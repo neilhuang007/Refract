@@ -282,6 +282,7 @@ void reproject(bool sample_indirect) {
     vec3 debugFaceMask = vec3(0.0);
     if (ph_mod_shadow_pixelation_enabled > 0.5f) {
         vec3 worldPos = base_position + world_offset;
+        float safePixelSize = max(ph_mod_shadow_pixel_size_rt, 1.0f);
 
         // Quantize normal to a single dominant axis to avoid tie-driven jitter.
         vec3 absN = abs(base_normal);
@@ -305,23 +306,23 @@ void reproject(bool sample_indirect) {
         vec3 faceMask = vec3(1.0) - faceAxis;
         debugFaceMask = faceMask;
 
-        // Determine block origin by pushing inward and adding extra vertical bias on Z faces.
-        float faceBias = 0.02;
-        float verticalBiasTarget = faceAxis.z > 0.5 ? 0.02 : 0.0;
-        float worldYFrac = fract(worldPos.y);
-        float verticalBias = min(verticalBiasTarget, max(worldYFrac - 0.001, 0.0));
-        vec3 blockOrigin = floor(worldPos - faceBias * faceNormal - vec3(0.0, verticalBias, 0.0));
+        // Determine block ownership by moving slightly toward the face interior.
+        // This avoids axis-specific ownership glitches on side faces.
+        const float faceInset = 1.0 / 512.0;
+        vec3 ownedPos = worldPos - faceInset * faceNormal;
+        vec3 blockOrigin = floor(ownedPos);
 
         // Block-local coordinates (0..1 range = higher float precision)
-        vec3 localPos = worldPos - blockOrigin;
+        vec3 localPos = ownedPos - blockOrigin;
         localPos = clamp(localPos, vec3(0.0), vec3(0.9999));
         debugRawLocalPos = localPos;
         debugYBias = localPos.y;
 
-        // Snap to texel CENTERS at (k + 0.5)/16
-        vec3 snappedLocal = (floor(localPos * 16.0) + 0.5) / 16.0;
-        debugTexelIdx = floor(localPos * 16.0);
-        vec3 texelFrac = fract(localPos * 16.0);
+        // Snap to texel centers at (k + 0.5) / pixelSize.
+        vec3 texelIdx = floor(localPos * safePixelSize);
+        vec3 snappedLocal = (texelIdx + 0.5) / safePixelSize;
+        debugTexelIdx = texelIdx;
+        vec3 texelFrac = fract(localPos * safePixelSize);
         float checker = float(mod(int(debugTexelIdx.x + debugTexelIdx.y + debugTexelIdx.z), 2));
         vec2 planeFrac = vec2(0.0);
         if (faceAxis.x > 0.5) {
@@ -337,13 +338,18 @@ void reproject(bool sample_indirect) {
         debugCenterBlend = checker;
 
         // Clamp to valid texel centers within the block
-        snappedLocal = clamp(snappedLocal, vec3(0.5 / 16.0), vec3(15.5 / 16.0));
+        float centerMin = 0.5 / safePixelSize;
+        float centerMax = (safePixelSize - 0.5) / safePixelSize;
+        snappedLocal = clamp(snappedLocal, vec3(centerMin), vec3(centerMax));
 
-        // Keep original face-axis depth, use snapped position on the face plane.
-        worldPos = worldPos * faceAxis + (blockOrigin + snappedLocal) * faceMask;
+        // Use deterministic face depth and snapped position on the face plane.
+        float faceDepth = dot(blockOrigin, faceAxis) + (faceSign > 0.0 ? 1.0 : 0.0);
+        worldPos = (blockOrigin + snappedLocal) * faceMask + faceDepth * faceAxis;
 
         directPosition = worldPos - world_offset;
-        debugCenterBranch = 2.0f;
+        // Use quantized face normal for stable shadow-ray origin bias.
+        directNormal = faceNormal;
+        debugCenterBranch = 3.0f;
     }
     phWritePixelationDebugProbe(
         base_position,
@@ -377,16 +383,7 @@ void reproject(bool sample_indirect) {
     frag.direct_soft.w = max(frag.direct_soft.w, 0.01f);
     direct_soft_frag_out = frag.direct_soft;
 
-    // === PIXELATION DEBUG VISUALIZATION ===
-    // Enable via ph_mod_pixelation_debug_enabled
-    // Flat checkerboard debug view:
-    // yellow = one texel parity, white = alternate texel parity
-    if (ph_mod_pixelation_debug_enabled > 0.5f && ph_mod_shadow_pixelation_enabled > 0.5f) {
-        float checker = float(mod(int(debugTexelIdx.x + debugTexelIdx.y + debugTexelIdx.z), 2));
-        vec3 debugGridColor = checker > 0.5 ? vec3(1.0) : vec3(1.0, 1.0, 0.0);
-        direct_frag_out = vec4(debugGridColor, 1.0);
-        direct_soft_frag_out = vec4(0.0, 0.0, 0.0, 0.01);
-    }
+    // Keep debug probe logging in SSBO only. Do not override visible lighting output.
 }
 
 void process_direct(inout Frag frag, vec3 directPosition, vec3 directNormal, vec3 directMappedNormal, int light_offset, int light_count, int soft_light_count) {
@@ -517,9 +514,18 @@ void sample_light_direction(inout Light light, float light_radius) {
 }
 
 vec3 sample_direct_lighting(vec3 position, vec3 normal, vec3 mapped_normal, Light light) {
-    light_ray.origin = position + normal * 0.02f;
+    float surfaceBias = 0.02f;
+    if (ph_mod_shadow_pixelation_enabled > 0.5f) {
+        // Use a smaller, deterministic bias in pixelated mode to reduce face-direction flicker.
+        surfaceBias = max(0.003f, 0.25f / max(ph_mod_shadow_pixel_size_rt, 1.0f));
+    }
+    light_ray.origin = position + normal * surfaceBias;
     vec3 to_light = light.position - light_ray.origin;
     light_ray.direction = normalize(to_light);
+    if (ph_mod_shadow_pixelation_enabled > 0.5f) {
+        // Push the origin slightly along the ray to avoid DDA tie breaks on voxel boundaries.
+        light_ray.origin += light_ray.direction * 0.0015f;
+    }
 
     // light attenuation
     float distance_squared = dot(to_light, to_light);
@@ -535,12 +541,14 @@ vec3 sample_direct_lighting(vec3 position, vec3 normal, vec3 mapped_normal, Ligh
 
     float cosine = clamp(dot(mapped_normal, light_ray.direction) * 2.0, 0.0, 1.0);
     light.color *= cosine;
-    if (luminance(light.color) < 0.001) {
+    if (luminance(light.color) < 0.00002) {
         return vec3(0.0f);
     }
 
     ray_target = ivec3(light.position);
-    RAY_ITERATION_COUNT = 20;
+    // Avoid hard radius cutoffs by scaling ray budget with source distance.
+    int directTraceBudget = int(clamp(ceil(length(to_light)) + 12.0f, 24.0f, 120.0f));
+    RAY_ITERATION_COUNT = directTraceBudget;
     trace_ray(light_ray);
     RAY_ITERATION_COUNT = 100;
 

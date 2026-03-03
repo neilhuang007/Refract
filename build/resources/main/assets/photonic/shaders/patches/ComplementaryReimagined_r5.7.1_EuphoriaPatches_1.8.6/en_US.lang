@@ -1,8 +1,0 @@
-#file "/lang/en_US.lang"
-
-#replace "value.RP_MODE.1=§bIntegrated PBR+"
-value.RP_MODE.1=§bIntegrated PBR+
-
-option.PHOTONICS_ENABLED=Photonics
-option.PHOTONICS_ENABLED.comment=Should Photonics be used in this shaderpack?
-#endreplace

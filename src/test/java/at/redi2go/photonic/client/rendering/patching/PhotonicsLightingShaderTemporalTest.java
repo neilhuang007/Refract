@@ -75,23 +75,29 @@ class PhotonicsLightingShaderTemporalTest {
       String shader = Files.readString(LIGHTING_SHADER);
       assertTrue(shader.contains("vec3 faceAxis = vec3(0.0);"));
       assertTrue(shader.contains("if (absN.x >= absN.y && absN.x >= absN.z) {"));
+      assertTrue(shader.contains("float safePixelSize = max(ph_mod_shadow_pixel_size_rt, 1.0f);"));
       assertTrue(shader.contains("float faceSign = sign(dot(base_normal, faceAxis));"));
       assertTrue(shader.contains("vec3 faceNormal = faceAxis * faceSign;"));
-      assertTrue(shader.contains("float faceBias = 0.02;"));
-      assertTrue(shader.contains("float verticalBiasTarget = faceAxis.z > 0.5 ? 0.02 : 0.0;"));
-      assertTrue(shader.contains("float worldYFrac = fract(worldPos.y);"));
-      assertTrue(shader.contains("float verticalBias = min(verticalBiasTarget, max(worldYFrac - 0.001, 0.0));"));
-      assertTrue(shader.contains("vec3 blockOrigin = floor(worldPos - faceBias * faceNormal - vec3(0.0, verticalBias, 0.0));"));
+      assertTrue(shader.contains("const float faceInset = 1.0 / 512.0;"));
+      assertTrue(shader.contains("vec3 ownedPos = worldPos - faceInset * faceNormal;"));
+      assertTrue(shader.contains("vec3 blockOrigin = floor(ownedPos);"));
+      assertTrue(shader.contains("vec3 texelIdx = floor(localPos * safePixelSize);"));
+      assertTrue(shader.contains("float faceDepth = dot(blockOrigin, faceAxis) + (faceSign > 0.0 ? 1.0 : 0.0);"));
+      assertTrue(shader.contains("worldPos = (blockOrigin + snappedLocal) * faceMask + faceDepth * faceAxis;"));
+      assertFalse(shader.contains("float faceBias = 0.02;"));
+      assertFalse(shader.contains("float verticalBiasTarget = faceAxis.z > 0.5 ? 0.02 : 0.0;"));
+      assertFalse(shader.contains("float verticalBias = min(verticalBiasTarget, max(worldYFrac - 0.001, 0.0));"));
+      assertFalse(shader.contains("vec3 blockOrigin = floor(worldPos - faceBias * faceNormal - vec3(0.0, verticalBias, 0.0));"));
       assertFalse(shader.contains("vec3 normalAxis = step(dominant - 0.001, absN);"));
       assertFalse(shader.contains("vec3 blockOrigin = floor(worldPos + 0.01 * base_normal);"));
    }
 
    @Test
-   void pixelationDebugVisualizationUsesFlatYellowWhiteTiles() throws IOException {
+   void pixelationDebugDoesNotOverrideVisibleLightingOutput() throws IOException {
       String shader = Files.readString(LIGHTING_SHADER);
-      assertTrue(shader.contains("vec3 debugGridColor = checker > 0.5 ? vec3(1.0) : vec3(1.0, 1.0, 0.0);"));
-      assertTrue(shader.contains("direct_frag_out = vec4(debugGridColor, 1.0);"));
-      assertFalse(shader.contains("direct_frag_out = vec4(fracPos.x, fracPos.y, checker, 1.0);"));
+      assertFalse(shader.contains("vec3 debugGridColor = checker > 0.5 ? vec3(1.0) : vec3(1.0, 1.0, 0.0);"));
+      assertFalse(shader.contains("direct_frag_out = vec4(debugGridColor, 1.0);"));
+      assertFalse(shader.contains("direct_soft_frag_out = vec4(0.0, 0.0, 0.0, 0.01);"));
    }
 
    @Test

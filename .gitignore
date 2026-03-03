@@ -1,0 +1,29 @@
+# Build output
+build/
+
+# Gradle
+.gradle/
+
+# IDE
+.idea/
+*.iml
+
+# Runtime
+run/
+logs/
+
+# Temp files
+*.log
+.codex_tmp_*
+tmp_*
+.pytest_cache/
+
+# External/reference shader packs
+Euphoria-Patches-photonics-test/
+Insane-Shaders-master/
+
+# Tools (binary jars)
+tools/
+
+# Docs (not part of mod distribution)
+docs/

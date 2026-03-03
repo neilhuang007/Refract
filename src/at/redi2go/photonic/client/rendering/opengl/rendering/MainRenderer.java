@@ -35,7 +35,7 @@ public class MainRenderer implements Destructable {
       this.lightingBuffer.createAttachment("normal", "RGBA16F", false);
       this.lightingBuffer.createAttachment("direct", "RGBA16F", false);
       this.lightingBuffer.createAttachment("direct_soft", "RGBA32F", false);
-      this.lightingBuffer.createAttachment("handheld", "RGBA8", false);
+      this.lightingBuffer.createAttachment("handheld", "RGBA16F", false);
       this.memoryCollection = this.buildGlMemoryCollection();
    }
 

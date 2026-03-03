@@ -28,22 +28,22 @@ if (z0ph < 0.99999 && z0ph >= 0.56) {
 		color.rgb = pixelatedDirect;
 	} else {
 		float pixelatedStrength = max(pixelatedDirect.r, max(pixelatedDirect.g, pixelatedDirect.b));
-		if (pixelatedStrength > max(ph_debug_cast_light_threshold, 0.0)) {
-			vec3 photonicsAlbedo = texelFetch(colortex10, texelCoord, 0).rgb;
-			if (any(isnan(photonicsAlbedo)) || any(isinf(photonicsAlbedo))) {
-				photonicsAlbedo = vec3(0.0);
+		float threshold = max(ph_debug_cast_light_threshold, 0.0);
+		float lightingGate = threshold > 0.0 ? smoothstep(0.25 * threshold, 2.0 * threshold, pixelatedStrength) : 1.0;
+		vec3 photonicsAlbedo = texelFetch(colortex10, texelCoord, 0).rgb;
+		if (any(isnan(photonicsAlbedo)) || any(isinf(photonicsAlbedo))) {
+			photonicsAlbedo = vec3(0.0);
+		}
+		photonicsAlbedo = clamp(photonicsAlbedo, vec3(0.0), vec3(1.0));
+		if ((photonicsAlbedo.r > 0.0 || photonicsAlbedo.g > 0.0 || photonicsAlbedo.b > 0.0) && lightingGate > 0.0) {
+			vec3 centerIndirect = texelFetch(colortex12, texelCoord, 0).rgb * 0.15;
+			vec3 photonicsLighting = max(centerIndirect + pixelatedDirect, vec3(0.0));
+			if (any(isnan(photonicsLighting)) || any(isinf(photonicsLighting))) {
+				photonicsLighting = vec3(0.0);
 			}
-			photonicsAlbedo = clamp(photonicsAlbedo, vec3(0.0), vec3(1.0));
-			if (photonicsAlbedo.r > 0.0 || photonicsAlbedo.g > 0.0 || photonicsAlbedo.b > 0.0) {
-				vec3 centerIndirect = texelFetch(colortex12, texelCoord, 0).rgb * 0.15;
-				vec3 photonicsLighting = max(centerIndirect + pixelatedDirect, vec3(0.0));
-				if (any(isnan(photonicsLighting)) || any(isinf(photonicsLighting))) {
-					photonicsLighting = vec3(0.0);
-				}
-				photonicsLighting = min(photonicsLighting, vec3(5.0));
-				photonicsLighting *= clamp(ph_debug_lighting_master_scale, 0.0, 4.0);
-				color.rgb += photonicsLighting * photonicsAlbedo;
-			}
+			photonicsLighting = min(photonicsLighting, vec3(5.0));
+			photonicsLighting *= clamp(ph_debug_lighting_master_scale, 0.0, 4.0) * lightingGate;
+			color.rgb += photonicsLighting * photonicsAlbedo;
 		}
 	}
 }
