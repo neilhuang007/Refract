@@ -1,0 +1,225 @@
+plugins {
+    id 'fabric-loom' version '1.10.5'
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    maven { url = 'https://maven.fabricmc.net/' }
+    maven { url = 'https://api.modrinth.com/maven' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    modImplementation "maven.modrinth:iris:${project.iris_version}"
+    modImplementation "maven.modrinth:sodium:${project.sodium_version}"
+    modImplementation "maven.modrinth:modmenu:${project.modmenu_version}"
+    // Iris ships some libs as nested jars, but Loom dev runtime does not always expose them on runClient classpath.
+    runtimeOnly "org.anarres:jcpp:1.4.14"
+    runtimeOnly "io.github.douira:glsl-transformer:2.0.1"
+
+    modImplementation "io.github.llamalad7:mixinextras-fabric:${project.mixinextras_version}"
+    annotationProcessor "io.github.llamalad7:mixinextras-fabric:${project.mixinextras_version}"
+
+    testImplementation "org.junit.jupiter:junit-jupiter-api:5.12.0"
+    testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.12.0"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+loom {
+    runs {
+        client {
+            client()
+            runDir = "run"
+        }
+        shaderGameTestClient {
+            client()
+            runDir = "run"
+            programArg "--quickPlaySingleplayer"
+            programArg "New World"
+            programArg "--quickPlayPath"
+            programArg "quickPlay/log.json"
+            vmArg "-Dphotonics.automation.enabled=true"
+            vmArg "-Dphotonics.automation.worldName=New World"
+            vmArg "-Dphotonics.automation.autoStartWorld=false"
+            vmArg "-Dphotonics.automation.startDelayTicks=40"
+            vmArg "-Dphotonics.automation.timeoutTicks=4200"
+            vmArg "-Dphotonics.automation.expectedShaderPack=ComplementaryReimagined"
+            vmArg "-Dphotonics.automation.reportFile=${project.projectDir.toPath().resolve('run/automation/shader-report.properties')}"
+            vmArg "-Dphotonics.automation.captureDir=${project.projectDir.toPath().resolve('run/automation/captures')}"
+            vmArg "-Dphotonics.automation.captureEveryN=60"
+            vmArg "-Dphotonics.automation.captureCount=3"
+            vmArg "-Dphotonics.automation.autoStop=true"
+        }
+    }
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src']
+            exclude 'test/**'
+        }
+        resources {
+            srcDirs = ['.']
+            include 'fabric.mod.json'
+            include 'photonics.mixins.json'
+            include 'Photonic-refmap.json'
+            include 'assets/**'
+            include 'META-INF/**'
+        }
+    }
+    test {
+        java {
+            srcDirs = ['src/test/java']
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 21
+    it.options.compilerArgs += ['-proc:none']
+}
+
+def java21Launcher = javaToolchains.launcherFor {
+    languageVersion = JavaLanguageVersion.of(21)
+}
+
+tasks.withType(JavaExec).configureEach {
+    javaLauncher = java21Launcher
+}
+
+tasks.named("test") {
+    useJUnitPlatform()
+}
+
+tasks.register("patchValidationTest", Test) {
+    group = "verification"
+    description = "Runs automated shader patch validation tests."
+    useJUnitPlatform()
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    filter {
+        includeTestsMatching "at.redi2go.photonic.client.rendering.patching.*"
+    }
+}
+
+tasks.register("automationValidation") {
+    group = "verification"
+    description = "Runs patch validation tests and full build verification."
+    dependsOn "patchValidationTest", "build"
+}
+
+tasks.register("shaderGameTest") {
+    group = "verification"
+    description = "Runs automated shader runtime smoke test and validates report/log evidence."
+    dependsOn "cleanShaderGameTestArtifacts", "runShaderGameTestClient"
+    doLast {
+        File reportFile = file("run/automation/shader-report.properties")
+        if (!reportFile.exists()) {
+            throw new GradleException("Missing shader automation report: ${reportFile}")
+        }
+
+        Properties props = new Properties()
+        reportFile.withInputStream { props.load(it) }
+
+        if (!Boolean.parseBoolean(props.getProperty("success", "false"))) {
+            throw new GradleException("Shader automation report failed: ${props.getProperty('failureReason', 'unknown reason')}")
+        }
+
+        if (!Boolean.parseBoolean(props.getProperty("expectedShaderPackMatched", "false"))) {
+            throw new GradleException("Unexpected shader pack in automation run: ${props.getProperty('shaderPackName', '')}")
+        }
+
+        if (!Boolean.parseBoolean(props.getProperty("raytracerActive", "false"))) {
+            throw new GradleException("Raytracer was not active during automation run")
+        }
+
+        if (!Boolean.parseBoolean(props.getProperty("lightingSignalDetected", "false"))) {
+            throw new GradleException(
+                "No lighting signal detected in captured attachments "
+                    + "(directMaxLuma=${props.getProperty('directMaxLuma', '0')}, "
+                    + "directSoftMaxLuma=${props.getProperty('directSoftMaxLuma', '0')}, "
+                    + "handheldMaxLuma=${props.getProperty('handheldMaxLuma', '0')})"
+            )
+        }
+
+        int capturesTaken = Integer.parseInt(props.getProperty("capturesTaken", "0"))
+        int captureTarget = Integer.parseInt(props.getProperty("captureTarget", "0"))
+        if (captureTarget <= 0 || capturesTaken < captureTarget) {
+            throw new GradleException("Insufficient frame captures: ${capturesTaken}/${captureTarget}")
+        }
+
+        File latestLog = file("run/logs/latest.log")
+        if (!latestLog.exists()) {
+            throw new GradleException("Missing client log file: ${latestLog}")
+        }
+
+        String logContent = latestLog.getText("UTF-8")
+        List<String> forbiddenPatterns = [
+                "Unable to resolve shader pack option menu element",
+                "Error while parsing the block ID map entry",
+                "NullPointerException",
+                "Disabling automation frame capture after failure"
+        ]
+        List<String> hits = forbiddenPatterns.findAll { logContent.contains(it) }
+        if (!hits.isEmpty()) {
+            throw new GradleException("Shader automation found forbidden log patterns: ${hits.join(', ')}")
+        }
+
+        println "shaderGameTest passed: captures=${capturesTaken}/${captureTarget}, patch=${props.getProperty('patchId', '')}, pack=${props.getProperty('shaderPackName', '')}"
+    }
+}
+
+tasks.register("cleanShaderGameTestArtifacts") {
+    group = "verification"
+    description = "Cleans shader automation output from prior runs."
+    doLast {
+        delete file("run/automation")
+        File quickPlayWorld = file("run/saves/New World/level.dat")
+        if (!quickPlayWorld.exists()) {
+            throw new GradleException("Missing required Quick Play world save: run/saves/New World/level.dat")
+        }
+        File staleWorldDir = file("run/saves/photonics_shader_test")
+        if (staleWorldDir.exists() && !file("run/saves/photonics_shader_test/level.dat").exists()) {
+            delete staleWorldDir
+        }
+    }
+}
+
+tasks.register("gameTest") {
+    group = "verification"
+    description = "Runs automated shader game test verification."
+    dependsOn "shaderGameTest"
+}
+
+processResources {
+    inputs.property "version", project.version
+    filteringCharset "UTF-8"
+
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+jar {
+    from("LICENSE_Photonic") {
+        rename { "${it}_${project.archives_base_name}" }
+    }
+}

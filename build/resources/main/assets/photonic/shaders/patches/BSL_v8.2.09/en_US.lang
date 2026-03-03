@@ -1,0 +1,8 @@
+#file "/lang/en_US.lang"
+
+#replace "value.ABOUT.0=by Capt Tatsu"
+value.ABOUT.0=by Capt Tatsu
+
+option.PHOTONICS_ENABLED=Photonics
+option.PHOTONICS_ENABLED.comment=Should Photonics be used in this shaderpack?
+#endreplace

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest" tests="6" skipped="1" failures="1" errors="0" timestamp="2026-03-02T02:30:46.970Z" hostname="LAPTOP-3EJOJ4TU" time="0.008">
+  <properties/>
+  <testcase name="euphoriadeferred1BilateralFilterParameters()" classname="at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest" time="0.002">
+    <failure message="org.opentest4j.AssertionFailedError: Patch should document upstream ownership of pixelation ==&gt; expected: &lt;true&gt; but was: &lt;false&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: Patch should document upstream ownership of pixelation ==&gt; expected: &lt;true&gt; but was: &lt;false&gt;
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+	at app//org.junit.jupiter.api.AssertTrue.failNotTrue(AssertTrue.java:63)
+	at app//org.junit.jupiter.api.AssertTrue.assertTrue(AssertTrue.java:36)
+	at app//org.junit.jupiter.api.Assertions.assertTrue(Assertions.java:214)
+	at app//at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest.euphoriadeferred1BilateralFilterParameters(GrazingAngleDenoiseRegressionTest.java:81)
+	at java.base@21.0.6/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base@21.0.6/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base@21.0.6/java.util.ArrayList.forEach(ArrayList.java:1596)
+</failure>
+  </testcase>
+  <testcase name="r2Deferred1LacksBilateralFiltering()" classname="at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest" time="0.002">
+    <skipped message="Assumption failed: Missing r2 deferred1 patch: assets\photonic\shaders\patches\ComplementaryReimagined_r2.0.3\deferred1.glsl" type="org.opentest4j.TestAbortedException">org.opentest4j.TestAbortedException: Assumption failed: Missing r2 deferred1 patch: assets\photonic\shaders\patches\ComplementaryReimagined_r2.0.3\deferred1.glsl
+	at org.junit.jupiter.api.Assumptions.throwAssumptionFailed(Assumptions.java:321)
+	at org.junit.jupiter.api.Assumptions.assumeTrue(Assumptions.java:106)
+	at at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest.r2Deferred1LacksBilateralFiltering(GrazingAngleDenoiseRegressionTest.java:93)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+</skipped>
+  </testcase>
+  <testcase name="phLightingTemporalAccumulationDecay()" classname="at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest" time="0.001"/>
+  <testcase name="phLightingEdgeDetectionSkipsIndirectAtEdges()" classname="at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest" time="0.001"/>
+  <testcase name="phLightingIndirectBouncesAndEarlyTermination()" classname="at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest" time="0.001"/>
+  <testcase name="phCoreBadAngleResolutionDowngrade()" classname="at.redi2go.photonic.client.rendering.patching.GrazingAngleDenoiseRegressionTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

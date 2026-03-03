@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "photonics",
+  "version": "0.2.10",
+  "name": "Photonic",
+  "description": "An Iris raytracing extension",
+  "authors": [
+    "Redi2Go"
+  ],
+  "contact": {
+    "repo": "https://github.com/Redi2Go/Photonic"
+  },
+  "license": "All-Rights-Reserved",
+  "icon": "assets/photonic/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "at.redi2go.photonic.client.PhotonicClient"
+    ],
+    "main": [
+      "at.redi2go.photonic.client.Photonic"
+    ],
+    "modmenu": [
+      "at.redi2go.photonic.client.PhotonicModMenu"
+    ]
+  },
+  "mixins": [
+    "photonics.mixins.json"
+  ],
+  "depends": {
+    "iris": "1.8.8+1.21.1-fabric",
+    "modmenu": ">=11.0.3",
+    "fabricloader": ">=0.16.0",
+    "fabric": "*",
+    "minecraft": "1.21.1"
+  }
+}

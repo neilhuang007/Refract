@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="at.redi2go.photonic.client.rendering.patching.ComplementaryVoxelEntrypointsPatchTest" tests="5" skipped="5" failures="0" errors="0" timestamp="2026-03-02T02:30:46.969Z" hostname="LAPTOP-3EJOJ4TU" time="0.0">
+  <properties/>
+  <testcase name="edgeCaseVoxelEntrypointsAreActuallyMissingInSourcePack()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryVoxelEntrypointsPatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="step05PatchFilesExist()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryVoxelEntrypointsPatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="programTemplatesReferenceExistingSourcePrograms()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryVoxelEntrypointsPatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="wrappersCoverAllThreeDimensionsExactlyOnce()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryVoxelEntrypointsPatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="wrapperCreateAndIncludeWiringIsValid()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryVoxelEntrypointsPatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

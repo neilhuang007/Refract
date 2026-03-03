@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="at.redi2go.photonic.client.rendering.patching.ComplementaryEnergyRebalancePatchTest" tests="3" skipped="3" failures="0" errors="0" timestamp="2026-03-02T02:30:46.843Z" hostname="LAPTOP-3EJOJ4TU" time="0.0">
+  <properties/>
+  <testcase name="patchTargetsMainLighting()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEnergyRebalancePatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="anchorsExistExactlyOnceInSource()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEnergyRebalancePatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="patchedOutputUsesGuardedConservativeAttenuation()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEnergyRebalancePatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

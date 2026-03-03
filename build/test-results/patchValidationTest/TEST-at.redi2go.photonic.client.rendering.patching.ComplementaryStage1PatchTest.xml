@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="at.redi2go.photonic.client.rendering.patching.ComplementaryStage1PatchTest" tests="6" skipped="6" failures="0" errors="0" timestamp="2026-03-02T02:30:46.965Z" hostname="LAPTOP-3EJOJ4TU" time="0.001">
+  <properties/>
+  <testcase name="stage1LanguagePatchAppliesToCurrentShaderpack()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryStage1PatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="languagePatchTargetsLangFileAndDefinesToggleTextExactlyOnce()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryStage1PatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="stage1BlockPropertiesPatchRemovesLegacyVariantTokens()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryStage1PatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="shadersPropertiesPatchDefinesToggleProperty()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryStage1PatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="patchMetadataUsesAlwaysPatchedPathsCompatibleWithPatchEngine()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryStage1PatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <testcase name="stage1ShadersPropertiesPatchAppliesToCurrentShaderpack()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryStage1PatchTest" time="0.0">
+    <skipped/>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

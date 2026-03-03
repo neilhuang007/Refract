@@ -1,0 +1,45 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "at.redi2go.photonic.client.mixin",
+  "compatibilityLevel": "JAVA_16",
+  "mixins": [
+    "BlockElementFaceMixin",
+    "BlockModelRendererMixin",
+    "BlockOcclusionCacheMixin",
+    "BlockRendererMixin",
+    "ChunkBuilderMeshingTaskMixin",
+    "CommonUniformsMixin",
+    "CompositeRendererMixin",
+    "DefaultTerrainRenderPassesMixin",
+    "GameRendererAccessor",
+    "GlProgramMixin",
+    "IncludeGraphMixin",
+    "IrisImagesMixin",
+    "IrisRenderingPipelineMixin",
+    "IrisSamplersMixin",
+    "LanguageMapMixin",
+    "ModelElementMixin",
+    "ProgramBuilderMixin",
+    "ProgramIdMixin",
+    "ReloadableResourceManagerAccessor",
+    "ShaderPackAccessor",
+    "ShaderPackMixin",
+    "SodiumProgramsMixin",
+    "SodiumProgramsPassMixin",
+    "SodiumShaderMixin",
+    "SodiumWorldRendererMixin",
+    "VertexBufferMixin"
+  ],
+  "client": [
+    "BakedQuadMixin",
+    "FaceBakeryMixin",
+    "GameRendererMixin",
+    "ModelElementMixin",
+    "WorldRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "refmap": "Photonic-refmap.json"
+}

@@ -1,0 +1,380 @@
+package at.redi2go.photonic.client;
+
+import at.redi2go.photonic.client.rendering.world.LightBlock;
+import at.redi2go.photonic.client.rendering.world.LightType;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+import net.minecraft.block.Blocks;
+import net.minecraft.block.Block;
+import net.minecraft.text.Text;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.widget.ClickableWidget;
+import net.minecraft.util.Unit;
+import net.minecraft.resource.ResourceReload;
+import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.screen.SplashOverlay;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.screen.ScreenTexts;
+import net.minecraft.client.gui.widget.TextWidget;
+import net.minecraft.client.gui.widget.GridWidget;
+import net.minecraft.client.gui.widget.Positioner;
+import net.minecraft.client.gui.tooltip.Tooltip;
+import net.minecraft.registry.Registries;
+import net.minecraft.client.gui.widget.ThreePartsLayoutWidget;
+import net.minecraft.client.gui.widget.DirectionalLayoutWidget;
+import net.minecraft.client.gui.widget.ButtonWidget.PressAction;
+import net.minecraft.client.gui.widget.GridWidget.Adder;
+import net.minecraft.client.gui.widget.SliderWidget;
+import org.jetbrains.annotations.NotNull;
+
+public class ModSettingsScreen extends Screen {
+   private static final ToggleableListScreen.Model BLOCKS_3D_MODEL = new ToggleableListScreen.Model(Registries.BLOCK.stream().filter(block -> {
+      Set<Block> blacklistedBlocks = Set.of(Blocks.AIR, Blocks.WATER, Blocks.LAVA);
+      return !blacklistedBlocks.contains(block);
+   }).sorted(Comparator.comparing(block -> block.getName().getString())).map(block -> (ToggleableListScreen.ModelEntry)new ModSettingsScreen.BlockModel3DEntry(block)).toList());
+   private static final ToggleableListScreen.Model BLOCKS_TRACED_MODEL;
+   private final Screen parent;
+   private SchematicExporter schematicExporter = null;
+   private final ThreePartsLayoutWidget layout = new ThreePartsLayoutWidget(this, 61, 33);
+
+   protected ModSettingsScreen(Screen parent) {
+      super(Text.of("Photonic Client Settings"));
+      this.parent = parent;
+   }
+
+   protected void init() {
+      super.init();
+      List<ModSettingsScreen.PButton> buttons = new ArrayList<>();
+      buttons.add(
+         new ModSettingsScreen.PButton(
+            "Generate schematics.zip",
+            w -> this.exportSchematics(),
+            "Exports all blockstates to the root\nMinecraft folder (schematics.zip). Only works in-game!",
+            () -> MinecraftClient.getInstance().world != null
+         )
+      );
+      PhotonicsStorage.Parameter<Boolean> doMultithreading = PhotonicsStorage.DO_MULTITHREADING;
+      buttons.add(new ModSettingsScreen.PButton("MultiThreading: " + (doMultithreading.value ? "On" : "Off"), w -> {
+         doMultithreading.value = !doMultithreading.value;
+         doMultithreading.modified();
+         w.setMessage(Text.of("MultiThreading: " + (doMultithreading.value ? "On" : "Off")));
+      }, "Turns MultiThreading on or off; MultiThreading is considerably faster, but can cause bugs.", () -> true));
+      PhotonicsStorage.Parameter<Boolean> shadowPixelation = PhotonicsStorage.SHADOW_PIXELATION_ENABLED;
+      PhotonicsStorage.Parameter<Float> shadowPixelationSize = PhotonicsStorage.SHADOW_PIXELATION_SIZE;
+      PhotonicsStorage.Parameter<Boolean> pixelationDebugLog = PhotonicsStorage.PIXELATED_LIGHTING_DEBUG_LOG;
+      ModSettingsScreen.ShadowPixelationSizeSlider shadowPixelationSizeSlider = new ModSettingsScreen.ShadowPixelationSizeSlider(shadowPixelationSize);
+      shadowPixelationSizeSlider.active = shadowPixelation.value;
+      buttons.add(new ModSettingsScreen.PButton("Pixelated Lighting: " + (shadowPixelation.value ? "On" : "Off"), w -> {
+         shadowPixelation.value = !shadowPixelation.value;
+         shadowPixelation.modified();
+         shadowPixelationSizeSlider.active = shadowPixelation.value;
+         w.setMessage(Text.of("Pixelated Lighting: " + (shadowPixelation.value ? "On" : "Off")));
+      }, "Turns pixelated lighting projection on or off.", () -> true));
+      buttons.add(new ModSettingsScreen.PButton("Pixelated Lighting Debug Log: " + (pixelationDebugLog.value ? "On" : "Off"), w -> {
+         pixelationDebugLog.value = !pixelationDebugLog.value;
+         pixelationDebugLog.modified();
+         w.setMessage(Text.of("Pixelated Lighting Debug Log: " + (pixelationDebugLog.value ? "On" : "Off")));
+      }, "Logs center-pixel pixelation probe values to latest.log once per second.", () -> true));
+      OilifySlider oilifySizeSlider = new OilifySlider(PhotonicsStorage.OILIFY_SIZE, 3.0f, 15.0f, "OILIFY_SIZE", true);
+      OilifySlider oilifySharpnessSlider = new OilifySlider(PhotonicsStorage.OILIFY_SHARPNESS, 0.0f, 1.0f, "Sharpness", false);
+      OilifySlider oilifyScaleSlider = new OilifySlider(PhotonicsStorage.OILIFY_SCALE, 1.0f, 4.0f, "Scale", false);
+      OilifySlider oilifyTuningSlider = new OilifySlider(PhotonicsStorage.OILIFY_TUNING, 0.0f, 4.0f, "Anistropy Tuning", false);
+      OilifySlider oilifyIterationsSlider = new OilifySlider(PhotonicsStorage.OILIFY_ITERATIONS, 1.0f, 8.0f, "OILIFY_ITERATIONS", true);
+      OilifySlider oilifyDepthScalingSlider = new OilifySlider(PhotonicsStorage.OILIFY_DEPTH_SCALING, 0.0f, 2.0f, "Depth Scaling", false);
+      OilifySlider oilifyStrokeStrengthSlider = new OilifySlider(PhotonicsStorage.OILIFY_STROKE_STRENGTH, 0.0f, 1.0f, "Stroke Strength", false);
+      List<OilifySlider> oilifySliders = List.of(oilifySizeSlider, oilifySharpnessSlider, oilifyScaleSlider, oilifyTuningSlider, oilifyIterationsSlider, oilifyDepthScalingSlider, oilifyStrokeStrengthSlider);
+      oilifySliders.forEach(s -> s.active = PhotonicsStorage.OILIFY_ENABLED.value);
+      PhotonicsStorage.Parameter<Boolean> oilify = PhotonicsStorage.OILIFY_ENABLED;
+      buttons.add(new ModSettingsScreen.PButton("Oilify: " + (oilify.value ? "On" : "Off"), w -> {
+         oilify.value = !oilify.value;
+         oilify.modified();
+         oilifySliders.forEach(s -> s.active = oilify.value);
+         w.setMessage(Text.of("Oilify: " + (oilify.value ? "On" : "Off")));
+      }, "Applies an oil painting effect to the world using\nan anisotropic Kuwahara filter.", () -> true));
+      ToggleableListScreen volumetricRenderedBlocks = new ToggleableListScreen(this, "3D Blocks", BLOCKS_3D_MODEL);
+      buttons.add(
+         new ModSettingsScreen.PButton(
+            "3D Blocks",
+            w -> this.client.setScreen(volumetricRenderedBlocks),
+            "Configures, whether a specific block should be rendered as a 3D block",
+            () -> true
+         )
+      );
+      ToggleableListScreen tracedBlocks = new ToggleableListScreen(this, "Raytraced Block Lights", BLOCKS_TRACED_MODEL);
+      buttons.add(
+         new ModSettingsScreen.PButton(
+            "Raytraced Lights",
+            w -> this.client.setScreen(tracedBlocks),
+            "Configures, whether a specific block should emit ray-traced light",
+            () -> true
+         )
+      );
+      DirectionalLayoutWidget linearLayout = (DirectionalLayoutWidget)this.layout.addHeader(DirectionalLayoutWidget.vertical().spacing(8));
+      linearLayout.add(new TextWidget(Text.of("Photonics Mod settings"), this.textRenderer), Positioner::alignHorizontalCenter);
+      GridWidget gridLayout = new GridWidget();
+      gridLayout.getMainPositioner().marginX(4).marginBottom(4).alignHorizontalCenter();
+      Adder rowHelper = gridLayout.createAdder(2);
+      int midX = this.width / 2;
+      int i = 0;
+
+      for (ModSettingsScreen.PButton button : buttons) {
+         int x = i % 2 * 220 + midX - 210;
+         int y = (i / 2 + 1) * 30;
+         button.widget = ButtonWidget.builder(Text.of(button.text), button.pressAction)
+            .position(x, y)
+            .size(200, 20)
+            .tooltip(Tooltip.of(Text.of(button.toolTip)))
+            .build();
+         button.widget.active = button.active.getAsBoolean();
+         rowHelper.add(button.widget);
+         i++;
+      }
+
+      rowHelper.add(shadowPixelationSizeSlider, 2);
+      rowHelper.add(oilifySizeSlider, 2);
+      rowHelper.add(oilifySharpnessSlider, 2);
+      rowHelper.add(oilifyScaleSlider, 2);
+      rowHelper.add(oilifyTuningSlider, 2);
+      rowHelper.add(oilifyIterationsSlider, 2);
+      rowHelper.add(oilifyDepthScalingSlider, 2);
+      rowHelper.add(oilifyStrokeStrengthSlider, 2);
+
+      this.layout.addBody(gridLayout);
+      this.layout.addFooter(ButtonWidget.builder(ScreenTexts.DONE, buttonx -> this.close()).width(200).build());
+      this.layout.forEachChild(x$0 -> {
+         ClickableWidget var10000 = (ClickableWidget)this.addDrawableChild(x$0);
+      });
+      this.layout.refreshPositions();
+   }
+
+   public void render(@NotNull DrawContext drawContext, int mouseX, int mouseY, float delta) {
+      super.renderBackground(drawContext, mouseX, mouseY, delta);
+      super.render(drawContext, mouseX, mouseY, delta);
+   }
+
+   public void exportSchematics() {
+      if (this.schematicExporter == null) {
+         try {
+            this.schematicExporter = new SchematicExporter(new File("."));
+            MinecraftClient.getInstance().setOverlay(buildLoadingOverlay(() -> {
+               if (this.schematicExporter == null) {
+                  return 1.0F;
+               } else {
+                  for (int i = 0; i < 100; i++) {
+                     if (!this.schematicExporter.exportOne()) {
+                        this.schematicExporter = null;
+                        return 1.0F;
+                     }
+                  }
+
+                  return this.schematicExporter.getProgress();
+               }
+            }));
+         } catch (FileNotFoundException var2) {
+            var2.printStackTrace();
+         }
+      }
+   }
+
+   public void close() {
+      this.client.setScreen(this.parent);
+   }
+
+   private static SplashOverlay buildLoadingOverlay(Supplier<Float> progressSupplier) {
+      return new SplashOverlay(MinecraftClient.getInstance(), new ResourceReload() {
+         public CompletableFuture<Unit> whenComplete() {
+            return null;
+         }
+
+         public float getProgress() {
+            return progressSupplier.get();
+         }
+
+         public boolean isComplete() {
+            return this.getProgress() == 1.0F;
+         }
+      }, o -> {}, false);
+   }
+
+   static {
+      Set<LightBlock> lightBlocks = PhotonicsStorage.TRACED_LIGHT_BLOCKS.value;
+      BLOCKS_TRACED_MODEL = new ToggleableListScreen.Model(
+         lightBlocks.stream()
+            .sorted(Comparator.comparing(lightblock -> lightblock.block.getName().getString()))
+            .map(lightBlock -> (ToggleableListScreen.ModelEntry)new ModSettingsScreen.TracedLightBlockEntry(lightBlock.block))
+            .toList()
+      );
+   }
+
+   public static class BlockModel3DEntry extends ToggleableListScreen.ModelEntry {
+      private final Block block;
+
+      public BlockModel3DEntry(Block block) {
+         this.block = block;
+      }
+
+      @Override
+      public String getDisplayValue() {
+         return this.block.getName().getString();
+      }
+
+      @Override
+      public boolean isEnabled() {
+         return PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS.value.contains(this.block);
+      }
+
+      @Override
+      public void setEnabled(boolean enabled) {
+         PhotonicsStorage.Parameter<Set<Block>> lightBlocks = PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS;
+         if (enabled) {
+            lightBlocks.value.add(this.block);
+         } else {
+            lightBlocks.value.remove(this.block);
+         }
+
+         lightBlocks.modified();
+      }
+   }
+
+   private static class PButton {
+      public ButtonWidget widget;
+      public final String text;
+      public final PressAction pressAction;
+      public final String toolTip;
+      public final BooleanSupplier active;
+
+      public PButton(String text, PressAction pressAction, String toolTip, BooleanSupplier active) {
+         this.text = text;
+         this.pressAction = pressAction;
+         this.toolTip = toolTip;
+         this.active = active;
+      }
+   }
+
+   private static class ShadowPixelationSizeSlider extends SliderWidget {
+      private static final float[] STEPS = new float[]{1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
+      private final PhotonicsStorage.Parameter<Float> shadowPixelationSize;
+
+      ShadowPixelationSizeSlider(PhotonicsStorage.Parameter<Float> shadowPixelationSize) {
+         super(0, 0, 200, 20, Text.of(""), normalize(shadowPixelationSize.value));
+         this.shadowPixelationSize = shadowPixelationSize;
+         this.updateMessage();
+      }
+
+      @Override
+      protected void updateMessage() {
+         this.setMessage(Text.of("Pixelated Lighting Size: " + (int)this.getPixelSize() + "x"));
+      }
+
+      @Override
+      protected void applyValue() {
+         this.shadowPixelationSize.value = this.getPixelSize();
+         this.shadowPixelationSize.modified();
+         this.updateMessage();
+      }
+
+      private static double normalize(float pixelSize) {
+         return nearestIndex(pixelSize) / (double)(STEPS.length - 1);
+      }
+
+      private float getPixelSize() {
+         int index = (int)Math.round(this.value * (STEPS.length - 1));
+         index = Math.max(0, Math.min(STEPS.length - 1, index));
+         return STEPS[index];
+      }
+
+      private static int nearestIndex(float pixelSize) {
+         int bestIndex = 0;
+         float bestDistance = Float.MAX_VALUE;
+
+         for (int i = 0; i < STEPS.length; i++) {
+            float distance = Math.abs(STEPS[i] - pixelSize);
+            if (distance < bestDistance) {
+               bestDistance = distance;
+               bestIndex = i;
+            }
+         }
+
+         return bestIndex;
+      }
+   }
+
+   private static class OilifySlider extends SliderWidget {
+      private final PhotonicsStorage.Parameter<Float> param;
+      private final float min;
+      private final float max;
+      private final String label;
+      private final boolean intDisplay;
+
+      OilifySlider(PhotonicsStorage.Parameter<Float> param, float min, float max, String label, boolean intDisplay) {
+         super(0, 0, 200, 20, Text.of(""), normalize(param.value, min, max));
+         this.param = param;
+         this.min = min;
+         this.max = max;
+         this.label = label;
+         this.intDisplay = intDisplay;
+         this.updateMessage();
+      }
+
+      @Override
+      protected void updateMessage() {
+         String valueStr = intDisplay ? String.valueOf((int) getValue()) : String.format("%.2f", getValue());
+         this.setMessage(Text.of(label + ": " + valueStr));
+      }
+
+      @Override
+      protected void applyValue() {
+         this.param.value = getValue();
+         this.param.modified();
+         this.updateMessage();
+      }
+
+      private static double normalize(float val, float min, float max) {
+         return (Math.max(min, Math.min(max, val)) - min) / (max - min);
+      }
+
+      private float getValue() {
+         if (intDisplay) {
+            return Math.max(min, Math.min(max, min + Math.round((float)(this.value * (max - min)))));
+         }
+         float raw = (float)(min + this.value * (max - min));
+         return Math.max(min, Math.min(max, raw));
+      }
+   }
+
+   public static class TracedLightBlockEntry extends ToggleableListScreen.ModelEntry {
+      private final Block block;
+
+      public TracedLightBlockEntry(Block block) {
+         this.block = block;
+      }
+
+      @Override
+      public String getDisplayValue() {
+         return Registries.BLOCK.getId(this.block).getPath();
+      }
+
+      @Override
+      public boolean isEnabled() {
+         return PhotonicsStorage.TRACED_LIGHT_BLOCKS.value.stream().anyMatch(lightBlock -> lightBlock.block == this.block && lightBlock.lightType.isTraced());
+      }
+
+      @Override
+      public void setEnabled(boolean traced) {
+         PhotonicsStorage.Parameter<Set<LightBlock>> lightBlocks = PhotonicsStorage.TRACED_LIGHT_BLOCKS;
+         LightBlock lightBlock = lightBlocks.value.stream().filter(lightBlock1 -> lightBlock1.block == this.block).findFirst().orElse(null);
+         if (lightBlock != null) {
+            lightBlock.lightType = new LightType(lightBlock.lightType.getColor(), lightBlock.lightType.getAttenuation(), traced);
+            lightBlocks.modified();
+         }
+      }
+   }
+}

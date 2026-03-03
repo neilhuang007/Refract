@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="at.redi2go.photonic.client.rendering.patching.PatchSelectionTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-03-02T02:30:47.570Z" hostname="LAPTOP-3EJOJ4TU" time="0.093">
+  <properties/>
+  <testcase name="selectBestPatchReturnsNullWhenPhotonicsEnabledStateDoesNotMatch()" classname="at.redi2go.photonic.client.rendering.patching.PatchSelectionTest" time="0.032"/>
+  <testcase name="canBeAppliedSupportsZipNames()" classname="at.redi2go.photonic.client.rendering.patching.PatchSelectionTest" time="0.013"/>
+  <testcase name="selectBestPatchPrefersLoadedShaderNameOverFirstMatch()" classname="at.redi2go.photonic.client.rendering.patching.PatchSelectionTest" time="0.037"/>
+  <testcase name="selectBestPatchHandlesSeparatorDifferences()" classname="at.redi2go.photonic.client.rendering.patching.PatchSelectionTest" time="0.009"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

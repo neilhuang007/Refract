@@ -1,0 +1,16 @@
+{
+  "formatVersion": 1,
+  "shaderPackNames": [
+    "ComplementaryReimagined_r5.7.1",
+    "EuphoriaPatches_1.8.6",
+    "ComplementaryReimagined_r5.7.1+EuphoriaPatches_1.8.6"
+  ],
+  "supportedVersions": [ "0.2.9", "0.2.10" ],
+  "debug": true,
+  "alwaysPatched": [
+    "/block.properties",
+    "/shaders.properties",
+    "/lang/en_US.lang"
+  ]
+}
+

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="at.redi2go.photonic.client.rendering.patching.ComplementaryEuphoriaPatchCompatibilityTest" tests="6" skipped="0" failures="1" errors="0" timestamp="2026-03-02T02:30:46.844Z" hostname="LAPTOP-3EJOJ4TU" time="0.107">
+  <properties/>
+  <testcase name="allAnchorsResolveAgainstCurrentSources()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEuphoriaPatchCompatibilityTest" time="0.08"/>
+  <testcase name="patchedGbuffersExposePhotonicsTargets()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEuphoriaPatchCompatibilityTest" time="0.004"/>
+  <testcase name="alphaDrivenGbuffersKeepNormalMCacheToAvoidScopeBreakage()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEuphoriaPatchCompatibilityTest" time="0.002"/>
+  <testcase name="patchMetadataTargetsEuphoriaVariant()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEuphoriaPatchCompatibilityTest" time="0.013"/>
+  <testcase name="deferredLightingUsesUnlitAlbedoCacheForRtContribution()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEuphoriaPatchCompatibilityTest" time="0.002">
+    <failure message="org.opentest4j.AssertionFailedError: expected: &lt;true&gt; but was: &lt;false&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: expected: &lt;true&gt; but was: &lt;false&gt;
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+	at app//org.junit.jupiter.api.AssertTrue.failNotTrue(AssertTrue.java:63)
+	at app//org.junit.jupiter.api.AssertTrue.assertTrue(AssertTrue.java:36)
+	at app//org.junit.jupiter.api.AssertTrue.assertTrue(AssertTrue.java:31)
+	at app//org.junit.jupiter.api.Assertions.assertTrue(Assertions.java:183)
+	at app//at.redi2go.photonic.client.rendering.patching.ComplementaryEuphoriaPatchCompatibilityTest.deferredLightingUsesUnlitAlbedoCacheForRtContribution(ComplementaryEuphoriaPatchCompatibilityTest.java:164)
+	at java.base@21.0.6/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base@21.0.6/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base@21.0.6/java.util.ArrayList.forEach(ArrayList.java:1596)
+</failure>
+  </testcase>
+  <testcase name="patchedGbuffersEncodeGeometricNormalForPhotonicsCache()" classname="at.redi2go.photonic.client.rendering.patching.ComplementaryEuphoriaPatchCompatibilityTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

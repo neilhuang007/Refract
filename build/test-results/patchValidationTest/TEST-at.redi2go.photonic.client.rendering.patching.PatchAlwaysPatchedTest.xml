@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="at.redi2go.photonic.client.rendering.patching.PatchAlwaysPatchedTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-03-02T02:30:46.980Z" hostname="LAPTOP-3EJOJ4TU" time="0.587">
+  <properties/>
+  <testcase name="patchKeepsOnlyAlwaysPatchedFilesWhenPhotonicsIsDisabled()" classname="at.redi2go.photonic.client.rendering.patching.PatchAlwaysPatchedTest" time="0.587"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
