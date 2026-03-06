@@ -100,6 +100,12 @@ public class CommonUniformsMixin {
             "ph_mod_pixelation_debug_enabled",
             () -> PhotonicsStorage.PIXELATED_LIGHTING_DEBUG_LOG.value ? 1.0F : 0.0F
          );
+         if (!Raytracer.SHADERPACK_PROPERTIES.containsKey("uniform.float.ph_debug_lighting_master_scale")) {
+            uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_lighting_master_scale", () -> 1.0F);
+         }
+         if (!Raytracer.SHADERPACK_PROPERTIES.containsKey("uniform.float.ph_debug_cast_light_threshold")) {
+            uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_cast_light_threshold", () -> 0.0F);
+         }
       }
    }
 

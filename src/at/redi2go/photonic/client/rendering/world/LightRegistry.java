@@ -40,6 +40,8 @@ import org.joml.Vector3f;
 public class LightRegistry implements Destructable {
    public static final int MAX_LIGHT_COUNT = 1000;
    private static final int LIGHT_BYTE_SIZE = 32;
+   // Keep in sync with shader-side direct-light luminance rejection threshold.
+   private static final float MIN_NODE_LUMINANCE = 0.00002F;
    private final Predicate<PChunkPos> chunkEmptyPredicate;
    private final GlMemoryManager registryMemoryManager;
    private final MemoryOwner registryMemory;
@@ -123,7 +125,7 @@ public class LightRegistry implements Destructable {
       for (Entry<LightInstance, Integer> light : this.tracedLights) {
          float luminance = light.getKey().getType().luminanceFrom(light.getKey().getPosition(), middleBlockPos);
          luminanceCache[light.getValue()] = luminance;
-         if (!(luminance < 0.001F)) {
+         if (!(luminance < MIN_NODE_LUMINANCE)) {
             sortedLights.add(light);
             if (sortedLights.size() > this.maxLightsPerNode) {
                sortedLights.poll();

@@ -135,10 +135,14 @@ public class Raytracer implements Destructable {
       if (!Iris.getIrisConfig().areShadersEnabled()) {
          return false;
       } else {
-         if (SHADERPACK_PROPERTIES == null) {
+         if (SHADERPACK_PROPERTIES == null || SHADERPACK_CHANGED_OPTIONS == null) {
             return false;
          }
          boolean shaderPackSupported = Boolean.parseBoolean(SHADERPACK_PROPERTIES.getOrDefault("photonics.enabled", false).toString());
+         if (!shaderPackSupported) {
+            // Native integrations may expose support without predefining PHOTONICS in shaders.properties.
+            shaderPackSupported = Boolean.parseBoolean(SHADERPACK_PROPERTIES.getOrDefault("photonics.supported", false).toString());
+         }
          boolean photonicsEnabled = Boolean.parseBoolean(SHADERPACK_CHANGED_OPTIONS.getOrDefault("PHOTONICS_ENABLED", "true"));
          return !shaderPackSupported ? false : photonicsEnabled;
       }
@@ -234,6 +238,11 @@ public class Raytracer implements Destructable {
             }
 
             String relativeToPhotonics = path.getRelativeToPhotonics();
+            if (path.exists() && !"photonics.glsl".equals(relativeToPhotonics)) {
+               String preprocessed = readShaderAndPreprocess(path);
+               return preprocessed;
+            }
+
             Path devEnvShaderPath = DEV_ENV_SHADERS_PATH.resolve(relativeToPhotonics);
             if (Files.exists(devEnvShaderPath)) {
                String preprocessed = readShaderAndPreprocess(new ShaderPackPath(devEnvShaderPath));
@@ -262,7 +271,18 @@ public class Raytracer implements Destructable {
    }
 
    private static String readShaderAndPreprocess(ShaderPackPath path) throws IOException {
-      return ShaderUtil.preprocessForward(path.readFile());
+      String source = path.readFile();
+      if (
+         path.isPhotonicsPath()
+            && "shader_interface.glsl".equals(path.getRelativeToPhotonics())
+            && source.contains("get_taa_jitter(")
+            && source.contains("vec2 get_taa_jitter()")
+            && !source.contains("vec2 get_taa_jitter();")
+      ) {
+         source = source.replace("vec3 load_world_position() {", "vec2 get_taa_jitter();\n\nvec3 load_world_position() {");
+      }
+
+      return ShaderUtil.preprocessForward(source);
    }
 
    private static void registerDefaultLightBlock(List<LightBlock> lightBlocks, Vector3f color, boolean traced, Block... blocks) {

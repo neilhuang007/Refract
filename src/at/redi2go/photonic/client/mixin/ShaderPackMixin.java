@@ -94,9 +94,15 @@ public abstract class ShaderPackMixin {
       remap = false
    )
    private static void provideSource(Args args) {
+      Iterable<StringPair> environmentDefines = (Iterable<StringPair>)args.get(1);
+      List<StringPair> definitions = Lists.newArrayList(environmentDefines.iterator());
+
+      if (Raytracer.shouldBeEnabled()) {
+         // Enable native #ifdef PHOTONICS paths in supported shaderpacks.
+         definitions.add(new StringPair("PHOTONICS", ""));
+      }
+
       if (isPhotonicsSource) {
-         Iterable<StringPair> environmentDefines = (Iterable<StringPair>)args.get(1);
-         List<StringPair> definitions = Lists.newArrayList(environmentDefines.iterator());
          String var4 = Iris.getCurrentDimension().getName();
 
          String dimensionDefine = switch (var4) {
@@ -106,7 +112,8 @@ public abstract class ShaderPackMixin {
             default -> throw new IllegalStateException("Unexpected value: " + Iris.getCurrentDimension().getName());
          };
          definitions.add(new StringPair(dimensionDefine, ""));
-         args.set(1, definitions);
       }
+
+      args.set(1, definitions);
    }
 }

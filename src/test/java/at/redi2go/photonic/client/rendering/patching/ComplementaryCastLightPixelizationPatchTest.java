@@ -71,6 +71,8 @@ class ComplementaryCastLightPixelizationPatchTest {
       assertTrue(patched.contains("vec4 castDirectSoft = texelFetch(radiosity_direct_soft, texelCoord, 0);"));
       assertTrue(patched.contains("vec3 baseDirect = texelFetch(radiosity_handheld, texelCoord, 0).rgb"));
       assertTrue(patched.contains("vec3 pixelatedDirect = baseDirect;"));
+      assertTrue(patched.contains("float pixelatedLuminance = dot(positiveDirect, vec3(0.2126, 0.7152, 0.0722));"));
+      assertTrue(patched.contains("smoothstep(0.25 * threshold, 2.0 * threshold, pixelatedLuminance)"));
       assertFalse(patched.contains("uniform sampler2D colortex11;"));
       assertFalse(patched.contains("uniform float ph_mod_shadow_pixelation_enabled;"));
       assertFalse(patched.contains("uniform float ph_mod_shadow_pixel_size_rt;"));

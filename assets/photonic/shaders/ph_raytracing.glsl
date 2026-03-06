@@ -16,9 +16,11 @@ ivec3 ray_constraint = ivec3(-9999);
 bool breakOnEmpty = false;
 
 vec3 lightEmittance = vec3(0.0f);
+float ray_hit_alpha = 1.0f;
 
 void trace_ray(inout RayJob job) {
     job.direction = normalize(job.direction);
+    ray_hit_alpha = 1.0f;
 
     vec3 direction_inv = 1.0f / job.direction;
     float t0 = intersects_world(direction_inv, 16.0f * job.origin);
@@ -111,6 +113,7 @@ void trace_ray(inout RayJob job) {
     lightEmittance = unpackUnorm4x8(cb_array[-entries.y / 4096]).xyz;
 
     job.result_color = vec3((-entries.z >> 0) & 0xff, (-entries.z >> 8) & 0xff, (-entries.z >> 16) & 0xff) / 0xff;
+    ray_hit_alpha = float((-entries.z >> 24) & 0xff) / 255.0f;
     job.result_position = job.result_hit ? vec3(position / 16.0f) : (vec3(47823934.0f) - world_offset);
 
     if (t_min != -1)

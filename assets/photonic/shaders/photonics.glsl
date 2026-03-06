@@ -1,5 +1,5 @@
-#ifndef PHOTONICS
-#define PHOTONICS
+#ifndef PHOTONICS_GLSL_INCLUDED
+#define PHOTONICS_GLSL_INCLUDED
 
 /*
     -- SSBO --
@@ -94,4 +94,4 @@ const vec3 NULL = vec3(424242.424242);
 #include "ph_core.glsl"
 #include "ph_raytracing.glsl"
 
-#endif // PHOTONICS
+#endif // PHOTONICS_GLSL_INCLUDED

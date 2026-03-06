@@ -557,6 +557,22 @@ vec3 sample_direct_lighting(vec3 position, vec3 normal, vec3 mapped_normal, Ligh
     }
 
     if (floor(light.position) != floor(light_ray.result_position)) {
+        // Allow one transmissive pass through alpha-tested blocks (e.g. glass-like materials).
+        float transmission = clamp(1.0f - ray_hit_alpha, 0.0f, 1.0f);
+        if (transmission > 0.05f) {
+            vec3 throughOrigin = light_ray.result_position + light_ray.direction * 0.06f;
+            light_ray.origin = throughOrigin;
+            light_ray.direction = normalize(light.position - throughOrigin);
+
+            int throughBudget = int(clamp(ceil(length(light.position - throughOrigin)) + 10.0f, 16.0f, 120.0f));
+            RAY_ITERATION_COUNT = throughBudget;
+            trace_ray(light_ray);
+            RAY_ITERATION_COUNT = 100;
+
+            if (!light_ray.result_hit || floor(light.position) == floor(light_ray.result_position)) {
+                return light.color * mix(0.25f, 0.85f, transmission);
+            }
+        }
         return vec3(0.0f);
     }
 
