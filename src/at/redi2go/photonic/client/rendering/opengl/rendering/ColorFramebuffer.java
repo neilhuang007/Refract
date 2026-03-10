@@ -23,20 +23,26 @@ import org.lwjgl.opengl.GL42;
 
 public class ColorFramebuffer extends GlFramebuffer {
    private final Supplier<Vector2f> resolutionSupplier;
+   private final float scale;
    private int width;
    private int height;
+   private int realWidth;
+   private int realHeight;
+   private int previousDrawFramebuffer;
    private int viewportSide = -1;
    private int lastFrameUpdate = -1;
+   private boolean needsClear = false;
    private final List<String> attachmentNames = new ArrayList<>();
    private Map<String, ColorFramebuffer.FramebufferAttachment> readAttachment = new HashMap<>();
    private Map<String, ColorFramebuffer.FramebufferAttachment> writeAttachment = new HashMap<>();
 
-   public ColorFramebuffer() {
-      this(() -> new Vector2f(MinecraftClient.getInstance().getWindow().getFramebufferWidth(), MinecraftClient.getInstance().getWindow().getFramebufferHeight()));
+   public ColorFramebuffer(float scale) {
+      this(() -> new Vector2f(MinecraftClient.getInstance().getWindow().getFramebufferWidth(), MinecraftClient.getInstance().getWindow().getFramebufferHeight()), scale);
    }
 
-   public ColorFramebuffer(Supplier<Vector2f> resolutionSupplier) {
+   public ColorFramebuffer(Supplier<Vector2f> resolutionSupplier, float scale) {
       this.resolutionSupplier = resolutionSupplier;
+      this.scale = scale;
    }
 
    public void createAttachment(String name, String internalFormat, boolean interpolate) {
@@ -48,6 +54,7 @@ public class ColorFramebuffer extends GlFramebuffer {
 
    public void bind() {
       this.updatePerFrame();
+      this.previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
       GL30.glBindFramebuffer(36160, this.getId());
       if (this.viewportSide != -1) {
          int x = this.viewportSide * this.width / 2;
@@ -62,7 +69,6 @@ public class ColorFramebuffer extends GlFramebuffer {
 
       for (String name : this.attachmentNames) {
          int texture = name == null ? 0 : this.writeAttachment.get(name).getTextureId();
-         GL11.glBindTexture(3553, texture);
          if (!Objects.equals(name, "depth")) {
             buffer.put(36064 + i);
             GL30.glFramebufferTexture2D(36160, 36064 + i, 3553, texture, 0);
@@ -79,13 +85,20 @@ public class ColorFramebuffer extends GlFramebuffer {
       if (status != 36053) {
          throw new RuntimeException("Framebuffer in invalid state: " + status);
       }
+
+      if (this.needsClear) {
+         this.needsClear = false;
+         GL11.glClearColor(0, 0, 0, 0);
+         GL11.glClear(16640);
+      }
    }
 
    public void unbind() {
-      GL30.glBindFramebuffer(36160, MinecraftClient.getInstance().getFramebuffer().fbo);
+      GL30.glBindFramebuffer(36160, this.previousDrawFramebuffer);
       int width = MinecraftClient.getInstance().getWindow().getFramebufferWidth();
       int height = MinecraftClient.getInstance().getWindow().getFramebufferHeight();
       GL11.glViewport(0, 0, width, height);
+      this.previousDrawFramebuffer = 0;
    }
 
    public void swap() {
@@ -124,11 +137,16 @@ public class ColorFramebuffer extends GlFramebuffer {
       if (counter != this.lastFrameUpdate) {
          this.lastFrameUpdate = counter;
          Vector2f resolution = this.resolutionSupplier.get();
-         if (this.width != resolution.x || this.height != resolution.y) {
-            this.width = (int)Math.max(resolution.x, 1.0F);
-            this.height = (int)Math.max(resolution.y, 1.0F);
+         int rawW = (int) resolution.x;
+         int rawH = (int) resolution.y;
+         if (this.realWidth != rawW || this.realHeight != rawH) {
+            this.realWidth = rawW;
+            this.realHeight = rawH;
+            this.width = (int) Math.max(rawW * this.scale, 1.0F);
+            this.height = (int) Math.max(rawH * this.scale, 1.0F);
             this.readAttachment.values().forEach(attachment -> attachment.init(this.width, this.height));
             this.writeAttachment.values().forEach(attachment -> attachment.init(this.width, this.height));
+            this.needsClear = true;
          }
       }
    }

@@ -13,16 +13,34 @@ public class LightNodePos {
       this.z = z;
    }
 
+   public LightNodePos(LightNodePos pos) {
+      this.x = pos.x;
+      this.y = pos.y;
+      this.z = pos.z;
+   }
+
    public void add(int x, int y, int z) {
       this.x += x;
       this.y += y;
       this.z += z;
    }
 
+   public void add(int scalar) {
+      this.x += scalar;
+      this.y += scalar;
+      this.z += scalar;
+   }
+
    public void sub(int x, int y, int z) {
       this.x -= x;
       this.y -= y;
       this.z -= z;
+   }
+
+   public void sub(int scalar) {
+      this.x -= scalar;
+      this.y -= scalar;
+      this.z -= scalar;
    }
 
    public PBlockPos toBlockPos(int nodeSize, PBlockPos offset) {

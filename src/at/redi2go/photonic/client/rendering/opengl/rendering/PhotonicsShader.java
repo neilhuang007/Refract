@@ -1,5 +1,6 @@
 package at.redi2go.photonic.client.rendering.opengl.rendering;
 
+import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.rendering.opengl.objects.GLMemoryCollection;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
 import java.util.ArrayList;
@@ -20,6 +21,10 @@ public class PhotonicsShader {
       this.vertexName = vertexName;
       this.memoryCollection = memoryCollection;
       this.framebuffer = framebuffer;
+   }
+
+   public void bindFramebuffer() {
+      Raytracer.CURRENT_FRAMEBUFFER = this.framebuffer;
    }
 
    public void bind(int shaderId) {

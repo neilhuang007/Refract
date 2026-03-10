@@ -23,7 +23,7 @@ public class SimpleMemoryOwner implements MemoryOwner {
    }
 
    @Override
-   public void allocate(GlMemoryManager memoryManager) {
+   public void allocate(MemoryManager memoryManager) {
       if (this.memory != null) {
          this.free(memoryManager);
       }
@@ -32,13 +32,13 @@ public class SimpleMemoryOwner implements MemoryOwner {
    }
 
    @Override
-   public void free(GlMemoryManager memoryManager) {
+   public void free(MemoryManager memoryManager) {
       memoryManager.free(this.memory);
       this.memory = null;
    }
 
    @Override
-   public boolean update(GlMemoryManager memoryManager) {
+   public boolean update(MemoryManager memoryManager) {
       return false;
    }
 

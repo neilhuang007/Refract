@@ -45,7 +45,7 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
    private final AtomicIntegerImage[] gi;
    private final Map<Integer, Integer> boundTextures = new HashMap<>();
 
-   public RenderDispatcher() {
+   public RenderDispatcher(float renderScale) {
       this.gi = IntStream.range(0, 5).mapToObj(i -> new AtomicIntegerImage(() -> {
          Window window = MinecraftClient.getInstance().getWindow();
          return new Vector3f(window.getFramebufferWidth(), window.getFramebufferHeight(), 2.0F);

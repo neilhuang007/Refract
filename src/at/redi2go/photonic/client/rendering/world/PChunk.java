@@ -1,57 +1,127 @@
 package at.redi2go.photonic.client.rendering.world;
 
+import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.rendering.schematics.Schematic;
-import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
+import at.redi2go.photonic.client.rendering.world.buffer.MemoryManager;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryOwner;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryRegion;
+import it.unimi.dsi.fastutil.objects.Object2IntMap;
+import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
 public class PChunk implements MemoryOwner {
    public static final int CHUNK_SIZE = 16;
+   private static final int MAX_SHADER_BLOCK_INDEX = 0xFFF;
+   private static final int DEBUG_LOG_LIMIT = 16;
+   private static int blockPointerOverflowLogs = 0;
    private final Schematic schematic;
    private MemoryRegion chunkMemory;
    private boolean dirty = true;
+   private final Object2IntMap<PBlock> blocks = new Object2IntOpenHashMap<>();
+   private CompletableFuture<Void> pendingOptimization;
    public static int loaded = 0;
 
    public PChunk() {
       this.schematic = new Schematic(16, 16, 16);
    }
 
-   public void set(int x, int y, int z, PBlock block) {
-      this.schematic.setEntry(x, y, z, block != null ? block.getMemory().begin >> 2 : 0);
+   public void freeBlocks() {
+      for (Object2IntMap.Entry<PBlock> e : this.blocks.object2IntEntrySet()) {
+         e.getKey().changeTimesUsed(-e.getIntValue());
+      }
+      this.blocks.clear();
+   }
+
+   public void set(int x, int y, int z, PBlock block, int skyBrightness) {
+      int value;
+      if (block != null) {
+         value = block.getMemory().begin >> 2;
+         block.changeTimesUsed(1);
+         this.blocks.mergeInt(block, 1, Integer::sum);
+      } else {
+         value = 0;
+      }
+
+      value /= PBlock.BYTE_SIZE / 4;
+      if (value > MAX_SHADER_BLOCK_INDEX) {
+         if (blockPointerOverflowLogs < DEBUG_LOG_LIMIT) {
+            blockPointerOverflowLogs++;
+            Photonic.warn(
+               "[PChunkDebug] Block pointer overflow: blockId={} shaderIndex={} exceeds 12-bit budget, falling back to air",
+               block == null ? -1 : block.blockId,
+               value
+            );
+         }
+         value = 0;
+      }
+      if (skyBrightness != -1 && value != 0) {
+         value |= skyBrightness << 12;
+      }
+
+      this.schematic.setEntry(x, y, z, value);
       this.dirty = true;
    }
 
    @Override
-   public void allocate(GlMemoryManager memoryManager) {
+   public void allocate(MemoryManager memoryManager) {
       this.chunkMemory = memoryManager.allocate(this.getSize());
       loaded++;
    }
 
    @Override
-   public void free(GlMemoryManager memoryManager) {
+   public void free(MemoryManager memoryManager) {
       if (this.chunkMemory != null) {
          memoryManager.free(this.chunkMemory);
          this.chunkMemory = null;
+         this.pendingOptimization = null;
          loaded--;
       }
    }
 
    @Override
-   public boolean update(GlMemoryManager memoryManager) {
+   public boolean update(MemoryManager memoryManager) {
       if (!this.dirty) {
          return false;
-      } else {
-         try {
-            this.schematic.reset();
-            this.schematic.initialize();
-            this.schematic.optimizeThreaded().get();
-            this.chunkMemory.getBuffer().asIntBuffer().put(this.schematic.getData());
-            memoryManager.queueUpload(this);
-            return true;
-         } catch (ExecutionException | InterruptedException var3) {
-            throw new RuntimeException(var3);
-         }
+      }
+
+      this.optimizeAsync();
+      this.finishUpdate(memoryManager);
+      return true;
+   }
+
+   public CompletableFuture<Void> optimizeAsync() {
+      if (!this.dirty) {
+         return CompletableFuture.completedFuture(null);
+      }
+      if (this.pendingOptimization != null) {
+         return this.pendingOptimization;
+      }
+
+      this.schematic.reset();
+      this.schematic.initialize();
+      this.pendingOptimization = this.schematic.optimizeThreaded();
+      return this.pendingOptimization;
+   }
+
+   public void finishUpdate(MemoryManager memoryManager) {
+      if (!this.dirty) {
+         return;
+      }
+
+      CompletableFuture<Void> optimization = this.pendingOptimization;
+      if (optimization == null) {
+         optimization = this.optimizeAsync();
+      }
+
+      try {
+         optimization.get();
+         this.chunkMemory.getBuffer().asIntBuffer().put(this.schematic.getData());
+         memoryManager.queueUpload(this);
+      } catch (ExecutionException | InterruptedException e) {
+         throw new RuntimeException(e);
+      } finally {
+         this.pendingOptimization = null;
       }
    }
 

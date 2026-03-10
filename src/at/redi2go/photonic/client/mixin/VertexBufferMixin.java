@@ -14,10 +14,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(VertexBuffer.class)
 public class VertexBufferMixin {
    @Inject(
-      method = "_drawWithShader",
+      method = "drawInternal",
       at = @At(
          value = "INVOKE",
-         target = "Lnet/minecraft/client/renderer/ShaderInstance;setDefaultUniforms(Lcom/mojang/blaze3d/vertex/VertexFormat$Mode;Lorg/joml/Matrix4f;Lorg/joml/Matrix4f;Lcom/mojang/blaze3d/platform/Window;)V",
+         target = "Lnet/minecraft/client/gl/ShaderProgram;initializeUniforms(Lnet/minecraft/client/render/VertexFormat$DrawMode;Lorg/joml/Matrix4f;Lorg/joml/Matrix4f;Lnet/minecraft/client/util/Window;)V",
          shift = Shift.AFTER
       )
    )

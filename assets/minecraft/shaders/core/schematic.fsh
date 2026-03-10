@@ -30,7 +30,7 @@ int get_index(ivec3 position) {
 
 void main() {
     vec4 color = texture(Sampler0, texCoord0);
-    if (color.a < 0.1) {
+    if (color.a < 0.0078125) {
         discard;
     }
 
@@ -40,11 +40,20 @@ void main() {
 //        color.xyz *= tint;
 //    }
 
+//    color.xyz = vec3(1.0f, 0.0f, 0.0f);
+
     ivec3 icolor = ivec3(color * 0xff);
     icolor = max(icolor, ivec3(1, 1, 1));
 
-    // use atomic max so result is not dependent on vertex order
-    atomicMax(world_array[get_index(clamp(ivec3(pos), ivec3(0), ivec3(15)))], icolor.x | (icolor.y << 8) | (icolor.z << 16));
+    // Use 7 bits to store alpha
+    int alpha = int((color.a * 127));
 
-    fragColor = color;
+    // use atomic max so result is not dependent on vertex order
+    // alpha is reversed so that built in schematics are opaque
+    atomicMax(
+        world_array[get_index(clamp(ivec3(pos), ivec3(0), ivec3(15)))],
+        (127 - alpha) | (icolor.x << 7) | (icolor.y << 15) | (icolor.z << 23)
+    );
+
+    discard;
 }

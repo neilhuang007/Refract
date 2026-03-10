@@ -1,11 +1,11 @@
 package at.redi2go.photonic.client.rendering.world.buffer;
 
 public interface MemoryOwner {
-   void allocate(GlMemoryManager var1);
+   void allocate(MemoryManager var1);
 
-   void free(GlMemoryManager var1);
+   void free(MemoryManager var1);
 
-   boolean update(GlMemoryManager var1);
+   boolean update(MemoryManager var1);
 
    void afterUpload();
 

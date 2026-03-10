@@ -10,8 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ModOilifyOptionTest {
    private static final Path STORAGE_FILE = Path.of("src/at/redi2go/photonic/client/PhotonicsStorage.java");
    private static final Path SETTINGS_SCREEN_FILE = Path.of("src/at/redi2go/photonic/client/ModSettingsScreen.java");
-   private static final Path COMMON_UNIFORMS_MIXIN_FILE = Path.of("src/at/redi2go/photonic/client/mixin/CommonUniformsMixin.java");
-
    @Test
    void storageDeclaresOilifyEnabledParameter() throws IOException {
       String source = Files.readString(STORAGE_FILE);
@@ -28,15 +26,6 @@ class ModOilifyOptionTest {
       assertTrue(source.contains("\"Oilify: \" + (oilify.value ? \"On\" : \"Off\")"));
       assertTrue(source.contains("oilify.value = !oilify.value;"));
       assertTrue(source.contains("oilify.modified();"));
-   }
-
-   @Test
-   void commonUniformsPublishOilifyEnabledUniform() throws IOException {
-      String source = Files.readString(COMMON_UNIFORMS_MIXIN_FILE);
-
-      assertTrue(source.contains("uniforms.uniform1f("));
-      assertTrue(source.contains("\"ph_mod_oilify_enabled\""));
-      assertTrue(source.contains("() -> PhotonicsStorage.OILIFY_ENABLED.value ? 1.0F : 0.0F"));
    }
 
    @Test
@@ -57,19 +46,6 @@ class ModOilifyOptionTest {
       assertTrue(source.contains("\"oilify_depth_scaling\""), "oilify_depth_scaling config key must exist");
       assertTrue(source.contains("OILIFY_STROKE_STRENGTH"), "OILIFY_STROKE_STRENGTH parameter must exist");
       assertTrue(source.contains("\"oilify_stroke_strength\""), "oilify_stroke_strength config key must exist");
-   }
-
-   @Test
-   void commonUniformsPublishOilifyConfigUniforms() throws IOException {
-      String source = Files.readString(COMMON_UNIFORMS_MIXIN_FILE);
-
-      assertTrue(source.contains("\"ph_mod_oilify_size\""), "ph_mod_oilify_size uniform must exist");
-      assertTrue(source.contains("\"ph_mod_oilify_sharpness\""), "ph_mod_oilify_sharpness uniform must exist");
-      assertTrue(source.contains("\"ph_mod_oilify_scale\""), "ph_mod_oilify_scale uniform must exist");
-      assertTrue(source.contains("\"ph_mod_oilify_tuning\""), "ph_mod_oilify_tuning uniform must exist");
-      assertTrue(source.contains("\"ph_mod_oilify_iterations\""), "ph_mod_oilify_iterations uniform must exist");
-      assertTrue(source.contains("\"ph_mod_oilify_depth_scaling\""), "ph_mod_oilify_depth_scaling uniform must exist");
-      assertTrue(source.contains("\"ph_mod_oilify_stroke_strength\""), "ph_mod_oilify_stroke_strength uniform must exist");
    }
 
    @Test

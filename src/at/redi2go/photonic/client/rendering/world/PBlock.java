@@ -1,52 +1,96 @@
 package at.redi2go.photonic.client.rendering.world;
 
 import at.redi2go.photonic.client.rendering.schematics.Schematic;
-import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
+import at.redi2go.photonic.client.rendering.schematics.SchematicAlgorithms;
+import at.redi2go.photonic.client.rendering.util.BufferUtils;
+import at.redi2go.photonic.client.rendering.world.buffer.MemoryManager;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryOwner;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryRegion;
+import java.nio.IntBuffer;
 import java.util.function.Supplier;
+import org.joml.Vector3f;
 
 public class PBlock implements MemoryOwner {
-   public static final int BLOCK_SIZE = 16;
-   private MemoryRegion blockMemory;
+   public static int numAllocated = 0;
+   public final int blockId;
+   public int emissionColor;
    private Supplier<Schematic> compiledSchematicSupplier;
-   private boolean lightSourceRegistered = false;
-   private boolean empty = false;
-   public static int loaded = 0;
+   private MemoryRegion blockMemory;
+   private int timesUsed = 0;
+   private boolean needsUpdate = false;
+   public boolean canOcclude = false;
+   public static final int BLOCK_SIZE = 16;
+   public static final int SCHEMATIC_SIZE = 16384;
+   public static int BYTE_SIZE = 16392;
 
-   public PBlock(Supplier<Schematic> compiledSchematicSupplier) {
+   public PBlock(int blockId, Supplier<Schematic> compiledSchematicSupplier) {
       if (compiledSchematicSupplier == null) {
          throw new IllegalArgumentException("compiledSchematicSupplier must not be null");
-      } else {
-         this.compiledSchematicSupplier = compiledSchematicSupplier;
+      }
+      this.blockId = blockId;
+      this.compiledSchematicSupplier = compiledSchematicSupplier;
+   }
+
+   public boolean needsUpdate() {
+      return this.needsUpdate;
+   }
+
+   public boolean isUsed() {
+      return this.timesUsed > 0;
+   }
+
+   public void changeTimesUsed(int delta) {
+      this.timesUsed = Math.max(0, this.timesUsed + delta);
+   }
+
+   public boolean isAllocated() {
+      return this.blockMemory != null;
+   }
+
+   @Override
+   public void allocate(MemoryManager memoryManager) {
+      if (this.blockMemory == null) {
+         this.blockMemory = memoryManager.allocate(this.getSize());
+         this.needsUpdate = true;
+         numAllocated++;
       }
    }
 
    @Override
-   public void allocate(GlMemoryManager memoryManager) {
-      this.blockMemory = memoryManager.allocate(this.getSize());
-      loaded++;
-   }
-
-   @Override
-   public void free(GlMemoryManager memoryManager) {
+   public void free(MemoryManager memoryManager) {
       if (this.blockMemory != null) {
          memoryManager.free(this.blockMemory);
+         this.needsUpdate = true;
          this.blockMemory = null;
-         loaded--;
+         numAllocated = Math.max(0, numAllocated - 1);
       }
    }
 
    @Override
-   public boolean update(GlMemoryManager memoryManager) {
-      if (this.compiledSchematicSupplier == null) {
+   public boolean update(MemoryManager memoryManager) {
+      if (!this.needsUpdate) {
          return false;
-      } else {
-         this.blockMemory.getBuffer().asIntBuffer().put(this.compiledSchematicSupplier.get().getData());
-         memoryManager.queueUploadPriority(this);
-         this.compiledSchematicSupplier = null;
-         return true;
       }
+      this.needsUpdate = false;
+      Schematic schematic;
+      if (this.compiledSchematicSupplier != null) {
+         schematic = this.compiledSchematicSupplier.get();
+         this.canOcclude = SchematicAlgorithms.canOcclude(schematic);
+         this.compiledSchematicSupplier = null;
+      } else {
+         schematic = null;
+      }
+
+      IntBuffer buffer = this.blockMemory.getBuffer().asIntBuffer();
+      buffer.position(0);
+      buffer.put(this.blockId);
+      buffer.put(this.emissionColor);
+      if (schematic != null) {
+         buffer.put(schematic.getData());
+      }
+
+      memoryManager.queueUploadPriority(this);
+      return true;
    }
 
    @Override
@@ -55,7 +99,7 @@ public class PBlock implements MemoryOwner {
 
    @Override
    public int getSize() {
-      return 16384;
+      return BYTE_SIZE;
    }
 
    @Override
@@ -63,23 +107,18 @@ public class PBlock implements MemoryOwner {
       return this.blockMemory;
    }
 
+   public int getIndex() {
+      return this.blockMemory.begin / (BYTE_SIZE / 4095);
+   }
+
    public void setCompiledSchematicSupplier(Supplier<Schematic> compiledSchematicSupplier) {
       this.compiledSchematicSupplier = compiledSchematicSupplier;
+      this.needsUpdate = true;
    }
 
-   public boolean isEmpty() {
-      return this.empty;
-   }
-
-   public void setEmpty(boolean empty) {
-      this.empty = empty;
-   }
-
-   public boolean isLightSourceRegistered() {
-      return this.lightSourceRegistered;
-   }
-
-   public void setLightSourceRegistered(boolean lightSourceRegistered) {
-      this.lightSourceRegistered = lightSourceRegistered;
+   public void setEmissionColor(Vector3f color) {
+      int[] bytes = BufferUtils.packUnorm4x8(color.x, color.y, color.z, 0.0F);
+      this.emissionColor = bytes[0] | bytes[1] << 8 | bytes[2] << 16;
+      this.needsUpdate = true;
    }
 }

@@ -5,7 +5,7 @@
     "EuphoriaPatches_1.8.6",
     "ComplementaryReimagined_r5.7.1+EuphoriaPatches_1.8.6"
   ],
-  "supportedVersions": [ "0.2.9", "0.2.10" ],
+  "supportedVersions": [ "0.2.9", "0.2.10", "0.3.1+1.21.1" ],
   "debug": true,
   "alwaysPatched": [
     "/block.properties",
@@ -13,4 +13,3 @@
     "/lang/en_US.lang"
   ]
 }
-

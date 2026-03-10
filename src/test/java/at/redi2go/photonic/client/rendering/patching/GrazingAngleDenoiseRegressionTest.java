@@ -47,13 +47,13 @@ class GrazingAngleDenoiseRegressionTest {
          "onEdge variable must be declared");
       assertTrue(shader.contains("if (!onEdge)"),
          "process_indirect() must be guarded by !onEdge check");
-      assertTrue(shader.contains("process_indirect();"),
-         "process_indirect() call must be present");
+      assertTrue(shader.contains("ph_process_indirect();"),
+         "ph_process_indirect() call must be present");
 
       int onEdgeIndex = shader.indexOf("bool onEdge =");
-      int processIndirectIndex = shader.indexOf("process_indirect();");
+      int processIndirectIndex = shader.indexOf("ph_process_indirect();");
       assertTrue(onEdgeIndex >= 0 && processIndirectIndex >= 0 && onEdgeIndex < processIndirectIndex,
-         "onEdge must be declared before process_indirect() call");
+         "onEdge must be declared before ph_process_indirect() call");
    }
 
    @Test
@@ -103,12 +103,20 @@ class GrazingAngleDenoiseRegressionTest {
    void phLightingTemporalAccumulationDecay() throws IOException {
       String shader = Files.readString(PH_LIGHTING);
 
-      assertTrue(shader.contains("float historyDecay = light_reload ? 0.0f : 0.985f;"),
-         "historyDecay must be 0.985 with full reset on light_reload");
+      assertTrue(shader.contains("float historyDecay;"),
+         "historyDecay must be declared");
+      assertTrue(shader.contains("historyDecay = mix(0.5f, 0.0f,"),
+         "historyDecay must blend to 0.0 during strong blend factor");
+      assertTrue(shader.contains("historyDecay = 0.9f;"),
+         "historyDecay must be 0.9 for low sample count");
+      assertTrue(shader.contains("historyDecay = 0.95f;"),
+         "historyDecay must be 0.95 for medium sample count");
+      assertTrue(shader.contains("historyDecay = 0.985f;"),
+         "historyDecay must reach 0.985 for high sample count");
       assertTrue(shader.contains("result *= historyDecay;"),
          "History must be multiplied by historyDecay");
-      assertTrue(shader.contains("if (light_reload || frag == NULL4)"),
-         "History must be fully reset on light_reload");
+      assertTrue(shader.contains("if (frag == NULL4)"),
+         "History must be fully reset when frag is NULL4");
       assertTrue(shader.contains("dot(d, d) >= 0.1f"),
          "Reprojection must reject samples with position distance dot(d,d) >= 0.1f");
       assertTrue(shader.contains("dot(n, base_normal) < 0.99f"),
@@ -121,8 +129,8 @@ class GrazingAngleDenoiseRegressionTest {
 
       assertTrue(shader.contains("for (int i = 0; i < 2; i++)"),
          "sample_indirect_lighting must use exactly 2 bounces");
-      assertTrue(shader.contains("RAY_ITERATION_COUNT = 20;"),
-         "Indirect bounce ray iteration count must be 20");
+      assertTrue(shader.contains("RAY_ITERATION_COUNT = 32;"),
+         "Indirect bounce ray iteration count must be 32");
       assertFalse(shader.contains("sample_blue_noise_hemisphere"),
          "Reference shader should not include unstable blue-noise hemisphere helper");
       assertTrue(shader.contains("breakOnEmpty = true;"),

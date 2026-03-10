@@ -1,9 +1,10 @@
 package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.BlockRendererExt;
-import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.Raytracer;
+import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.rendering.world.LightRegistry;
+import at.redi2go.photonic.client.rendering.world.PBlock;
 import at.redi2go.photonic.client.rendering.world.position.PChunkPos;
 import com.llamalad7.mixinextras.sugar.Local;
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkBuildContext;
@@ -12,9 +13,10 @@ import net.caffeinemc.mods.sodium.client.render.chunk.compile.pipeline.BlockRend
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.tasks.ChunkBuilderMeshingTask;
 import net.caffeinemc.mods.sodium.client.util.task.CancellationToken;
 import net.minecraft.client.render.model.BakedModel;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.block.BlockRenderType;
-import net.minecraft.block.BlockState;
 import net.minecraft.util.math.BlockPos.Mutable;
 import org.joml.Vector3f;
 import org.spongepowered.asm.mixin.Mixin;
@@ -51,34 +53,41 @@ public class ChunkBuilderMeshingTaskMixin {
                   .getWorldRegistry()
                   .loadChunk(new PChunkPos(lowerCorner.getX() / 16, lowerCorner.getY() / 16, lowerCorner.getZ() / 16))
             );
-         Raytracer.INSTANCE.getWorldRegistry().wakeUpWorldBuilder();
          LightRegistry lightRegistry = Raytracer.INSTANCE.getWorldRegistry().getLightRegistry();
 
          for (BlockPos blockPos : BlockPos.iterate(lowerCorner, upperCorner)) {
-            lightRegistry.onBlockLoad(new Vector3f(blockPos.getX(), blockPos.getY(), blockPos.getZ()));
+            if (lightRegistry.hasPossibleLight(buildContext.cache.getWorldSlice().getBlockState(blockPos))) {
+               lightRegistry.onBlockLoad(new Vector3f(blockPos.getX(), blockPos.getY(), blockPos.getZ()));
+            }
          }
+
+         Raytracer.INSTANCE.getWorldRegistry().wakeUpWorldBuilder();
       }
    }
 
    @Redirect(
       method = "execute(Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/ChunkBuildContext;Lnet/caffeinemc/mods/sodium/client/util/task/CancellationToken;)Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/ChunkBuildOutput;",
-      at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/state/BlockState;hasBlockEntity()Z")
+      at = @At(value = "INVOKE", target = "Lnet/minecraft/block/BlockState;hasBlockEntity()Z", remap = true),
+      remap = false
    )
    public boolean hasBlockEntity(BlockState instance) {
-      return !Raytracer.isDisabled() && PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS.value.contains(instance.getBlock()) ? false : instance.hasBlockEntity();
+      return !Raytracer.isDisabled() && PhotonicsConfig.isVoxelized(instance.getBlock()) ? false : instance.hasBlockEntity();
    }
 
    @Redirect(
       method = "execute(Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/ChunkBuildContext;Lnet/caffeinemc/mods/sodium/client/util/task/CancellationToken;)Lnet/caffeinemc/mods/sodium/client/render/chunk/compile/ChunkBuildOutput;",
-      at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/state/BlockState;getRenderShape()Lnet/minecraft/world/level/block/RenderShape;")
+      at = @At(value = "INVOKE", target = "Lnet/minecraft/block/BlockState;getRenderType()Lnet/minecraft/block/BlockRenderType;", remap = true),
+      remap = false
    )
    public BlockRenderType getRenderShape(
       BlockState instance, @Local BlockRenderCache cache, @Local(ordinal = 0) Mutable blockPos, @Local(ordinal = 1) Mutable modelOffset
    ) {
-      if (!Raytracer.isDisabled() && PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS.value.contains(instance.getBlock())) {
-         BakedModel model = cache.getBlockModels().getModel(instance);
+      if (!Raytracer.isDisabled() && PhotonicsConfig.isVoxelized(instance.getBlock())) {
+         PBlock block = Raytracer.INSTANCE.getBlockRegistry().getBlock(instance);
+         BlockState blockState = block != null && block.canOcclude ? Blocks.STONE.getDefaultState() : Blocks.GLASS.getDefaultState();
+         BakedModel model = cache.getBlockModels().getModelManager().getMissingModel();
          ((BlockRendererExt)cache.getBlockRenderer()).photonic$setRenderingVoxelBlock(true);
-         cache.getBlockRenderer().renderModel(model, instance, blockPos, modelOffset);
+         cache.getBlockRenderer().renderModel(model, blockState, blockPos, modelOffset);
          ((BlockRendererExt)cache.getBlockRenderer()).photonic$setRenderingVoxelBlock(false);
          return BlockRenderType.INVISIBLE;
       } else {

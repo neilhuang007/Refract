@@ -48,6 +48,10 @@ public class PBlockPos {
       return new PChunkPos(Math.floorDiv(this.x, 16), Math.floorDiv(this.y, 16), Math.floorDiv(this.z, 16));
    }
 
+   public LightNodePos toLightPos(int nodeSize, PBlockPos offset) {
+      return new LightNodePos((this.x - offset.x) / nodeSize, (this.y - offset.y) / nodeSize, (this.z - offset.z) / nodeSize);
+   }
+
    public Vector3i toVector() {
       return new Vector3i(this.x, this.y, this.z);
    }

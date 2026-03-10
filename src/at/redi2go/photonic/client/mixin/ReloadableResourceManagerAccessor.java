@@ -8,6 +8,6 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 
 @Mixin(ReloadableResourceManagerImpl.class)
 public interface ReloadableResourceManagerAccessor {
-   @Accessor
+   @Accessor("reloaders")
    List<ResourceReloader> getListeners();
 }

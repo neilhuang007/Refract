@@ -66,7 +66,9 @@ public class IncludeGraphMixin {
 
    @Inject(method = "readFile", at = @At("HEAD"), cancellable = true)
    private static void readFile(Path path, CallbackInfoReturnable<String> cir) throws IOException {
-      cir.setReturnValue(Raytracer.readShaderFile(new ShaderPackPath(path), true));
+      ShaderPackPath spp = new ShaderPackPath(path);
+      String result = Raytracer.readShaderFile(spp, true);
+      cir.setReturnValue(result);
       cir.cancel();
    }
 }

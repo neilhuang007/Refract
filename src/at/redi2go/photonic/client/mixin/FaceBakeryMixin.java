@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(BakedQuadFactory.class)
 public class FaceBakeryMixin {
-   @Inject(method = "bakeQuad", at = @At("RETURN"))
+   @Inject(method = "bake", at = @At("RETURN"))
    private static void bakeQuad(
       Vector3f vector3f,
       Vector3f vector3f2,

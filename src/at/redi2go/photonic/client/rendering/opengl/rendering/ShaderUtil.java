@@ -1,5 +1,6 @@
 package at.redi2go.photonic.client.rendering.opengl.rendering;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -11,6 +12,9 @@ import org.joml.Matrix4fc;
 
 public class ShaderUtil {
    private static final Pattern FUNCTION_PATTERN = Pattern.compile("(\\w+\\s+\\w+\\(.*\\))\\s*\\{");
+   private static final Pattern CUSTOM_ALPHA_FLAG_PATTERN = Pattern.compile("(?m)^\\s*#PH_USE_CUSTOM_ALPHA\\s*$");
+   private static final Pattern CUSTOM_ALPHA_FUNCTION_PATTERN =
+      Pattern.compile("(?m)^\\s*#PH_ALPHA_FUNC\\(([^)]*)\\)\\s+(.+?)\\s*$");
    private static final List<Pair<String, String>> IRIS_UNIFORMS = List.of(
       Pair.of("int", "heldItemId"),
       Pair.of("int", "heldBlockLightValue"),
@@ -121,8 +125,13 @@ public class ShaderUtil {
       return new Matrix4f(projectionMatrix).mul(rotationMatrix).invert();
    }
 
+   public static String preprocessPhotonicsDirectives(String source) {
+      String processed = CUSTOM_ALPHA_FLAG_PATTERN.matcher(source).replaceAll("#define PH_USE_CUSTOM_ALPHA");
+      return CUSTOM_ALPHA_FUNCTION_PATTERN.matcher(processed).replaceAll("#define PH_ALPHA_FUNC($1) $2");
+   }
+
    public static String preprocessAutoUniforms(String source) {
-      return source;
+      return injectMissingUniforms(preprocessPhotonicsDirectives(source));
    }
 
    public static String preprocessForward(String source) {
@@ -139,5 +148,50 @@ public class ShaderUtil {
 
          return source.replace(forward, String.join("\n", functionSignatures));
       }
+   }
+
+   private static String injectMissingUniforms(String source) {
+      List<String> missingUniforms = new ArrayList<>();
+
+      for (Pair<String, String> uniform : IRIS_UNIFORMS) {
+         String name = uniform.getRight();
+         if (referencesIdentifier(source, name) && !declaresUniform(source, name)) {
+            missingUniforms.add("uniform " + uniform.getLeft() + " " + name + ";");
+         }
+      }
+
+      if (missingUniforms.isEmpty()) {
+         return source;
+      }
+
+      String newline = source.contains("\r\n") ? "\r\n" : "\n";
+      String declarations = String.join(newline, missingUniforms);
+      String[] lines = source.split("\\R", -1);
+      int insertionLine = lines.length > 0 && lines[0].startsWith("#version") ? 1 : 0;
+
+      while (insertionLine < lines.length && lines[insertionLine].startsWith("#extension")) {
+         insertionLine++;
+      }
+
+      String prefix = String.join(newline, List.of(lines).subList(0, insertionLine));
+      String suffix = String.join(newline, List.of(lines).subList(insertionLine, lines.length));
+
+      if (prefix.isEmpty()) {
+         return declarations + newline + suffix;
+      }
+
+      if (suffix.isEmpty()) {
+         return prefix + newline + declarations;
+      }
+
+      return prefix + newline + declarations + newline + suffix;
+   }
+
+   private static boolean referencesIdentifier(String source, String name) {
+      return Pattern.compile("\\b" + Pattern.quote(name) + "\\b").matcher(source).find();
+   }
+
+   private static boolean declaresUniform(String source, String name) {
+      return Pattern.compile("(?m)^\\s*uniform\\b[^;]*\\b" + Pattern.quote(name) + "\\b[^;]*;").matcher(source).find();
    }
 }

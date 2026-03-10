@@ -20,7 +20,7 @@ class VoxReaderTest {
       assertEquals(1, schematic.getHeight());
       assertEquals(1, schematic.getDepth());
 
-      int expectedColor = MagicaVox.packNormalized(new float[]{1.0F, 1.0F, 1.0F, 0.5F});
+      int expectedColor = MagicaVox.packNormalized(new float[]{1.0F, 1.0F, 1.0F, 0.0F});
       assertEquals(expectedColor, schematic.getEntry(0, 0, 0));
    }
 

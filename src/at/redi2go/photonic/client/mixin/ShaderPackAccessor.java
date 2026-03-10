@@ -3,6 +3,7 @@ package at.redi2go.photonic.client.mixin;
 import java.util.function.Function;
 import net.irisshaders.iris.shaderpack.ShaderPack;
 import net.irisshaders.iris.shaderpack.include.AbsolutePackPath;
+import net.irisshaders.iris.shaderpack.properties.ShaderProperties;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
@@ -10,4 +11,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface ShaderPackAccessor {
    @Accessor
    Function<AbsolutePackPath, String> getSourceProvider();
+
+   @Accessor("shaderProperties")
+   ShaderProperties getShaderProperties();
 }

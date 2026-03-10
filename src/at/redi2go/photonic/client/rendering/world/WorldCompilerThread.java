@@ -3,6 +3,8 @@ package at.redi2go.photonic.client.rendering.world;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 
 public class WorldCompilerThread extends Thread implements Destructable {
+   private static final long BUSY_WAIT_MILLIS = 4L;
+   private static final long IDLE_WAIT_MILLIS = 16L;
    private WorldRegistry worldRegistry;
    private volatile boolean started = false;
 
@@ -21,6 +23,9 @@ public class WorldCompilerThread extends Thread implements Destructable {
 
    public void sendStopSignal() {
       this.started = false;
+      synchronized (this) {
+         this.notifyAll();
+      }
    }
 
    @Override
@@ -28,19 +33,21 @@ public class WorldCompilerThread extends Thread implements Destructable {
       super.run();
 
       while (this.started) {
-         if (this.worldRegistry == null) {
+         WorldRegistry registry = this.worldRegistry;
+         if (registry == null) {
             return;
          }
 
          try {
-            this.worldRegistry.compileWorld();
+            registry.compileWorld();
          } catch (Exception var6) {
             var6.printStackTrace();
          }
 
+         boolean hasPendingWork = registry.hasPendingWork();
          synchronized (this) {
             try {
-               this.wait(200L);
+               this.wait(hasPendingWork ? BUSY_WAIT_MILLIS : IDLE_WAIT_MILLIS);
             } catch (InterruptedException var4) {
             }
          }

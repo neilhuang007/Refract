@@ -34,7 +34,7 @@ public class VoxReader {
                int paletteIndex = voxels.get(x, y, z);
                if (paletteIndex != 0) {
                   float[] color = MagicaVox.unpackNormalized(palette.get(paletteIndex));
-                  color[3] *= 0.5F;
+                  color[3] = 0.5F - color[3] * 0.5F;
                   schematic.setEntry(x, y, z, MagicaVox.packNormalized(color));
                }
             }

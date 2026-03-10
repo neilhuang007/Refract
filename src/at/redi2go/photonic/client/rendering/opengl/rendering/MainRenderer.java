@@ -1,41 +1,34 @@
 package at.redi2go.photonic.client.rendering.opengl.rendering;
 
 import at.redi2go.photonic.client.GlProgramExt;
-import at.redi2go.photonic.client.Photonic;
-import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
-import at.redi2go.photonic.client.rendering.opengl.GL;
 import at.redi2go.photonic.client.rendering.opengl.objects.GLMemoryCollection;
-import at.redi2go.photonic.client.rendering.opengl.objects.GlTarget;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
-import java.nio.FloatBuffer;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.ints.IntSet;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import net.caffeinemc.mods.sodium.client.gl.shader.GlProgram;
 import net.caffeinemc.mods.sodium.client.render.chunk.shader.ChunkShaderInterface;
 import net.irisshaders.iris.pipeline.CompositeRenderer;
-import org.lwjgl.opengl.GL42;
 
 public class MainRenderer implements Destructable {
    private final WorldRegistry worldRegistry;
+   private final float renderScale;
    private CompositeRenderer compositeRenderer;
    private final GLMemoryCollection memoryCollection;
-   private final ColorFramebuffer lightingBuffer;
-   private final GlMemoryManager pixelationDebugBuffer;
-   private long lastPixelationDebugLogMs = 0L;
-   private int lastPixelationDebugFrame = Integer.MIN_VALUE;
+   private ColorFramebuffer lightingBuffer;
+   private final Int2ObjectMap<List<Map.Entry<Integer, GlMemoryManager>>> foundMemories = new Int2ObjectOpenHashMap<>();
 
-   public MainRenderer(WorldRegistry worldRegistry) {
+   public MainRenderer(WorldRegistry worldRegistry, float renderScale) {
       this.worldRegistry = worldRegistry;
-      this.pixelationDebugBuffer = new GlMemoryManager(GlTarget.SSBO, "debug_pixelation_block", 16 * Float.BYTES, false);
-      this.lightingBuffer = new ColorFramebuffer();
-      this.lightingBuffer.createAttachment("position", "RGB32F", false);
-      this.lightingBuffer.createAttachment("normal", "RGBA16F", false);
-      this.lightingBuffer.createAttachment("direct", "RGBA16F", false);
-      this.lightingBuffer.createAttachment("direct_soft", "RGBA32F", false);
-      this.lightingBuffer.createAttachment("handheld", "RGBA16F", false);
+      this.renderScale = renderScale;
       this.memoryCollection = this.buildGlMemoryCollection();
    }
 
@@ -48,15 +41,16 @@ public class MainRenderer implements Destructable {
    }
 
    public void finishRender() {
-      this.lightingBuffer.swap();
-      this.compositeRenderer.renderAll();
-      this.logPixelationDebugProbe();
+      this.getLightBuffer().swap();
+      if (this.compositeRenderer != null) {
+         this.compositeRenderer.renderAll();
+      }
    }
 
    public void createCompositeRenderer(Function<List<PhotonicsShader>, CompositeRenderer> rendererCreator) {
       this.compositeRenderer = rendererCreator.apply(
          List.of(
-            new PhotonicsShader("ph_lighting.glsl", "ph_screen.glsl", this.memoryCollection, this.lightingBuffer),
+            new PhotonicsShader("ph_lighting.glsl", "ph_screen.glsl", this.memoryCollection, this.getLightBuffer()),
             new PhotonicsShader("ph_indirect.glsl", "ph_screen.glsl", this.memoryCollection, null)
          )
       );
@@ -67,11 +61,43 @@ public class MainRenderer implements Destructable {
       ((GlProgramExt)voxelProgram).photonic$setPhotonicsShader(photonicsShader);
    }
 
+   public void bindProgramBuffers(int shaderId, IntSet usedBuffers) {
+      List<Map.Entry<Integer, GlMemoryManager>> cached = this.foundMemories.get(shaderId);
+      if (cached == null) {
+         cached = new ArrayList<>();
+         int bindingPointIndex = 16;
+         for (Supplier<GlMemoryManager> glMemoryManagerSupplier : this.memoryCollection) {
+            GlMemoryManager glMemoryManager = glMemoryManagerSupplier.get();
+            int blockIndex = glMemoryManager.findInProgram(shaderId);
+            if (blockIndex >= 0) {
+               while (usedBuffers.contains(--bindingPointIndex)) {
+               }
+               cached.add(Map.entry(blockIndex, glMemoryManager));
+               glMemoryManager.bind(shaderId, blockIndex, bindingPointIndex);
+            }
+         }
+         this.foundMemories.put(shaderId, cached);
+      } else {
+         int bindingPointIndex = 16;
+         for (Map.Entry<Integer, GlMemoryManager> entry : cached) {
+            int blockIndex = entry.getKey();
+            GlMemoryManager glMemoryManager = entry.getValue();
+            while (usedBuffers.contains(--bindingPointIndex)) {
+            }
+            glMemoryManager.bind(shaderId, blockIndex, bindingPointIndex);
+         }
+      }
+   }
+
    @Override
    public void free() {
-      this.compositeRenderer.destroy();
-      this.lightingBuffer.destroy();
-      this.pixelationDebugBuffer.free();
+      if (this.compositeRenderer != null) {
+         this.compositeRenderer.destroy();
+      }
+      if (this.lightingBuffer != null) {
+         this.lightingBuffer.destroy();
+      }
+      this.foundMemories.clear();
    }
 
    private GLMemoryCollection buildGlMemoryCollection() {
@@ -80,88 +106,28 @@ public class MainRenderer implements Destructable {
       memoryCollection.add(this.worldRegistry::getCbMemoryManager);
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getLightsMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegistryMemoryManager());
-      memoryCollection.add(() -> this.pixelationDebugBuffer);
       return memoryCollection;
    }
 
    public void recalculateSizes() {
-      this.compositeRenderer.recalculateSizes();
+      if (this.compositeRenderer != null) {
+         this.compositeRenderer.recalculateSizes();
+      }
    }
 
    public ColorFramebuffer getLightBuffer() {
+      if (this.lightingBuffer == null) {
+         this.lightingBuffer = new ColorFramebuffer(this.renderScale);
+         this.lightingBuffer.createAttachment("position", "RGB32F", false);
+         this.lightingBuffer.createAttachment("normal", "RGBA16F", false);
+         this.lightingBuffer.createAttachment("direct", "RGBA16F", false);
+         this.lightingBuffer.createAttachment("direct_soft", "RGBA32F", false);
+         this.lightingBuffer.createAttachment("handheld", "RGBA8", false);
+         this.lightingBuffer.clear(new org.joml.Vector4f(0, 0, 0, 0));
+         this.lightingBuffer.swap();
+         this.lightingBuffer.clear(new org.joml.Vector4f(0, 0, 0, 0));
+         this.lightingBuffer.swap();
+      }
       return this.lightingBuffer;
-   }
-
-   private void logPixelationDebugProbe() {
-      if (!PhotonicsStorage.PIXELATED_LIGHTING_DEBUG_LOG.value) {
-         return;
-      }
-
-      long now = System.currentTimeMillis();
-      if (now - this.lastPixelationDebugLogMs < 1000L) {
-         return;
-      }
-      this.lastPixelationDebugLogMs = now;
-
-      GL42.glMemoryBarrier(GL.pGetShaderWriteToCpuBarrierBits());
-      this.pixelationDebugBuffer.download(downloadedBuffer -> {
-         FloatBuffer probe = downloadedBuffer.asFloatBuffer();
-         if (probe.remaining() < 16) {
-            return;
-         }
-
-         float baseX = probe.get(0);
-         float baseY = probe.get(1);
-         float baseZ = probe.get(2);
-         int frame = (int)probe.get(3);
-         float snapX = probe.get(4);
-         float snapY = probe.get(5);
-         float snapZ = probe.get(6);
-         float snapDist = probe.get(7);
-         float texelOffsetX = probe.get(8);
-         float texelOffsetY = probe.get(9);
-         float centerFactor = probe.get(10);
-         float pixelMeta = probe.get(11);
-         float yBias = probe.get(12);
-         float centerBlend = probe.get(13);
-         float centerBranch = probe.get(14);
-         float sameCell = probe.get(15);
-
-         if (frame == this.lastPixelationDebugFrame) {
-            return;
-         }
-         this.lastPixelationDebugFrame = frame;
-
-         if (frame < 0) {
-            Photonic.info("[PixelationDebug] centerProbe=sky/no-geometry");
-            return;
-         }
-
-         int axisIndex = Math.max(0, Math.min(2, Math.round(centerFactor)));
-         String faceLabel = switch (axisIndex) {
-            case 0 -> pixelMeta >= 0.0f ? "+X" : "-X";
-            case 1 -> pixelMeta >= 0.0f ? "+Y" : "-Y";
-            default -> pixelMeta >= 0.0f ? "+Z" : "-Z";
-         };
-
-         Photonic.info(
-            "[PixelationDebug] frame={} face={} base=({}, {}, {}) snapped=({}, {}, {}) snapDist={} planeFrac=({}, {}) blockY={} checker={} centerBranch={} sameCell={}",
-            frame,
-            faceLabel,
-            baseX,
-            baseY,
-            baseZ,
-            snapX,
-            snapY,
-            snapZ,
-            snapDist,
-            texelOffsetX,
-            texelOffsetY,
-            yBias,
-            centerBlend,
-            centerBranch,
-            sameCell
-         );
-      });
    }
 }

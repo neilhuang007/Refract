@@ -28,10 +28,10 @@ public abstract class WorldRendererMixin {
    private static boolean initialMessageSent = false;
 
    @Inject(
-      method = "renderLevel",
+      method = "render",
       at = @At(
          value = "INVOKE",
-         target = "Lnet/minecraft/client/renderer/LevelRenderer;renderSectionLayer(Lnet/minecraft/client/renderer/RenderType;DDDLorg/joml/Matrix4f;Lorg/joml/Matrix4f;)V",
+         target = "Lnet/minecraft/client/render/WorldRenderer;renderLayer(Lnet/minecraft/client/render/RenderLayer;DDDLorg/joml/Matrix4f;Lorg/joml/Matrix4f;)V",
          ordinal = 0
       )
    )
@@ -50,7 +50,7 @@ public abstract class WorldRendererMixin {
       }
    }
 
-   @Inject(method = "renderLevel", at = @At("TAIL"))
+   @Inject(method = "render", at = @At("TAIL"))
    public void renderLevelTail(
       RenderTickCounter deltaTracker,
       boolean bl,

@@ -55,4 +55,9 @@ public class ShaderPackPath {
    public String getRelativePath() {
       return this.relativePath;
    }
+
+   @Override
+   public String toString() {
+      return this.path.toAbsolutePath().toString();
+   }
 }

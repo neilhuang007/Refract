@@ -51,8 +51,8 @@ public class Patch {
          Map<String, Function<Path, String>> patchFiles = new HashMap<>();
          List<String> files = new ArrayList<>();
 
-         try (Stream<Path> patches = Files.list(patchPath)) {
-            for (Path patchFile : patches.toList()) {
+         try (Stream<Path> patches = Files.walk(patchPath)) {
+            for (Path patchFile : patches.filter(Files::isRegularFile).toList()) {
                if (!patchFile.getFileName().toString().equals("patch.json")) {
                   readPatchFile(patchFiles, files, patchFile);
                }

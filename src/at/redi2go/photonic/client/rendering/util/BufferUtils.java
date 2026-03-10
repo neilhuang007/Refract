@@ -54,11 +54,11 @@ public class BufferUtils {
       return ar;
    }
 
-   public static byte[] packUnorm4x8(float... data) {
-      byte[] bytes = new byte[data.length];
+   public static int[] packUnorm4x8(float... data) {
+      int[] bytes = new int[data.length];
 
       for (int i = 0; i < data.length; i++) {
-         bytes[i] = (byte)Math.round(Math.clamp((double)data[i], 0.0, 1.0) * 255.0);
+         bytes[i] = (int)Math.round(Math.clamp((double)data[i], 0.0, 1.0) * 255.0);
       }
 
       return bytes;

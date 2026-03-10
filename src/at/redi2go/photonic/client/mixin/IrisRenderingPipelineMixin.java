@@ -2,7 +2,6 @@ package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.CompositeRendererExt;
 import at.redi2go.photonic.client.IrisRenderingPipelineExt;
-import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.PhotonicsShader;
 import com.llamalad7.mixinextras.sugar.Local;
@@ -73,8 +72,7 @@ public abstract class IrisRenderingPipelineMixin implements IrisRenderingPipelin
          return null;
       } else {
          AbsolutePackPath path = AbsolutePackPath.fromAbsolutePath("/photonics/" + fileName);
-         String src = ((ShaderPackAccessor)shaderPack).getSourceProvider().apply(path);
-         return src;
+         return ((ShaderPackAccessor)shaderPack).getSourceProvider().apply(path);
       }
    }
 
@@ -88,53 +86,58 @@ public abstract class IrisRenderingPipelineMixin implements IrisRenderingPipelin
    )
    public void init(ProgramSet programSet, CallbackInfo ci, @Local BufferFlipper flipper) {
       if (Raytracer.shouldBeEnabled()) {
+         if (Raytracer.INSTANCE != null) {
+            Raytracer.INSTANCE.free();
+         }
          Raytracer.INSTANCE = new Raytracer();
          Raytracer.INSTANCE.getWorldRegistry().getLightRegistry().init();
-         Raytracer.INSTANCE
-            .getMainRenderer()
-            .createCompositeRenderer(
-               shaders -> {
-                  ProgramSource[] compositeSources = new ProgramSource[shaders.size()];
+         if (Raytracer.getProperties().orElseThrow().useDeferredPass().orElse(true)) {
+            Raytracer.INSTANCE
+               .getMainRenderer()
+               .createCompositeRenderer(
+                  shaders -> {
+                     ProgramSource[] compositeSources = new ProgramSource[shaders.size()];
 
-                  for (int i = 0; i < shaders.size(); i++) {
-                     PhotonicsShader shader = shaders.get(i);
-                     compositeSources[i] = new ProgramSource(
-                        shader.getFragmentName(),
-                        readSource(shader.getVertexName()),
-                        null,
-                        null,
-                        null,
-                        readSource(shader.getFragmentName()),
-                        programSet,
-                        null,
-                        null
+                     for (int i = 0; i < shaders.size(); i++) {
+                        PhotonicsShader shader = shaders.get(i);
+                        compositeSources[i] = new ProgramSource(
+                           shader.getFragmentName(),
+                           readSource(shader.getVertexName()),
+                           null,
+                           null,
+                           null,
+                           readSource(shader.getFragmentName()),
+                           programSet,
+                           null,
+                           null
+                        );
+                     }
+
+                     CompositeRenderer compositeRenderer = new CompositeRenderer(
+                        (IrisRenderingPipeline)(Object)this,
+                        CompositePass.DEFERRED,
+                        programSet.getPackDirectives(),
+                        compositeSources,
+                        new ComputeSource[0][0],
+                        this.renderTargets,
+                        this.shaderStorageBufferHolder,
+                        this.customTextureManager.getNoiseTexture(),
+                        this.updateNotifier,
+                        this.centerDepthSampler,
+                        flipper,
+                        this.shadowTargetsSupplier,
+                        TextureStage.DEFERRED,
+                        this.customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.DEFERRED, Object2ObjectMaps.emptyMap()),
+                        this.customTextureManager.getIrisCustomTextures(),
+                        this.customImages,
+                        programSet.getPackDirectives().getExplicitFlips("photonics"),
+                        this.customUniforms
                      );
+                     ((CompositeRendererExt)compositeRenderer).photonic$setPhotonicsShaders(shaders);
+                     return compositeRenderer;
                   }
-
-                  CompositeRenderer compositeRenderer = new CompositeRenderer(
-                     (IrisRenderingPipeline)(Object)this,
-                     CompositePass.DEFERRED,
-                     programSet.getPackDirectives(),
-                     compositeSources,
-                     new ComputeSource[0][0],
-                     this.renderTargets,
-                     this.shaderStorageBufferHolder,
-                     this.customTextureManager.getNoiseTexture(),
-                     this.updateNotifier,
-                     this.centerDepthSampler,
-                     flipper,
-                     this.shadowTargetsSupplier,
-                     TextureStage.DEFERRED,
-                     this.customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.DEFERRED, Object2ObjectMaps.emptyMap()),
-                     this.customTextureManager.getIrisCustomTextures(),
-                     this.customImages,
-                     programSet.getPackDirectives().getExplicitFlips("photonics"),
-                     this.customUniforms
-                  );
-                  ((CompositeRendererExt)compositeRenderer).photonic$setPhotonicsShaders(shaders);
-                  return compositeRenderer;
-               }
-            );
+               );
+         }
       }
    }
 

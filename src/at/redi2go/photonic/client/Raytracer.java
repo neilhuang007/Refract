@@ -1,17 +1,22 @@
 package at.redi2go.photonic.client;
 
+import at.redi2go.photonic.client.api.PhotonicsProperties;
+import at.redi2go.photonic.client.config.PhotonicsConfig;
+import at.redi2go.photonic.client.mixin.ShaderPackAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
+import at.redi2go.photonic.client.rendering.opengl.rendering.ColorFramebuffer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.MainRenderer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ShaderUtil;
 import at.redi2go.photonic.client.rendering.patching.Patch;
-import at.redi2go.photonic.client.rendering.world.LightBlock;
-import at.redi2go.photonic.client.rendering.world.LightType;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
 import com.mojang.blaze3d.systems.RenderSystem;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
 import java.io.File;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,64 +25,72 @@ import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.stream.Stream;
 import net.caffeinemc.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
 import net.irisshaders.iris.Iris;
+import net.irisshaders.iris.shaderpack.ShaderPack;
 import net.irisshaders.iris.shaderpack.include.IncludeGraph;
 import net.minecraft.client.render.RenderLayer;
-import net.minecraft.block.Blocks;
 import net.minecraft.block.Block;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.block.RedstoneWireBlock;
-import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.model.json.ModelElementFace;
-import org.joml.Vector2f;
 import org.joml.Vector3f;
 
 public class Raytracer implements Destructable {
+   public static final Object LOCK = new Object();
    public static Raytracer INSTANCE;
+   public static final Path SHADER_PATCHES_PATH = Path.of("./shader-patches");
    public static final Path DEV_ENV_SHADERS_PATH = Path.of("../src/main/resources/assets/photonic/shaders");
    public static Map<String, String> SHADERPACK_CHANGED_OPTIONS = null;
    public static Properties SHADERPACK_PROPERTIES = null;
+   public static Properties PATCHED_SHADERPACK_PROPERTIES = null;
+   public static final IntSet USED_BUFFERS = new IntOpenHashSet();
+   public static ColorFramebuffer CURRENT_FRAMEBUFFER = null;
+   private static final List<FileSystem> FILE_SYSTEMS = new ArrayList<>();
    public static final List<Patch> AVAILABLE_PATCHES = new ArrayList<>();
    public static final TerrainRenderPass VOXEL = new TerrainRenderPass(RenderLayer.getCutout(), false, true);
-   public static final Set<Block> DEFAULT_VOLUMETRIC_RENDERED_BLOCKS = Set.of(
-      Blocks.CRAFTING_TABLE,
-      Blocks.FURNACE,
-      Blocks.LADDER,
-      Blocks.SCULK_VEIN,
-      Blocks.REDSTONE_WIRE,
-      Blocks.DETECTOR_RAIL,
-      Blocks.RAIL,
-      Blocks.POWERED_RAIL,
-      Blocks.ACTIVATOR_RAIL
-   );
-   public static final Set<LightBlock> DEFAULT_LIGHT_BLOCKS;
    private final MainRenderer mainRenderer;
    private final RenderDispatcher renderDispatcher;
    private final WorldRegistry worldRegistry;
-   private final BlockRegistry blockRegistry = new BlockRegistry();
-   public Path shaderPackPath = Iris.getShaderpacksDirectory()
-      .resolve((String)Iris.getIrisConfig().getShaderPackName().orElseThrow(() -> new RuntimeException("No shaderpack selected!")));
-   private final Consumer<Set<Block>> volumetricBlocksUpdated;
+   public final Path shaderPackPath;
+   private final PhotonicsConfig.Observer<Set<Block>> voxelizedBlockObserver;
 
    public Raytracer() {
-      this.renderDispatcher = new RenderDispatcher();
-      this.worldRegistry = new WorldRegistry(this.renderDispatcher);
-      this.mainRenderer = new MainRenderer(this.worldRegistry);
+      String shaderPackName = (String)Iris.getIrisConfig().getShaderPackName().orElseThrow(() -> new RuntimeException("No shaderpack selected!"));
+      this.shaderPackPath = Iris.getShaderpacksDirectory().resolve(shaderPackName);
+
+      ShaderPack buffers = (ShaderPack)Iris.getCurrentPack().orElseThrow();
+      USED_BUFFERS.clear();
+      it.unimi.dsi.fastutil.ints.IntIterator bufferIter = buffers.getBufferObjects().keySet().iterator();
+      while (bufferIter.hasNext()) {
+         USED_BUFFERS.add((int)(Integer)bufferIter.next());
+      }
+
+      PhotonicsProperties properties = getProperties().orElseThrow();
+      this.renderDispatcher = new RenderDispatcher(properties.getRenderScale());
+      this.worldRegistry = new WorldRegistry(
+         this.renderDispatcher, properties.getMaxLights(), properties.getMaxSamples(), properties.isBlockLightEnabled().orElse(true)
+      );
+      this.mainRenderer = new MainRenderer(this.worldRegistry, properties.getRenderScale());
       this.worldRegistry.startWorldBuilder();
-      this.volumetricBlocksUpdated = volumetricBlocks -> MinecraftClient.getInstance().worldRenderer.reload();
-      PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS.addObserver(this.volumetricBlocksUpdated);
+      this.voxelizedBlockObserver = PhotonicsConfig.observe(c -> c.voxelizedBlocks, unused -> MinecraftClient.getInstance().worldRenderer.reload());
+   }
+
+   public static Optional<PhotonicsProperties> getProperties() {
+      return Iris.getCurrentPack().map(e -> (ShaderPackAccessor)e).map(ShaderPackAccessor::getShaderProperties).map(e -> (PhotonicsProperties)e);
+   }
+
+   public static void bindBuffers(int shaderId) {
+      if (!isDisabled()) {
+         INSTANCE.getMainRenderer().bindProgramBuffers(shaderId, USED_BUFFERS);
+      }
    }
 
    public void queueBuildJob(Runnable job) {
@@ -120,11 +133,14 @@ public class Raytracer implements Destructable {
 
    @Override
    public void free() {
-      this.renderDispatcher.free();
-      this.blockRegistry.free();
-      this.worldRegistry.free();
-      this.mainRenderer.free();
-      PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS.removeObserver(this.volumetricBlocksUpdated);
+      synchronized (LOCK) {
+         this.renderDispatcher.free();
+         this.worldRegistry.free();
+         this.mainRenderer.free();
+         this.voxelizedBlockObserver.unregister();
+         USED_BUFFERS.clear();
+         INSTANCE = null;
+      }
    }
 
    public static boolean isDisabled() {
@@ -132,20 +148,13 @@ public class Raytracer implements Destructable {
    }
 
    public static boolean shouldBeEnabled() {
-      if (!Iris.getIrisConfig().areShadersEnabled()) {
-         return false;
-      } else {
-         if (SHADERPACK_PROPERTIES == null || SHADERPACK_CHANGED_OPTIONS == null) {
-            return false;
-         }
-         boolean shaderPackSupported = Boolean.parseBoolean(SHADERPACK_PROPERTIES.getOrDefault("photonics.enabled", false).toString());
-         if (!shaderPackSupported) {
-            // Native integrations may expose support without predefining PHOTONICS in shaders.properties.
-            shaderPackSupported = Boolean.parseBoolean(SHADERPACK_PROPERTIES.getOrDefault("photonics.supported", false).toString());
-         }
-         boolean photonicsEnabled = Boolean.parseBoolean(SHADERPACK_CHANGED_OPTIONS.getOrDefault("PHOTONICS_ENABLED", "true"));
-         return !shaderPackSupported ? false : photonicsEnabled;
+      if (!Iris.getIrisConfig().areShadersEnabled()) return false;
+      if (getAppliedPatch(true) != null) {
+         boolean shaderPackSupported = Boolean.parseBoolean(PATCHED_SHADERPACK_PROPERTIES.getOrDefault("photonics.supported", false).toString());
+         if (!shaderPackSupported) return false;
+         return Boolean.parseBoolean(SHADERPACK_CHANGED_OPTIONS.getOrDefault("PHOTONICS_ENABLED", "true"));
       }
+      return getProperties().map(PhotonicsProperties::isPhotonicsEnabled).map(e -> e.orElse(false)).orElse(false);
    }
 
    public static void watchFolder(File folder, Runnable callback) {
@@ -185,43 +194,88 @@ public class Raytracer implements Destructable {
    }
 
    public BlockRegistry getBlockRegistry() {
-      return this.blockRegistry;
+      return this.worldRegistry.getBlockRegistry();
+   }
+
+   private static Optional<Patch> getPatch(String name, boolean enabled) {
+      return AVAILABLE_PATCHES.stream().filter(p -> p.canBeApplied(name, enabled)).findFirst();
+   }
+
+   private static Patch getAppliedPatch(boolean enabled) {
+      if (SHADERPACK_PROPERTIES != null && SHADERPACK_PROPERTIES.containsKey("photonics.enabled")) return null;
+      return Iris.getIrisConfig().getShaderPackName().flatMap(e -> getPatch(e, enabled)).orElse(null);
    }
 
    public static Patch getAppliedPatch() {
-      Patch result = Iris.getIrisConfig()
-         .getShaderPackName()
-         .map(config -> {
-            return Patch.selectBestPatch(AVAILABLE_PATCHES, config, shouldBeEnabled());
-         })
-         .orElse(null);
-      return result;
+      return getAppliedPatch(shouldBeEnabled());
+   }
+
+   private static Stream<Path> loadClassStream() throws URISyntaxException, IOException {
+      URL resource = Patch.class.getClassLoader().getResource("assets/photonic/shaders/patches/");
+      return resource == null ? Stream.empty() : Files.list(Path.of(resource.toURI()));
    }
 
    public static void reloadPatches() {
+      for (FileSystem fs : FILE_SYSTEMS) {
+         try {
+            fs.close();
+         } catch (IOException var11) {
+            Photonic.error("Error while closing patch file system", var11);
+         }
+      }
+
+      FILE_SYSTEMS.clear();
       AVAILABLE_PATCHES.clear();
-      Path fsPath = DEV_ENV_SHADERS_PATH.resolve("patches");
+      Path fsDevPath = DEV_ENV_SHADERS_PATH.resolve("patches");
+      Path fsPath = SHADER_PATCHES_PATH;
+      if (Files.notExists(fsPath)) {
+         try {
+            Files.createDirectory(fsPath);
+         } catch (IOException var10) {
+            Photonic.error("Failed to create default patches directory", var10);
+         }
+      }
 
       try {
          try (
+            Stream<Path> fsDevStream = Files.exists(fsDevPath) ? Files.list(fsDevPath) : Stream.of();
             Stream<Path> fsStream = Files.exists(fsPath) ? Files.list(fsPath) : Stream.of();
-            Stream<Path> classStream = Files.list(
-               Path.of(Objects.requireNonNull(Patch.class.getClassLoader().getResource("assets/photonic/shaders/patches/")).toURI())
-            );
+            Stream<Path> classStream = loadClassStream();
          ) {
-            Stream.concat(fsStream, classStream).filter(x$0 -> Files.exists(x$0)).forEach(p -> {
+            Stream.of(fsStream, fsDevStream, classStream).flatMap(s -> s).filter(x$0 -> Files.exists(x$0)).map(p -> {
+               String name = p.getFileName().toString();
+               int extensionIndex = name.lastIndexOf(46);
+               if (extensionIndex == -1) {
+                  return new PathFsPair(p, null);
+               }
+               String extension = name.substring(extensionIndex);
+               if (!extension.equals(".zip")) {
+                  return new PathFsPair(p, null);
+               }
                try {
-                  AVAILABLE_PATCHES.add(Patch.of(p, true));
-                  AVAILABLE_PATCHES.add(Patch.of(p, false));
+                  FileSystem fs = FileSystems.newFileSystem(p);
+                  return new PathFsPair(fs.getPath("./"), fs);
+               } catch (IOException e) {
+                  return new PathFsPair(p, null);
+               }
+            }).forEach(pair -> {
+               try {
+                  if (pair.fs() != null) {
+                     FILE_SYSTEMS.add(pair.fs());
+                  }
+                  AVAILABLE_PATCHES.add(Patch.of(pair.path(), true));
+                  AVAILABLE_PATCHES.add(Patch.of(pair.path(), false));
                } catch (IOException var2x) {
-                  throw new RuntimeException(var2x);
+                  Photonic.warn("Skipping invalid patch directory: {}", pair.path());
                }
             });
          }
-      } catch (URISyntaxException | IOException var9) {
-         throw new RuntimeException(var9);
+      } catch (URISyntaxException | IOException var15) {
+         throw new RuntimeException(var15);
       }
    }
+
+   private record PathFsPair(Path path, FileSystem fs) {}
 
    public static String readShaderFile(ShaderPackPath path, boolean patchFile) {
       String source = null;
@@ -233,20 +287,23 @@ public class Raytracer implements Destructable {
       if (source == null) {
          try {
             if (!path.isPhotonicsPath()) {
-               String preprocessed = readShaderAndPreprocess(path);
-               return preprocessed;
+               return readShaderAndPreprocess(path);
             }
 
             String relativeToPhotonics = path.getRelativeToPhotonics();
-            if (path.exists() && !"photonics.glsl".equals(relativeToPhotonics)) {
-               String preprocessed = readShaderAndPreprocess(path);
-               return preprocessed;
+
+            // When no patch is applied, prefer the shader pack's version for all photonics
+            // files except photonics.glsl (which the mod always provides)
+            if (patch == null && !relativeToPhotonics.equals("photonics.glsl")) {
+               Optional<String> content = tryReadFile(path);
+               if (content.isPresent()) {
+                  return readShaderAndPreprocess(path);
+               }
             }
 
             Path devEnvShaderPath = DEV_ENV_SHADERS_PATH.resolve(relativeToPhotonics);
             if (Files.exists(devEnvShaderPath)) {
-               String preprocessed = readShaderAndPreprocess(new ShaderPackPath(devEnvShaderPath));
-               return preprocessed;
+               return readShaderAndPreprocess(new ShaderPackPath(devEnvShaderPath));
             }
 
             URL jarShaderUrl = IncludeGraph.class.getClassLoader().getResource("assets/photonic/shaders/" + relativeToPhotonics);
@@ -256,8 +313,7 @@ public class Raytracer implements Destructable {
 
             Path jarShaderPath = Path.of(jarShaderUrl.toURI());
             if (Files.exists(jarShaderPath)) {
-               String preprocessed = readShaderAndPreprocess(new ShaderPackPath(jarShaderPath));
-               return preprocessed;
+               return readShaderAndPreprocess(new ShaderPackPath(jarShaderPath));
             }
          } catch (Exception var7) {
          }
@@ -271,33 +327,14 @@ public class Raytracer implements Destructable {
    }
 
    private static String readShaderAndPreprocess(ShaderPackPath path) throws IOException {
-      String source = path.readFile();
-      if (
-         path.isPhotonicsPath()
-            && "shader_interface.glsl".equals(path.getRelativeToPhotonics())
-            && source.contains("get_taa_jitter(")
-            && source.contains("vec2 get_taa_jitter()")
-            && !source.contains("vec2 get_taa_jitter();")
-      ) {
-         source = source.replace("vec3 load_world_position() {", "vec2 get_taa_jitter();\n\nvec3 load_world_position() {");
-      }
-
-      return ShaderUtil.preprocessForward(source);
+      return ShaderUtil.preprocessForward(path.readFile());
    }
 
-   private static void registerDefaultLightBlock(List<LightBlock> lightBlocks, Vector3f color, boolean traced, Block... blocks) {
-      for (Block block : blocks) {
-         LightType lightType = new LightType(color, new Vector2f(0.9F, 0.9F), traced);
-         lightBlocks.add(new LightBlock(block, lightType));
-      }
-   }
-
-   public static boolean blockStateEmitsLight(BlockState blockState) {
-      Block block = blockState.getBlock();
-      if (block == Blocks.REDSTONE_WIRE) {
-         return (Integer)blockState.get(RedstoneWireBlock.POWER) > 0;
-      } else {
-         return block != Blocks.REDSTONE_BLOCK && block != Blocks.EMERALD_BLOCK && block != Blocks.LAPIS_BLOCK ? blockState.getLuminance() > 0 : true;
+   private static Optional<String> tryReadFile(ShaderPackPath path) {
+      try {
+         return Optional.of(path.readFile());
+      } catch (IOException var2) {
+         return Optional.empty();
       }
    }
 
@@ -308,130 +345,5 @@ public class Raytracer implements Destructable {
          } catch (IOException var1x) {
          }
       }));
-      List<LightBlock> lightBlocks = new LinkedList<>();
-      Vector3f redstoneColor = new Vector3f(255.0F, 51.0F, 51.0F).mul(0.003921569F);
-      registerDefaultLightBlock(lightBlocks, redstoneColor, true, Blocks.REDSTONE_TORCH, Blocks.REDSTONE_WALL_TORCH);
-      registerDefaultLightBlock(
-         lightBlocks, redstoneColor, false, Blocks.REDSTONE_BLOCK, Blocks.REDSTONE_ORE, Blocks.DEEPSLATE_REDSTONE_ORE, Blocks.REDSTONE_WIRE
-      );
-      Vector3f torchColor = new Vector3f(119.0F, 106.0F, 56.0F).mul(0.003921569F);
-      registerDefaultLightBlock(
-         lightBlocks,
-         torchColor,
-         true,
-         Blocks.CANDLE,
-         Blocks.WHITE_CANDLE,
-         Blocks.ORANGE_CANDLE,
-         Blocks.MAGENTA_CANDLE,
-         Blocks.LIGHT_BLUE_CANDLE,
-         Blocks.YELLOW_CANDLE,
-         Blocks.LIME_CANDLE,
-         Blocks.PINK_CANDLE,
-         Blocks.GRAY_CANDLE,
-         Blocks.LIGHT_GRAY_CANDLE,
-         Blocks.CYAN_CANDLE,
-         Blocks.PURPLE_CANDLE,
-         Blocks.BLUE_CANDLE,
-         Blocks.BROWN_CANDLE,
-         Blocks.GREEN_CANDLE,
-         Blocks.RED_CANDLE,
-         Blocks.BLACK_CANDLE,
-         Blocks.CANDLE_CAKE,
-         Blocks.WHITE_CANDLE_CAKE,
-         Blocks.ORANGE_CANDLE_CAKE,
-         Blocks.MAGENTA_CANDLE_CAKE,
-         Blocks.LIGHT_BLUE_CANDLE_CAKE,
-         Blocks.YELLOW_CANDLE_CAKE,
-         Blocks.LIME_CANDLE_CAKE,
-         Blocks.PINK_CANDLE_CAKE,
-         Blocks.GRAY_CANDLE_CAKE,
-         Blocks.LIGHT_GRAY_CANDLE_CAKE,
-         Blocks.CYAN_CANDLE_CAKE,
-         Blocks.PURPLE_CANDLE_CAKE,
-         Blocks.BLUE_CANDLE_CAKE,
-         Blocks.BROWN_CANDLE_CAKE,
-         Blocks.GREEN_CANDLE_CAKE,
-         Blocks.RED_CANDLE_CAKE,
-         Blocks.BLACK_CANDLE_CAKE
-      );
-      registerDefaultLightBlock(
-         lightBlocks,
-         torchColor,
-         true,
-         Blocks.TORCH,
-         Blocks.WALL_TORCH,
-         Blocks.JACK_O_LANTERN,
-         Blocks.LANTERN,
-         Blocks.CAMPFIRE,
-         Blocks.REDSTONE_LAMP
-      );
-      registerDefaultLightBlock(
-         lightBlocks,
-         torchColor,
-         true,
-         Blocks.COPPER_BULB,
-         Blocks.EXPOSED_COPPER_BULB,
-         Blocks.OXIDIZED_COPPER_BULB,
-         Blocks.WEATHERED_COPPER_BULB,
-         Blocks.WAXED_COPPER_BULB,
-         Blocks.WAXED_EXPOSED_COPPER_BULB,
-         Blocks.WAXED_OXIDIZED_COPPER_BULB,
-         Blocks.WAXED_WEATHERED_COPPER_BULB
-      );
-      registerDefaultLightBlock(
-         lightBlocks,
-         torchColor,
-         false,
-         Blocks.LAVA,
-         Blocks.MAGMA_BLOCK,
-         Blocks.SHROOMLIGHT,
-         Blocks.GLOWSTONE,
-         Blocks.LAVA_CAULDRON,
-         Blocks.FIRE,
-         Blocks.BREWING_STAND,
-         Blocks.FURNACE,
-         Blocks.BLAST_FURNACE,
-         Blocks.SMOKER,
-         Blocks.CAVE_VINES,
-         Blocks.CAVE_VINES_PLANT
-      );
-      Vector3f soulColor = new Vector3f(51.0F, 204.0F, 255.0F).mul(0.003921569F);
-      registerDefaultLightBlock(lightBlocks, soulColor, true, Blocks.SOUL_TORCH, Blocks.SOUL_WALL_TORCH, Blocks.SOUL_LANTERN, Blocks.SOUL_CAMPFIRE);
-      registerDefaultLightBlock(lightBlocks, soulColor, false, Blocks.SOUL_FIRE);
-      Vector3f endColor = new Vector3f(170.0F, 170.0F, 170.0F).mul(0.003921569F);
-      registerDefaultLightBlock(lightBlocks, endColor, true, Blocks.END_ROD);
-      registerDefaultLightBlock(lightBlocks, endColor, false, Blocks.END_PORTAL, Blocks.END_PORTAL_FRAME, Blocks.END_GATEWAY);
-      Vector3f whiteColor = new Vector3f(100.0F, 100.0F, 100.0F).mul(0.003921569F);
-      registerDefaultLightBlock(
-         lightBlocks, whiteColor, false, Blocks.LIGHT, Blocks.ENDER_CHEST, Blocks.SEA_PICKLE, Blocks.SEA_LANTERN, Blocks.BEACON
-      );
-      registerDefaultLightBlock(lightBlocks, new Vector3f(whiteColor).mul(0.5F), true, Blocks.DRAGON_EGG);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(whiteColor).mul(0.5F), false, Blocks.TRIAL_SPAWNER);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(whiteColor).mul(0.5F), false, Blocks.VAULT);
-      Vector3f purpleColor = new Vector3f(131.0F, 8.0F, 228.0F).mul(0.003921569F);
-      registerDefaultLightBlock(lightBlocks, purpleColor, false, Blocks.CRYING_OBSIDIAN, Blocks.RESPAWN_ANCHOR, Blocks.NETHER_PORTAL);
-      Vector3f amethystColor = new Vector3f(new Vector3f(122.0F, 91.0F, 181.0F).mul(0.003921569F));
-      registerDefaultLightBlock(
-         lightBlocks,
-         amethystColor,
-         false,
-         Blocks.AMETHYST_BLOCK,
-         Blocks.AMETHYST_CLUSTER,
-         Blocks.LARGE_AMETHYST_BUD,
-         Blocks.MEDIUM_AMETHYST_BUD,
-         Blocks.SMALL_AMETHYST_BUD
-      );
-      Vector3f sculkColor = new Vector3f(39.0F, 133.0F, 145.0F).mul(0.003921569F);
-      registerDefaultLightBlock(lightBlocks, sculkColor, false, Blocks.SCULK_SENSOR, Blocks.CALIBRATED_SCULK_SENSOR, Blocks.SCULK_CATALYST);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(0.0F, 0.0F, 0.0F).mul(0.003921569F), false, Blocks.BROWN_MUSHROOM, Blocks.CONDUIT);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(227.0F, 236.0F, 228.0F).mul(0.003921569F), false, Blocks.SCULK_SHRIEKER);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(29.0F, 74.0F, 149.0F).mul(0.003921569F), false, Blocks.LAPIS_BLOCK);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(23.0F, 221.0F, 98.0F).mul(0.003921569F), false, Blocks.EMERALD_BLOCK);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(178.0F, 138.0F, 189.0F).mul(0.003921569F), false, Blocks.PEARLESCENT_FROGLIGHT);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(145.0F, 195.0F, 130.0F).mul(0.003921569F), false, Blocks.VERDANT_FROGLIGHT);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(150.0F, 220.0F, 134.0F).mul(0.003921569F), false, Blocks.OCHRE_FROGLIGHT);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(128.0F, 70.0F, 0.0F).mul(0.003921569F), false, Blocks.ENCHANTING_TABLE);
-      registerDefaultLightBlock(lightBlocks, new Vector3f(113.0F, 134.0F, 126.0F).mul(0.003921569F), false, Blocks.GLOW_LICHEN);
-      DEFAULT_LIGHT_BLOCKS = new HashSet<>(lightBlocks);
    }
 }

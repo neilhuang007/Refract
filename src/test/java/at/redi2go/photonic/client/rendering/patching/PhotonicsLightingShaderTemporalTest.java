@@ -23,10 +23,10 @@ class PhotonicsLightingShaderTemporalTest {
    @Test
    void directAndSoftTemporalBuffersUseReferenceResetPath() throws IOException {
       String shader = Files.readString(LIGHTING_SHADER);
-      assertTrue(shader.contains("if (light_reload || frag == NULL4)"));
+      assertTrue(shader.contains("if (frag == NULL4)"));
       assertTrue(shader.contains("frag.direct = vec4(0.0f);"));
       assertTrue(shader.contains("frag.direct_soft = vec4(0.0f);"));
-      assertFalse(shader.contains("} else if (light_reload) {"));
+      assertFalse(shader.contains("if (light_reload)\n"));
       assertFalse(shader.contains("if (hard_light_count == 0)"));
    }
 
@@ -43,7 +43,8 @@ class PhotonicsLightingShaderTemporalTest {
    @Test
    void temporalBuffersUseReferenceDecay() throws IOException {
       String shader = Files.readString(LIGHTING_SHADER);
-      assertTrue(shader.contains("float historyDecay = light_reload ? 0.0f : 0.985f;"));
+      assertTrue(shader.contains("float historyDecay;"));
+      assertTrue(shader.contains("historyDecay = 0.985f;"));
       assertTrue(shader.contains("result *= historyDecay;"));
       assertFalse(shader.contains("reprojectionValid"));
       assertFalse(shader.contains("result *= 0.90f;"));
@@ -73,7 +74,10 @@ class PhotonicsLightingShaderTemporalTest {
    @Test
    void shadowPixelationUsesDeterministicFaceAxisAndInwardBias() throws IOException {
       String shader = Files.readString(LIGHTING_SHADER);
+      assertTrue(shader.contains("uniform float ph_mod_shadow_pixelation_enabled;"));
       assertTrue(shader.contains("vec3 faceAxis = vec3(0.0);"));
+      assertTrue(shader.contains("if (ph_mod_shadow_pixelation_enabled <= 0.5f) {"));
+      assertTrue(shader.contains("return worldPos - world_offset;"));
       assertTrue(shader.contains("if (absN.x >= absN.y && absN.x >= absN.z) {"));
       assertTrue(shader.contains("float safePixelSize = max(ph_mod_shadow_pixel_size_rt, 1.0f);"));
       assertTrue(shader.contains("float faceSign = sign(dot(base_normal, faceAxis));"));

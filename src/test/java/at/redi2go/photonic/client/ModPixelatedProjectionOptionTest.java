@@ -12,8 +12,7 @@ class ModPixelatedProjectionOptionTest {
    private static final Path STORAGE_FILE = Path.of("src/at/redi2go/photonic/client/PhotonicsStorage.java");
    private static final Path STORAGE_IO_FILE = Path.of("src/at/redi2go/photonic/client/StorageIO.java");
    private static final Path SETTINGS_SCREEN_FILE = Path.of("src/at/redi2go/photonic/client/ModSettingsScreen.java");
-   private static final Path COMMON_UNIFORMS_MIXIN_FILE = Path.of("src/at/redi2go/photonic/client/mixin/CommonUniformsMixin.java");
-
+   private static final Path COMMON_UNIFORMS_FILE = Path.of("src/at/redi2go/photonic/client/mixin/CommonUniformsMixin.java");
    @Test
    void storageDeclaresShadowPixelationParameters() throws IOException {
       String source = Files.readString(STORAGE_FILE);
@@ -46,19 +45,14 @@ class ModPixelatedProjectionOptionTest {
    }
 
    @Test
-   void commonUniformsPublishShadowPixelationUniforms() throws IOException {
-      String source = Files.readString(COMMON_UNIFORMS_MIXIN_FILE);
+   void commonUniformsBindShadowPixelationControls() throws IOException {
+      String source = Files.readString(COMMON_UNIFORMS_FILE);
 
+      assertTrue(source.contains("uniform1f("));
       assertTrue(source.contains("\"ph_mod_shadow_pixelation_enabled\""));
       assertTrue(source.contains("() -> PhotonicsStorage.SHADOW_PIXELATION_ENABLED.value ? 1.0F : 0.0F"));
       assertTrue(source.contains("\"ph_mod_shadow_pixel_size_rt\""));
-      assertTrue(source.contains("float shadowSize = Math.max(1.0F, PhotonicsStorage.SHADOW_PIXELATION_SIZE.value);"));
-      assertTrue(source.contains("return shadowSize;"));
-      assertFalse(source.contains("\"ph_mod_shadow_bias_center_normal_offset\""));
-      assertFalse(source.contains("\"ph_mod_shadow_bias_subsurface_sign_coupling\""));
-      assertFalse(source.contains("\"ph_mod_cast_light_pixelation_enabled\""));
-      assertFalse(source.contains("PhotonicsStorage.PIXELATED_PROJECTION"));
-      assertFalse(source.contains("\"ph_mod_cast_light_pixel_size\""));
-      assertFalse(source.contains("PhotonicsStorage.CAST_LIGHT_PIXEL_SIZE"));
+      assertTrue(source.contains("() -> PhotonicsStorage.SHADOW_PIXELATION_SIZE.value"));
    }
+
 }

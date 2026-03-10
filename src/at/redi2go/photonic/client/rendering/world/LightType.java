@@ -1,8 +1,10 @@
 package at.redi2go.photonic.client.rendering.world;
 
-import at.redi2go.photonic.client.Raytracer;
 import java.util.Objects;
+import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.block.RedstoneWireBlock;
 import org.joml.Vector2f;
 import org.joml.Vector3f;
 
@@ -28,7 +30,12 @@ public class LightType {
    }
 
    public boolean blockStateEmitsLight(BlockState blockState) {
-      return Raytracer.blockStateEmitsLight(blockState);
+      Block block = blockState.getBlock();
+      if (block == Blocks.REDSTONE_WIRE) {
+         return (Integer)blockState.get(RedstoneWireBlock.POWER) > 0;
+      } else {
+         return block != Blocks.REDSTONE_BLOCK && block != Blocks.EMERALD_BLOCK && block != Blocks.LAPIS_BLOCK ? blockState.getLuminance() > 0 : true;
+      }
    }
 
    public Vector3f getColor() {

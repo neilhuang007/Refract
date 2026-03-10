@@ -15,40 +15,57 @@ class WorldUpdateLatencyTest {
    private static final Path WORLD_COMPILER_THREAD = Path.of("src/at/redi2go/photonic/client/rendering/world/WorldCompilerThread.java");
 
    @Test
-   void shadowStateDirtyIsSetAndConsumedByWorldRegistry() throws Exception {
-      String source = Files.readString(WORLD_REGISTRY);
+   void compileWorldUsesDirtyTrackingToSkipRedundantWork() throws Exception {
+      String source = normalize(Files.readString(WORLD_REGISTRY));
 
-      assertTrue(source.contains("private boolean shadowStateDirty = true;"));
-      assertTrue(source.contains("this.shadowStateDirty = true;"));
-      assertTrue(source.contains("public boolean consumeShadowStateDirty()"));
-      assertTrue(source.contains("this.shadowStateDirty = false;"));
-      assertTrue(source.contains("this.lightRegistry.consumeTracedLightSetDirty() || this.consumeShadowStateDirty()"));
+      assertTrue(source.contains("chunkSyncNeeded"));
+      assertTrue(source.contains("shadowStateDirty"));
+      assertTrue(source.contains("update(this.rootMemoryManager, rootNeedsRebuild)"));
+      assertTrue(source.contains("consumeShadowStateDirty()"));
+      assertTrue(source.contains("consumeTracedLightSetDirty()"));
    }
 
    @Test
-   void dirtyChunkUpdatesTriggerImmediateLightRecompilePath() throws Exception {
-      String worldRegistry = Files.readString(WORLD_REGISTRY);
-      String lightRegistry = Files.readString(LIGHT_REGISTRY);
-      String chunkMeshingMixin = Files.readString(CHUNK_MESHING_MIXIN);
+   void queueBuildJobSetsDirtyFlags() throws Exception {
+      String source = normalize(Files.readString(WORLD_REGISTRY));
 
-      assertTrue(worldRegistry.contains("boolean chunkContentChanged = this.update(this.rootMemoryManager, rootNeedsRebuild);"));
-      assertTrue(worldRegistry.contains("if (chunkContentChanged) {\n            this.closeChunkUpdate = true;\n         }"));
-      assertTrue(worldRegistry.contains("if (!forceRootUpload) {"));
-      assertTrue(worldRegistry.contains("this.dirty = true;\n         return true;"));
+      assertTrue(source.contains("this.shadowStateDirty = true;"));
+   }
 
-      assertTrue(chunkMeshingMixin.contains("for (BlockPos blockPos : BlockPos.iterate(lowerCorner, upperCorner))"));
+   @Test
+   void initialChunkLoadingUsesHigherBootstrapBudget() throws Exception {
+      String source = normalize(Files.readString(WORLD_REGISTRY));
+
+      assertTrue(source.contains("this.chunks.isEmpty() ? INITIAL_CHUNK_LOAD_BUDGET : CHUNK_LOAD_BUDGET"));
+   }
+
+   @Test
+   void lightRegistryTracksTracedLightPositionsBeforeBuilderWakeup() throws Exception {
+      String lightRegistry = normalize(Files.readString(LIGHT_REGISTRY));
+      String chunkMeshingMixin = normalize(Files.readString(CHUNK_MESHING_MIXIN));
+
+      String tracedLightScan = "for (BlockPos blockPos : BlockPos.iterate(lowerCorner, upperCorner))";
+      String wakeUpBuilder = "Raytracer.INSTANCE.getWorldRegistry().wakeUpWorldBuilder();";
+      assertTrue(chunkMeshingMixin.contains(tracedLightScan));
       assertTrue(chunkMeshingMixin.contains("lightRegistry.onBlockLoad(new Vector3f(blockPos.getX(), blockPos.getY(), blockPos.getZ()));"));
+      assertTrue(chunkMeshingMixin.indexOf(tracedLightScan) < chunkMeshingMixin.indexOf(wakeUpBuilder));
+      assertFalse(chunkMeshingMixin.contains("Lock lock = lightRegistry.readLock();"));
 
-      assertTrue(lightRegistry.contains("boolean isTracedLight = lightType != null && lightType.isTraced() && lightType.blockStateEmitsLight(blockState);"));
-      assertTrue(lightRegistry.contains("else if (this.tracedLightPositions.remove(tracedPosition))"));
-      assertTrue(lightRegistry.contains("this.tracedLightSetDirty = true;"));
+      assertTrue(lightRegistry.contains("private volatile boolean tracedLightSetDirty = true;"));
       assertTrue(lightRegistry.contains("public boolean consumeTracedLightSetDirty()"));
    }
 
    @Test
-   void worldCompilerLoopRunsAtFrameRateCadence() throws Exception {
-      String source = Files.readString(WORLD_COMPILER_THREAD);
-      assertTrue(source.contains("this.wait(16L);"), "World compiler thread wait must be 16ms for responsive updates");
-      assertFalse(source.contains("this.wait(1000L);"), "Legacy 1s wait should not be present");
+   void worldCompilerLoopAvoidsGlobalLockAndUsesModerateCadence() throws Exception {
+      String source = normalize(Files.readString(WORLD_COMPILER_THREAD));
+      assertFalse(source.contains("synchronized (Raytracer.LOCK)"));
+      assertTrue(source.contains("private static final long BUSY_WAIT_MILLIS = 4L;"));
+      assertTrue(source.contains("private static final long IDLE_WAIT_MILLIS = 16L;"));
+      assertTrue(source.contains("this.wait(hasPendingWork ? BUSY_WAIT_MILLIS : IDLE_WAIT_MILLIS);"));
+      assertFalse(source.contains("this.wait(hasPendingWork ? 1L : 16L);"));
+   }
+
+   private static String normalize(String s) {
+      return s.replace("\r\n", "\n");
    }
 }

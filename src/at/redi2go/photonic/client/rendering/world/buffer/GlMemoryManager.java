@@ -1,20 +1,22 @@
 package at.redi2go.photonic.client.rendering.world.buffer;
 
+import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.opengl.objects.GlTarget;
 import at.redi2go.photonic.client.rendering.util.BufferUtils;
 import java.nio.ByteBuffer;
 import java.util.Deque;
 import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL43;
 
-public class GlMemoryManager implements Destructable {
+public class GlMemoryManager implements MemoryManager {
    private int id;
    private final GlTarget target;
    private final boolean staticData;
@@ -22,8 +24,8 @@ public class GlMemoryManager implements Destructable {
    private final ByteBuffer buffer;
    public int index = 0;
    private int uploadBatchSize = Integer.MAX_VALUE;
-   private final Deque<MemoryOwner> uploadQueue = new LinkedList<>();
-   public final Queue<MemoryRegion> unusedBuffers = new LinkedList<>();
+   private final Deque<MemoryOwner> uploadQueue = new ConcurrentLinkedDeque<>();
+   public final Queue<MemoryRegion> unusedBuffers = new ConcurrentLinkedQueue<>();
 
    public GlMemoryManager(GlTarget target, String name, int byteSize, boolean staticData) {
       this.target = target;
@@ -46,8 +48,15 @@ public class GlMemoryManager implements Destructable {
 
       int begin = this.index;
       int end = this.index + byteSize;
+      if (end > this.buffer.capacity()) {
+         throw new OutOfMemoryError("Could not allocate " + byteSize + " bytes");
+      }
       this.index += byteSize;
       return new MemoryRegion(this.buffer.slice(begin, end - begin).order(this.buffer.order()), begin, end);
+   }
+
+   public MemoryManager allocateRegion(int byteSize) {
+      return new BufferRegion(this.allocate(byteSize));
    }
 
    public void bind(int program, int blockIndex, int bindingPointIndex) {
@@ -75,9 +84,17 @@ public class GlMemoryManager implements Destructable {
 
       for (int i = 0; i < this.uploadBatchSize && !this.uploadQueue.isEmpty(); i++) {
          MemoryOwner memoryOwner = this.uploadQueue.poll();
-         MemoryRegion memoryRegion = memoryOwner.getMemory();
-         GL15.glBufferSubData(this.target.target, memoryRegion.begin, memoryRegion.getBuffer());
-         memoryOwner.afterUpload();
+         if (memoryOwner == null) {
+            Photonic.warn("Memory owner is null?");
+         } else {
+            synchronized (memoryOwner) {
+               MemoryRegion memoryRegion = memoryOwner.getMemory();
+               if (memoryRegion != null) {
+                  GL15.glBufferSubData(this.target.target, memoryRegion.begin, memoryRegion.getBuffer());
+                  memoryOwner.afterUpload();
+               }
+            }
+         }
       }
 
       GL15.glBindBuffer(this.target.target, 0);
@@ -94,11 +111,19 @@ public class GlMemoryManager implements Destructable {
    }
 
    public void queueUpload(MemoryOwner memoryOwner) {
-      this.uploadQueue.addLast(memoryOwner);
+      if (memoryOwner == null) {
+         System.err.println("Trying to upload null?");
+      } else {
+         this.uploadQueue.addLast(memoryOwner);
+      }
    }
 
    public void queueUploadPriority(MemoryOwner memoryOwner) {
-      this.uploadQueue.addFirst(memoryOwner);
+      if (memoryOwner == null) {
+         System.err.println("Trying to priority-upload null?");
+      } else {
+         this.uploadQueue.addFirst(memoryOwner);
+      }
    }
 
    public void free(MemoryRegion memoryRegion) {
@@ -127,6 +152,72 @@ public class GlMemoryManager implements Destructable {
    public void free() {
       if (this.id != 0) {
          GL15.glDeleteBuffers(this.id);
+         this.id = -1;
+      }
+   }
+
+   private class BufferRegion implements MemoryManager {
+      private final MemoryRegion memory;
+      private int index;
+      public final Queue<MemoryRegion> unusedBuffers = new ConcurrentLinkedQueue<>();
+
+      BufferRegion(MemoryRegion region) {
+         this.memory = region;
+         this.index = region.begin;
+      }
+
+      @Override
+      public int getCapacity() {
+         return this.memory.end - this.memory.begin;
+      }
+
+      @Override
+      public MemoryRegion allocate(int byteSize) {
+         Iterator<MemoryRegion> memoryIterator = this.unusedBuffers.iterator();
+
+         while (memoryIterator.hasNext()) {
+            MemoryRegion region = memoryIterator.next();
+            if (region.end - region.begin == byteSize) {
+               memoryIterator.remove();
+               region.allocated = true;
+               return region;
+            }
+         }
+
+         int begin = this.index;
+         int end = this.index + byteSize;
+         if (end > this.memory.end) {
+            throw new OutOfMemoryError("Could not allocate " + byteSize + " bytes");
+         }
+
+         this.index += byteSize;
+         return new MemoryRegion(GlMemoryManager.this.buffer.slice(begin, end - begin).order(GlMemoryManager.this.buffer.order()), begin, end);
+      }
+
+      @Override
+      public boolean upload() {
+         return GlMemoryManager.this.upload();
+      }
+
+      @Override
+      public void queueUpload(MemoryOwner memoryOwner) {
+         GlMemoryManager.this.queueUpload(memoryOwner);
+      }
+
+      @Override
+      public void queueUploadPriority(MemoryOwner memoryOwner) {
+         GlMemoryManager.this.queueUploadPriority(memoryOwner);
+      }
+
+      @Override
+      public void free(MemoryRegion memoryRegion) {
+         memoryRegion.allocated = false;
+         this.unusedBuffers.add(memoryRegion);
+      }
+
+      @Override
+      public void free() {
+         GlMemoryManager.this.free(this.memory);
       }
    }
 }

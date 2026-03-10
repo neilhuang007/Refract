@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "shaderPackNames": [ "BSL_v8.2.09" ],
-  "supportedVersions": [ "0.2.9" ],
+  "supportedVersions": [ "0.2.9", "0.3.1+1.21.1" ],
   "debug": true,
   "alwaysPatched": [
     "/lib/settings.glsl",

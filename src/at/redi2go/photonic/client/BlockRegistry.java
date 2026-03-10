@@ -6,19 +6,19 @@ import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.schematics.AirEntry;
 import at.redi2go.photonic.client.rendering.schematics.Schematic;
 import at.redi2go.photonic.client.rendering.world.PBlock;
+import at.redi2go.photonic.client.rendering.world.buffer.MemoryManager;
 import at.redi2go.photonic.client.rendering.world.position.PBlockPos;
 import com.google.common.collect.UnmodifiableIterator;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.Map.Entry;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import net.minecraft.world.World;
 import net.minecraft.block.Blocks;
@@ -30,45 +30,155 @@ import net.minecraft.state.property.Property;
 import net.minecraft.util.Identifier;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.resource.Resource;
-import net.minecraft.resource.ResourceManager;
 import net.minecraft.resource.ResourceReloader;
 import net.minecraft.resource.ReloadableResourceManagerImpl;
-import net.minecraft.util.profiler.Profiler;
 import net.minecraft.util.Unit;
 import net.minecraft.resource.ResourceFactory;
 import net.minecraft.registry.Registries;
-import net.minecraft.resource.ResourceReloader.Synchronizer;
 import org.apache.commons.io.IOUtils;
 import org.joml.Vector3f;
 
 public class BlockRegistry implements Destructable {
    private static final Schematic EMPTY_BLOCK = new Schematic(16, 16, 16);
    public static final Set<Block> DEFAULT_STATE_BLOCKS = Set.of(Blocks.NOTE_BLOCK);
+   public static final Set<Block> VANILLA_RENDERED_BLOCK = Set.of(
+      Blocks.WATER,
+      Blocks.LAVA,
+      Blocks.BARRIER,
+      Blocks.END_PORTAL,
+      Blocks.END_GATEWAY,
+      Blocks.TRIPWIRE,
+      Blocks.ZOMBIE_HEAD,
+      Blocks.ZOMBIE_WALL_HEAD,
+      Blocks.PLAYER_HEAD,
+      Blocks.PLAYER_WALL_HEAD,
+      Blocks.CREEPER_HEAD,
+      Blocks.CREEPER_WALL_HEAD,
+      Blocks.DRAGON_HEAD,
+      Blocks.DRAGON_WALL_HEAD,
+      Blocks.PIGLIN_HEAD,
+      Blocks.PIGLIN_WALL_HEAD,
+      Blocks.OAK_SIGN,
+      Blocks.SPRUCE_SIGN,
+      Blocks.BIRCH_SIGN,
+      Blocks.ACACIA_SIGN,
+      Blocks.CHERRY_SIGN,
+      Blocks.JUNGLE_SIGN,
+      Blocks.DARK_OAK_SIGN,
+      Blocks.MANGROVE_SIGN,
+      Blocks.BAMBOO_SIGN,
+      Blocks.OAK_WALL_SIGN,
+      Blocks.SPRUCE_WALL_SIGN,
+      Blocks.BIRCH_WALL_SIGN,
+      Blocks.ACACIA_WALL_SIGN,
+      Blocks.CHERRY_WALL_SIGN,
+      Blocks.JUNGLE_WALL_SIGN,
+      Blocks.DARK_OAK_WALL_SIGN,
+      Blocks.MANGROVE_WALL_SIGN,
+      Blocks.BAMBOO_WALL_SIGN,
+      Blocks.OAK_HANGING_SIGN,
+      Blocks.SPRUCE_HANGING_SIGN,
+      Blocks.BIRCH_HANGING_SIGN,
+      Blocks.ACACIA_HANGING_SIGN,
+      Blocks.CHERRY_HANGING_SIGN,
+      Blocks.JUNGLE_HANGING_SIGN,
+      Blocks.DARK_OAK_HANGING_SIGN,
+      Blocks.CRIMSON_HANGING_SIGN,
+      Blocks.WARPED_HANGING_SIGN,
+      Blocks.MANGROVE_HANGING_SIGN,
+      Blocks.BAMBOO_HANGING_SIGN,
+      Blocks.OAK_WALL_HANGING_SIGN,
+      Blocks.SPRUCE_WALL_HANGING_SIGN,
+      Blocks.BIRCH_WALL_HANGING_SIGN,
+      Blocks.ACACIA_WALL_HANGING_SIGN,
+      Blocks.CHERRY_WALL_HANGING_SIGN,
+      Blocks.JUNGLE_WALL_HANGING_SIGN,
+      Blocks.DARK_OAK_WALL_HANGING_SIGN,
+      Blocks.MANGROVE_WALL_HANGING_SIGN,
+      Blocks.CRIMSON_WALL_HANGING_SIGN,
+      Blocks.WARPED_WALL_HANGING_SIGN,
+      Blocks.BAMBOO_WALL_HANGING_SIGN,
+      Blocks.CRIMSON_SIGN,
+      Blocks.WARPED_SIGN,
+      Blocks.CRIMSON_WALL_SIGN,
+      Blocks.WARPED_WALL_SIGN,
+      Blocks.WHITE_BANNER,
+      Blocks.ORANGE_BANNER,
+      Blocks.MAGENTA_BANNER,
+      Blocks.LIGHT_BLUE_BANNER,
+      Blocks.YELLOW_BANNER,
+      Blocks.LIME_BANNER,
+      Blocks.PINK_BANNER,
+      Blocks.GRAY_BANNER,
+      Blocks.LIGHT_GRAY_BANNER,
+      Blocks.CYAN_BANNER,
+      Blocks.PURPLE_BANNER,
+      Blocks.BLUE_BANNER,
+      Blocks.BROWN_BANNER,
+      Blocks.GREEN_BANNER,
+      Blocks.RED_BANNER,
+      Blocks.BLACK_BANNER,
+      Blocks.WHITE_WALL_BANNER,
+      Blocks.ORANGE_WALL_BANNER,
+      Blocks.MAGENTA_WALL_BANNER,
+      Blocks.LIGHT_BLUE_WALL_BANNER,
+      Blocks.YELLOW_WALL_BANNER,
+      Blocks.LIME_WALL_BANNER,
+      Blocks.PINK_WALL_BANNER,
+      Blocks.GRAY_WALL_BANNER,
+      Blocks.LIGHT_GRAY_WALL_BANNER,
+      Blocks.CYAN_WALL_BANNER,
+      Blocks.PURPLE_WALL_BANNER,
+      Blocks.BLUE_WALL_BANNER,
+      Blocks.BROWN_WALL_BANNER,
+      Blocks.GREEN_WALL_BANNER,
+      Blocks.RED_WALL_BANNER,
+      Blocks.BLACK_WALL_BANNER
+   );
    public static final Set<Property<?>> DEFAULT_PROPERTIES = Set.of(
       Properties.PERSISTENT, Properties.DISTANCE_1_7, Properties.WATERLOGGED, Properties.OCCUPIED
    );
-   private final Map<BlockState, PBlock> blockSchematicCache = new HashMap<>();
-   private final ResourceReloader resourceReloadListener = new ResourceReloader() {
-      public CompletableFuture<Void> reload(
-         Synchronizer preparationBarrier,
-         ResourceManager resourceManager,
-         Profiler profilerFiller,
-         Profiler applyProfiler,
-         Executor applyExecutor,
-         Executor executor2
-      ) {
-         return preparationBarrier.whenPrepared(Unit.INSTANCE).thenRunAsync(() -> {
-            applyProfiler.startTick();
-            applyProfiler.push("schematic_reload");
-            BlockRegistry.this.reloadBlockModels();
-            applyProfiler.pop();
-            applyProfiler.endTick();
-         }, applyExecutor);
-      }
-   };
+   private final MemoryManager memoryManager;
+   private final Map<BlockState, PBlock> blockSchematicCache = new ConcurrentHashMap<>();
+   private final ResourceReloader resourceReloadListener = (preparationBarrier, resourceManager, profilerFiller, applyProfiler, applyExecutor, executor2) ->
+      preparationBarrier.whenPrepared(Unit.INSTANCE).thenRunAsync(this::reloadBlockModels, applyExecutor);
 
-   public BlockRegistry() {
+   public BlockRegistry(MemoryManager memoryManager) {
       ((ReloadableResourceManagerImpl)MinecraftClient.getInstance().getResourceManager()).registerReloader(this.resourceReloadListener);
+      this.memoryManager = memoryManager;
+      memoryManager.allocate(PBlock.BYTE_SIZE);
+      PBlock.numAllocated = 0;
+   }
+
+   public void freeUnused() {
+      for (Map.Entry<BlockState, PBlock> e : this.blockSchematicCache.entrySet()) {
+         BlockState blockState = e.getKey();
+         PBlock block = e.getValue();
+         if (!block.isUsed() && block.isAllocated()) {
+            synchronized (block) {
+               block.free(this.memoryManager);
+               this.blockSchematicCache.remove(blockState);
+            }
+         }
+      }
+   }
+
+   public void ensureAllocated(PBlock block) {
+      synchronized (block) {
+         if (block.isAllocated()) {
+            if (block.needsUpdate()) {
+               block.update(this.memoryManager);
+            }
+         } else {
+            block.changeTimesUsed(1);
+            if (PBlock.numAllocated >= 4095) {
+               this.freeUnused();
+            }
+            block.changeTimesUsed(-1);
+            block.allocate(this.memoryManager);
+            block.update(this.memoryManager);
+         }
+      }
    }
 
    public PBlock getBlock(PBlockPos blockPosition) {
@@ -96,9 +206,7 @@ public class BlockRegistry implements Destructable {
          if (block != null) {
             return block;
          } else {
-            block = new PBlock(() -> EMPTY_BLOCK);
-            block.allocate(Raytracer.INSTANCE.getWorldRegistry().getCbMemoryManager());
-            block.update(Raytracer.INSTANCE.getWorldRegistry().getCbMemoryManager());
+            block = new PBlock(at.redi2go.photonic.client.rendering.util.IrisUtil.getBlockId(blockState), () -> EMPTY_BLOCK);
             Raytracer.INSTANCE.getWorldRegistry().getLightRegistry().registerBlockState(blockState, block);
             this.blockSchematicCache.put(blockState, block);
             Schematic schematic = loadSchematicFromDisk(blockState, false);
@@ -110,13 +218,21 @@ public class BlockRegistry implements Destructable {
                final Schematic finalSchematic = schematic;
                schematic.optimizeThreaded().thenRun(() -> Raytracer.INSTANCE.queueUrgentBuildJob(() -> {
                   finalBlock.setCompiledSchematicSupplier(() -> finalSchematic);
-                  finalBlock.update(Raytracer.INSTANCE.getWorldRegistry().getCbMemoryManager());
                }));
             }
 
             return block;
          }
       }
+   }
+
+   public boolean upload() {
+      for (PBlock block : this.blockSchematicCache.values()) {
+         if (block.needsUpdate() && block.isAllocated()) {
+            block.update(this.memoryManager);
+         }
+      }
+      return this.memoryManager.upload();
    }
 
    public void reloadBlockModels() {
@@ -129,7 +245,6 @@ public class BlockRegistry implements Destructable {
                schematic.initialize();
                schematic.optimizeThreaded().thenRun(() -> Raytracer.INSTANCE.queueUrgentBuildJob(() -> {
                   entry.getValue().setCompiledSchematicSupplier(() -> schematic);
-                  entry.getValue().update(Raytracer.INSTANCE.getWorldRegistry().getCbMemoryManager());
                }));
             }
          }
@@ -139,7 +254,9 @@ public class BlockRegistry implements Destructable {
    @Override
    public void free() {
       this.blockSchematicCache.clear();
+      PBlock.numAllocated = 0;
       ((ReloadableResourceManagerAccessor)MinecraftClient.getInstance().getResourceManager()).getListeners().remove(this.resourceReloadListener);
+      this.memoryManager.free();
    }
 
    public Map<BlockState, PBlock> getBlockSchematicCache() {
@@ -228,7 +345,7 @@ public class BlockRegistry implements Destructable {
       builder.append(Registries.BLOCK.getId(blockState.getBlock()).getPath());
       blockState.getEntries().forEach((p, v) -> {
          if (!DEFAULT_PROPERTIES.contains(p)) {
-            builder.append('-').append(p.getName().toLowerCase()).append('_').append(v.toString().toLowerCase());
+            builder.append('-').append(p.getName().toLowerCase(Locale.ENGLISH)).append('_').append(v.toString().toLowerCase(Locale.ENGLISH));
          }
       });
       return builder.toString();
@@ -236,7 +353,12 @@ public class BlockRegistry implements Destructable {
 
    public static BlockState decodeBlockState(String encodedBlockState) {
       String blockName = encodedBlockState.split("-")[0];
-      UnmodifiableIterator var2 = ((Block)Registries.BLOCK.get(Identifier.ofVanilla(blockName))).getStateManager().getStates().iterator();
+      Optional<Block> block = Registries.BLOCK.getOrEmpty(Identifier.ofVanilla(blockName));
+      if (block.isEmpty()) {
+         return null;
+      }
+
+      UnmodifiableIterator var2 = block.get().getStateManager().getStates().iterator();
 
       while (var2.hasNext()) {
          BlockState blockState = (BlockState)var2.next();
@@ -249,15 +371,19 @@ public class BlockRegistry implements Destructable {
    }
 
    public static BlockState cleanUpBlockState(BlockState blockState) {
-      if (blockState.isAir()) {
-         return null;
-      } else {
+      if (!blockState.isAir() && !isVanillaRendered(blockState.getBlock())) {
          if (DEFAULT_STATE_BLOCKS.contains(blockState.getBlock())) {
             blockState = blockState.getBlock().getDefaultState();
          }
 
          return blockState;
+      } else {
+         return null;
       }
+   }
+
+   private static boolean isVanillaRendered(Block block) {
+      return Raytracer.getProperties().map(e -> e.voxelizeLava().orElse(false)).orElse(false) ? false : VANILLA_RENDERED_BLOCK.contains(block);
    }
 
    static {

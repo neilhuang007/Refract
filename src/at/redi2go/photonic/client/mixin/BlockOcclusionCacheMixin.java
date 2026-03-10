@@ -1,6 +1,8 @@
 package at.redi2go.photonic.client.mixin;
 
-import at.redi2go.photonic.client.PhotonicsStorage;
+import at.redi2go.photonic.client.Raytracer;
+import at.redi2go.photonic.client.config.PhotonicsConfig;
+import at.redi2go.photonic.client.rendering.world.PBlock;
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.pipeline.BlockOcclusionCache;
 import net.minecraft.world.BlockView;
 import net.minecraft.util.math.BlockPos;
@@ -25,9 +27,12 @@ public class BlockOcclusionCacheMixin {
       Mutable neighborPos = this.cachedPositionObject;
       neighborPos.set(selfPos, facing);
       BlockState neighborBlockState = view.getBlockState(neighborPos);
-      if (PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS.value.contains(neighborBlockState.getBlock())) {
-         cir.setReturnValue(true);
-         cir.cancel();
+      if (PhotonicsConfig.isVoxelized(neighborBlockState.getBlock())) {
+         PBlock block = Raytracer.INSTANCE != null ? Raytracer.INSTANCE.getBlockRegistry().getBlock(neighborBlockState) : null;
+         if (block != null && !block.canOcclude) {
+            cir.setReturnValue(true);
+            cir.cancel();
+         }
       }
    }
 }

@@ -21,7 +21,7 @@ public final class PhotonicsStorage {
       return new Parameter<>(key, s -> StorageIO.readBoolean(s, defaultValue), StorageIO::writeBoolean);
    }
 
-   public static final Parameter<Boolean> DO_MULTITHREADING = boolParam("do_multithreading", false);
+   public static final Parameter<Boolean> DO_MULTITHREADING = boolParam("do_multithreading", true);
    public static final Parameter<Boolean> SHADOW_PIXELATION_ENABLED = boolParam("shadow_pixelation_enabled", true);
    public static final Parameter<Float> SHADOW_PIXELATION_SIZE = floatParam("shadow_pixelation_size", 8.0F);
    public static final Parameter<Boolean> PIXELATED_LIGHTING_DEBUG_LOG = boolParam("pixelated_lighting_debug_log", false);
@@ -35,12 +35,12 @@ public final class PhotonicsStorage {
    public static final Parameter<Float> OILIFY_STROKE_STRENGTH = floatParam("oilify_stroke_strength", 0.0F);
    public static final PhotonicsStorage.Parameter<Set<Block>> VOLUMETRIC_RENDERED_BLOCKS = new PhotonicsStorage.Parameter<>(
       "volumetric_blocks",
-      blocksString -> new HashSet<>(StorageIO.readBlocks(blocksString, Raytracer.DEFAULT_VOLUMETRIC_RENDERED_BLOCKS)),
+      blocksString -> new HashSet<>(StorageIO.readBlocks(blocksString, Set.of())),
       StorageIO::writeBlocks
    );
    public static final PhotonicsStorage.Parameter<Set<LightBlock>> TRACED_LIGHT_BLOCKS = new PhotonicsStorage.Parameter<>(
       "traced_light_blocks",
-      lightBlocksString -> new HashSet<>(StorageIO.readLightBlocks(lightBlocksString, Raytracer.DEFAULT_LIGHT_BLOCKS)),
+      lightBlocksString -> new HashSet<>(StorageIO.readLightBlocks(lightBlocksString, Set.of())),
       StorageIO::writeLightBlocks
    );
 

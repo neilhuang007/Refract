@@ -1,5 +1,6 @@
 package at.redi2go.photonic.client;
 
+import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.rendering.world.LightBlock;
 import at.redi2go.photonic.client.rendering.world.LightType;
 import java.io.File;
@@ -40,14 +41,23 @@ public class ModSettingsScreen extends Screen {
       Set<Block> blacklistedBlocks = Set.of(Blocks.AIR, Blocks.WATER, Blocks.LAVA);
       return !blacklistedBlocks.contains(block);
    }).sorted(Comparator.comparing(block -> block.getName().getString())).map(block -> (ToggleableListScreen.ModelEntry)new ModSettingsScreen.BlockModel3DEntry(block)).toList());
-   private static final ToggleableListScreen.Model BLOCKS_TRACED_MODEL;
    private final Screen parent;
+   private final ToggleableListScreen.Model tracedBlocksModel;
    private SchematicExporter schematicExporter = null;
    private final ThreePartsLayoutWidget layout = new ThreePartsLayoutWidget(this, 61, 33);
 
    protected ModSettingsScreen(Screen parent) {
       super(Text.of("Photonic Client Settings"));
       this.parent = parent;
+      this.tracedBlocksModel = new ToggleableListScreen.Model(
+         PhotonicsConfig.getLightList()
+            .keySet()
+            .stream()
+            .sorted(Comparator.comparing(block -> block.getName().getString()))
+            .map(block -> (ToggleableListScreen.ModelEntry)new ModSettingsScreen.TracedLightBlockEntry(block))
+            .toList()
+      );
+      PhotonicsConfig.prepareModify();
    }
 
    protected void init() {
@@ -61,11 +71,9 @@ public class ModSettingsScreen extends Screen {
             () -> MinecraftClient.getInstance().world != null
          )
       );
-      PhotonicsStorage.Parameter<Boolean> doMultithreading = PhotonicsStorage.DO_MULTITHREADING;
-      buttons.add(new ModSettingsScreen.PButton("MultiThreading: " + (doMultithreading.value ? "On" : "Off"), w -> {
-         doMultithreading.value = !doMultithreading.value;
-         doMultithreading.modified();
-         w.setMessage(Text.of("MultiThreading: " + (doMultithreading.value ? "On" : "Off")));
+      buttons.add(new ModSettingsScreen.PButton("MultiThreading: " + (PhotonicsConfig.isMultiThreadingEnabled() ? "On" : "Off"), w -> {
+         PhotonicsConfig.setMultiThreadingEnabled(!PhotonicsConfig.isMultiThreadingEnabled());
+         w.setMessage(Text.of("MultiThreading: " + (PhotonicsConfig.isMultiThreadingEnabled() ? "On" : "Off")));
       }, "Turns MultiThreading on or off; MultiThreading is considerably faster, but can cause bugs.", () -> true));
       PhotonicsStorage.Parameter<Boolean> shadowPixelation = PhotonicsStorage.SHADOW_PIXELATION_ENABLED;
       PhotonicsStorage.Parameter<Float> shadowPixelationSize = PhotonicsStorage.SHADOW_PIXELATION_SIZE;
@@ -108,7 +116,7 @@ public class ModSettingsScreen extends Screen {
             () -> true
          )
       );
-      ToggleableListScreen tracedBlocks = new ToggleableListScreen(this, "Raytraced Block Lights", BLOCKS_TRACED_MODEL);
+      ToggleableListScreen tracedBlocks = new ToggleableListScreen(this, "Raytraced Block Lights", this.tracedBlocksModel);
       buttons.add(
          new ModSettingsScreen.PButton(
             "Raytraced Lights",
@@ -186,6 +194,13 @@ public class ModSettingsScreen extends Screen {
 
    public void close() {
       this.client.setScreen(this.parent);
+
+      try {
+         PhotonicsConfig.onChanged();
+         PhotonicsConfig.save();
+      } catch (Exception e) {
+         Photonic.error("error saving config", e);
+      }
    }
 
    private static SplashOverlay buildLoadingOverlay(Supplier<Float> progressSupplier) {
@@ -204,16 +219,6 @@ public class ModSettingsScreen extends Screen {
       }, o -> {}, false);
    }
 
-   static {
-      Set<LightBlock> lightBlocks = PhotonicsStorage.TRACED_LIGHT_BLOCKS.value;
-      BLOCKS_TRACED_MODEL = new ToggleableListScreen.Model(
-         lightBlocks.stream()
-            .sorted(Comparator.comparing(lightblock -> lightblock.block.getName().getString()))
-            .map(lightBlock -> (ToggleableListScreen.ModelEntry)new ModSettingsScreen.TracedLightBlockEntry(lightBlock.block))
-            .toList()
-      );
-   }
-
    public static class BlockModel3DEntry extends ToggleableListScreen.ModelEntry {
       private final Block block;
 
@@ -228,19 +233,12 @@ public class ModSettingsScreen extends Screen {
 
       @Override
       public boolean isEnabled() {
-         return PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS.value.contains(this.block);
+         return PhotonicsConfig.isVoxelized(this.block);
       }
 
       @Override
       public void setEnabled(boolean enabled) {
-         PhotonicsStorage.Parameter<Set<Block>> lightBlocks = PhotonicsStorage.VOLUMETRIC_RENDERED_BLOCKS;
-         if (enabled) {
-            lightBlocks.value.add(this.block);
-         } else {
-            lightBlocks.value.remove(this.block);
-         }
-
-         lightBlocks.modified();
+         PhotonicsConfig.setVoxelized(this.block, enabled);
       }
    }
 
@@ -364,16 +362,16 @@ public class ModSettingsScreen extends Screen {
 
       @Override
       public boolean isEnabled() {
-         return PhotonicsStorage.TRACED_LIGHT_BLOCKS.value.stream().anyMatch(lightBlock -> lightBlock.block == this.block && lightBlock.lightType.isTraced());
+         Boolean override = PhotonicsConfig.getTracedOverrides().get(this.block);
+         return override != null ? override : PhotonicsConfig.getLightList().isTraced(this.block);
       }
 
       @Override
       public void setEnabled(boolean traced) {
-         PhotonicsStorage.Parameter<Set<LightBlock>> lightBlocks = PhotonicsStorage.TRACED_LIGHT_BLOCKS;
-         LightBlock lightBlock = lightBlocks.value.stream().filter(lightBlock1 -> lightBlock1.block == this.block).findFirst().orElse(null);
-         if (lightBlock != null) {
-            lightBlock.lightType = new LightType(lightBlock.lightType.getColor(), lightBlock.lightType.getAttenuation(), traced);
-            lightBlocks.modified();
+         if (!Screen.hasShiftDown()) {
+            PhotonicsConfig.getTracedOverrides().put(this.block, traced);
+         } else {
+            PhotonicsConfig.getTracedOverrides().remove(this.block);
          }
       }
    }

@@ -1,6 +1,7 @@
 package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.GlProgramExt;
+import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.PhotonicsShader;
 import net.caffeinemc.mods.sodium.client.gl.shader.GlProgram;
 import org.spongepowered.asm.mixin.Mixin;
@@ -16,8 +17,10 @@ public class GlProgramMixin implements GlProgramExt {
 
    @Inject(method = "bind", at = @At("TAIL"), remap = false)
    public void applyTail(CallbackInfo ci) {
+      int programId = ((GlProgram)(Object)this).handle();
+      Raytracer.bindBuffers(programId);
       if (this.photonicsShader != null) {
-         this.photonicsShader.bind(((GlProgram)(Object)this).handle());
+         this.photonicsShader.bindFramebuffer();
       }
    }
 

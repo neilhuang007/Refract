@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.gen.Invoker;
 
-@Mixin(targets = "net.irisshaders.iris.pipeline.programs.SodiumPrograms$Pass", remap = false)
+@Mixin(value = Pass.class, remap = false)
 public class SodiumProgramsPassMixin {
    @Shadow
    @Final

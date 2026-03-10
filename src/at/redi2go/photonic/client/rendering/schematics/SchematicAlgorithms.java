@@ -3,6 +3,33 @@ package at.redi2go.photonic.client.rendering.schematics;
 import java.util.ArrayDeque;
 
 public class SchematicAlgorithms {
+   public static boolean canOcclude(Schematic schematic) {
+      boolean hasAir = false;
+
+      for (int z = 0; z < schematic.getDepth(); z++) {
+         for (int y = 0; y < schematic.getHeight(); y++) {
+            if (schematic.getUncheckedEntry(0, y, z) > 0) hasAir = true;
+            if (schematic.getUncheckedEntry(schematic.getWidth() - 1, y, z) > 0) hasAir = true;
+         }
+      }
+
+      for (int z = 0; z < schematic.getDepth(); z++) {
+         for (int x = 0; x < schematic.getWidth(); x++) {
+            if (schematic.getUncheckedEntry(x, 0, z) > 0) hasAir = true;
+            if (schematic.getUncheckedEntry(x, schematic.getHeight() - 1, z) > 0) hasAir = true;
+         }
+      }
+
+      for (int y = 0; y < schematic.getHeight(); y++) {
+         for (int x = 0; x < schematic.getWidth(); x++) {
+            if (schematic.getUncheckedEntry(x, y, 0) > 0) hasAir = true;
+            if (schematic.getUncheckedEntry(x, y, schematic.getDepth() - 1) > 0) hasAir = true;
+         }
+      }
+
+      return !hasAir;
+   }
+
    static void cullInside(Schematic schematic) {
       boolean[] visible = new boolean[schematic.data.length];
 
@@ -90,13 +117,14 @@ public class SchematicAlgorithms {
          for (int z = 0; z < schematic.getDepth(); z++) {
             int airEntry1 = schematic.getUncheckedEntry(x, y, z);
             if (!AirEntry.isData(airEntry1)) {
-               schematic.setEntry(x, y, z, mergeNeighbours(schematic, airEntry1));
+               int maxSA = 2 * (schematic.width * schematic.height + schematic.width * schematic.depth + schematic.height * schematic.depth) / 2;
+               schematic.setEntry(x, y, z, mergeNeighbours(schematic, airEntry1, maxSA));
             }
          }
       }
    }
 
-   private static int mergeNeighbours(Schematic schematic, int airEntry) {
+   private static int mergeNeighbours(Schematic schematic, int airEntry, int maxSurfaceArea) {
       int startX = AirEntry.getX1(airEntry);
       int startY = AirEntry.getY1(airEntry);
       int startZ = AirEntry.getZ1(airEntry);
@@ -154,7 +182,7 @@ public class SchematicAlgorithms {
          } else {
             bottomMerged = false;
          }
-      } while (merged && surfaceArea(startX, startY, startZ, endX, endY, endZ) < 300);
+      } while (merged && surfaceArea(startX, startY, startZ, endX, endY, endZ) < maxSurfaceArea);
 
       return AirEntry.toAirEntry(startX, startY, startZ, endX, endY, endZ);
    }
