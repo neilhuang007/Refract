@@ -56,6 +56,8 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private boolean closeChunkUpdate = false;
    private boolean closeChunkUpload = false;
    private int chunkUploadAge = 0;
+   private Vector3f previousCameraPosition = new Vector3f();
+   private boolean forceTemporalReset = false;
    private static final int TEMPORAL_BLEND_FRAMES = 8;
    private final int worldBlockSize;
    private final int worldChunkSize;
@@ -125,6 +127,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             this.buildQueue.poll().run();
          }
 
+         this.checkCameraJump(new Vector3f(MinecraftAccessor.getCameraPosition()));
          Vector3f worldOffset = new Vector3f(MinecraftAccessor.getCameraPosition());
          worldOffset.floor();
          worldOffset.add(-this.worldBlockSize / 2.0F, -this.worldBlockSize / 2.0F, -this.worldBlockSize / 2.0F);
@@ -455,10 +458,14 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          this.closeChunkUpload = false;
          this.chunkUploadAge = TEMPORAL_BLEND_FRAMES;
       }
+      if (this.forceTemporalReset) {
+         this.forceTemporalReset = false;
+         this.chunkUploadAge = TEMPORAL_BLEND_FRAMES;
+      }
       if (this.chunkUploadAge > 0) {
          this.chunkUploadAge--;
       }
-      return false;
+      return this.chunkUploadAge > 0;
    }
 
    public float fetchLightBlendFactor() {
@@ -466,6 +473,40 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return (float) this.chunkUploadAge / TEMPORAL_BLEND_FRAMES;
       }
       return 0.0f;
+   }
+
+   public void checkCameraJump(Vector3f currentCameraPosition) {
+      float dx = currentCameraPosition.x - this.previousCameraPosition.x;
+      float dy = currentCameraPosition.y - this.previousCameraPosition.y;
+      float dz = currentCameraPosition.z - this.previousCameraPosition.z;
+      float distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq > 32.0f * 32.0f) {
+         this.forceTemporalReset = true;
+      }
+      this.previousCameraPosition.set(currentCameraPosition);
+   }
+
+   public Vector3d getLightBlendMin() {
+      if (this.chunkUploadAge > 0) {
+         // Cover entire world in world-space block coordinates
+         return new Vector3d(
+            this.liveWorldBlockOffset.x - this.worldBlockSize,
+            this.liveWorldBlockOffset.y - this.worldBlockSize,
+            this.liveWorldBlockOffset.z - this.worldBlockSize
+         );
+      }
+      return new Vector3d(0, 0, 0);
+   }
+
+   public Vector3d getLightBlendMax() {
+      if (this.chunkUploadAge > 0) {
+         return new Vector3d(
+            this.liveWorldBlockOffset.x + this.worldBlockSize,
+            this.liveWorldBlockOffset.y + this.worldBlockSize,
+            this.liveWorldBlockOffset.z + this.worldBlockSize
+         );
+      }
+      return new Vector3d(0, 0, 0);
    }
 
    public boolean consumeShadowStateDirty() {

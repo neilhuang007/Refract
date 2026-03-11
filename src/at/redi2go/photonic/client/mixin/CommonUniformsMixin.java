@@ -84,6 +84,9 @@ public class CommonUniformsMixin {
             Raytracer rt = Raytracer.INSTANCE;
             return rt == null ? 0 : rt.getWorldRegistry().getLightRegistry().lightCount();
          });
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "light_blend_factor", () -> worldRegistry.get().fetchLightBlendFactor());
+         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_min", () -> worldRegistry.get().getLightBlendMin());
+         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_max", () -> worldRegistry.get().getLightBlendMax());
          Raytracer.INSTANCE.getMainRenderer().registerCustomUniforms(uniforms);
       }
    }
