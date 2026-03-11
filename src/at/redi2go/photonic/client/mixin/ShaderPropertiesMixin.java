@@ -2,6 +2,7 @@ package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.api.AlphaMode;
+import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import java.io.IOException;
 import java.io.StringReader;
@@ -22,15 +23,13 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Unique
    private OptionalBoolean isPhotonicsEnabled = OptionalBoolean.DEFAULT;
    @Unique
-   private OptionalBoolean useDeferredPass = OptionalBoolean.DEFAULT;
+   private float renderScale = DEFAULT_RENDER_SCALE;
    @Unique
-   private float renderScale = 1.0F;
+   private int maxLights = DEFAULT_MAX_LIGHTS;
    @Unique
-   private int maxLights = 1000;
+   private int maxSamples = DEFAULT_MAX_SAMPLES;
    @Unique
-   private int maxSamples = 20;
-   @Unique
-   private AlphaMode alphaMode = PhotonicsProperties.DEFAULT_ALPHA_MODE;
+   private AlphaMode alphaMode = DEFAULT_ALPHA_MODE;
    @Unique
    private OptionalBoolean isGiEnabled = OptionalBoolean.DEFAULT;
    @Unique
@@ -38,7 +37,23 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Unique
    private OptionalBoolean isHandheldLightEnabled = OptionalBoolean.DEFAULT;
    @Unique
+   private OptionalBoolean isLightBinningEnabled = OptionalBoolean.DEFAULT;
+   @Unique
    private OptionalBoolean voxelizeLava = OptionalBoolean.DEFAULT;
+   @Unique
+   private LightingMode lightingMode = DEFAULT_LIGHTING_MODE;
+   @Unique
+   private int restirInitialSamples = DEFAULT_RESTIR_INITIAL_SAMPLES;
+   @Unique
+   private int restirSpatialReuseSamples = DEFAULT_RESTIR_SPATIAL_REUSE_SAMPLES;
+   @Unique
+   private float restirSpatialReuseRadius = DEFAULT_RESTIR_SPATIAL_REUSE_RADIUS;
+   @Unique
+   private int restirAccumulationFrames = DEFAULT_RESTIR_ACCUMULATION_FRAMES;
+   @Unique
+   private OptionalBoolean restirSoftShadows = OptionalBoolean.DEFAULT;
+   @Unique
+   private int denoiserPasses = DEFAULT_RESTIR_DENOISER_PASSES;
 
    @Inject(
       method = "<init>(Ljava/lang/String;Lnet/irisshaders/iris/shaderpack/option/ShaderPackOptions;Ljava/lang/Iterable;)V",
@@ -51,9 +66,6 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
       } catch (IOException e) {
          return;
       }
-      // Merge raw SHADERPACK_PROPERTIES for photonics keys that JCPP may have stripped
-      // from #ifdef blocks (e.g., #ifdef PHOTONICS_LIGHTING which is a GLSL-level define,
-      // not an environment define available during shaders.properties preprocessing).
       if (Raytracer.SHADERPACK_PROPERTIES != null) {
          for (String key : Raytracer.SHADERPACK_PROPERTIES.stringPropertyNames()) {
             if (key.startsWith("photonics.") && !props.containsKey(key)) {
@@ -71,7 +83,6 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    private void photonics$handleDirective(String key, String value) {
       switch (key) {
          case "photonics.enabled" -> this.isPhotonicsEnabled = photonics$parseBoolean(value);
-         case "photonics.useDeferredPass" -> this.useDeferredPass = photonics$parseBoolean(value);
          case "photonics.renderScale" -> photonics$parseFloat(key, value, e -> this.renderScale = e);
          case "photonics.maxLights" -> photonics$parseUnsignedInt(key, value, e -> this.maxLights = e);
          case "photonics.maxSamples" -> photonics$parseUnsignedInt(key, value, e -> this.maxSamples = e);
@@ -79,7 +90,15 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          case "photonics.enableGi" -> this.isGiEnabled = photonics$parseBoolean(value);
          case "photonics.enableBlockLight" -> this.isBlockLightEnabled = photonics$parseBoolean(value);
          case "photonics.enableHandheldLight" -> this.isHandheldLightEnabled = photonics$parseBoolean(value);
+         case "photonics.enableLightBinning" -> this.isLightBinningEnabled = photonics$parseBoolean(value);
          case "photonics.voxelizeLava" -> this.voxelizeLava = photonics$parseBoolean(value);
+         case "photonics.lightingMode" -> photonics$parseLightingMode(key, value, e -> this.lightingMode = e);
+         case "photonics.restirInitialSamples" -> photonics$parseUnsignedInt(key, value, e -> this.restirInitialSamples = e);
+         case "photonics.restirSpatialReuseSamples" -> photonics$parseUnsignedInt(key, value, e -> this.restirSpatialReuseSamples = e);
+         case "photonics.restirSpatialReuseRadius" -> photonics$parseFloat(key, value, e -> this.restirSpatialReuseRadius = e);
+         case "photonics.restirAccumulationFrames" -> photonics$parseUnsignedInt(key, value, e -> this.restirAccumulationFrames = e);
+         case "photonics.restirSoftShadows" -> this.restirSoftShadows = photonics$parseBoolean(value);
+         case "photonics.restirDenoiserPasses" -> photonics$parseNonNegativeInt(key, value, e -> this.denoiserPasses = e);
       }
    }
 
@@ -104,11 +123,6 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    }
 
    @Override
-   public OptionalBoolean useDeferredPass() {
-      return this.useDeferredPass;
-   }
-
-   @Override
    public AlphaMode getAlphaMode() {
       return this.alphaMode;
    }
@@ -129,8 +143,48 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    }
 
    @Override
+   public OptionalBoolean isLightBinningEnabled() {
+      return this.isLightBinningEnabled;
+   }
+
+   @Override
    public OptionalBoolean voxelizeLava() {
       return this.voxelizeLava;
+   }
+
+   @Override
+   public LightingMode getLightingMode() {
+      return this.lightingMode;
+   }
+
+   @Override
+   public int getRestirInitialSamples() {
+      return this.restirInitialSamples;
+   }
+
+   @Override
+   public int getRestirSpatialReuseSamples() {
+      return this.restirSpatialReuseSamples;
+   }
+
+   @Override
+   public float getRestirSpatialReuseRadius() {
+      return this.restirSpatialReuseRadius;
+   }
+
+   @Override
+   public int getRestirAccumulationFrames() {
+      return this.restirAccumulationFrames;
+   }
+
+   @Override
+   public OptionalBoolean useRestirSoftShadows() {
+      return this.restirSoftShadows;
+   }
+
+   @Override
+   public int getRestirDenoiserPasses() {
+      return this.denoiserPasses;
    }
 
    @Unique
@@ -156,6 +210,19 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    }
 
    @Unique
+   private static void photonics$parseNonNegativeInt(String key, String value, Consumer<Integer> handler) {
+      try {
+         int result = Integer.parseInt(value);
+         if (result < 0) {
+            throw new NumberFormatException("Was negative");
+         }
+         handler.accept(result);
+      } catch (NumberFormatException e) {
+         Iris.logger.warn("Unexpected value for unsigned integer key " + key + " in shaders.properties: got " + value + ", but expected a non-negative integer");
+      }
+   }
+
+   @Unique
    private static void photonics$parseFloat(String key, String value, Consumer<Float> handler) {
       try {
          handler.accept(Float.parseFloat(value));
@@ -170,6 +237,15 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          handler.accept(AlphaMode.valueOf(value.toUpperCase()));
       } catch (IllegalArgumentException e) {
          Iris.logger.warn("Unexpected value for alpha mode key " + key + " in shaders.properties: got " + value + ", but expected alpha mode");
+      }
+   }
+
+   @Unique
+   private static void photonics$parseLightingMode(String key, String value, Consumer<LightingMode> handler) {
+      try {
+         handler.accept(LightingMode.valueOf(value.toUpperCase()));
+      } catch (IllegalArgumentException e) {
+         Iris.logger.warn("Unexpected value for lighting mode key " + key + " in shaders.properties: got " + value + ", but expected lighting mode");
       }
    }
 }

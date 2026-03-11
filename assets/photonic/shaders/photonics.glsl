@@ -21,18 +21,24 @@ layout (std430) restrict readonly buffer cb_block {
     int cb_array[];
 };
 
+#ifdef PH_ENABLE_LIGHT_BINNING
 layout (std430) restrict readonly buffer light_registry_block {
     int light_registry_array[];
 };
+#endif
 
 
 const int light_size = 3; // 3 vec4s per light
 
-layout (std140) uniform lights_uniform {
-    // vec 1: position (xyz) + 1 padding (w)
-    // vec 2: color (xyz) + 1 padding (w)
-    // vec 3: attenutation (xy) + falloff (z) + 1 padding (w)
-    vec4 lights_array[PH_MAX_LIGHTS * light_size];
+layout (std140) restrict readonly buffer ph_light_list {
+    // vec 1: position (xyz) + block_id (w)
+    // vec 2: color (xyz) + intensity (w)
+    // vec 3: attenutation (xy) + falloff (z) + block_radius (w)
+    vec4 ph_lights_array[];
+};
+
+layout (std430) restrict readonly buffer ph_light_list_mapping {
+    int ph_lights_array_mapping[];
 };
 
 /*
@@ -63,17 +69,7 @@ uniform layout(r32ui) uimage3D gi_z;
 uniform layout(r32ui) uimage3D gi_w;
 uniform layout(r32ui) uimage3D gi_d;
 
-uniform sampler2D prev_radiosity_position;
-uniform sampler2D prev_radiosity_normal;
-uniform sampler2D prev_radiosity_direct;
-uniform sampler2D prev_radiosity_direct_soft;
-uniform sampler2D prev_radiosity_handheld;
-
-uniform sampler2D radiosity_position;
-uniform sampler2D radiosity_normal;
-uniform sampler2D radiosity_direct;
-uniform sampler2D radiosity_direct_soft;
-uniform sampler2D radiosity_handheld;
+#include "/photonics/ph_samplers.glsl"
 
 /*
     -- STRUCTS --
@@ -89,6 +85,7 @@ struct RayJob {
 };
 
 struct Light {
+    int index;
     int blockId;
     vec3 position;
     vec3 color;

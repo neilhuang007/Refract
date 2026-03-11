@@ -16,13 +16,15 @@ int indirect_write_index = indirect_read_index ^ 1;
 //#forward
 
 Light load_light(int index) {
+    int real_index = index;
     index *= light_size;
 
-    vec4 position_full = lights_array[index + 0];
-    vec4 color_full = lights_array[index + 1];
-    vec4 attenuation_full = lights_array[index + 2];
+    vec4 position_full = ph_lights_array[index + 0];
+    vec4 color_full = ph_lights_array[index + 1];
+    vec4 attenuation_full = ph_lights_array[index + 2];
 
     return Light(
+        real_index,
         floatBitsToInt(position_full.w),
         position_full.xyz - world_offset,
         color_full.xyz,
@@ -38,14 +40,9 @@ void ph_get_key(vec3 world_pos, vec3 normal, vec3 world_camera_pos, inout ivec3 
     
     bool badAngle = dot(normal, normalize(world_pos - world_camera_pos)) > -0.2f && dist > 16.0f;
 
-    // Quantize more aggressively at distance and for grazing angles to stabilize GI history.
-    float resolution = 0.5f;
-    if (dist > 32.0f || badAngle) {
-        resolution = 1.0f;
-    }
-    if (dist > 128.0f) {
-        resolution = 2.0f;
-    }
+    // How rough GI is, where resolution is roughly one block.
+    float resolution = ceil((dist / 16)) / (4 * PH_RENDER_SCALE);
+    if (badAngle) resolution*= 2f;
 
     world_pos = floor(world_pos / resolution) * resolution;
 
@@ -115,11 +112,13 @@ vec2 ph_reprojectf(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jit
     return xy * viewSize * PH_RENDER_SCALE;
 }
 
+#ifdef PH_ENABLE_LIGHT_BINNING
 int load_light_offset(vec3 position) {
     vec3 o = floor(position / 8.0f);
 
     return (1 + PH_MAX_SAMPLES) * int(o.y * 64 * 64 + o.z * 64 + o.x);
 }
+#endif
 
 int ph_hash(ivec3 v) {
     return ph_cantor(ph_hash(v.x), ph_cantor(ph_hash(v.y), ph_hash(v.z)));

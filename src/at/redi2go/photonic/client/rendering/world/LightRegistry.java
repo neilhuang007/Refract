@@ -60,10 +60,13 @@ public class LightRegistry implements Destructable {
    };
 
    private final Predicate<PChunkPos> chunkEmptyPredicate;
+   private final boolean lightBinningEnabled;
    private final GlMemoryManager registryMemoryManager;
    private final MemoryOwner registryMemory;
    private final GlMemoryManager lightsMemoryManager;
    private final MemoryOwner lightsMemory;
+   private final GlMemoryManager lightMappingMemoryManager;
+   private final MemoryOwner lightMappingMemory;
    private final int maxLights;
    private final int maxLightsPerNode;
    private final int nodeSize;
@@ -84,11 +87,12 @@ public class LightRegistry implements Destructable {
    private LightsProvider lightsProvider = null;
    private volatile boolean tracedLightSetDirty = true;
 
-   public LightRegistry(int maxLights, int maxLightsPerNode, int nodeSize, int worldSize, Predicate<PChunkPos> chunkEmptyPredicate) {
+   public LightRegistry(int maxLights, int maxLightsPerNode, int nodeSize, int worldSize, Predicate<PChunkPos> chunkEmptyPredicate, boolean lightBinningEnabled) {
       if (16 % nodeSize != 0) {
          throw new IllegalArgumentException();
       }
       this.chunkEmptyPredicate = chunkEmptyPredicate;
+      this.lightBinningEnabled = lightBinningEnabled;
       this.maxLights = maxLights;
       this.maxLightsPerNode = maxLightsPerNode;
       this.nodeSize = nodeSize;
@@ -100,8 +104,10 @@ public class LightRegistry implements Destructable {
       this.lightRegions = new short[lightSize];
       this.lightRegionsPrev = new short[lightSize];
       this.newLightIndices = new short[maxLights];
-      this.lightsMemoryManager = new GlMemoryManager(GlTarget.UBO, "lights_uniform", maxLights * LIGHT_BYTE_SIZE + 4, true);
+      this.lightsMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list", maxLights * LIGHT_BYTE_SIZE + 4, true);
       this.lightsMemory = new SimpleMemoryOwner(this.lightsMemoryManager, this.lightsMemoryManager.getCapacity());
+      this.lightMappingMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list_mapping", maxLights * 4, false);
+      this.lightMappingMemory = new SimpleMemoryOwner(this.lightMappingMemoryManager, this.lightMappingMemoryManager.getCapacity());
       this.lightListObserver = PhotonicsConfig.observe(c -> PhotonicsConfig.getLightList(), c -> {
          this.lightList = c;
          this.registerLightBlocks(this.lightList);
@@ -342,10 +348,20 @@ public class LightRegistry implements Destructable {
       return anyDirty;
    }
 
+   public void clearLightMappings() {
+      java.nio.IntBuffer buffer = this.lightMappingMemory.getMemory().getBuffer().asIntBuffer();
+      for (int i = 0; i < this.maxLights; i++) {
+         buffer.put(i, i);
+      }
+      this.lightMappingMemoryManager.queueUpload(this.lightMappingMemory);
+      this.lightMappingMemoryManager.upload();
+   }
+
    public boolean upload() {
       boolean uploadDone = true;
       uploadDone &= this.registryMemoryManager.upload();
       uploadDone &= this.lightsMemoryManager.upload();
+      uploadDone &= this.lightMappingMemoryManager.upload();
       this.lightCount = this.tracedLights.length;
       return uploadDone;
    }
@@ -413,12 +429,20 @@ public class LightRegistry implements Destructable {
       return dirty;
    }
 
+   public boolean isLightBinningEnabled() {
+      return this.lightBinningEnabled;
+   }
+
    public GlMemoryManager getRegistryMemoryManager() {
       return this.registryMemoryManager;
    }
 
    public GlMemoryManager getLightsMemoryManager() {
       return this.lightsMemoryManager;
+   }
+
+   public GlMemoryManager getLightMappingMemoryManager() {
+      return this.lightMappingMemoryManager;
    }
 
    private LightInstance[] toLightInstanceArray() {
@@ -452,6 +476,7 @@ public class LightRegistry implements Destructable {
    public void free() {
       this.lightsMemoryManager.free();
       this.registryMemoryManager.free();
+      this.lightMappingMemoryManager.free();
       this.lightListObserver.unregister();
       if (this.lightsProvider != null) {
          PhotonicsConfig.removeLightProvider(this.lightsProvider);

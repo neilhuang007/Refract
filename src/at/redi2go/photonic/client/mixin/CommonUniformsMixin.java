@@ -65,17 +65,10 @@ public class CommonUniformsMixin {
          uniforms.uniform3f(UniformUpdateFrequency.PER_FRAME, "handheld_color", () -> renderDispatcher.get().getHandheldColor());
          uniforms.uniform1b(UniformUpdateFrequency.PER_FRAME, "left_handed", () -> renderDispatcher.get().isLeftHanded());
          uniforms.uniform1b(UniformUpdateFrequency.PER_FRAME, "light_reload", () -> worldRegistry.get().fetchLightReload());
-         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "light_blend_factor", () -> worldRegistry.get().fetchLightBlendFactor());
-         uniforms.uniform1f(
-            UniformUpdateFrequency.PER_FRAME,
-            "ph_mod_shadow_pixelation_enabled",
-            () -> PhotonicsStorage.SHADOW_PIXELATION_ENABLED.value ? 1.0F : 0.0F
-         );
-         uniforms.uniform1f(
-            UniformUpdateFrequency.PER_FRAME,
-            "ph_mod_shadow_pixel_size_rt",
-            () -> PhotonicsStorage.SHADOW_PIXELATION_SIZE.value
-         );
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_mod_shadow_pixelation_enabled",
+            () -> PhotonicsStorage.SHADOW_PIXELATION_ENABLED.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_mod_shadow_pixel_size_rt",
+            () -> PhotonicsStorage.SHADOW_PIXELATION_SIZE.value);
       }
    }
 
@@ -91,6 +84,7 @@ public class CommonUniformsMixin {
             Raytracer rt = Raytracer.INSTANCE;
             return rt == null ? 0 : rt.getWorldRegistry().getLightRegistry().lightCount();
          });
+         Raytracer.INSTANCE.getMainRenderer().registerCustomUniforms(uniforms);
       }
    }
 }

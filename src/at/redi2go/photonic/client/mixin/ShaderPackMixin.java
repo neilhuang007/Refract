@@ -4,8 +4,8 @@ import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.ShaderPackPath;
 import at.redi2go.photonic.client.UniformPatcher;
+import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
-import at.redi2go.photonic.client.rendering.opengl.rendering.ShaderUtil;
 import at.redi2go.photonic.client.rendering.patching.Patch;
 import com.google.common.collect.ImmutableList;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
@@ -180,21 +180,36 @@ public abstract class ShaderPackMixin {
       @Local(name = "newEnvDefines") List<StringPair> newEnvDefines
    ) {
       PhotonicsProperties properties = (PhotonicsProperties)this.shaderProperties;
-      newEnvDefines.add(new StringPair("PH_RENDER_SCALE", Float.toString(properties.getRenderScale())));
-      newEnvDefines.add(new StringPair("PH_MAX_LIGHTS", Integer.toString(properties.getMaxLights())));
-      newEnvDefines.add(new StringPair("PH_MAX_SAMPLES", Integer.toString(properties.getMaxSamples())));
+      floatDefine(newEnvDefines, "PH_RENDER_SCALE", properties.getRenderScale());
+      intDefine(newEnvDefines, "PH_MAX_LIGHTS", properties.getMaxLights());
       properties.getAlphaMode().registerDefines(newEnvDefines);
       if (properties.isGiEnabled().orElse(true)) {
-         newEnvDefines.add(new StringPair("PH_ENABLE_GI", ""));
+         stringDefine(newEnvDefines, "PH_ENABLE_GI", "");
       }
 
       if (properties.isBlockLightEnabled().orElse(true)) {
-         newEnvDefines.add(new StringPair("PH_ENABLE_BLOCKLIGHT", ""));
+         stringDefine(newEnvDefines, "PH_ENABLE_BLOCKLIGHT", "");
       }
 
       if (properties.isHandheldLightEnabled().orElse(true)) {
-         newEnvDefines.add(new StringPair("PH_ENABLE_HANDHELD_LIGHT", ""));
+         stringDefine(newEnvDefines, "PH_ENABLE_HANDHELD_LIGHT", "");
       }
+
+      if (properties.isLightBinningEnabled().orElse(properties.getLightingMode() == LightingMode.BASIC)) {
+         stringDefine(newEnvDefines, "PH_ENABLE_LIGHT_BINNING", "");
+      }
+
+      enumDefine(newEnvDefines, "PH_LIGHTING_MODE", properties.getLightingMode());
+      intDefine(newEnvDefines, "PH_RESTIR_INITIAL_SAMPLES", properties.getRestirInitialSamples());
+      intDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_SAMPLES", properties.getRestirSpatialReuseSamples());
+      floatDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_RADIUS", properties.getRestirSpatialReuseRadius());
+      intDefine(newEnvDefines, "PH_RESTIR_ACCUMULATION_FRAMES", properties.getRestirAccumulationFrames());
+      intDefine(newEnvDefines, "PH_RESTIR_DENOISER_PASSES", properties.getRestirDenoiserPasses());
+      if (properties.useRestirSoftShadows().orElse(true)) {
+         stringDefine(newEnvDefines, "PH_RESTIR_SOFT_SHADOWS", "");
+      }
+
+      intDefine(newEnvDefines, "PH_MAX_SAMPLES", properties.getMaxSamples());
    }
 
    @ModifyArgs(
@@ -206,7 +221,6 @@ public abstract class ShaderPackMixin {
       remap = false
    )
    private static void provideSource(Args args) {
-      args.set(0, ShaderUtil.preprocessPhotonicsDirectives((String)args.get(0)));
       if (isPhotonicsSource) {
          Iterable<StringPair> environmentDefines = (Iterable<StringPair>)args.get(1);
          List<StringPair> definitions = Lists.newArrayList(environmentDefines.iterator());
@@ -218,8 +232,29 @@ public abstract class ShaderPackMixin {
             case "the_end" -> "END";
             default -> throw new IllegalStateException("Unexpected value: " + dimensionName);
          };
+         stringDefine(definitions, dimensionDefine, "");
          definitions.add(new StringPair(dimensionDefine, ""));
          args.set(1, definitions);
       }
+   }
+
+   @Unique
+   private static void stringDefine(List<StringPair> defines, String name, String value) {
+      defines.add(new StringPair(name, value));
+   }
+
+   @Unique
+   private static void intDefine(List<StringPair> defines, String name, int value) {
+      defines.add(new StringPair(name, Integer.toString(value)));
+   }
+
+   @Unique
+   private static void floatDefine(List<StringPair> defines, String name, float value) {
+      defines.add(new StringPair(name, Float.toString(value)));
+   }
+
+   @Unique
+   private static <T extends Enum<T>> void enumDefine(List<StringPair> defines, String name, T value) {
+      defines.add(new StringPair(name, Integer.toString(value.ordinal())));
    }
 }

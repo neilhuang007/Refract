@@ -1,7 +1,6 @@
 package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.CompositeRendererExt;
-import at.redi2go.photonic.client.IrisRenderingPipelineExt;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.PhotonicsShader;
 import com.llamalad7.mixinextras.sugar.Local;
@@ -37,7 +36,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(value = IrisRenderingPipeline.class, remap = false)
-public abstract class IrisRenderingPipelineMixin implements IrisRenderingPipelineExt {
+public abstract class IrisRenderingPipelineMixin {
    @Shadow
    @Final
    private RenderTargets renderTargets;
@@ -91,53 +90,51 @@ public abstract class IrisRenderingPipelineMixin implements IrisRenderingPipelin
          }
          Raytracer.INSTANCE = new Raytracer();
          Raytracer.INSTANCE.getWorldRegistry().getLightRegistry().init();
-         if (Raytracer.getProperties().orElseThrow().useDeferredPass().orElse(true)) {
-            Raytracer.INSTANCE
-               .getMainRenderer()
-               .createCompositeRenderer(
-                  shaders -> {
-                     ProgramSource[] compositeSources = new ProgramSource[shaders.size()];
+         Raytracer.INSTANCE
+            .getMainRenderer()
+            .createCompositeRenderer(
+               shaders -> {
+                  ProgramSource[] compositeSources = new ProgramSource[shaders.size()];
 
-                     for (int i = 0; i < shaders.size(); i++) {
-                        PhotonicsShader shader = shaders.get(i);
-                        compositeSources[i] = new ProgramSource(
-                           shader.getFragmentName(),
-                           readSource(shader.getVertexName()),
-                           null,
-                           null,
-                           null,
-                           readSource(shader.getFragmentName()),
-                           programSet,
-                           null,
-                           null
-                        );
-                     }
-
-                     CompositeRenderer compositeRenderer = new CompositeRenderer(
-                        (IrisRenderingPipeline)(Object)this,
-                        CompositePass.DEFERRED,
-                        programSet.getPackDirectives(),
-                        compositeSources,
-                        new ComputeSource[0][0],
-                        this.renderTargets,
-                        this.shaderStorageBufferHolder,
-                        this.customTextureManager.getNoiseTexture(),
-                        this.updateNotifier,
-                        this.centerDepthSampler,
-                        flipper,
-                        this.shadowTargetsSupplier,
-                        TextureStage.DEFERRED,
-                        this.customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.DEFERRED, Object2ObjectMaps.emptyMap()),
-                        this.customTextureManager.getIrisCustomTextures(),
-                        this.customImages,
-                        programSet.getPackDirectives().getExplicitFlips("photonics"),
-                        this.customUniforms
+                  for (int i = 0; i < shaders.size(); i++) {
+                     PhotonicsShader shader = shaders.get(i);
+                     compositeSources[i] = new ProgramSource(
+                        shader.getFragmentName(),
+                        readSource(shader.getVertexName()),
+                        null,
+                        null,
+                        null,
+                        readSource(shader.getFragmentName()),
+                        programSet,
+                        null,
+                        null
                      );
-                     ((CompositeRendererExt)compositeRenderer).photonic$setPhotonicsShaders(shaders);
-                     return compositeRenderer;
                   }
-               );
-         }
+
+                  CompositeRenderer compositeRenderer = new CompositeRenderer(
+                     (IrisRenderingPipeline)(Object)this,
+                     CompositePass.DEFERRED,
+                     programSet.getPackDirectives(),
+                     compositeSources,
+                     new ComputeSource[0][0],
+                     this.renderTargets,
+                     this.shaderStorageBufferHolder,
+                     this.customTextureManager.getNoiseTexture(),
+                     this.updateNotifier,
+                     this.centerDepthSampler,
+                     flipper,
+                     this.shadowTargetsSupplier,
+                     TextureStage.DEFERRED,
+                     this.customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.DEFERRED, Object2ObjectMaps.emptyMap()),
+                     this.customTextureManager.getIrisCustomTextures(),
+                     this.customImages,
+                     programSet.getPackDirectives().getExplicitFlips("photonics"),
+                     this.customUniforms
+                  );
+                  ((CompositeRendererExt)compositeRenderer).photonic$setPhotonicsShaders(shaders);
+                  return compositeRenderer;
+               }
+            );
       }
    }
 
@@ -162,12 +159,7 @@ public abstract class IrisRenderingPipelineMixin implements IrisRenderingPipelin
    @Inject(method = "beginTranslucents", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pipeline/CompositeRenderer;renderAll()V"))
    public void beginTranslucents(CallbackInfo ci) {
       if (!Raytracer.isDisabled()) {
-         Raytracer.INSTANCE.getMainRenderer().finishRender();
+         Raytracer.INSTANCE.getMainRenderer().render();
       }
-   }
-
-   @Override
-   public CustomUniforms photonic$getCustomUniforms() {
-      return this.customUniforms;
    }
 }

@@ -71,13 +71,13 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private final Set<PChunkPos> pendingChunkSet = new HashSet<>();
    private static final int CHUNK_LOAD_BUDGET = 64;
 
-   public WorldRegistry(IRenderDispatcher renderDispatcher, int maxLights, int maxLightsPerNode, boolean blockLightEnabled) {
+   public WorldRegistry(IRenderDispatcher renderDispatcher, int maxLights, int maxLightsPerNode, boolean blockLightEnabled, boolean lightBinningEnabled) {
       this.renderDispatcher = renderDispatcher;
       this.blockLightEnabled = blockLightEnabled;
       this.worldChunkSize = 32;
       this.worldBlockSize = 16 * this.worldChunkSize;
       this.rootSchematic = new Schematic(this.worldChunkSize, this.worldChunkSize, this.worldChunkSize);
-      this.lightRegistry = new LightRegistry(maxLights, maxLightsPerNode, 8, this.worldBlockSize, renderDispatcher::isChunkEmpty);
+      this.lightRegistry = new LightRegistry(maxLights, maxLightsPerNode, 8, this.worldBlockSize, renderDispatcher::isChunkEmpty, lightBinningEnabled);
       this.cbMemoryManager = new GlMemoryManager(GlTarget.SSBO, "cb_block", 536870912, true);
       this.blockRegistry = new BlockRegistry(this.cbMemoryManager.allocateRegion(4096 * PBlock.BYTE_SIZE));
       this.rootMemoryManager = new GlMemoryManager(GlTarget.SSBO, "root_uniform", 4 * this.worldChunkSize * this.worldChunkSize * this.worldChunkSize, false);
@@ -86,28 +86,30 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    public void upload() {
-      if (this.buildStage == WorldRegistry.BuildStage.WAIT_FOR_UPLOAD) {
-         this.changeBuildStage(WorldRegistry.BuildStage.UPLOAD);
-         boolean uploadDone = true;
-         uploadDone &= this.lightRegistry.upload();
-         uploadDone &= this.blockRegistry.upload();
-         uploadDone &= this.cbMemoryManager.upload();
-         if (!uploadDone) {
-            this.buildStage = WorldRegistry.BuildStage.WAIT_FOR_UPLOAD;
-         } else {
-            this.rootMemoryManager.upload();
-            this.liveWorldBlockOffset = new Vector3d(this.rtToWorldBlockOffset.x, this.rtToWorldBlockOffset.y, this.rtToWorldBlockOffset.z);
-            this.liveWorldMinVoxel = this.worldMinVoxel;
-            this.liveWorldMaxVoxel = this.worldMaxVoxel;
-            if (this.closeChunkUpdate) {
-               this.renderDispatcher.onChunkLoad();
-               this.closeChunkUpload = true;
-               this.closeChunkUpdate = false;
-            }
-            this.changeBuildStage(WorldRegistry.BuildStage.IDLE);
-            if (!this.buildQueue.isEmpty()) {
-               this.wakeUpWorldBuilder();
-            }
+      if (this.buildStage != WorldRegistry.BuildStage.WAIT_FOR_UPLOAD) {
+         this.lightRegistry.clearLightMappings();
+         return;
+      }
+      this.changeBuildStage(WorldRegistry.BuildStage.UPLOAD);
+      boolean uploadDone = true;
+      uploadDone &= this.lightRegistry.upload();
+      uploadDone &= this.blockRegistry.upload();
+      uploadDone &= this.cbMemoryManager.upload();
+      if (!uploadDone) {
+         this.buildStage = WorldRegistry.BuildStage.WAIT_FOR_UPLOAD;
+      } else {
+         this.rootMemoryManager.upload();
+         this.liveWorldBlockOffset = new Vector3d(this.rtToWorldBlockOffset.x, this.rtToWorldBlockOffset.y, this.rtToWorldBlockOffset.z);
+         this.liveWorldMinVoxel = this.worldMinVoxel;
+         this.liveWorldMaxVoxel = this.worldMaxVoxel;
+         if (this.closeChunkUpdate) {
+            this.renderDispatcher.onChunkLoad();
+            this.closeChunkUpload = true;
+            this.closeChunkUpdate = false;
+         }
+         this.changeBuildStage(WorldRegistry.BuildStage.IDLE);
+         if (!this.buildQueue.isEmpty()) {
+            this.wakeUpWorldBuilder();
          }
       }
    }

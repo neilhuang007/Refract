@@ -1,12 +1,13 @@
 package at.redi2go.photonic.client;
 
+import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.mixin.ShaderPackAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ColorFramebuffer;
-import at.redi2go.photonic.client.rendering.opengl.rendering.MainRenderer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ShaderUtil;
+import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.MainRenderer;
 import at.redi2go.photonic.client.rendering.patching.Patch;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -48,6 +49,7 @@ public class Raytracer implements Destructable {
    public static Raytracer INSTANCE;
    public static final Path SHADER_PATCHES_PATH = Path.of("./shader-patches");
    public static final Path DEV_ENV_SHADERS_PATH = Path.of("../src/main/resources/assets/photonic/shaders");
+   private static final Set<String> AUTO_REPLACED_FILES = Set.of("photonics.glsl", "ph_samplers.glsl");
    public static Map<String, String> SHADERPACK_CHANGED_OPTIONS = null;
    public static Properties SHADERPACK_PROPERTIES = null;
    public static Properties PATCHED_SHADERPACK_PROPERTIES = null;
@@ -76,9 +78,13 @@ public class Raytracer implements Destructable {
       PhotonicsProperties properties = getProperties().orElseThrow();
       this.renderDispatcher = new RenderDispatcher(properties.getRenderScale());
       this.worldRegistry = new WorldRegistry(
-         this.renderDispatcher, properties.getMaxLights(), properties.getMaxSamples(), properties.isBlockLightEnabled().orElse(true)
+         this.renderDispatcher,
+         properties.getMaxLights(),
+         properties.getMaxSamples(),
+         properties.isBlockLightEnabled().orElse(true),
+         properties.isLightBinningEnabled().orElse(properties.getLightingMode() == LightingMode.BASIC)
       );
-      this.mainRenderer = new MainRenderer(this.worldRegistry, properties.getRenderScale());
+      this.mainRenderer = properties.getLightingMode().createMainRenderer(this.worldRegistry, properties.getRenderScale(), properties);
       this.worldRegistry.startWorldBuilder();
       this.voxelizedBlockObserver = PhotonicsConfig.observe(c -> c.voxelizedBlocks, unused -> MinecraftClient.getInstance().worldRenderer.reload());
    }
@@ -292,9 +298,7 @@ public class Raytracer implements Destructable {
 
             String relativeToPhotonics = path.getRelativeToPhotonics();
 
-            // When no patch is applied, prefer the shader pack's version for all photonics
-            // files except photonics.glsl (which the mod always provides)
-            if (patch == null && !relativeToPhotonics.equals("photonics.glsl")) {
+            if (patch == null && !AUTO_REPLACED_FILES.contains(relativeToPhotonics)) {
                Optional<String> content = tryReadFile(path);
                if (content.isPresent()) {
                   return readShaderAndPreprocess(path);
