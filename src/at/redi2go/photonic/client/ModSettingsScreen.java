@@ -75,22 +75,12 @@ public class ModSettingsScreen extends Screen {
          PhotonicsConfig.setMultiThreadingEnabled(!PhotonicsConfig.isMultiThreadingEnabled());
          w.setMessage(Text.of("MultiThreading: " + (PhotonicsConfig.isMultiThreadingEnabled() ? "On" : "Off")));
       }, "Turns MultiThreading on or off; MultiThreading is considerably faster, but can cause bugs.", () -> true));
-      PhotonicsStorage.Parameter<Boolean> shadowPixelation = PhotonicsStorage.SHADOW_PIXELATION_ENABLED;
-      PhotonicsStorage.Parameter<Float> shadowPixelationSize = PhotonicsStorage.SHADOW_PIXELATION_SIZE;
-      PhotonicsStorage.Parameter<Boolean> pixelationDebugLog = PhotonicsStorage.PIXELATED_LIGHTING_DEBUG_LOG;
-      ModSettingsScreen.ShadowPixelationSizeSlider shadowPixelationSizeSlider = new ModSettingsScreen.ShadowPixelationSizeSlider(shadowPixelationSize);
-      shadowPixelationSizeSlider.active = shadowPixelation.value;
-      buttons.add(new ModSettingsScreen.PButton("Pixelated Lighting: " + (shadowPixelation.value ? "On" : "Off"), w -> {
-         shadowPixelation.value = !shadowPixelation.value;
-         shadowPixelation.modified();
-         shadowPixelationSizeSlider.active = shadowPixelation.value;
-         w.setMessage(Text.of("Pixelated Lighting: " + (shadowPixelation.value ? "On" : "Off")));
-      }, "Turns pixelated lighting projection on or off.", () -> true));
-      buttons.add(new ModSettingsScreen.PButton("Pixelated Lighting Debug Log: " + (pixelationDebugLog.value ? "On" : "Off"), w -> {
-         pixelationDebugLog.value = !pixelationDebugLog.value;
-         pixelationDebugLog.modified();
-         w.setMessage(Text.of("Pixelated Lighting Debug Log: " + (pixelationDebugLog.value ? "On" : "Off")));
-      }, "Logs center-pixel pixelation probe values to latest.log once per second.", () -> true));
+      PhotonicsStorage.Parameter<Boolean> profilerEnabled = PhotonicsStorage.PROFILER_ENABLED;
+      buttons.add(new ModSettingsScreen.PButton("Performance Profiler: " + (profilerEnabled.value ? "On" : "Off"), w -> {
+         profilerEnabled.value = !profilerEnabled.value;
+         profilerEnabled.modified();
+         w.setMessage(Text.of("Performance Profiler: " + (profilerEnabled.value ? "On" : "Off")));
+      }, "Logs per-frame timing data (world update, render dispatch,\nshader passes) to latest.log for performance diagnostics.", () -> true));
       OilifySlider oilifySizeSlider = new OilifySlider(PhotonicsStorage.OILIFY_SIZE, 3.0f, 15.0f, "OILIFY_SIZE", true);
       OilifySlider oilifySharpnessSlider = new OilifySlider(PhotonicsStorage.OILIFY_SHARPNESS, 0.0f, 1.0f, "Sharpness", false);
       OilifySlider oilifyScaleSlider = new OilifySlider(PhotonicsStorage.OILIFY_SCALE, 1.0f, 4.0f, "Scale", false);
@@ -146,7 +136,6 @@ public class ModSettingsScreen extends Screen {
          i++;
       }
 
-      rowHelper.add(shadowPixelationSizeSlider, 2);
       rowHelper.add(oilifySizeSlider, 2);
       rowHelper.add(oilifySharpnessSlider, 2);
       rowHelper.add(oilifyScaleSlider, 2);
@@ -254,54 +243,6 @@ public class ModSettingsScreen extends Screen {
          this.pressAction = pressAction;
          this.toolTip = toolTip;
          this.active = active;
-      }
-   }
-
-   private static class ShadowPixelationSizeSlider extends SliderWidget {
-      private static final float[] STEPS = new float[]{1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
-      private final PhotonicsStorage.Parameter<Float> shadowPixelationSize;
-
-      ShadowPixelationSizeSlider(PhotonicsStorage.Parameter<Float> shadowPixelationSize) {
-         super(0, 0, 200, 20, Text.of(""), normalize(shadowPixelationSize.value));
-         this.shadowPixelationSize = shadowPixelationSize;
-         this.updateMessage();
-      }
-
-      @Override
-      protected void updateMessage() {
-         this.setMessage(Text.of("Pixelated Lighting Size: " + (int)this.getPixelSize() + "x"));
-      }
-
-      @Override
-      protected void applyValue() {
-         this.shadowPixelationSize.value = this.getPixelSize();
-         this.shadowPixelationSize.modified();
-         this.updateMessage();
-      }
-
-      private static double normalize(float pixelSize) {
-         return nearestIndex(pixelSize) / (double)(STEPS.length - 1);
-      }
-
-      private float getPixelSize() {
-         int index = (int)Math.round(this.value * (STEPS.length - 1));
-         index = Math.max(0, Math.min(STEPS.length - 1, index));
-         return STEPS[index];
-      }
-
-      private static int nearestIndex(float pixelSize) {
-         int bestIndex = 0;
-         float bestDistance = Float.MAX_VALUE;
-
-         for (int i = 0; i < STEPS.length; i++) {
-            float distance = Math.abs(STEPS[i] - pixelSize);
-            if (distance < bestDistance) {
-               bestDistance = distance;
-               bestIndex = i;
-            }
-         }
-
-         return bestIndex;
       }
    }
 

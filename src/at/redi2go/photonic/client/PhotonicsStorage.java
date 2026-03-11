@@ -24,7 +24,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DO_MULTITHREADING = boolParam("do_multithreading", true);
    public static final Parameter<Boolean> SHADOW_PIXELATION_ENABLED = boolParam("shadow_pixelation_enabled", true);
    public static final Parameter<Float> SHADOW_PIXELATION_SIZE = floatParam("shadow_pixelation_size", 8.0F);
-   public static final Parameter<Boolean> PIXELATED_LIGHTING_DEBUG_LOG = boolParam("pixelated_lighting_debug_log", false);
+   public static final Parameter<Boolean> PROFILER_ENABLED = boolParam("profiler_enabled", false);
    public static final Parameter<Boolean> OILIFY_ENABLED = boolParam("oilify_enabled", false);
    public static final Parameter<Float> OILIFY_SIZE = floatParam("oilify_size", 7.0F);
    public static final Parameter<Float> OILIFY_SHARPNESS = floatParam("oilify_sharpness", 1.0F);

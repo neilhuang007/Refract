@@ -28,20 +28,18 @@ class ModPixelatedProjectionOptionTest {
    }
 
    @Test
-   void settingsScreenExposesShadowPixelationControls() throws IOException {
+   void settingsScreenExposesProfilerToggle() throws IOException {
       String source = Files.readString(SETTINGS_SCREEN_FILE);
 
-      assertTrue(source.contains("PhotonicsStorage.Parameter<Boolean> shadowPixelation = PhotonicsStorage.SHADOW_PIXELATION_ENABLED;"));
-      assertTrue(source.contains("PhotonicsStorage.Parameter<Float> shadowPixelationSize = PhotonicsStorage.SHADOW_PIXELATION_SIZE;"));
-      assertTrue(source.contains("\"Pixelated Lighting: \" + (shadowPixelation.value ? \"On\" : \"Off\")"));
-      assertTrue(source.contains("new ModSettingsScreen.ShadowPixelationSizeSlider("));
-      assertTrue(source.contains("float[] STEPS = new float[]{1.0f, 2.0f, 4.0f, 8.0f, 16.0f};"));
-      assertTrue(source.contains("\"Pixelated Lighting Size: \""));
+      assertTrue(source.contains("PhotonicsStorage.PROFILER_ENABLED"));
+      assertTrue(source.contains("\"Performance Profiler: \""));
+      assertFalse(source.contains("ShadowPixelationSizeSlider"));
       assertFalse(source.contains("ShadowBiasSlider"));
       assertFalse(source.contains("Pixelated Projection:"));
       assertFalse(source.contains("CastLightPixelSizeSlider"));
       assertFalse(source.contains("castLightPixelSize"));
       assertFalse(source.contains("pixelatedProjection"));
+      assertFalse(source.contains("PIXELATED_LIGHTING_DEBUG_LOG"));
    }
 
    @Test

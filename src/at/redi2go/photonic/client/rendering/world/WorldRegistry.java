@@ -1,6 +1,8 @@
 package at.redi2go.photonic.client.rendering.world;
 
 import at.redi2go.photonic.client.BlockRegistry;
+import at.redi2go.photonic.client.Photonic;
+import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.rendering.MinecraftAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.opengl.objects.GlTarget;
@@ -93,6 +95,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          this.lightRegistry.clearLightMappings();
          return;
       }
+      long profilerStart = PhotonicsStorage.PROFILER_ENABLED.value ? System.nanoTime() : 0;
       this.changeBuildStage(WorldRegistry.BuildStage.UPLOAD);
       boolean uploadDone = true;
       uploadDone &= this.lightRegistry.upload();
@@ -114,11 +117,16 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          if (!this.buildQueue.isEmpty()) {
             this.wakeUpWorldBuilder();
          }
+         if (profilerStart != 0) {
+            long uploadMs = (System.nanoTime() - profilerStart) / 1_000_000L;
+            Photonic.info("[Profiler] upload: chunks={} lights={} ms={}", this.chunks.size(), this.lightRegistry.lightCount(), uploadMs);
+         }
       }
    }
 
    public void compileWorld() {
       if (this.buildStage == WorldRegistry.BuildStage.IDLE) {
+         long profilerStart = PhotonicsStorage.PROFILER_ENABLED.value ? System.nanoTime() : 0;
          this.ensureWorldThread();
          this.changeBuildStage(WorldRegistry.BuildStage.COMPILE);
          PBlockPos previousBlockOffset = this.rtToWorldBlockOffset;
@@ -154,6 +162,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          }
 
          this.changeBuildStage(WorldRegistry.BuildStage.WAIT_FOR_UPLOAD);
+         if (profilerStart != 0) {
+            long compileMs = (System.nanoTime() - profilerStart) / 1_000_000L;
+            Photonic.info("[Profiler] compileWorld: chunks={} pendingLoads={} topologyChanged={} ms={}",
+               this.chunks.size(), this.pendingChunkLoads.size(), chunkTopologyChanged, compileMs);
+         }
       }
    }
 
