@@ -3,7 +3,7 @@ package at.redi2go.photonic.client.rendering.world;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 
 public class WorldCompilerThread extends Thread implements Destructable {
-   private static final long BUSY_WAIT_MILLIS = 4L;
+   private static final long BUSY_WAIT_MILLIS = 1L;
    private static final long IDLE_WAIT_MILLIS = 16L;
    private WorldRegistry worldRegistry;
    private volatile boolean started = false;

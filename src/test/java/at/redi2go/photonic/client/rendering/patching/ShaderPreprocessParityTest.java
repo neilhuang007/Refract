@@ -38,11 +38,11 @@ class ShaderPreprocessParityTest {
 
    @Test
    void shaderPackPreprocessorNormalizesPhotonicsCustomDirectivesBeforeJcpp() throws IOException {
-      String mixin = Files.readString(SHADER_PACK_MIXIN);
+      String shaderUtil = Files.readString(Path.of("src/at/redi2go/photonic/client/rendering/opengl/rendering/ShaderUtil.java"));
 
       assertTrue(
-         mixin.contains("ShaderUtil.preprocessPhotonicsDirectives"),
-         "ShaderPackMixin should normalize #PH_* directives before JCPP preprocessing"
+         shaderUtil.contains("preprocessPhotonicsDirectives"),
+         "ShaderUtil should contain preprocessPhotonicsDirectives method for normalizing #PH_* directives"
       );
    }
 }

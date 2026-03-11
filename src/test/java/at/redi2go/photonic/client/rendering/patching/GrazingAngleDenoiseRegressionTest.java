@@ -23,16 +23,10 @@ class GrazingAngleDenoiseRegressionTest {
          "badAngle must use dot product threshold of -0.2f");
       assertTrue(shader.contains("bool badAngle = dot(normal, normalize(world_pos - world_camera_pos)) > -0.2f && dist > 16.0f;"),
          "badAngle must only trigger for near-grazing angles and moderate distance");
-      assertTrue(shader.contains("if (dist > 32.0f || badAngle)"),
-         "Resolution must drop to 1.0 when dist > 32 OR badAngle");
-      assertTrue(shader.contains("resolution = 1.0f;"),
-         "Resolution must be set to 1.0f for mid-range or bad-angle surfaces");
-      assertTrue(shader.contains("if (dist > 128.0f)"),
-         "Resolution must further drop when dist > 128");
-      assertTrue(shader.contains("resolution = 2.0f;"),
-         "Resolution must be set to 2.0f for far surfaces");
-      assertTrue(shader.contains("float resolution = 0.5f;"),
-         "Base resolution must start at 0.5f");
+      assertTrue(shader.contains("float resolution = ceil((dist / 16)) / (4 * PH_RENDER_SCALE);"),
+         "Resolution must use 0.3.1 formula: ceil((dist/16))/(4*PH_RENDER_SCALE)");
+      assertTrue(shader.contains("if (badAngle) resolution*= 2f;"),
+         "Resolution must double when badAngle");
       assertTrue(shader.contains("floor(world_pos / resolution) * resolution"),
          "world_pos must be quantized using floor(world_pos / resolution) * resolution");
    }

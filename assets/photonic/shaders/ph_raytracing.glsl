@@ -78,7 +78,7 @@ void trace_ray(inout RayJob job, bool transparency) {
         // are unlikely to contribute useful lighting information
         if (RAY_ITERATION_COUNT <= 32) {
             float travel_dist_sq = dot(position - job.origin * 16.0f, position - job.origin * 16.0f);
-            if (travel_dist_sq > 16777216.0f) { // > 256 blocks (4096 voxels squared)
+            if (travel_dist_sq > 4194304.0f) { // > 128 blocks (2048 voxels squared)
                 return;
             }
         }
@@ -198,7 +198,7 @@ void trace_ray(inout RayJob job, bool transparency) {
         // Root-level empty space look-ahead: skip consecutive empty chunks
         // without consuming main loop iterations
         if (scale == 13 && entries.x >= 0) {  // scale 13 = root level (8+4+1)
-            for (int skip = 0; skip < 4; skip++) {
+            for (int skip = 0; skip < 8; skip++) {
                 ivec3 skip_w = ivec3(position);
                 if (!ph_is_inside(position)) break;
 
@@ -223,6 +223,41 @@ void trace_ray(inout RayJob job, bool transparency) {
                 position += skip_t[skip_axis] * job.direction;
                 position[skip_axis] = (skip_intersection[skip_axis] * 0.01f + skipDelta[skip_axis]) * 100.0f;
                 t_min = skip_axis;
+            }
+        }
+
+        // Block-level empty space look-ahead: skip consecutive empty blocks
+        // within the same chunk without consuming main loop iterations
+        if (scale == 8 && entries.y >= 0 && entries.x < 0) {  // scale 8 = block level (4+4)
+            for (int bskip = 0; bskip < 3; bskip++) {
+                ivec3 bskip_w = ivec3(position);
+                if (!ph_is_inside(position)) break;
+
+                ivec3 bskip_chunk = (bskip_w >> 8) & 31;
+                int bskip_chunk_idx = ph_get_world_index(bskip_chunk);
+                if (root_array[bskip_chunk_idx] >= 0) break;  // Different or empty chunk
+
+                ivec3 bskip_block = (bskip_w >> 4) & 15;
+                int bskip_block_idx = -root_array[bskip_chunk_idx] + ph_get_index(bskip_block);
+                if (bskip_block_idx == new_index.y) break;  // Same block
+
+                int bskip_entry = cb_array[bskip_block_idx];
+                if (bskip_entry < 0) break;  // Found occupied block, stop
+
+                // Step through this empty block
+                new_index.y = bskip_block_idx;
+                entries.y = bskip_entry;
+
+                ivec3 bskip_intersection = (((ivec3(bskip_entry) >> intersection_index) & 31) + intersection_offset) << 4;
+                bskip_intersection += bskip_w & (-1 << 8);
+
+                vec3 bskip_t = (bskip_intersection - position) * direction_inv;
+                int bskip_axis = int(bskip_t.x >= bskip_t.y);
+                bskip_axis = bskip_t.z < bskip_t[bskip_axis] ? 2 : bskip_axis;
+
+                position += bskip_t[bskip_axis] * job.direction;
+                position[bskip_axis] = (bskip_intersection[bskip_axis] * 0.01f + skipDelta[bskip_axis]) * 100.0f;
+                t_min = bskip_axis;
             }
         }
     }

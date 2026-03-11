@@ -94,12 +94,8 @@ ivec3 ph_read(vec3 world_pos, vec3 normal, mat4 mvp, vec3 world_camera_pos) {
     return !mismatch ? key : ivec3(NULL);
 }
 
-ivec2 ph_reproject(mat4 mvp_matrix, vec3 world_position) {
-    vec4 viewspace_position = mvp_matrix * vec4(world_position, 1.0f);
-
-    ivec2 pos = ivec2(floor((viewspace_position.xy / viewspace_position.w * 0.5f + 0.5f) * ires));
-
-    return pos % ires;
+ivec2 ph_reproject(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jitter) {
+    return ivec2(floor(ph_reprojectf(mvp_matrix, world_position, viewSize, jitter)));
 }
 
 vec2 ph_reprojectf(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jitter) {

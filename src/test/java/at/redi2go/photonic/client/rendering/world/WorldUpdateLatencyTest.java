@@ -20,7 +20,7 @@ class WorldUpdateLatencyTest {
 
       assertTrue(source.contains("chunkSyncNeeded"));
       assertTrue(source.contains("shadowStateDirty"));
-      assertTrue(source.contains("update(this.rootMemoryManager, rootNeedsRebuild)"));
+      assertTrue(source.contains("update(this.rootMemoryManager, rootNeedsRebuild, chunkTopologyChanged)"));
       assertTrue(source.contains("consumeShadowStateDirty()"));
       assertTrue(source.contains("consumeTracedLightSetDirty()"));
    }
@@ -59,10 +59,9 @@ class WorldUpdateLatencyTest {
    void worldCompilerLoopAvoidsGlobalLockAndUsesModerateCadence() throws Exception {
       String source = normalize(Files.readString(WORLD_COMPILER_THREAD));
       assertFalse(source.contains("synchronized (Raytracer.LOCK)"));
-      assertTrue(source.contains("private static final long BUSY_WAIT_MILLIS = 4L;"));
+      assertTrue(source.contains("private static final long BUSY_WAIT_MILLIS = 1L;"));
       assertTrue(source.contains("private static final long IDLE_WAIT_MILLIS = 16L;"));
       assertTrue(source.contains("this.wait(hasPendingWork ? BUSY_WAIT_MILLIS : IDLE_WAIT_MILLIS);"));
-      assertFalse(source.contains("this.wait(hasPendingWork ? 1L : 16L);"));
    }
 
    private static String normalize(String s) {

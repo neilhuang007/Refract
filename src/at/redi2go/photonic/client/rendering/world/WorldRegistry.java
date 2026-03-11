@@ -62,6 +62,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private PBlockPos worldMinVoxel = new PBlockPos(0, 0, 0);
    private PBlockPos worldMaxVoxel = new PBlockPos(0, 0, 0);
    private boolean dirty = true;
+   private boolean rootDataValid = false;
    private final boolean blockLightEnabled;
    private volatile boolean shadowStateDirty = true;
    private volatile boolean chunkSyncNeeded = true;
@@ -69,7 +70,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       Comparator.comparingDouble(this::chunkDistanceToCamera)
    );
    private final Set<PChunkPos> pendingChunkSet = new HashSet<>();
-   private static final int CHUNK_LOAD_BUDGET = 64;
+   private static final int CHUNK_LOAD_BUDGET = 256;
 
    public WorldRegistry(IRenderDispatcher renderDispatcher, int maxLights, int maxLightsPerNode, boolean blockLightEnabled, boolean lightBinningEnabled) {
       this.renderDispatcher = renderDispatcher;
@@ -140,7 +141,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          }
 
          boolean rootNeedsRebuild = worldOffsetChanged || chunkTopologyChanged;
-         boolean chunkContentChanged = this.update(this.rootMemoryManager, rootNeedsRebuild);
+         boolean chunkContentChanged = this.update(this.rootMemoryManager, rootNeedsRebuild, chunkTopologyChanged);
          if (chunkContentChanged) {
             this.closeChunkUpdate = true;
          }
@@ -184,15 +185,20 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return false;
       });
 
-      int loaded = 0;
       int chunkLoadBudget = this.chunks.isEmpty() ? INITIAL_CHUNK_LOAD_BUDGET : CHUNK_LOAD_BUDGET;
-      while (!this.pendingChunkLoads.isEmpty() && loaded < chunkLoadBudget) {
+      List<PChunkPos> chunksToLoad = new ArrayList<>();
+      while (!this.pendingChunkLoads.isEmpty() && chunksToLoad.size() < chunkLoadBudget) {
          PChunkPos nextChunk = this.pendingChunkLoads.poll();
          this.pendingChunkSet.remove(nextChunk);
          if (inboundNonEmptyChunks.contains(nextChunk) && !this.chunks.containsKey(nextChunk)) {
-            this.loadChunk(nextChunk);
-            changed = true;
-            loaded++;
+            chunksToLoad.add(nextChunk);
+         }
+      }
+
+      if (!chunksToLoad.isEmpty()) {
+         changed = true;
+         for (PChunkPos chunkPos : chunksToLoad) {
+            this.loadChunk(chunkPos);
          }
       }
 
@@ -303,6 +309,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    public boolean update(MemoryManager memoryManager, boolean forceRootUpload) {
+      return this.update(memoryManager, forceRootUpload, forceRootUpload);
+   }
+
+   public boolean update(MemoryManager memoryManager, boolean forceRootUpload, boolean fullRootRebuild) {
       if (!forceRootUpload) {
          boolean anyChunkDirty = false;
          for (PChunk chunk : this.chunks.values()) {
@@ -317,8 +327,9 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          }
       }
 
-      if (forceRootUpload) {
+      if (fullRootRebuild) {
          Arrays.fill(this.rootSchematic.getData(), 0);
+         this.rootDataValid = false;
       }
 
       List<CompletableFuture<Void>> pendingOptimizations = new ArrayList<>();
@@ -358,6 +369,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             this.rootSchematic.optimizeThreaded().get();
             this.rootMemory.getBuffer().asIntBuffer().put(this.rootSchematic.getData());
             memoryManager.queueUpload(this);
+            this.rootDataValid = true;
          } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
          }

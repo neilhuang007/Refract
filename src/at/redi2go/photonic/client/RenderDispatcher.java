@@ -4,7 +4,8 @@ import at.redi2go.photonic.client.rendering.opengl.objects.AtomicIntegerImage;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.opengl.rendering.IRenderDispatcher;
-import at.redi2go.photonic.client.rendering.world.LightBlock;
+import at.redi2go.photonic.client.config.PhotonicsConfig;
+import at.redi2go.photonic.client.config.lights.BlockLightInfo;
 import at.redi2go.photonic.client.rendering.world.position.PChunkPos;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -48,7 +49,7 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
    public RenderDispatcher(float renderScale) {
       this.gi = IntStream.range(0, 5).mapToObj(i -> new AtomicIntegerImage(() -> {
          Window window = MinecraftClient.getInstance().getWindow();
-         return new Vector3f(window.getFramebufferWidth(), window.getFramebufferHeight(), 2.0F);
+         return new Vector3f(window.getFramebufferWidth() * renderScale, window.getFramebufferHeight() * renderScale, 2.0F);
       })).toArray(AtomicIntegerImage[]::new);
    }
 
@@ -179,14 +180,9 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
                RegistryKey<Item> itemRegistryKey = (RegistryKey<Item>)Registries.ITEM.getKey(itemStack.getItem()).orElse(null);
                if (itemRegistryKey != null) {
                   Block block = (Block)Registries.BLOCK.get(itemRegistryKey.getValue());
-                  LightBlock lightBlock = PhotonicsStorage.TRACED_LIGHT_BLOCKS
-                     .value
-                     .stream()
-                     .filter(lightBlock1 -> lightBlock1.block == block)
-                     .findFirst()
-                     .orElse(null);
-                  if (lightBlock != null && lightBlock.lightType.blockStateEmitsLight(block.getDefaultState())) {
-                     color.add(lightBlock.lightType.getColor());
+                  BlockLightInfo light = PhotonicsConfig.getLightList().getDefault(block);
+                  if (light != null) {
+                     color.add(light.getColorAsVector());
                   }
                }
             }

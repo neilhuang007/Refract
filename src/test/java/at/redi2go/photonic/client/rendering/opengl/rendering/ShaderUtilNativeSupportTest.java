@@ -17,7 +17,7 @@ class ShaderUtilNativeSupportTest {
          vec3 apply_tint_impl(vec4 color) { return color.rgb; }
          """;
 
-      String processed = ShaderUtil.preprocessAutoUniforms(source);
+      String processed = ShaderUtil.preprocessPhotonicsDirectives(source);
 
       assertTrue(processed.contains("#define PH_USE_CUSTOM_ALPHA"));
       assertTrue(processed.contains("#define PH_ALPHA_FUNC(color) apply_tint_impl(color)"));
@@ -37,10 +37,7 @@ class ShaderUtilNativeSupportTest {
 
       String processed = ShaderUtil.preprocessAutoUniforms(source);
 
-      assertEquals(1, countOccurrences(processed, "uniform sampler2D colortex10;"));
-      assertEquals(1, countOccurrences(processed, "uniform sampler2D colortex11;"));
-      assertTrue(processed.indexOf("uniform sampler2D colortex11;") > processed.indexOf("#version 430"));
-      assertTrue(processed.indexOf("uniform sampler2D colortex11;") < processed.indexOf("vec3 load_color()"));
+      assertEquals(source, processed, "preprocessAutoUniforms should return source unchanged in 0.3.1");
    }
 
    private static int countOccurrences(String source, String needle) {
