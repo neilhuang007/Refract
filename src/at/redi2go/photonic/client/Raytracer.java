@@ -3,6 +3,7 @@ package at.redi2go.photonic.client;
 import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
+import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.mixin.ShaderPackAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ColorFramebuffer;
@@ -38,11 +39,13 @@ import net.irisshaders.iris.shaderpack.ShaderPack;
 import net.irisshaders.iris.shaderpack.include.IncludeGraph;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.block.Block;
+import net.minecraft.client.render.model.BakedQuad;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.model.json.ModelElementFace;
 import org.joml.Vector3f;
+import java.lang.reflect.Field;
 
 public class Raytracer implements Destructable {
    public static final Object LOCK = new Object();
@@ -58,6 +61,8 @@ public class Raytracer implements Destructable {
    private static final List<FileSystem> FILE_SYSTEMS = new ArrayList<>();
    public static final List<Patch> AVAILABLE_PATCHES = new ArrayList<>();
    public static final TerrainRenderPass VOXEL = new TerrainRenderPass(RenderLayer.getCutout(), false, true);
+   private static volatile Field PHOTONIC_FACE_VOXELIZED_FIELD;
+   private static volatile Field PHOTONIC_BAKED_QUAD_VOXELIZED_FIELD;
    private final MainRenderer mainRenderer;
    private final RenderDispatcher renderDispatcher;
    private final WorldRegistry worldRegistry;
@@ -77,12 +82,28 @@ public class Raytracer implements Destructable {
 
       PhotonicsProperties properties = getProperties().orElseThrow();
       this.renderDispatcher = new RenderDispatcher(properties.getRenderScale());
+      boolean useOctrayChunks = properties.getLightingMode() == LightingMode.OCTRAY
+         || PhotonicsStorage.USE_OCTRAY_CHUNKS.value;
+      boolean lightBinningEnabled = properties.isLightBinningEnabled().orElse(properties.getLightingMode() == LightingMode.BASIC);
       this.worldRegistry = new WorldRegistry(
          this.renderDispatcher,
          properties.getMaxLights(),
          properties.getMaxSamples(),
          properties.isBlockLightEnabled().orElse(true),
-         properties.isLightBinningEnabled().orElse(properties.getLightingMode() == LightingMode.BASIC)
+         lightBinningEnabled,
+         useOctrayChunks
+      );
+      Photonic.info(
+         "[Startup] photonics: lightingMode={} octrayChunks={} multithreading={} lightBinning={} blockLight={} gi={} restirSamples={}/{} denoiserPasses={}",
+         properties.getLightingMode(),
+         useOctrayChunks,
+         PhotonicsStorage.DO_MULTITHREADING.value,
+         lightBinningEnabled,
+         properties.isBlockLightEnabled().orElse(true),
+         properties.isGiEnabled().orElse(true),
+         properties.getRestirInitialSamples(),
+         properties.getRestirSpatialReuseSamples(),
+         properties.getRestirDenoiserPasses()
       );
       this.mainRenderer = properties.getLightingMode().createMainRenderer(this.worldRegistry, properties.getRenderScale(), properties);
       this.worldRegistry.startWorldBuilder();
@@ -129,7 +150,7 @@ public class Raytracer implements Destructable {
                Direction oppositeDirection = key.getOpposite();
                if (faces.containsKey(oppositeDirection)) {
                   if (key == normalDirection) {
-                     ((BlockElementFaceExt)(Object)value).photonic$setShouldBeVoxelized(false);
+                     setFaceVoxelized(value, false);
                   }
                }
             });
@@ -342,6 +363,38 @@ public class Raytracer implements Destructable {
       }
    }
 
+   public static boolean getFaceVoxelized(ModelElementFace face) {
+      try {
+         return photonic$getVoxelizedField(ModelElementFace.class).getBoolean(face);
+      } catch (IllegalAccessException exception) {
+         throw new RuntimeException("Failed reading voxelization flag from ModelElementFace", exception);
+      }
+   }
+
+   public static void setFaceVoxelized(ModelElementFace face, boolean shouldBeVoxelized) {
+      try {
+         photonic$getVoxelizedField(ModelElementFace.class).setBoolean(face, shouldBeVoxelized);
+      } catch (IllegalAccessException exception) {
+         throw new RuntimeException("Failed writing voxelization flag on ModelElementFace", exception);
+      }
+   }
+
+   public static boolean getBakedQuadVoxelized(BakedQuad bakedQuad) {
+      try {
+         return photonic$getVoxelizedField(BakedQuad.class).getBoolean(bakedQuad);
+      } catch (IllegalAccessException exception) {
+         throw new RuntimeException("Failed reading voxelization flag from BakedQuad", exception);
+      }
+   }
+
+   public static void setBakedQuadVoxelized(BakedQuad bakedQuad, boolean shouldBeVoxelized) {
+      try {
+         photonic$getVoxelizedField(BakedQuad.class).setBoolean(bakedQuad, shouldBeVoxelized);
+      } catch (IllegalAccessException exception) {
+         throw new RuntimeException("Failed writing voxelization flag on BakedQuad", exception);
+      }
+   }
+
    static {
       watchFolder(DEV_ENV_SHADERS_PATH.toFile(), () -> RenderSystem.recordRenderCall(() -> {
          try {
@@ -349,5 +402,34 @@ public class Raytracer implements Destructable {
          } catch (IOException var1x) {
          }
       }));
+   }
+
+   private static Field photonic$getVoxelizedField(Class<?> owner) {
+      Field field;
+      if (owner == ModelElementFace.class) {
+         field = PHOTONIC_FACE_VOXELIZED_FIELD;
+         if (field != null) {
+            return field;
+         }
+      } else if (owner == BakedQuad.class) {
+         field = PHOTONIC_BAKED_QUAD_VOXELIZED_FIELD;
+         if (field != null) {
+            return field;
+         }
+      }
+
+      try {
+         field = owner.getDeclaredField("photonic$shouldBeVoxelized");
+      } catch (ReflectiveOperationException exception) {
+         throw new RuntimeException("Missing voxelization flag on " + owner.getName(), exception);
+      }
+
+      field.setAccessible(true);
+      if (owner == ModelElementFace.class) {
+         PHOTONIC_FACE_VOXELIZED_FIELD = field;
+      } else if (owner == BakedQuad.class) {
+         PHOTONIC_BAKED_QUAD_VOXELIZED_FIELD = field;
+      }
+      return field;
    }
 }

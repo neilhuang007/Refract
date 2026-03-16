@@ -17,6 +17,10 @@ public final class PhotonicsStorage {
       return new Parameter<>(key, s -> StorageIO.readFloat(s, defaultValue), StorageIO::writeFloat);
    }
 
+   private static Parameter<String> stringParam(String key, String defaultValue) {
+      return new Parameter<>(key, s -> StorageIO.readString(s, defaultValue), StorageIO::writeString);
+   }
+
    private static Parameter<Boolean> boolParam(String key, boolean defaultValue) {
       return new Parameter<>(key, s -> StorageIO.readBoolean(s, defaultValue), StorageIO::writeBoolean);
    }
@@ -25,6 +29,8 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> SHADOW_PIXELATION_ENABLED = boolParam("shadow_pixelation_enabled", true);
    public static final Parameter<Float> SHADOW_PIXELATION_SIZE = floatParam("shadow_pixelation_size", 8.0F);
    public static final Parameter<Boolean> PROFILER_ENABLED = boolParam("profiler_enabled", false);
+   public static final Parameter<String> LIGHTING_MODE_OVERRIDE = stringParam("lighting_mode_override", "");
+   public static final Parameter<Boolean> USE_OCTRAY_CHUNKS = boolParam("use_octray_chunks", true);
    public static final Parameter<Boolean> OILIFY_ENABLED = boolParam("oilify_enabled", false);
    public static final Parameter<Float> OILIFY_SIZE = floatParam("oilify_size", 7.0F);
    public static final Parameter<Float> OILIFY_SHARPNESS = floatParam("oilify_sharpness", 1.0F);
@@ -69,5 +75,42 @@ public final class PhotonicsStorage {
       public void removeObserver(Consumer<T> observer) {
          this.observers.remove(observer);
       }
+   }
+
+   public static void applySystemPropertyOverrides() {
+      applyStringSystemPropertyOverride("photonics.lightingMode", LIGHTING_MODE_OVERRIDE.value);
+      applyBooleanSystemPropertyOverride("photonics.profilerEnabled", PROFILER_ENABLED);
+   }
+
+   private static void applyStringSystemPropertyOverride(String key, String value) {
+      String systemValue = System.getProperty(key);
+      if (systemValue != null && !systemValue.isBlank()) {
+         return;
+      }
+
+      if (value == null || value.isBlank()) {
+         // Blank local storage means "no local override", not "force clear any
+         // externally supplied system property" such as automation/test launch args.
+         return;
+        } else {
+         System.setProperty(key, value);
+       }
+   }
+
+   private static void applyBooleanSystemPropertyOverride(String key, Parameter<Boolean> parameter) {
+      String value = System.getProperty(key);
+      if (value == null || value.isBlank()) {
+         return;
+      }
+
+      parameter.value = Boolean.parseBoolean(value);
+   }
+
+   public static String getEffectiveStringOverride(Parameter<String> parameter, String systemPropertyKey) {
+      if (parameter.value != null && !parameter.value.isBlank()) {
+         return parameter.value;
+      }
+      String systemValue = System.getProperty(systemPropertyKey);
+      return systemValue == null ? "" : systemValue;
    }
 }

@@ -17,4 +17,15 @@ public class MemoryRegion {
    public ByteBuffer getBuffer() {
       return this.buffer.duplicate().order(this.buffer.order());
    }
+
+   public MemoryRegion slice(int relativeBegin, int byteSize) {
+      if (relativeBegin < 0 || byteSize < 0 || relativeBegin + byteSize > this.end - this.begin) {
+         throw new IllegalArgumentException("Slice exceeds memory region bounds");
+      }
+
+      int sliceBegin = this.begin + relativeBegin;
+      int sliceEnd = sliceBegin + byteSize;
+      ByteBuffer sliceBuffer = this.buffer.slice(relativeBegin, byteSize).order(this.buffer.order());
+      return new MemoryRegion(sliceBuffer, sliceBegin, sliceEnd);
+   }
 }

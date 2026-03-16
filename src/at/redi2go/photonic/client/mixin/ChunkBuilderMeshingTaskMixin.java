@@ -3,7 +3,6 @@ package at.redi2go.photonic.client.mixin;
 import at.redi2go.photonic.client.BlockRendererExt;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
-import at.redi2go.photonic.client.rendering.world.LightRegistry;
 import at.redi2go.photonic.client.rendering.world.PBlock;
 import at.redi2go.photonic.client.rendering.world.position.PChunkPos;
 import com.llamalad7.mixinextras.sugar.Local;
@@ -18,7 +17,6 @@ import net.minecraft.block.Blocks;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.block.BlockRenderType;
 import net.minecraft.util.math.BlockPos.Mutable;
-import org.joml.Vector3f;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -48,18 +46,11 @@ public class ChunkBuilderMeshingTaskMixin {
          BlockPos upperCorner = new BlockPos(maxX, maxY, maxZ);
          Raytracer.INSTANCE
             .getWorldRegistry()
-            .queueBuildJob(
-               () -> Raytracer.INSTANCE
-                  .getWorldRegistry()
-                  .loadChunk(new PChunkPos(lowerCorner.getX() / 16, lowerCorner.getY() / 16, lowerCorner.getZ() / 16))
-            );
-         LightRegistry lightRegistry = Raytracer.INSTANCE.getWorldRegistry().getLightRegistry();
-
-         for (BlockPos blockPos : BlockPos.iterate(lowerCorner, upperCorner)) {
-            if (lightRegistry.hasPossibleLight(buildContext.cache.getWorldSlice().getBlockState(blockPos))) {
-               lightRegistry.onBlockLoad(new Vector3f(blockPos.getX(), blockPos.getY(), blockPos.getZ()));
-            }
-         }
+            .queueChunkLoad(new PChunkPos(
+               Math.floorDiv(lowerCorner.getX(), 16),
+               Math.floorDiv(lowerCorner.getY(), 16),
+               Math.floorDiv(lowerCorner.getZ(), 16)
+            ));
 
          Raytracer.INSTANCE.getWorldRegistry().wakeUpWorldBuilder();
       }

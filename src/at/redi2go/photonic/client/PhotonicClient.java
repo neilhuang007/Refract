@@ -6,7 +6,9 @@ import net.fabricmc.api.ClientModInitializer;
 
 public class PhotonicClient implements ClientModInitializer {
    public void onInitializeClient() {
+      PhotonicsStorage.applySystemPropertyOverrides();
       PhotonicsConfig.reloadConfig();
       PhotonicsConfigWatchThread.INSTANCE.start();
+      ShaderAutomation.initialize();
    }
 }

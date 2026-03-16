@@ -8,6 +8,8 @@ import java.nio.ByteBuffer;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
@@ -25,6 +27,9 @@ public class GlMemoryManager implements MemoryManager {
    public int index = 0;
    private int uploadBatchSize = Integer.MAX_VALUE;
    private final Deque<MemoryOwner> uploadQueue = new ConcurrentLinkedDeque<>();
+   private final Set<MemoryOwner> queuedUploads = ConcurrentHashMap.newKeySet();
+   private volatile int lastUploadCount = 0;
+   private volatile long lastUploadedBytes = 0L;
    public final Queue<MemoryRegion> unusedBuffers = new ConcurrentLinkedQueue<>();
 
    public GlMemoryManager(GlTarget target, String name, int byteSize, boolean staticData) {
@@ -81,22 +86,29 @@ public class GlMemoryManager implements MemoryManager {
    public boolean upload() {
       this.ensureAllocated();
       GL15.glBindBuffer(this.target.target, this.id);
+      int uploadedCount = 0;
+      long uploadedBytes = 0L;
 
       for (int i = 0; i < this.uploadBatchSize && !this.uploadQueue.isEmpty(); i++) {
          MemoryOwner memoryOwner = this.uploadQueue.poll();
          if (memoryOwner == null) {
             Photonic.warn("Memory owner is null?");
          } else {
+            this.queuedUploads.remove(memoryOwner);
             synchronized (memoryOwner) {
                MemoryRegion memoryRegion = memoryOwner.getMemory();
                if (memoryRegion != null) {
                   GL15.glBufferSubData(this.target.target, memoryRegion.begin, memoryRegion.getBuffer());
+                  uploadedCount++;
+                  uploadedBytes += (long) (memoryRegion.end - memoryRegion.begin);
                   memoryOwner.afterUpload();
                }
             }
          }
       }
 
+      this.lastUploadCount = uploadedCount;
+      this.lastUploadedBytes = uploadedBytes;
       GL15.glBindBuffer(this.target.target, 0);
       return this.uploadQueue.isEmpty();
    }
@@ -113,7 +125,7 @@ public class GlMemoryManager implements MemoryManager {
    public void queueUpload(MemoryOwner memoryOwner) {
       if (memoryOwner == null) {
          System.err.println("Trying to upload null?");
-      } else {
+      } else if (this.queuedUploads.add(memoryOwner)) {
          this.uploadQueue.addLast(memoryOwner);
       }
    }
@@ -121,7 +133,7 @@ public class GlMemoryManager implements MemoryManager {
    public void queueUploadPriority(MemoryOwner memoryOwner) {
       if (memoryOwner == null) {
          System.err.println("Trying to priority-upload null?");
-      } else {
+      } else if (this.queuedUploads.add(memoryOwner)) {
          this.uploadQueue.addFirst(memoryOwner);
       }
    }
@@ -146,6 +158,18 @@ public class GlMemoryManager implements MemoryManager {
 
    public int getCapacity() {
       return this.buffer.capacity();
+   }
+
+   public int getPendingUploadCount() {
+      return this.uploadQueue.size();
+   }
+
+   public int getLastUploadCount() {
+      return this.lastUploadCount;
+   }
+
+   public long getLastUploadedBytes() {
+      return this.lastUploadedBytes;
    }
 
    @Override

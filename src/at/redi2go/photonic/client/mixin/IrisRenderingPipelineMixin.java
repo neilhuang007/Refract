@@ -2,6 +2,7 @@ package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.CompositeRendererExt;
 import at.redi2go.photonic.client.Raytracer;
+import at.redi2go.photonic.client.ShaderAutomation;
 import at.redi2go.photonic.client.rendering.opengl.rendering.PhotonicsShader;
 import com.llamalad7.mixinextras.sugar.Local;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMaps;
@@ -160,6 +161,12 @@ public abstract class IrisRenderingPipelineMixin {
    public void beginTranslucents(CallbackInfo ci) {
       if (!Raytracer.isDisabled()) {
          Raytracer.INSTANCE.getMainRenderer().render();
+         ShaderAutomation.afterPhotonicsRender();
       }
+   }
+
+   @Inject(method = "finalizeLevelRendering", at = @At("TAIL"))
+   public void finalizeLevelRendering(CallbackInfo ci) {
+      ShaderAutomation.afterFinalComposite();
    }
 }

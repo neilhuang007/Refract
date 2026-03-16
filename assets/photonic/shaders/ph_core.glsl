@@ -36,12 +36,15 @@ Light load_light(int index) {
 }
 
 void ph_get_key(vec3 world_pos, vec3 normal, vec3 world_camera_pos, inout ivec3 key, out uint pos_i) {
-    float dist = distance(floor(world_pos), floor(world_camera_pos));
-    
-    bool badAngle = dot(normal, normalize(world_pos - world_camera_pos)) > -0.2f && dist > 16.0f;
+    vec3 to_camera = world_pos - world_camera_pos;
+    float view_distance_sq = dot(to_camera, to_camera);
+    float dist = sqrt(view_distance_sq);
+    bool badAngle = view_distance_sq > 1e-6f
+        && dot(normal, to_camera * inversesqrt(view_distance_sq)) > -0.2f
+        && dist > 16.0f;
 
     // How rough GI is, where resolution is roughly one block.
-    float resolution = ceil((dist / 16)) / (4 * PH_RENDER_SCALE);
+    float resolution = max(1.0f + floor(dist / 16.0f), 1.0f) / (4.0f * PH_RENDER_SCALE);
     if (badAngle) resolution*= 2f;
 
     world_pos = floor(world_pos / resolution) * resolution;
@@ -74,11 +77,15 @@ ivec3 ph_write(vec3 world_pos, vec3 normal, mat4 mvp, vec3 world_camera_pos) {
     uint pos_i = 0;
     ph_get_key(world_pos, normal, world_camera_pos, key, pos_i);
 
-    for (uint i = 0, d = 0; i < 5 && (d = imageAtomicCompSwap(gi_d, key, 0, pos_i).x) != 0 && d != pos_i; i++) {
+    for (uint i = 0; i < 5; i++) {
+        uint d = imageAtomicCompSwap(gi_d, key, 0, pos_i).x;
+        if (d == 0 || d == pos_i) {
+            return key;
+        }
         key.xy = (key.xy + 1) % indirect_res;
     }
 
-    return key;
+    return ivec3(NULL);
 }
 
 ivec3 ph_read(vec3 world_pos, vec3 normal, mat4 mvp, vec3 world_camera_pos) {

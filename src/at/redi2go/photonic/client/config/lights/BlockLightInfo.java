@@ -22,6 +22,7 @@ public final class BlockLightInfo implements Comparable<BlockLightInfo> {
    private final float luminanceDotColor;
    private final float radiusRcp;
    private final float blockRadius;
+   private final Vector3f rawColor;
 
    public BlockLightInfo(LightPredicate predicate, LightColor color, float intensity, float radius, float falloff, boolean isTraced, boolean requestedTrace) {
       Objects.requireNonNull(predicate, "predicate was null");
@@ -33,10 +34,12 @@ public final class BlockLightInfo implements Comparable<BlockLightInfo> {
       this.falloff = falloff;
       this.isTraced = isTraced;
       this.requestedTrace = requestedTrace;
+      this.rawColor = color.toVec3f();
       this.adjustedIntensity = intensity / 100.0F;
-      this.luminanceDotColor = color.toVec3f().dot(0.2126F, 0.7152F, 0.0722F);
+      this.luminanceDotColor = this.rawColor.dot(0.2126F, 0.7152F, 0.0722F) * this.adjustedIntensity;
       this.radiusRcp = 1.0F / radius;
-      this.blockRadius = (float) Math.sqrt((this.luminanceDotColor / 0.001F - 0.9F) / this.radiusRcp / falloff);
+      float radiusSquared = Math.max((this.luminanceDotColor / 0.001F - 0.9F) / this.radiusRcp / falloff, 0.0F);
+      this.blockRadius = (float) Math.sqrt(radiusSquared);
    }
 
    public Block block() {
@@ -79,8 +82,16 @@ public final class BlockLightInfo implements Comparable<BlockLightInfo> {
       return this.luminanceDotColor / (0.9F + distanceSquared * this.radiusRcp);
    }
 
+   public float adjustedIntensity() {
+      return this.adjustedIntensity;
+   }
+
+   public Vector3f getRawColorAsVector() {
+      return new Vector3f(this.rawColor);
+   }
+
    public Vector3f getColorAsVector() {
-      return this.color.toVec3f().mul(this.adjustedIntensity);
+      return new Vector3f(this.rawColor).mul(this.adjustedIntensity);
    }
 
    public Vector2f getAttenuationAsVector() {

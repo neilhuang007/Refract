@@ -6,6 +6,7 @@ import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import java.io.IOException;
 import java.io.StringReader;
+import java.util.HashSet;
 import java.util.Properties;
 import java.util.function.Consumer;
 import net.irisshaders.iris.Iris;
@@ -73,6 +74,8 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
             }
          }
       }
+      photonics$applyShaderOptionOverrides(props, shaderPackOptions);
+      photonics$applySystemPropertyOverrides(props);
       for (String key : props.stringPropertyNames()) {
          String value = props.getProperty(key);
          photonics$handleDirective(key, value);
@@ -185,6 +188,85 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Override
    public int getRestirDenoiserPasses() {
       return this.denoiserPasses;
+   }
+
+   @Unique
+   private static void photonics$applyShaderOptionOverrides(Properties props, ShaderPackOptions shaderPackOptions) {
+      if (shaderPackOptions == null) {
+         return;
+      }
+
+      String lightingMode = photonics$resolveLightingMode(shaderPackOptions);
+      if (lightingMode != null) {
+         props.setProperty("photonics.lightingMode", lightingMode);
+      }
+
+      String restirSoftShadows = photonics$resolveOptionValue(shaderPackOptions, "PHOTONICS_RESTIR_SOFT_SHADOWS");
+      if (restirSoftShadows != null) {
+         props.setProperty("photonics.restirSoftShadows", restirSoftShadows);
+      }
+
+      for (String key : new HashSet<>(props.stringPropertyNames())) {
+         String value = props.getProperty(key);
+         String resolvedValue = photonics$resolveOptionAlias(value, shaderPackOptions);
+         if (resolvedValue != null) {
+            props.setProperty(key, resolvedValue);
+         }
+      }
+   }
+
+   @Unique
+   private static String photonics$resolveOptionAlias(String value, ShaderPackOptions shaderPackOptions) {
+      if (value == null || !value.startsWith("PHOTONICS_")) {
+         return null;
+      }
+
+      return photonics$resolveOptionValue(shaderPackOptions, value);
+   }
+
+   @Unique
+   private static String photonics$resolveOptionValue(ShaderPackOptions shaderPackOptions, String optionName) {
+      if (shaderPackOptions == null || optionName == null) {
+         return null;
+      }
+
+      if (shaderPackOptions.getOptionSet().getBooleanOptions().containsKey(optionName)) {
+         return Boolean.toString(shaderPackOptions.getOptionValues().getBooleanValueOrDefault(optionName));
+      }
+
+      if (shaderPackOptions.getOptionSet().getStringOptions().containsKey(optionName)) {
+         return shaderPackOptions.getOptionValues().getStringValueOrDefault(optionName);
+      }
+
+      return null;
+   }
+
+   @Unique
+   private static String photonics$resolveLightingMode(ShaderPackOptions shaderPackOptions) {
+      String value = photonics$resolveOptionValue(shaderPackOptions, "PHOTONICS_LIGHTING_MODE");
+      if (value == null) {
+         return null;
+      }
+
+      return switch (value) {
+         case "0" -> LightingMode.OFF.name();
+         case "1" -> LightingMode.BASIC.name();
+         case "2" -> LightingMode.RESTIR.name();
+         case "3" -> LightingMode.OCTRAY.name();
+         default -> value;
+      };
+   }
+
+   @Unique
+   private static void photonics$applySystemPropertyOverrides(Properties props) {
+      for (String key : System.getProperties().stringPropertyNames()) {
+         if (key.startsWith("photonics.") && !key.startsWith("photonics.automation.")) {
+            String value = System.getProperty(key);
+            if (value != null) {
+               props.setProperty(key, value);
+            }
+         }
+      }
    }
 
    @Unique

@@ -4,8 +4,8 @@ import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 
 public record RgbColor(int packedColor) implements LightColor {
-   public RgbColor(int r, int b, int g) {
-      this(r << 16 | b << 8 | g);
+   public RgbColor(int r, int g, int b) {
+      this(r << 16 | g << 8 | b);
    }
 
    @Override
@@ -14,12 +14,12 @@ public record RgbColor(int packedColor) implements LightColor {
    }
 
    @Override
-   public int blue() {
+   public int green() {
       return this.packedColor >>> 8 & 0xFF;
    }
 
    @Override
-   public int green() {
+   public int blue() {
       return this.packedColor & 0xFF;
    }
 

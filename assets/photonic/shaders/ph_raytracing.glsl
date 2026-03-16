@@ -28,7 +28,21 @@ bool breakOnEmpty = false;
 
 vec3 lightEmittance = vec3(0.0f);
 
+int ph_lookup_chunk_entry(int chunk_base, ivec3 block_position);
+int ph_to_air_entry_bounds(ivec3 min_pos, ivec3 max_pos) {
+    return (min_pos.x << 0)
+        | (min_pos.y << 5)
+        | (min_pos.z << 10)
+        | ((max_pos.x - 1) << 15)
+        | ((max_pos.y - 1) << 20)
+        | ((max_pos.z - 1) << 25);
+}
+
 void trace_ray(inout RayJob job, bool transparency) {
+    job.result_hit = false;
+    job.result_normal = vec3(0.0f);
+    job.result_color = vec3(0.0f);
+
     job.direction = normalize(ph_signed_nudge(job.direction));
 
     vec3 direction_inv = 1.0f / job.direction;
@@ -102,7 +116,7 @@ void trace_ray(inout RayJob job, bool transparency) {
             new_index.y = -entries.x + ph_get_index(block_pos);
 
             if (new_index.y != old_index.y) {
-                entries.y = cb_array[new_index.y];
+                entries.y = ph_lookup_chunk_entry(-entries.x, block_pos);
                 if (entries.y < 0) { // found block
                     int block_data = -entries.y;
 
@@ -127,7 +141,7 @@ void trace_ray(inout RayJob job, bool transparency) {
                     entries.z = cb_array[new_index.z];
 
                     if (breakOnEmpty && entries.z == 519536640) {
-                        job.result_hit = true;
+                        job.result_hit = false;
                         entries.z = -0;
 
                         break;
@@ -229,19 +243,20 @@ void trace_ray(inout RayJob job, bool transparency) {
         // Block-level empty space look-ahead: skip consecutive empty blocks
         // within the same chunk without consuming main loop iterations
         if (scale == 8 && entries.y >= 0 && entries.x < 0) {  // scale 8 = block level (4+4)
-            for (int bskip = 0; bskip < 3; bskip++) {
+            for (int bskip = 0; bskip < 6; bskip++) {
                 ivec3 bskip_w = ivec3(position);
                 if (!ph_is_inside(position)) break;
 
                 ivec3 bskip_chunk = (bskip_w >> 8) & 31;
                 int bskip_chunk_idx = ph_get_world_index(bskip_chunk);
-                if (root_array[bskip_chunk_idx] >= 0) break;  // Different or empty chunk
+                int bskip_chunk_entry = root_array[bskip_chunk_idx];
+                if (bskip_chunk_entry >= 0) break;  // Different or empty chunk
 
                 ivec3 bskip_block = (bskip_w >> 4) & 15;
-                int bskip_block_idx = -root_array[bskip_chunk_idx] + ph_get_index(bskip_block);
+                int bskip_block_idx = -bskip_chunk_entry + ph_get_index(bskip_block);
                 if (bskip_block_idx == new_index.y) break;  // Same block
 
-                int bskip_entry = cb_array[bskip_block_idx];
+                int bskip_entry = ph_lookup_chunk_entry(-bskip_chunk_entry, bskip_block);
                 if (bskip_entry < 0) break;  // Found occupied block, stop
 
                 // Step through this empty block
@@ -290,7 +305,8 @@ int get_block_pointer(vec3 position) {
     index = root_array[ph_get_world_index((w >> 4) & 31)];
     if (index >= 0) return -1;
 
-    index = cb_array[-index + ph_get_index(w & 15)];
+    int chunk_base = -index;
+    index = ph_lookup_chunk_entry(chunk_base, w & 15);
     if (index >= 0) return -1;
 
     return (-index & 0xfff) * (ph_byte_size / 4);
@@ -340,6 +356,52 @@ int ph_get_world_index(ivec3 position) {
     return morton[position.x] | (morton[position.y] << 1) | (morton[position.z] << 2);
 }
 
+#ifndef PH_CHUNK_LOOKUP_DEFINED
+#define PH_CHUNK_LOOKUP_DEFINED
+
+#ifdef PH_OCTRAY_CHUNK_LOOKUP
+int ph_get_octray_sub_chunk_lod_base_addr(int lod) {
+    if (lod == 1) return 4096;
+    if (lod == 2) return 4608;
+    if (lod == 3) return 4672;
+    if (lod == 4) return 4680;
+    return 0;
+}
+
+int ph_get_octray_sub_chunk_addr(ivec3 block_position, int lod) {
+    ivec3 voxel_pos = (block_position & 15) >> lod;
+    int edge = 16 >> lod;
+    return ph_get_octray_sub_chunk_lod_base_addr(lod)
+        + voxel_pos.x * edge
+        + voxel_pos.y * edge * edge
+        + voxel_pos.z;
+}
+
+int ph_lookup_chunk_entry(int chunk_base, ivec3 block_position) {
+    int leaf_entry = cb_array[chunk_base + ph_get_index(block_position & 15)];
+    if (leaf_entry < 0) {
+        return leaf_entry;
+    }
+
+    for (int lod = 4; lod >= 1; lod--) {
+        int mip_entry = cb_array[chunk_base + ph_get_octray_sub_chunk_addr(block_position, lod)];
+        if (mip_entry == 0) {
+            ivec3 cell_min = ((block_position & 15) >> lod) << lod;
+            int span = 1 << lod;
+            return ph_to_air_entry_bounds(cell_min, cell_min + ivec3(span));
+        }
+    }
+
+    return leaf_entry;
+}
+#else
+int ph_lookup_chunk_entry(int chunk_base, ivec3 block_position) {
+    return cb_array[chunk_base + ph_get_index(block_position & 15)];
+}
+#endif
+
+#endif
+
 int get_result_sky_light(vec3 normal) {
     int index = clamp(
         int(
@@ -371,9 +433,7 @@ vec4 ph_unpack_color(int packedColor) {
 }
 
 int ph_to_fake_air_entry(ivec3 pos) {
-    int value = (pos.x << 0) |(pos.y << 5) | (pos.z << 10);
-
-    return value | (value << 15);
+    return ph_to_air_entry_bounds(pos, pos + ivec3(1));
 }
 
 float ph_signed_nudge(float value) {

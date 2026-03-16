@@ -10,11 +10,11 @@ public interface LightColor {
    float SCALAR = 0.003921569F;
 
    int red();
-   int blue();
    int green();
+   int blue();
 
    default Vector3f toVec3f() {
-      return new Vector3f(this.red() * SCALAR, this.blue() * SCALAR, this.green() * SCALAR);
+      return new Vector3f(this.red() * SCALAR, this.green() * SCALAR, this.blue() * SCALAR);
    }
 
    int toOpaque();

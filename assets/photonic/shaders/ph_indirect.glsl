@@ -86,6 +86,8 @@ vec3 ph_fetchInterpolatedLighting(vec3 world_pos) {
     v_dir /= 2.0f;
 
     vec3 t00 = ph_loadIndirectRough(center        );
+    if (t00 == NULL) return NULL; // Early out: no center data means no useful interpolation
+
     vec3 t10 = ph_loadIndirectRough(center + u_dir);
 
     vec3 t01 = ph_loadIndirectRough(center + v_dir);
@@ -100,6 +102,10 @@ vec3 ph_fetchInterpolatedLighting(vec3 world_pos) {
 
 vec3 ph_loadIndirectRough(vec3 pos) {
     ivec3 read = ph_read(pos, base_normal, modelview_projection, world_camera_position);
+    if (read == ivec3(NULL)) {
+        return NULL;
+    }
+
     vec3 indirect_voxel = vec3(0.0f);
     float w = imageLoad(gi_w, read).x;
     if (w <= 10.0f) {
@@ -109,7 +115,7 @@ vec3 ph_loadIndirectRough(vec3 pos) {
     indirect_voxel.x = imageLoad(gi_x, read).x;
     indirect_voxel.y = imageLoad(gi_y, read).x;
     indirect_voxel.z = imageLoad(gi_z, read).x;
-    indirect_voxel /= 255.0f * w;
+    indirect_voxel /= 1024.0f * w;
 
     return indirect_voxel.xyz;
 }

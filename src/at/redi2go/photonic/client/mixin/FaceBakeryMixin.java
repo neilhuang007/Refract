@@ -1,14 +1,13 @@
 package at.redi2go.photonic.client.mixin;
 
-import at.redi2go.photonic.client.BakedQuadExt;
-import at.redi2go.photonic.client.BlockElementFaceExt;
-import net.minecraft.client.texture.Sprite;
-import net.minecraft.util.math.Direction;
-import net.minecraft.client.render.model.ModelBakeSettings;
+import at.redi2go.photonic.client.Raytracer;
 import net.minecraft.client.render.model.BakedQuad;
+import net.minecraft.client.render.model.BakedQuadFactory;
+import net.minecraft.client.render.model.ModelBakeSettings;
 import net.minecraft.client.render.model.json.ModelElementFace;
 import net.minecraft.client.render.model.json.ModelRotation;
-import net.minecraft.client.render.model.BakedQuadFactory;
+import net.minecraft.client.texture.Sprite;
+import net.minecraft.util.math.Direction;
 import org.joml.Vector3f;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -30,7 +29,6 @@ public class FaceBakeryMixin {
       CallbackInfoReturnable<BakedQuad> cir
    ) {
       BakedQuad bakedQuad = (BakedQuad)cir.getReturnValue();
-      boolean shouldBeVoxelized = ((BlockElementFaceExt)(Object)blockElementFace).photonic$shouldBeVoxelized();
-      ((BakedQuadExt)bakedQuad).photonic$setShouldBeVoxelized(shouldBeVoxelized);
+      Raytracer.setBakedQuadVoxelized(bakedQuad, Raytracer.getFaceVoxelized(blockElementFace));
    }
 }

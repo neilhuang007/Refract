@@ -7,6 +7,10 @@
 #include "/photonics/basic/samplers.glsl"
 #elif PH_LIGHTING_MODE == 2
 #include "/photonics/restir/samplers.glsl"
+#elif PH_LIGHTING_MODE == 3
+#include "/photonics/octray/samplers.glsl"
+#elif PH_LIGHTING_MODE == 4
+#include "/photonics/lighttree/samplers.glsl"
 #endif
 
 #endif

@@ -9,10 +9,6 @@
 ivec2 tex_coord = ivec2(gl_FragCoord.xy);
 uint rng_state = uint(uint(gl_FragCoord.x) * uint(1973) + uint(gl_FragCoord.y) * uint(9277) + uint(frameCounter) * uint(26699)) | uint(1);
 
-#include "/photonics/photonics.glsl"
-
-RayJob ray = RayJob(vec3(0f), vec3(0f), vec3(0f), vec3(0f), vec3(0f), false);
-
 vec3 albedo = vec3(0f);
 vec3 world_pos = vec3(0f);
 vec3 rt_pos = vec3(0f);
@@ -20,5 +16,9 @@ vec3 rt_pos = vec3(0f);
 vec3 block_normal = vec3(0f);
 vec3 normal = vec3(0f);
 bool bad_angle = false;
+
+#include "/photonics/photonics.glsl"
+
+RayJob ray = RayJob(vec3(0f), vec3(0f), vec3(0f), vec3(0f), vec3(0f), false);
 
 #include "/photonics/common/util.glsl"

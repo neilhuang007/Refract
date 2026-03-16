@@ -12,12 +12,16 @@ uniform float ph_mod_oilify_enabled;
 
 #replace "vec4 color = texture2D(colortex0, texCoord);"
 vec4 color = texture2D(colortex0, texCoord);
+vec4 direct = texture2D(radiosity_direct, texCoord);
 vec4 direct_soft = texture2D(radiosity_direct_soft, texCoord);
 color.xyz += (
     texture2D(colortex12, texCoord).xyz + // indirect
     texture2D(radiosity_handheld, texCoord).xyz +
-    texture2D(radiosity_direct, texCoord).xyz +
-    direct_soft.xyz / max(direct_soft.w, 1.0f)
+    #if PH_LIGHTING_MODE >= 2
+    direct.xyz
+    #else
+    direct.xyz + direct_soft.xyz / max(direct_soft.w, 1.0f)
+    #endif
 ) * texture2D(colortex10, texCoord).xyz; // albedo
 if (ph_mod_oilify_enabled > 0.5) {
     const int PH_OIL_RADIUS = 3;

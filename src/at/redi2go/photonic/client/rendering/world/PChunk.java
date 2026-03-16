@@ -10,7 +10,7 @@ import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-public class PChunk implements MemoryOwner {
+public class PChunk implements WorldChunk {
    public static final int CHUNK_SIZE = 16;
    private static final int MAX_SHADER_BLOCK_INDEX = 0xFFF;
    private static final int DEBUG_LOG_LIMIT = 16;

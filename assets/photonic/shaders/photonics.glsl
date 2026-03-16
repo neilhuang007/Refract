@@ -105,6 +105,11 @@ ivec2 indirect_res = imageSize(gi_x).xy;
 const vec3 NULL = vec3(424242.424242);
 
 #include "ph_core.glsl"
+
+#if PH_LIGHTING_MODE == 3
+#include "/photonics/octray/raytracing.glsl"
+#else
 #include "ph_raytracing.glsl"
+#endif
 
 #endif // PHOTONICS

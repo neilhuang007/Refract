@@ -2,6 +2,10 @@
 #define PH_UTIL_INCLUDE
 
 const float ph_light_jitter_radius = 1.0f / 16.0f;
+// Keep secondary-bounce radiance in the same rough HDR range that the
+// downstream temporal filter and final composite expect; this avoids bright
+// speckles dominating history in dense emissive scenes.
+const float PH_MAX_INDIRECT_RADIANCE = 5.0f;
 
 float rand_next_float() {
     return ph_RandomFloat01(rng_state);
@@ -30,6 +34,23 @@ float ph_h(float x) {
 
 float ph_luminance(vec3 rgb) {
     return dot(rgb, vec3(0.2126f, 0.7152f, 0.0722f));
+}
+
+vec3 ph_clamp_luma(vec3 color, float maxLuma) {
+    float luma = ph_luminance(color);
+    if (luma > maxLuma) {
+        return color * (maxLuma / max(luma, 1e-4f));
+    }
+    return color;
+}
+
+vec3 ph_clamp_indirect_radiance(vec3 color) {
+    return ph_clamp_luma(max(color, vec3(0.0f)), PH_MAX_INDIRECT_RADIANCE);
+}
+
+bool ph_surface_positions_compatible(vec3 currentPosition, vec3 historyPosition, float thresholdSq) {
+    vec3 d = historyPosition - currentPosition;
+    return dot(d, d) < thresholdSq;
 }
 
 void jitter_sample_position(inout vec3 position) {

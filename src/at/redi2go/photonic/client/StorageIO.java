@@ -5,12 +5,14 @@ import at.redi2go.photonic.client.rendering.world.LightType;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.Map.Entry;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.block.Block;
 import net.minecraft.util.Identifier;
 import net.minecraft.registry.Registries;
@@ -18,7 +20,19 @@ import org.joml.Vector2f;
 import org.joml.Vector3f;
 
 public class StorageIO {
-   public static final File STORAGE_FILE = new File("ph_config.txt");
+   public static final File STORAGE_FILE = resolveStorageFile();
+
+   private static File resolveStorageFile() {
+      try {
+         Path gameDir = FabricLoader.getInstance().getGameDir();
+         if (gameDir != null) {
+            return gameDir.resolve("ph_config.txt").toFile();
+         }
+      } catch (Throwable ignored) {
+      }
+
+      return new File("ph_config.txt");
+   }
 
    public static boolean readBoolean(String[] booleanString, boolean elseBoolean) {
       return booleanString == null ? elseBoolean : Boolean.parseBoolean(booleanString[0]);
@@ -42,6 +56,14 @@ public class StorageIO {
 
    public static String[] writeFloat(float value) {
       return new String[]{Float.toString(value)};
+   }
+
+   public static String readString(String[] valueString, String elseValue) {
+      return valueString == null || valueString.length == 0 ? elseValue : valueString[0];
+   }
+
+   public static String[] writeString(String value) {
+      return value == null || value.isBlank() ? new String[0] : new String[]{value};
    }
 
    public static Collection<Block> readBlocks(String[] blocksString, Collection<Block> elseBlocks) {

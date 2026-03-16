@@ -1,10 +1,12 @@
 package at.redi2go.photonic.client.rendering.opengl.rendering.renderers;
 
 import at.redi2go.photonic.client.api.PhotonicsProperties;
+import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ColorFramebuffer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.PhotonicsShader;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 import net.irisshaders.iris.gl.sampler.SamplerHolder;
 import net.irisshaders.iris.gl.uniform.DynamicUniformHolder;
@@ -15,6 +17,7 @@ public class BasicRenderer extends MainRenderer {
    private final ColorFramebuffer lightingBuffer;
    @Nullable
    private CompositeRenderer lightingRenderer;
+   private final int[] lightingDrawBuffers;
 
    public BasicRenderer(WorldRegistry worldRegistry, float renderScale, PhotonicsProperties properties) {
       super(worldRegistry, renderScale);
@@ -24,13 +27,25 @@ public class BasicRenderer extends MainRenderer {
       this.lightingBuffer.createAttachment("direct", "RGBA16F", false);
       this.lightingBuffer.createAttachment("direct_soft", "RGBA32F", false);
       this.lightingBuffer.createAttachment("handheld", "RGBA16F", false);
+
+      boolean blockLightEnabled = properties.isBlockLightEnabled().orElse(true);
+      boolean handheldLightEnabled = properties.isHandheldLightEnabled().orElse(true);
+      if (blockLightEnabled && handheldLightEnabled) {
+         this.lightingDrawBuffers = new int[]{0, 1, 2, 3, 4};
+      } else if (blockLightEnabled) {
+         this.lightingDrawBuffers = new int[]{0, 1, 2, 3};
+      } else if (handheldLightEnabled) {
+         this.lightingDrawBuffers = new int[]{0, 1, 2, 3, 4};
+      } else {
+         this.lightingDrawBuffers = new int[]{0, 1};
+      }
    }
 
    @Override
    public void createCompositeRenderer(Function<List<PhotonicsShader>, CompositeRenderer> rendererCreator) {
       this.lightingRenderer = rendererCreator.apply(
          List.of(
-            new PhotonicsShader("basic/lighting.fsh", "common/screen.vsh", this.memoryCollection, this.lightingBuffer),
+            new PhotonicsShader("basic/lighting.fsh", "common/screen.vsh", this.memoryCollection, this.lightingBuffer, this.lightingDrawBuffers),
             new PhotonicsShader("common/indirect.fsh", "common/screen.vsh", this.memoryCollection, null)
          )
       );
@@ -59,7 +74,17 @@ public class BasicRenderer extends MainRenderer {
       if (this.lightingRenderer != null) {
          this.lightingBuffer.swap();
          this.lightingRenderer.renderAll();
+         this.worldRegistry.advanceLightBlendFrame();
       }
+   }
+
+   @Override
+   public Map<String, TextureObject> getAutomationTextures() {
+      return Map.of(
+         "direct", this.lightingBuffer.getWriteAttachment("direct"),
+         "direct_soft", this.lightingBuffer.getWriteAttachment("direct_soft"),
+         "handheld", this.lightingBuffer.getWriteAttachment("handheld")
+      );
    }
 
    @Override
@@ -77,3 +102,4 @@ public class BasicRenderer extends MainRenderer {
       }
    }
 }
+

@@ -37,29 +37,62 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
+def mainClasspathGroup = "${layout.buildDirectory.dir('classes/java/main').get().asFile.absolutePath}${File.pathSeparator}${layout.buildDirectory.dir('resources/main').get().asFile.absolutePath}"
+
 loom {
     runs {
         client {
             client()
             runDir = "run"
+            vmArg "-Xms2G"
+            vmArg "-Xmx8G"
+            vmArg "-Dfabric.classPathGroups=${mainClasspathGroup}"
+            vmArg "-Dphotonics.profilerEnabled=false"
         }
         shaderGameTestClient {
             client()
             runDir = "run"
+            vmArg "-Xms2G"
+            vmArg "-Xmx8G"
+            vmArg "-Dfabric.classPathGroups=${mainClasspathGroup}"
             programArg "--quickPlaySingleplayer"
-            programArg "New World"
+            programArg "backup"
             programArg "--quickPlayPath"
             programArg "quickPlay/log.json"
             vmArg "-Dphotonics.automation.enabled=true"
-            vmArg "-Dphotonics.automation.worldName=New World"
+            vmArg "-Dphotonics.automation.worldName=backup"
             vmArg "-Dphotonics.automation.autoStartWorld=false"
-            vmArg "-Dphotonics.automation.startDelayTicks=40"
+            vmArg "-Dphotonics.automation.startDelayTicks=120"
             vmArg "-Dphotonics.automation.timeoutTicks=4200"
             vmArg "-Dphotonics.automation.expectedShaderPack=ComplementaryReimagined"
+            vmArg "-Dphotonics.automation.expectedPatchIdPrefix=OCTRAY:"
+            vmArg "-Dphotonics.lightingMode=OCTRAY"
+            vmArg "-Dphotonics.profilerEnabled=true"
             vmArg "-Dphotonics.automation.reportFile=${project.projectDir.toPath().resolve('run/automation/shader-report.properties')}"
             vmArg "-Dphotonics.automation.captureDir=${project.projectDir.toPath().resolve('run/automation/captures')}"
             vmArg "-Dphotonics.automation.captureEveryN=60"
-            vmArg "-Dphotonics.automation.captureCount=3"
+            vmArg "-Dphotonics.automation.captureEveryActiveTicks=30"
+            vmArg "-Dphotonics.automation.captureCount=8"
+            vmArg "-Dphotonics.automation.minLitCaptures=8"
+            vmArg "-Dphotonics.automation.minActiveTicksBeforeSuccess=540"
+            vmArg "-Dphotonics.automation.minActiveTicksAfterSignal=240"
+            vmArg "-Dphotonics.automation.cameraMotion=yaw_sine"
+            vmArg "-Dphotonics.automation.cameraMotionStartActiveTick=150"
+            vmArg "-Dphotonics.automation.cameraMotionPeriodTicks=120"
+            vmArg "-Dphotonics.automation.cameraYawAmplitudeDegrees=35"
+            vmArg "-Dphotonics.automation.cameraPitchAmplitudeDegrees=8"
+            vmArg "-Dphotonics.automation.timeOfDaySequence=18000"
+            vmArg "-Dphotonics.automation.timeOfDayStartActiveTick=270"
+            vmArg "-Dphotonics.automation.timeOfDayStepTicks=60"
+            vmArg "-Dphotonics.automation.blockToggleStartActiveTick=420"
+            vmArg "-Dphotonics.automation.blockTogglePeriodTicks=60"
+            vmArg "-Dphotonics.automation.blockToggleCount=2"
+            vmArg "-Dphotonics.automation.maxMotionRepeatDirectDeltaAvg=0.06"
+            vmArg "-Dphotonics.automation.maxMotionRepeatDirectDeltaMax=0.10"
+            vmArg "-Dphotonics.automation.maxMotionRepeatIndirectDeltaAvg=0.12"
+            vmArg "-Dphotonics.automation.maxMotionRepeatIndirectDeltaMax=0.20"
+            vmArg "-Dphotonics.automation.releaseMouse=true"
+            vmArg "-Dphotonics.automation.requireDirectSignal=true"
             vmArg "-Dphotonics.automation.autoStop=true"
         }
     }
@@ -180,6 +213,11 @@ tasks.register("shaderGameTest") {
             throw new GradleException("Unexpected shader pack in automation run: ${props.getProperty('shaderPackName', '')}")
         }
 
+        String expectedPatchIdPrefix = props.getProperty("expectedPatchIdPrefix", "")
+        if (expectedPatchIdPrefix && !Boolean.parseBoolean(props.getProperty("patchIdMatches", "false"))) {
+            throw new GradleException("Unexpected automation patch id: ${props.getProperty('patchId', '')} (expected prefix ${expectedPatchIdPrefix})")
+        }
+
         if (!Boolean.parseBoolean(props.getProperty("raytracerActive", "false"))) {
             throw new GradleException("Raytracer was not active during automation run")
         }
@@ -216,6 +254,15 @@ tasks.register("shaderGameTest") {
             throw new GradleException("Shader automation found forbidden log patterns: ${hits.join(', ')}")
         }
 
+        List<String> requiredProfilerPatterns = [
+                "[Profiler] upload:",
+                "[Profiler] compileWorld:"
+        ]
+        List<String> missingProfilerPatterns = requiredProfilerPatterns.findAll { !logContent.contains(it) }
+        if (!missingProfilerPatterns.isEmpty()) {
+            throw new GradleException("Shader automation missing profiler evidence: ${missingProfilerPatterns.join(', ')}")
+        }
+
         println "shaderGameTest passed: captures=${capturesTaken}/${captureTarget}, patch=${props.getProperty('patchId', '')}, pack=${props.getProperty('shaderPackName', '')}"
     }
 }
@@ -225,9 +272,9 @@ tasks.register("cleanShaderGameTestArtifacts") {
     description = "Cleans shader automation output from prior runs."
     doLast {
         delete file("run/automation")
-        File quickPlayWorld = file("run/saves/New World/level.dat")
+        File quickPlayWorld = file("run/saves/backup/level.dat")
         if (!quickPlayWorld.exists()) {
-            throw new GradleException("Missing required Quick Play world save: run/saves/New World/level.dat")
+            throw new GradleException("Missing required Quick Play world save: run/saves/backup/level.dat")
         }
         File staleWorldDir = file("run/saves/photonics_shader_test")
         if (staleWorldDir.exists() && !file("run/saves/photonics_shader_test/level.dat").exists()) {
@@ -256,3 +303,4 @@ jar {
         rename { "${it}_${project.archives_base_name}" }
     }
 }
+

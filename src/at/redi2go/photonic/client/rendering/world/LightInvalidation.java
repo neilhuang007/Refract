@@ -7,6 +7,8 @@ public class LightInvalidation {
    public final Vector3f pos;
    public BlockLightInfo before;
    public BlockLightInfo after;
+   public int beforeBlockId = -1;
+   public int afterBlockId = -1;
    public int beforeIndex;
    public int afterIndex;
 

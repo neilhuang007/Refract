@@ -103,20 +103,22 @@ function Resolve-GradleInterpolation {
     )
 }
 
-function Get-ShaderGameTestLaunchSettings {
+function Get-LoomRunLaunchSettings {
     param(
         [string]$BuildGradlePath,
-        [string]$RepoRoot
+        [string]$RepoRoot,
+        [string]$RunName
     )
 
     $programArgs = New-Object System.Collections.Generic.List[string]
     $vmArgs = New-Object System.Collections.Generic.List[string]
     $insideBlock = $false
     $braceDepth = 0
+    $runPattern = '^\s*' + [regex]::Escape($RunName) + '\s*\{'
 
     foreach ($line in Get-Content $BuildGradlePath) {
         if (-not $insideBlock) {
-            if ($line -match '^\s*shaderGameTestClient\s*\{') {
+            if ($line -match $runPattern) {
                 $insideBlock = $true
                 $braceDepth = ([regex]::Matches($line, '\{')).Count - ([regex]::Matches($line, '\}')).Count
             }
@@ -136,7 +138,7 @@ function Get-ShaderGameTestLaunchSettings {
     }
 
     if ($programArgs.Count -eq 0 -and $vmArgs.Count -eq 0) {
-        throw "Could not find the shaderGameTestClient run block in '$BuildGradlePath'."
+        throw "Could not find the $RunName run block in '$BuildGradlePath'."
     }
 
     return [PSCustomObject]@{
@@ -206,20 +208,19 @@ switch ($Target) {
     }
 }
 
-$shaderGameTestSettings = $null
+$runSettingsByTask = @{}
+if ($targets -contains "runClient") {
+    $runSettingsByTask["runClient"] = Get-LoomRunLaunchSettings -BuildGradlePath $buildGradle -RepoRoot $repoRoot -RunName "client"
+}
 if ($targets -contains "runShaderGameTestClient") {
-    $shaderGameTestSettings = Get-ShaderGameTestLaunchSettings -BuildGradlePath $buildGradle -RepoRoot $repoRoot
+    $runSettingsByTask["runShaderGameTestClient"] = Get-LoomRunLaunchSettings -BuildGradlePath $buildGradle -RepoRoot $repoRoot -RunName "shaderGameTestClient"
 }
 
 $results = New-Object System.Collections.Generic.List[object]
 foreach ($taskName in $targets) {
-    $additionalVmArgs = @()
-    $programArgs = @()
-
-    if ($taskName -eq "runShaderGameTestClient") {
-        $additionalVmArgs = $shaderGameTestSettings.VmArgs
-        $programArgs = $shaderGameTestSettings.ProgramArgs
-    }
+    $runSettings = $runSettingsByTask[$taskName]
+    $additionalVmArgs = $runSettings.VmArgs
+    $programArgs = $runSettings.ProgramArgs
 
     $argsPath = New-RenderDocArgsFile `
         -TaskName $taskName `
@@ -251,7 +252,7 @@ foreach ($result in $results) {
 }
 $summary.Add("")
 $summary.Add("Notes")
-$summary.Add("- runShaderGameTestClient mirrors the current Fabric Loom shaderGameTestClient block in build.gradle.")
+$summary.Add("- runClient and runShaderGameTestClient mirror the current Fabric Loom run blocks in build.gradle.")
 $summary.Add("- Re-run scripts/renderdoc-launch.ps1 after changing dependencies or Loom run settings.")
 
 Set-Content -Path $summaryPath -Value $summary -Encoding ASCII

@@ -1,6 +1,7 @@
 package at.redi2go.photonic.client.rendering.world;
 
 import at.redi2go.photonic.client.Photonic;
+import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.config.ShaderPackLights;
@@ -14,7 +15,9 @@ import at.redi2go.photonic.client.rendering.opengl.objects.GlTarget;
 import at.redi2go.photonic.client.rendering.util.IrisUtil;
 import at.redi2go.photonic.client.rendering.util.MultiThreader;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
+import at.redi2go.photonic.client.rendering.world.buffer.MemoryManager;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryOwner;
+import at.redi2go.photonic.client.rendering.world.buffer.MemoryRegion;
 import at.redi2go.photonic.client.rendering.world.buffer.SimpleMemoryOwner;
 import at.redi2go.photonic.client.rendering.world.position.LightNodePos;
 import at.redi2go.photonic.client.rendering.world.position.PBlockPos;
@@ -26,13 +29,19 @@ import java.util.AbstractQueue;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.EnumMap;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -52,6 +61,57 @@ import org.joml.Vector3f;
 public class LightRegistry implements Destructable {
    private static final int LIGHT_BYTE_SIZE = 48;
    private static final float MIN_NODE_LUMINANCE = 0.001F;
+   private static final int GRID_CELL_SIZE = 32;
+   private static final int INCREMENTAL_PARALLEL_THRESHOLD = 32;
+   private static final float MIN_TRACED_LIGHT_SELECTION_LUMA = 0.0025F;
+   private static final Comparator<LightInstance> STABLE_LIGHT_ORDER = (a, b) -> {
+      Vector3f pa = a.position();
+      Vector3f pb = b.position();
+      int cmp = Float.compare(pa.x, pb.x);
+      if (cmp != 0) return cmp;
+      cmp = Float.compare(pa.y, pb.y);
+      if (cmp != 0) return cmp;
+      cmp = Float.compare(pa.z, pb.z);
+      if (cmp != 0) return cmp;
+      cmp = Integer.compare(a.blockId(), b.blockId());
+      if (cmp != 0) return cmp;
+      return a.type().compareTo(b.type());
+   };
+   // Dense scenes can have many lights with nearly identical scores; keep the
+   // capped top-N set a bit sticky so tiny camera motion does not reshuffle it.
+   private static final float LIGHT_SELECTION_HISTORY_BONUS = 1.35f;
+
+   private static float selectionScore(LightInstance light, Vector3f cameraPosition, Set<LightInstance> previouslySelected) {
+      float score = light.type().luminanceFrom(light.position(), cameraPosition);
+      if (previouslySelected.contains(light)) {
+         score *= LIGHT_SELECTION_HISTORY_BONUS;
+      }
+      return score;
+   }
+
+   private static int compareLightSelectionOrder(
+      LightInstance a,
+      LightInstance b,
+      Vector3f cameraPosition,
+      Set<LightInstance> previouslySelected
+   ) {
+      float aScore = selectionScore(a, cameraPosition, previouslySelected);
+      float bScore = selectionScore(b, cameraPosition, previouslySelected);
+      int cmp = Float.compare(
+         bScore,
+         aScore
+      );
+      if (cmp != 0) return cmp;
+      return STABLE_LIGHT_ORDER.compare(a, b);
+   }
+
+   private static Vector3f getLightSelectionCameraPosition() {
+      MinecraftClient client = MinecraftClient.getInstance();
+      if (client == null || client.gameRenderer == null || client.gameRenderer.getCamera() == null) {
+         return new Vector3f();
+      }
+      return new Vector3f(MinecraftAccessor.getCameraPosition());
+   }
 
    private static final BlockPos[] NEIGHBORS = {
       new BlockPos(0, 1, 0), new BlockPos(0, -1, 0),
@@ -67,6 +127,10 @@ public class LightRegistry implements Destructable {
    private final MemoryOwner lightsMemory;
    private final GlMemoryManager lightMappingMemoryManager;
    private final MemoryOwner lightMappingMemory;
+   private final GlMemoryManager lightTreeMemoryManager;
+   private final MemoryOwner lightTreeMemory;
+   private final GlMemoryManager lightTreeIndicesMemoryManager;
+   private final MemoryOwner lightTreeIndicesMemory;
    private final int maxLights;
    private final int maxLightsPerNode;
    private final int nodeSize;
@@ -77,8 +141,11 @@ public class LightRegistry implements Destructable {
    private short[] newLightIndices;
    private PBlockPos offset = new PBlockPos(0, 0, 0);
    private int lightCount = 0;
+   private int lightTreeNodeCount = 0;
+   private int lightTreeIndexCount = 0;
    private LightInstance[] tracedLights = new LightInstance[0];
    private final Map<Vector3f, TracedLightPosition> tracedLightPositions = new ConcurrentHashMap<>();
+   private final Set<Long> loadedLightChunks = ConcurrentHashMap.newKeySet();
    private final PhotonicsConfig.Observer<LightList> lightListObserver;
    private LightList lightList = new LightList();
    private final ReadWriteLock lock;
@@ -86,6 +153,12 @@ public class LightRegistry implements Destructable {
    private int compileCount = 0;
    private LightsProvider lightsProvider = null;
    private volatile boolean tracedLightSetDirty = true;
+   private HashMap<Long, List<Integer>> lightGrid;
+   private int lightGridAssignments = 0;
+   private final List<LightNodePos> dirtyNodes = new ArrayList<>();
+   private final LightChurnStats churnStats = new LightChurnStats();
+   private boolean identityLightMappingPending = false;
+   private boolean loggedAutomationLightColors = false;
 
    public LightRegistry(int maxLights, int maxLightsPerNode, int nodeSize, int worldSize, Predicate<PChunkPos> chunkEmptyPredicate, boolean lightBinningEnabled) {
       if (16 % nodeSize != 0) {
@@ -108,6 +181,13 @@ public class LightRegistry implements Destructable {
       this.lightsMemory = new SimpleMemoryOwner(this.lightsMemoryManager, this.lightsMemoryManager.getCapacity());
       this.lightMappingMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list_mapping", maxLights * 4, false);
       this.lightMappingMemory = new SimpleMemoryOwner(this.lightMappingMemoryManager, this.lightMappingMemoryManager.getCapacity());
+      int maxTreeNodes = Math.max(2 * maxLights, 1);
+      int treeByteSize = maxTreeNodes * 16 * Float.BYTES;
+      this.lightTreeMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_tree", treeByteSize, false);
+      this.lightTreeMemory = new SimpleMemoryOwner(this.lightTreeMemoryManager, this.lightTreeMemoryManager.getCapacity());
+      int indexByteSize = Math.max(maxLights, 1) * Integer.BYTES;
+      this.lightTreeIndicesMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_tree_indices", indexByteSize, false);
+      this.lightTreeIndicesMemory = new SimpleMemoryOwner(this.lightTreeIndicesMemoryManager, this.lightTreeIndicesMemoryManager.getCapacity());
       this.lightListObserver = PhotonicsConfig.observe(c -> PhotonicsConfig.getLightList(), c -> {
          this.lightList = c;
          this.registerLightBlocks(this.lightList);
@@ -152,7 +232,7 @@ public class LightRegistry implements Destructable {
       return this.lightCount;
    }
 
-   public void compileRegistry(PBlockPos blockOffset, PBlockPos previousOffset) {
+   public void compileRegistry(PBlockPos blockOffset, PBlockPos previousOffset, boolean forceFullRebuild) {
       if (this.building) {
          throw new IllegalStateException();
       }
@@ -161,44 +241,179 @@ public class LightRegistry implements Destructable {
          return;
       }
       this.building = true;
-      this.offset = blockOffset;
-      this.lock.writeLock().lock();
-      LightInstance[] lights;
+      boolean profiling = PhotonicsStorage.PROFILER_ENABLED.value;
+      long t0 = profiling ? System.nanoTime() : 0;
+      long tGather = t0;
+      long tDiff = t0;
+      long tGrid = t0;
+      long tNodes = t0;
+      long tStore = t0;
+      int previousLightCount = this.tracedLights.length;
+      int dirtyNodesBeforeCompile = this.dirtyNodes.size();
+      boolean offsetChanged = !blockOffset.equals(previousOffset);
+      CompileStats compileStats = profiling ? new CompileStats() : null;
       try {
-         if (++this.compileCount % 10 == 0) {
-            this.compileCount = 0;
-            lights = this.toLightInstanceArrayClearUnloaded(level);
+         this.offset = blockOffset;
+         this.lock.writeLock().lock();
+         LightInstance[] lights;
+         try {
+            if (++this.compileCount % 10 == 0) {
+               this.compileCount = 0;
+               lights = this.toLightInstanceArrayClearUnloaded(level);
+            } else {
+               lights = this.toLightInstanceArray();
+            }
+         } finally {
+            this.lock.writeLock().unlock();
+         }
+         if (profiling) {
+            tGather = System.nanoTime();
+         }
+
+         boolean lightsChanged = this.createTracedLights(lights, previousOffset);
+         if (profiling) {
+            tDiff = System.nanoTime();
+         }
+         if (lightsChanged || this.lightGrid == null) {
+            this.buildSpatialGrid(this.tracedLights);
+         }
+         if (profiling) {
+            tGrid = System.nanoTime();
+         }
+         int nodesQueuedForUpload = 0;
+         int remappedNodes = 0;
+         boolean registryUploadQueued = false;
+         boolean fullRebuild = false;
+         if (this.lightBinningEnabled) {
+             fullRebuild = forceFullRebuild || !blockOffset.equals(previousOffset);
+             short[] sourceLightRegions = this.lightRegions;
+             if (fullRebuild) {
+                short[] tmp = this.lightRegionsPrev;
+                this.lightRegionsPrev = this.lightRegions;
+                this.lightRegions = tmp;
+                sourceLightRegions = this.lightRegionsPrev;
+             }
+             if (fullRebuild) {
+                this.dirtyNodes.clear();
+                final short[] compileSourceLightRegions = sourceLightRegions;
+                MultiThreader.runAndWait(this.nodeCount, x -> {
+                   for (int y = 0; y < this.nodeCount; y++) {
+                     for (int z = 0; z < this.nodeCount; z++) {
+                        LightNodePos lightNodePos = new LightNodePos(x, y, z);
+                         if (this.chunkEmptyPredicate.test(lightNodePos.toBlockPos(this.nodeSize, blockOffset).toChunkPos())) {
+                            if (compileStats != null) {
+                               compileStats.skippedEmptyNodes.increment();
+                            }
+                            continue;
+                         }
+                         boolean copiedFromPrevious = this.compileAndStoreNode(lightNodePos, previousOffset, compileSourceLightRegions, compileStats);
+                         if (compileStats != null) {
+                            compileStats.recordNode(copiedFromPrevious);
+                         }
+                      }
+                   }
+               });
+               this.registryMemoryManager.queueUpload(this.registryMemory);
+               registryUploadQueued = true;
+               nodesQueuedForUpload = compileStats == null ? this.nodeCount * this.nodeCount * this.nodeCount : (int) compileStats.compiledNodes.sum();
+             } else if (lightsChanged) {
+                remappedNodes = this.remapLightIndices();
+                List<LightNodePos> nodesToCompile = new ArrayList<>(this.dirtyNodes);
+                this.dirtyNodes.clear();
+                if (!nodesToCompile.isEmpty()) {
+                   this.compileDirtyNodes(nodesToCompile, previousOffset, sourceLightRegions, compileStats);
+                   this.queueNodeUploads(nodesToCompile);
+                   nodesQueuedForUpload = nodesToCompile.size();
+                }
+             } else {
+                List<LightNodePos> nodesToCompile = new ArrayList<>(this.dirtyNodes);
+                this.dirtyNodes.clear();
+                if (!nodesToCompile.isEmpty()) {
+                   this.compileDirtyNodes(nodesToCompile, previousOffset, sourceLightRegions, compileStats);
+                   this.queueNodeUploads(nodesToCompile);
+                   nodesQueuedForUpload = nodesToCompile.size();
+                }
+             }
+          } else {
+             this.dirtyNodes.clear();
+          }
+         if (profiling) {
+            tNodes = System.nanoTime();
+         }
+
+         boolean identityQueued = false;
+         if (lightsChanged) {
+            this.storeLights();
+            this.storeLightMappings();
+            this.buildLightTree();
+            this.lightsMemoryManager.queueUpload(this.lightsMemory);
+            this.lightMappingMemoryManager.queueUpload(this.lightMappingMemory);
+            this.lightTreeMemoryManager.queueUpload(this.lightTreeMemory);
+            this.lightTreeIndicesMemoryManager.queueUpload(this.lightTreeIndicesMemory);
+            this.identityLightMappingPending = true;
          } else {
-            lights = this.toLightInstanceArray();
+            identityQueued = this.queueIdentityLightMappingsIfNeeded();
+         }
+         if (profiling) {
+            tStore = System.nanoTime();
+            String rebuildReason;
+            if (!this.lightBinningEnabled) {
+               rebuildReason = "binning_disabled";
+            } else if (!fullRebuild) {
+               rebuildReason = "dirty_nodes";
+            } else if (forceFullRebuild) {
+               rebuildReason = "topology";
+            } else if (offsetChanged) {
+               rebuildReason = "offset";
+            } else if (lightsChanged) {
+               rebuildReason = "lights";
+            } else {
+               rebuildReason = "unknown";
+            }
+            long totalMs = (tStore - t0) / 1_000_000L;
+            long gatherMs = (tGather - t0) / 1_000_000L;
+            long diffMs = (tDiff - tGather) / 1_000_000L;
+            long gridMs = (tGrid - tDiff) / 1_000_000L;
+            long nodesMs = (tNodes - tGrid) / 1_000_000L;
+            long storeMs = (tStore - tNodes) / 1_000_000L;
+            long candidateLists = compileStats.candidateLists.sum();
+            long candidateChecks = compileStats.candidateChecks.sum();
+            long avgCandidates = candidateLists == 0 ? 0 : candidateChecks / candidateLists;
+            Photonic.info(
+               "[Profiler] lightRegistry: mode={} reason={} prevLights={} gatheredLights={} tracedLights={} changed={} offsetChanged={} dirtyNodes={} compiledNodes={} copiedNodes={} rebuiltNodes={} skippedEmpty={} nodeUploads={} remappedNodes={} gridCells={} gridAssignments={} avgCandidates={} churn={} uploads(registry={},lights={},mapping={},identity={}) timings: gather={}ms diff={}ms grid={}ms nodes={}ms store={}ms total={}ms",
+               fullRebuild ? "full" : "incremental",
+               rebuildReason,
+               previousLightCount,
+               lights.length,
+               this.tracedLights.length,
+               lightsChanged,
+               offsetChanged,
+               dirtyNodesBeforeCompile,
+               compileStats.compiledNodes.sum(),
+               compileStats.copiedNodes.sum(),
+               compileStats.rebuiltNodes.sum(),
+               compileStats.skippedEmptyNodes.sum(),
+               nodesQueuedForUpload,
+               remappedNodes,
+               this.lightGrid == null ? 0 : this.lightGrid.size(),
+               this.lightGridAssignments,
+               avgCandidates,
+               this.describeRecentChurn(),
+               registryUploadQueued,
+               lightsChanged,
+               lightsChanged,
+               identityQueued,
+               gatherMs,
+               diffMs,
+               gridMs,
+               nodesMs,
+               storeMs,
+               totalMs
+            );
          }
       } finally {
-         this.lock.writeLock().unlock();
+         this.building = false;
       }
-
-      boolean lightsChanged = this.createTracedLights(lights, previousOffset);
-      short[] tmp = this.lightRegionsPrev;
-      this.lightRegionsPrev = this.lightRegions;
-      this.lightRegions = tmp;
-
-      if (lightsChanged || !blockOffset.equals(previousOffset)) {
-         boolean fullRebuild = !blockOffset.equals(previousOffset);
-         MultiThreader.runAndWait(this.nodeCount, x -> {
-            for (int y = 0; y < this.nodeCount; y++) {
-               for (int z = 0; z < this.nodeCount; z++) {
-                  LightNodePos lightNodePos = new LightNodePos(x, y, z);
-                  if (this.chunkEmptyPredicate.test(lightNodePos.toBlockPos(this.nodeSize, blockOffset).toChunkPos())) {
-                     continue;
-                  }
-                  this.compileAndStoreNode(lightNodePos, previousOffset);
-               }
-            }
-         });
-      }
-
-      this.storeLights();
-      this.registryMemoryManager.queueUpload(this.registryMemory);
-      this.lightsMemoryManager.queueUpload(this.lightsMemory);
-      this.building = false;
    }
 
    private int toLightIndex(int x, int y, int z) {
@@ -216,33 +431,57 @@ public class LightRegistry implements Destructable {
       start.sub(radius);
       end.add(radius);
 
-      for (int x = start.x; x <= end.x; x++) {
-         for (int y = start.y; y <= end.y; y++) {
-            for (int z = start.z; z <= end.z; z++) {
+      for (int x = Math.max(0, start.x); x <= Math.min(this.nodeCount - 1, end.x); x++) {
+         for (int y = Math.max(0, start.y); y <= Math.min(this.nodeCount - 1, end.y); y++) {
+            for (int z = Math.max(0, start.z); z <= Math.min(this.nodeCount - 1, end.z); z++) {
                int index = this.toLightIndex(x, y, z);
                if (index >= 0 && index < this.lightRegions.length) {
-                  this.lightRegions[index] = (short) (this.lightRegions[index] & 32767);
+                  if ((this.lightRegions[index] & -32768) != 0) {
+                     this.lightRegions[index] = (short) (this.lightRegions[index] & 32767);
+                     this.dirtyNodes.add(new LightNodePos(x, y, z));
+                  }
                }
             }
          }
       }
    }
 
-   private boolean compileAndStoreNode(LightNodePos pos, PBlockPos previousOffset) {
+   private void compileDirtyNodes(List<LightNodePos> nodesToCompile, PBlockPos previousOffset, short[] sourceLightRegions, CompileStats compileStats) {
+      if (nodesToCompile.size() < INCREMENTAL_PARALLEL_THRESHOLD) {
+         for (LightNodePos lightNodePos : nodesToCompile) {
+            boolean copiedFromPrevious = this.compileAndStoreNode(lightNodePos, previousOffset, sourceLightRegions, compileStats);
+            if (compileStats != null) {
+               compileStats.recordNode(copiedFromPrevious);
+            }
+         }
+         return;
+      }
+
+      PBlockPos finalOffset = previousOffset;
+      MultiThreader.runAndWait(nodesToCompile.size(), i -> {
+         LightNodePos lightNodePos = nodesToCompile.get(i);
+         boolean copiedFromPrevious = this.compileAndStoreNode(lightNodePos, finalOffset, sourceLightRegions, compileStats);
+         if (compileStats != null) {
+            compileStats.recordNode(copiedFromPrevious);
+         }
+      });
+   }
+
+   private boolean compileAndStoreNode(LightNodePos pos, PBlockPos previousOffset, short[] sourceLightRegions, CompileStats compileStats) {
       PBlockPos blockPos = pos.toBlockPos(this.nodeSize, this.offset);
       IntBuffer buffer = this.registryMemory.getMemory().getBuffer().asIntBuffer();
       int curIndex = this.toLightIndex(pos);
       LightNodePos prevLightPos = blockPos.toLightPos(this.nodeSize, previousOffset);
       int prevIndex = this.toLightIndex(prevLightPos);
 
-      if (prevIndex >= 0 && prevIndex < this.lightRegions.length) {
-         short count = this.lightRegionsPrev[prevIndex];
+      if (prevIndex >= 0 && prevIndex < sourceLightRegions.length) {
+         short count = sourceLightRegions[prevIndex];
          if ((count & -32768) != 0) {
             int length = count & 32767;
             buffer.put(curIndex, length);
             this.lightRegions[curIndex] = count;
             for (int i = 1; i <= length; i++) {
-               short light = this.lightRegionsPrev[prevIndex + i];
+               short light = sourceLightRegions[prevIndex + i];
                light = this.newLightIndices[light];
                buffer.put(curIndex + i, light);
                this.lightRegions[curIndex + i] = light;
@@ -261,13 +500,25 @@ public class LightRegistry implements Destructable {
          this.maxLightsPerNode, compareWithCache(luminanceCache)
       );
 
-      for (LightInstance light : this.tracedLights) {
-         float luminance = light.type().luminanceFrom(light.position(), middleBlockPos);
-         luminanceCache[light.index()] = luminance;
-         if (!(luminance < MIN_NODE_LUMINANCE)) {
-            sortedLights.add(light);
-            if (sortedLights.size() > this.maxLightsPerNode) {
-               sortedLights.poll();
+      int gx = (int) Math.floor(middleBlockPos.x / GRID_CELL_SIZE);
+      int gy = (int) Math.floor(middleBlockPos.y / GRID_CELL_SIZE);
+      int gz = (int) Math.floor(middleBlockPos.z / GRID_CELL_SIZE);
+      List<Integer> candidates = this.lightGrid != null ? this.lightGrid.get(gridKey(gx, gy, gz)) : null;
+      if (compileStats != null && candidates != null) {
+         compileStats.candidateLists.increment();
+         compileStats.candidateChecks.add(candidates.size());
+      }
+
+      if (candidates != null) {
+         for (int idx : candidates) {
+            LightInstance light = this.tracedLights[idx];
+            float luminance = light.type().luminanceFrom(light.position(), middleBlockPos);
+            luminanceCache[light.index()] = luminance;
+            if (!(luminance < MIN_NODE_LUMINANCE)) {
+               sortedLights.add(light);
+               if (sortedLights.size() > this.maxLightsPerNode) {
+                  sortedLights.poll();
+               }
             }
          }
       }
@@ -285,28 +536,181 @@ public class LightRegistry implements Destructable {
 
    private void storeLights() {
       FloatBuffer buffer = this.lightsMemory.getMemory().getBuffer().asFloatBuffer();
+      Vector3f colorSum = Photonic.automationEnabled() && !this.loggedAutomationLightColors ? new Vector3f() : null;
+      StringBuilder sampleLights = Photonic.automationEnabled() && !this.loggedAutomationLightColors ? new StringBuilder() : null;
+      int sampledLights = 0;
       for (LightInstance light : this.tracedLights) {
          buffer.position(12 * light.index());
          BlockLightInfo lightInfo = light.type();
+         Vector3f rawColor = lightInfo.getRawColorAsVector();
+         float lightIntensity = lightInfo.adjustedIntensity();
          store(light.position(), buffer);
          buffer.put(Float.intBitsToFloat(light.blockId()));
-         store(lightInfo.getColorAsVector(), buffer);
-         buffer.put(lightInfo.intensity() / 100.0F);
+         store(rawColor, buffer);
+         buffer.put(lightIntensity);
          store(lightInfo.getAttenuationAsVector(), buffer);
          buffer.put(lightInfo.falloff());
          buffer.put(lightInfo.radiusInBlocks());
+
+         if (colorSum != null) {
+            colorSum.add(rawColor.x * lightIntensity, rawColor.y * lightIntensity, rawColor.z * lightIntensity);
+            if (sampledLights < 5) {
+               sampleLights.append(" idx=")
+                  .append(light.index())
+                  .append(" blockId=")
+                  .append(light.blockId())
+                  .append(" pos=")
+                  .append(light.position())
+                  .append(" color=")
+                  .append(rawColor)
+                  .append(" intensity=")
+                  .append(lightIntensity);
+               sampledLights++;
+            }
+         }
+      }
+
+      if (colorSum != null && this.tracedLights.length > 0) {
+         colorSum.div((float) this.tracedLights.length);
+         this.loggedAutomationLightColors = true;
+         Photonic.info(
+            "[LightRegistryDebug] uploadedLights={} meanColor={}{}",
+            this.tracedLights.length,
+            colorSum,
+            sampleLights == null || sampleLights.isEmpty() ? "" : sampleLights.toString()
+         );
       }
    }
 
-   private boolean createTracedLights(LightInstance[] lights, PBlockPos previousOffset) {
-      Arrays.fill(this.newLightIndices, (short) 0);
-      if (lights.length > this.maxLights) {
-         Vector3f cameraPosition = new Vector3f(MinecraftAccessor.getCameraPosition());
-         Arrays.sort(lights, Comparator.comparingDouble(l -> -l.type().luminanceFrom(l.position(), cameraPosition)));
-         lights = Arrays.copyOf(lights, this.maxLights);
+   private void storeLightMappings() {
+      IntBuffer buffer = this.lightMappingMemory.getMemory().getBuffer().asIntBuffer();
+      for (int i = 0; i < this.maxLights; i++) {
+         buffer.put(i, this.newLightIndices[i]);
+      }
+   }
+
+   private void storeIdentityLightMappings() {
+      IntBuffer buffer = this.lightMappingMemory.getMemory().getBuffer().asIntBuffer();
+      for (int i = 0; i < this.maxLights; i++) {
+         buffer.put(i, i);
+      }
+   }
+
+   private void buildLightTree() {
+      this.lightTreeNodeCount = 0;
+      this.lightTreeIndexCount = 0;
+      if (this.tracedLights.length == 0) {
+         return;
       }
 
+      LightTreeBuilder builder = new LightTreeBuilder(this.tracedLights);
+      this.lightTreeNodeCount = builder.build();
+      this.lightTreeIndexCount = builder.getLeafIndexCount();
+      if (this.lightTreeNodeCount == 0) {
+         return;
+      }
+
+      this.storeLightTreeNodes(builder);
+      this.storeLightTreeIndices(builder);
+   }
+
+   private void storeLightTreeNodes(LightTreeBuilder builder) {
+      this.validateLightTreeCapacity(builder.getNodeDataLength() * Float.BYTES, this.lightTreeMemoryManager.getCapacity(), "node");
+      FloatBuffer buffer = this.lightTreeMemory.getMemory().getBuffer().asFloatBuffer();
+      int floatCount = builder.getNodeDataLength();
+      for (int i = 0; i < floatCount; i++) {
+         buffer.put(i, builder.getNodeData()[i]);
+      }
+   }
+
+   private void storeLightTreeIndices(LightTreeBuilder builder) {
+      this.validateLightTreeCapacity(builder.getLeafIndexCount() * Integer.BYTES, this.lightTreeIndicesMemoryManager.getCapacity(), "index");
+      IntBuffer buffer = this.lightTreeIndicesMemory.getMemory().getBuffer().asIntBuffer();
+      int indexCount = builder.getLeafIndexCount();
+      for (int i = 0; i < indexCount; i++) {
+         buffer.put(i, builder.getLeafIndices()[i]);
+      }
+   }
+
+   private void validateLightTreeCapacity(int requiredBytes, int availableBytes, String bufferName) {
+      if (requiredBytes <= availableBytes) {
+         return;
+      }
+      throw new IllegalStateException(
+         "Preallocated light tree " + bufferName + " buffer is too small: required=" + requiredBytes + ", available=" + availableBytes
+      );
+   }
+
+   private int remapLightIndices() {
+      IntBuffer buffer = this.registryMemory.getMemory().getBuffer().asIntBuffer();
+      int stride = 1 + this.maxLightsPerNode;
+      int remappedNodes = 0;
+      for (int i = 0; i < this.lightRegions.length; i += stride) {
+         short count = this.lightRegions[i];
+         if ((count & -32768) != 0) {
+            int length = count & 32767;
+            boolean nodeChanged = false;
+            for (int j = 1; j <= length; j++) {
+               short oldIdx = this.lightRegions[i + j];
+               short newIdx = this.newLightIndices[oldIdx];
+               if (oldIdx != newIdx) {
+                  this.lightRegions[i + j] = newIdx;
+                  buffer.put(i + j, newIdx);
+                  nodeChanged = true;
+               }
+            }
+            if (nodeChanged) {
+               remappedNodes++;
+               MemoryRegion slice = this.registryMemory.getMemory().slice(i * Integer.BYTES, stride * Integer.BYTES);
+               this.registryMemoryManager.queueUpload(new SliceUpload(slice));
+            }
+         }
+      }
+      return remappedNodes;
+   }
+
+   private void queueNodeUploads(List<LightNodePos> nodesToCompile) {
+      for (LightNodePos lightNodePos : nodesToCompile) {
+         int begin = this.toLightIndex(lightNodePos) * Integer.BYTES;
+         int byteSize = (1 + this.maxLightsPerNode) * Integer.BYTES;
+         MemoryRegion slice = this.registryMemory.getMemory().slice(begin, byteSize);
+         this.registryMemoryManager.queueUpload(new SliceUpload(slice));
+      }
+   }
+
+   boolean queueIdentityLightMappingsIfNeeded() {
+      if (!this.identityLightMappingPending) {
+         return false;
+      }
+      this.storeIdentityLightMappings();
+      this.lightMappingMemoryManager.queueUpload(this.lightMappingMemory);
+      this.identityLightMappingPending = false;
+      return true;
+   }
+
+   private boolean createTracedLights(LightInstance[] lights, PBlockPos previousOffset) {
+      Arrays.fill(this.newLightIndices, (short) -1);
       LightInstance[] prevLights = this.tracedLights;
+      LightChurnStats.Frame frameStats = this.churnStats.beginFrame(prevLights.length, lights.length);
+      Vector3f cameraPosition = getLightSelectionCameraPosition();
+      Set<LightInstance> previouslySelected = new HashSet<>(Arrays.asList(prevLights));
+      if (lights.length > 0) {
+         List<LightInstance> filteredLights = new ArrayList<>(lights.length);
+         for (LightInstance light : lights) {
+            float score = selectionScore(light, cameraPosition, previouslySelected);
+            if (score >= MIN_TRACED_LIGHT_SELECTION_LUMA || previouslySelected.contains(light)) {
+               filteredLights.add(light);
+            }
+         }
+         if (!filteredLights.isEmpty()) {
+            lights = filteredLights.toArray(LightInstance[]::new);
+         }
+      }
+      if (lights.length > this.maxLights) {
+         Arrays.sort(lights, (a, b) -> compareLightSelectionOrder(a, b, cameraPosition, previouslySelected));
+         lights = Arrays.copyOf(lights, this.maxLights);
+         Arrays.sort(lights, STABLE_LIGHT_ORDER);
+      }
       Object2ObjectOpenHashMap<Vector3f, LightInvalidation> differences = new Object2ObjectOpenHashMap<>(
          Math.max(lights.length, prevLights.length)
       );
@@ -315,6 +719,7 @@ public class LightRegistry implements Destructable {
          LightInstance light = prevLights[i];
          LightInvalidation diff = differences.computeIfAbsent(light.position(), LightInvalidation::new);
          diff.before = light.type();
+         diff.beforeBlockId = light.blockId();
          diff.beforeIndex = i;
       }
 
@@ -322,6 +727,7 @@ public class LightRegistry implements Destructable {
          LightInstance light = lights[i];
          LightInvalidation diff = differences.computeIfAbsent(light.position(), LightInvalidation::new);
          diff.after = light.type();
+         diff.afterBlockId = light.blockId();
          diff.afterIndex = i;
          light.setIndex(i);
       }
@@ -333,10 +739,20 @@ public class LightRegistry implements Destructable {
          int beforeIndex = diff.beforeIndex;
          BlockLightInfo after = diff.after;
          int afterIndex = diff.afterIndex;
-         if (before == after) {
+         if (before == after && diff.beforeBlockId == diff.afterBlockId) {
             this.newLightIndices[beforeIndex] = (short) afterIndex;
+            frameStats.stableMappings++;
          } else {
             anyDirty = true;
+            if (before == null) {
+               frameStats.additions++;
+            } else if (after == null) {
+               frameStats.removals++;
+            } else if (diff.beforeBlockId != diff.afterBlockId) {
+               frameStats.blockIdChanges++;
+            } else {
+               frameStats.lightInfoChanges++;
+            }
             float radius = 0.0F;
             if (before != null) radius = before.radiusInBlocks();
             if (after != null) radius = Math.max(radius, after.radiusInBlocks());
@@ -348,20 +764,13 @@ public class LightRegistry implements Destructable {
       return anyDirty;
    }
 
-   public void clearLightMappings() {
-      java.nio.IntBuffer buffer = this.lightMappingMemory.getMemory().getBuffer().asIntBuffer();
-      for (int i = 0; i < this.maxLights; i++) {
-         buffer.put(i, i);
-      }
-      this.lightMappingMemoryManager.queueUpload(this.lightMappingMemory);
-      this.lightMappingMemoryManager.upload();
-   }
-
    public boolean upload() {
       boolean uploadDone = true;
       uploadDone &= this.registryMemoryManager.upload();
       uploadDone &= this.lightsMemoryManager.upload();
       uploadDone &= this.lightMappingMemoryManager.upload();
+      uploadDone &= this.lightTreeMemoryManager.upload();
+      uploadDone &= this.lightTreeIndicesMemoryManager.upload();
       this.lightCount = this.tracedLights.length;
       return uploadDone;
    }
@@ -397,29 +806,61 @@ public class LightRegistry implements Destructable {
    }
 
    public void onBlockLoad(Vector3f position) {
-      ClientWorld level = MinecraftAccessor.getLevel();
-      if (level == null) {
-         return;
+      this.lock.writeLock().lock();
+      try {
+         ClientWorld level = MinecraftAccessor.getLevel();
+         if (level == null) {
+            return;
+         }
+         BlockPos blockPos = new BlockPos((int) position.x, (int) position.y, (int) position.z);
+         this.syncTracedLight(level, blockPos, level.getBlockState(blockPos));
+      } finally {
+         this.lock.writeLock().unlock();
       }
-      BlockPos blockPos = new BlockPos((int) position.x, (int) position.y, (int) position.z);
-      BlockState blockState = level.getBlockState(blockPos);
-      BlockLightInfo lightInfo = this.lightList.get(blockState);
-      if (lightInfo == null) {
-         Vector3f lightPos = new Vector3f(position).add(0.5F, 0.5F, 0.5F);
-         if (this.tracedLightPositions.remove(lightPos) != null) {
+   }
+
+   public void synchronizeChunkLights(ClientWorld level, PChunkPos chunkPos) {
+      this.lock.writeLock().lock();
+      try {
+         this.loadedLightChunks.add(chunkKey(chunkPos));
+         PBlockPos chunkMin = chunkPos.toBlockPos();
+         BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
+         for (int x = 0; x < 16; x++) {
+            for (int y = 0; y < 16; y++) {
+               for (int z = 0; z < 16; z++) {
+                  mutableBlockPos.set(chunkMin.x + x, chunkMin.y + y, chunkMin.z + z);
+                  this.syncTracedLight(level, mutableBlockPos, level.getBlockState(mutableBlockPos));
+               }
+            }
+         }
+      } finally {
+         this.lock.writeLock().unlock();
+      }
+   }
+
+   public void clearChunkLights(PChunkPos chunkPos) {
+      this.lock.writeLock().lock();
+      try {
+         this.loadedLightChunks.remove(chunkKey(chunkPos));
+         PBlockPos chunkMin = chunkPos.toBlockPos();
+         int maxX = chunkMin.x + 16;
+         int maxY = chunkMin.y + 16;
+         int maxZ = chunkMin.z + 16;
+         boolean removed = false;
+         Iterator<Entry<Vector3f, TracedLightPosition>> itr = this.tracedLightPositions.entrySet().iterator();
+         while (itr.hasNext()) {
+            Entry<Vector3f, TracedLightPosition> entry = itr.next();
+            Vector3f pos = entry.getKey();
+            if (pos.x >= chunkMin.x && pos.x < maxX && pos.y >= chunkMin.y && pos.y < maxY && pos.z >= chunkMin.z && pos.z < maxZ) {
+               itr.remove();
+               removed = true;
+            }
+         }
+         if (removed) {
             this.tracedLightSetDirty = true;
          }
-         return;
-      }
-      Vector3f lightPos = new Vector3f(position).add(0.5F, 0.5F, 0.5F);
-      if (lightInfo.isTraced() && !shouldCull(level, blockPos)) {
-         int blockId = IrisUtil.getBlockId(blockState);
-         TracedLightPosition previous = this.tracedLightPositions.put(lightPos, new TracedLightPosition(blockId, lightInfo));
-         if (previous == null || previous.blockId() != blockId || previous.lightInfo() != lightInfo) {
-            this.tracedLightSetDirty = true;
-         }
-      } else if (this.tracedLightPositions.remove(lightPos) != null) {
-         this.tracedLightSetDirty = true;
+      } finally {
+         this.lock.writeLock().unlock();
       }
    }
 
@@ -445,13 +886,29 @@ public class LightRegistry implements Destructable {
       return this.lightMappingMemoryManager;
    }
 
+   public GlMemoryManager getLightTreeMemoryManager() {
+      return this.lightTreeMemoryManager;
+   }
+
+   public GlMemoryManager getLightTreeIndicesMemoryManager() {
+      return this.lightTreeIndicesMemoryManager;
+   }
+
+   public int getLightTreeNodeCount() {
+      return this.lightTreeNodeCount;
+   }
+
+   public int getLightTreeIndexCount() {
+      return this.lightTreeIndexCount;
+   }
+
    private LightInstance[] toLightInstanceArray() {
-      LightInstance[] lights = new LightInstance[this.tracedLightPositions.size()];
-      int i = 0;
+      List<LightInstance> lights = new ArrayList<>(this.tracedLightPositions.size());
       for (Entry<Vector3f, TracedLightPosition> e : this.tracedLightPositions.entrySet()) {
-         lights[i++] = new LightInstance(e.getValue().blockId(), e.getKey(), e.getValue().lightInfo());
+         lights.add(new LightInstance(e.getValue().blockId(), e.getKey(), e.getValue().lightInfo()));
       }
-      return lights;
+      lights.sort(STABLE_LIGHT_ORDER);
+      return lights.toArray(LightInstance[]::new);
    }
 
    private LightInstance[] toLightInstanceArrayClearUnloaded(ClientWorld level) {
@@ -462,13 +919,14 @@ public class LightRegistry implements Destructable {
          Vector3f pos = e.getKey();
          TracedLightPosition tracedPos = e.getValue();
          BlockPos blockPos = new BlockPos((int) pos.x, (int) pos.y, (int) pos.z);
-         if (!level.isChunkLoaded(blockPos)) {
+         if (!this.isTrackedChunkLoaded(blockPos) || !level.isChunkLoaded(blockPos)) {
             itr.remove();
             this.tracedLightSetDirty = true;
          } else {
             lights.add(new LightInstance(tracedPos.blockId(), pos, tracedPos.lightInfo()));
          }
       }
+      lights.sort(STABLE_LIGHT_ORDER);
       return lights.toArray(LightInstance[]::new);
    }
 
@@ -477,6 +935,8 @@ public class LightRegistry implements Destructable {
       this.lightsMemoryManager.free();
       this.registryMemoryManager.free();
       this.lightMappingMemoryManager.free();
+      this.lightTreeMemoryManager.free();
+      this.lightTreeIndicesMemoryManager.free();
       this.lightListObserver.unregister();
       if (this.lightsProvider != null) {
          PhotonicsConfig.removeLightProvider(this.lightsProvider);
@@ -498,6 +958,361 @@ public class LightRegistry implements Destructable {
       return (e1, e2) -> Float.compare(luminanceCache[e1.index()], luminanceCache[e2.index()]);
    }
 
+   private void syncTracedLight(ClientWorld level, BlockPos blockPos, BlockState blockState) {
+      BlockLightInfo lightInfo = this.lightList.get(blockState);
+      Vector3f lightPos = new Vector3f(blockPos.getX() + 0.5F, blockPos.getY() + 0.5F, blockPos.getZ() + 0.5F);
+      TracedLightPosition previous = this.tracedLightPositions.get(lightPos);
+      if (lightInfo == null) {
+         if (previous != null && this.isTrackedChunkLoaded(blockPos) && this.tracedLightPositions.remove(lightPos, previous)) {
+            this.noteTracedLightMutation(DirtyReason.REMOVED_NO_LIGHT, blockPos, previous, null);
+         }
+         return;
+      }
+
+      boolean tracedVisible = lightInfo.isTraced() && !shouldCull(level, blockPos);
+      if (!tracedVisible) {
+         if (previous != null && this.tracedLightPositions.remove(lightPos, previous)) {
+            this.noteTracedLightMutation(lightInfo.isTraced() ? DirtyReason.CULLED : DirtyReason.REMOVED_NO_LIGHT, blockPos, previous, null);
+         }
+         return;
+      }
+
+      int blockId = IrisUtil.getBlockId(blockState);
+      TracedLightPosition updated = new TracedLightPosition(blockId, lightInfo);
+      if (previous == null) {
+         TracedLightPosition raced = this.tracedLightPositions.putIfAbsent(lightPos, updated);
+         if (raced == null) {
+            this.noteTracedLightMutation(DirtyReason.ADDED, blockPos, null, updated);
+            return;
+         }
+         previous = raced;
+      }
+
+      if (previous.blockId() == blockId && previous.lightInfo() == lightInfo) {
+         this.churnStats.noteNoopSync();
+         return;
+      }
+
+      if (this.tracedLightPositions.replace(lightPos, previous, updated)) {
+         DirtyReason reason = previous.blockId() != blockId ? DirtyReason.BLOCK_ID_CHANGED : DirtyReason.LIGHT_INFO_CHANGED;
+         this.noteTracedLightMutation(reason, blockPos, previous, updated);
+      }
+   }
+
+   private static long gridKey(int gx, int gy, int gz) {
+      return ((long) gx & 0xFFFFF) | (((long) gy & 0xFFFFF) << 20) | (((long) gz & 0xFFFFF) << 40);
+   }
+
+   private void noteTracedLightMutation(DirtyReason reason, BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
+      this.tracedLightSetDirty = true;
+      this.churnStats.noteMutation(reason, blockPos, previous, updated);
+   }
+
+   private static long chunkKey(int chunkX, int chunkY, int chunkZ) {
+      return (((long) chunkX) & 0x1FFFFFL)
+         | ((((long) chunkY) & 0x1FFFFFL) << 21)
+         | ((((long) chunkZ) & 0x1FFFFFL) << 42);
+   }
+
+   private static long chunkKey(PChunkPos chunkPos) {
+      return chunkKey(chunkPos.x, chunkPos.y, chunkPos.z);
+   }
+
+   private static long chunkKey(BlockPos blockPos) {
+      return chunkKey(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
+   }
+
+   private boolean isTrackedChunkLoaded(BlockPos blockPos) {
+      return this.loadedLightChunks.contains(chunkKey(blockPos));
+   }
+
+   public String describeRecentChurn() {
+      return this.churnStats.describe();
+   }
+
+   private void buildSpatialGrid(LightInstance[] lights) {
+      this.lightGrid = new HashMap<>(lights.length * 4);
+      this.lightGridAssignments = 0;
+      for (int i = 0; i < lights.length; i++) {
+         LightInstance light = lights[i];
+         Vector3f pos = light.position();
+         float radius = light.type().radiusInBlocks();
+         int minGx = (int) Math.floor((pos.x - radius) / GRID_CELL_SIZE);
+         int minGy = (int) Math.floor((pos.y - radius) / GRID_CELL_SIZE);
+         int minGz = (int) Math.floor((pos.z - radius) / GRID_CELL_SIZE);
+         int maxGx = (int) Math.floor((pos.x + radius) / GRID_CELL_SIZE);
+         int maxGy = (int) Math.floor((pos.y + radius) / GRID_CELL_SIZE);
+         int maxGz = (int) Math.floor((pos.z + radius) / GRID_CELL_SIZE);
+         for (int gx = minGx; gx <= maxGx; gx++) {
+            for (int gy = minGy; gy <= maxGy; gy++) {
+               for (int gz = minGz; gz <= maxGz; gz++) {
+                  this.lightGrid.computeIfAbsent(gridKey(gx, gy, gz), k -> new ArrayList<>(8)).add(i);
+                  this.lightGridAssignments++;
+               }
+            }
+         }
+      }
+   }
+
+   private static final class LightTreeBuilder {
+      private static final int nodeFloatSize = 16;
+      private static final int maxLeafLights = 4;
+      private static final float luminanceRed = 0.2126F;
+      private static final float luminanceGreen = 0.7152F;
+      private static final float luminanceBlue = 0.0722F;
+      private final LightInstance[] lights;
+      private final int[] indices;
+      private final float[] nodeData;
+      private final int[] leafIndices;
+      private int nodeCount;
+      private int leafIndexCount;
+
+      private LightTreeBuilder(LightInstance[] lights) {
+         this.lights = lights;
+         this.indices = new int[lights.length];
+         for (int i = 0; i < lights.length; i++) {
+            this.indices[i] = i;
+         }
+         int maxNodeCount = Math.max(2 * lights.length, 1);
+         this.nodeData = new float[maxNodeCount * nodeFloatSize];
+         this.leafIndices = new int[lights.length];
+      }
+
+      private int build() {
+         this.nodeCount = 0;
+         this.leafIndexCount = 0;
+         if (this.lights.length == 0) {
+            return 0;
+         }
+         this.buildRecursive(0, this.lights.length, 0);
+         return this.nodeCount;
+      }
+
+      private int buildRecursive(int start, int end, int depth) {
+         int nodeIndex = this.nodeCount++;
+         int count = end - start;
+         NodeBounds bounds = this.calculateNodeBounds(start, end);
+         int offset = nodeIndex * nodeFloatSize;
+         this.storeNodeBounds(offset, bounds, depth);
+         if (count <= maxLeafLights) {
+            this.storeLeaf(offset, start, count);
+            return nodeIndex;
+         }
+
+         int axis = selectSplitAxis(bounds);
+         float splitPos = bounds.getMidpoint(axis);
+         int mid = this.partition(start, end, axis, splitPos);
+         if (mid == start || mid == end) {
+            mid = (start + end) >>> 1;
+         }
+
+         this.nodeData[offset + 12] = Float.intBitsToFloat(-1);
+         this.nodeData[offset + 13] = Float.intBitsToFloat(0);
+         int leftChild = this.buildRecursive(start, mid, depth + 1);
+         int rightChild = this.buildRecursive(mid, end, depth + 1);
+         this.nodeData[offset + 3] = Float.intBitsToFloat(leftChild);
+         this.nodeData[offset + 7] = Float.intBitsToFloat(rightChild);
+         return nodeIndex;
+      }
+
+      private NodeBounds calculateNodeBounds(int start, int end) {
+         float minX = Float.MAX_VALUE;
+         float minY = Float.MAX_VALUE;
+         float minZ = Float.MAX_VALUE;
+         float maxX = -Float.MAX_VALUE;
+         float maxY = -Float.MAX_VALUE;
+         float maxZ = -Float.MAX_VALUE;
+         float fluxR = 0.0F;
+         float fluxG = 0.0F;
+         float fluxB = 0.0F;
+         float totalIntensity = 0.0F;
+         for (int i = start; i < end; i++) {
+            LightInstance light = this.lights[this.indices[i]];
+            Vector3f pos = light.position();
+            float radius = light.type().radiusInBlocks();
+            minX = Math.min(minX, pos.x - radius);
+            minY = Math.min(minY, pos.y - radius);
+            minZ = Math.min(minZ, pos.z - radius);
+            maxX = Math.max(maxX, pos.x + radius);
+            maxY = Math.max(maxY, pos.y + radius);
+            maxZ = Math.max(maxZ, pos.z + radius);
+            Vector3f rawColor = light.type().getRawColorAsVector();
+            float lightIntensity = light.type().adjustedIntensity();
+            fluxR += rawColor.x * lightIntensity;
+            fluxG += rawColor.y * lightIntensity;
+            fluxB += rawColor.z * lightIntensity;
+            totalIntensity += (rawColor.x * luminanceRed + rawColor.y * luminanceGreen + rawColor.z * luminanceBlue) * lightIntensity;
+         }
+         return new NodeBounds(minX, minY, minZ, maxX, maxY, maxZ, fluxR, fluxG, fluxB, totalIntensity);
+      }
+
+      private void storeNodeBounds(int offset, NodeBounds bounds, int depth) {
+         this.nodeData[offset] = bounds.minX;
+         this.nodeData[offset + 1] = bounds.minY;
+         this.nodeData[offset + 2] = bounds.minZ;
+         this.nodeData[offset + 3] = Float.intBitsToFloat(-1);
+         this.nodeData[offset + 4] = bounds.maxX;
+         this.nodeData[offset + 5] = bounds.maxY;
+         this.nodeData[offset + 6] = bounds.maxZ;
+         this.nodeData[offset + 7] = Float.intBitsToFloat(-1);
+         this.nodeData[offset + 8] = bounds.fluxR;
+         this.nodeData[offset + 9] = bounds.fluxG;
+         this.nodeData[offset + 10] = bounds.fluxB;
+         this.nodeData[offset + 11] = bounds.totalIntensity;
+         this.nodeData[offset + 14] = Float.intBitsToFloat(depth);
+         this.nodeData[offset + 15] = 0.0F;
+      }
+
+      private void storeLeaf(int offset, int start, int count) {
+         int leafStart = this.leafIndexCount;
+         for (int i = 0; i < count; i++) {
+            LightInstance light = this.lights[this.indices[start + i]];
+            this.leafIndices[this.leafIndexCount++] = light.index();
+         }
+         this.nodeData[offset + 12] = Float.intBitsToFloat(leafStart);
+         this.nodeData[offset + 13] = Float.intBitsToFloat(count);
+      }
+
+      private int partition(int start, int end, int axis, float splitPos) {
+         int i = start;
+         int j = end - 1;
+         while (i <= j) {
+            float axisValue = getAxisValue(this.lights[this.indices[i]].position(), axis);
+            if (axisValue < splitPos) {
+               i++;
+               continue;
+            }
+            int tmp = this.indices[i];
+            this.indices[i] = this.indices[j];
+            this.indices[j] = tmp;
+            j--;
+         }
+         return i;
+      }
+
+      private static int selectSplitAxis(NodeBounds bounds) {
+         float extentX = bounds.maxX - bounds.minX;
+         float extentY = bounds.maxY - bounds.minY;
+         float extentZ = bounds.maxZ - bounds.minZ;
+         if (extentX >= extentY && extentX >= extentZ) {
+            return 0;
+         }
+         if (extentY >= extentZ) {
+            return 1;
+         }
+         return 2;
+      }
+
+      private static float getAxisValue(Vector3f position, int axis) {
+         return axis == 0 ? position.x : axis == 1 ? position.y : position.z;
+      }
+
+      private float[] getNodeData() {
+         return this.nodeData;
+      }
+
+      private int getNodeDataLength() {
+         return this.nodeCount * nodeFloatSize;
+      }
+
+      private int[] getLeafIndices() {
+         return this.leafIndices;
+      }
+
+      private int getLeafIndexCount() {
+         return this.leafIndexCount;
+      }
+
+      private static final class NodeBounds {
+         private final float minX;
+         private final float minY;
+         private final float minZ;
+         private final float maxX;
+         private final float maxY;
+         private final float maxZ;
+         private final float fluxR;
+         private final float fluxG;
+         private final float fluxB;
+         private final float totalIntensity;
+
+         private NodeBounds(float minX, float minY, float minZ, float maxX, float maxY, float maxZ, float fluxR, float fluxG, float fluxB, float totalIntensity) {
+            this.minX = minX;
+            this.minY = minY;
+            this.minZ = minZ;
+            this.maxX = maxX;
+            this.maxY = maxY;
+            this.maxZ = maxZ;
+            this.fluxR = fluxR;
+            this.fluxG = fluxG;
+            this.fluxB = fluxB;
+            this.totalIntensity = totalIntensity;
+         }
+
+         private float getMidpoint(int axis) {
+            if (axis == 0) {
+               return (this.minX + this.maxX) * 0.5F;
+            }
+            if (axis == 1) {
+               return (this.minY + this.maxY) * 0.5F;
+            }
+            return (this.minZ + this.maxZ) * 0.5F;
+         }
+      }
+   }
+
+   private static final class CompileStats {
+      private final LongAdder compiledNodes = new LongAdder();
+      private final LongAdder copiedNodes = new LongAdder();
+      private final LongAdder rebuiltNodes = new LongAdder();
+      private final LongAdder skippedEmptyNodes = new LongAdder();
+      private final LongAdder candidateLists = new LongAdder();
+      private final LongAdder candidateChecks = new LongAdder();
+
+      private void recordNode(boolean copiedFromPrevious) {
+         this.compiledNodes.increment();
+         if (copiedFromPrevious) {
+            this.copiedNodes.increment();
+         } else {
+            this.rebuiltNodes.increment();
+         }
+      }
+   }
+
+   private static final class SliceUpload implements MemoryOwner {
+      private final MemoryRegion memory;
+
+      private SliceUpload(MemoryRegion memory) {
+         this.memory = memory;
+      }
+
+      @Override
+      public void allocate(MemoryManager memoryManager) {
+      }
+
+      @Override
+      public void free(MemoryManager memoryManager) {
+      }
+
+      @Override
+      public boolean update(MemoryManager memoryManager) {
+         return false;
+      }
+
+      @Override
+      public void afterUpload() {
+      }
+
+      @Override
+      public int getSize() {
+         return this.memory.end - this.memory.begin;
+      }
+
+      @Override
+      public MemoryRegion getMemory() {
+         return this.memory;
+      }
+   }
+
    private static boolean shouldCull(ClientWorld level, BlockPos blockPos) {
       for (BlockPos offset : NEIGHBORS) {
          BlockPos neighborPos = blockPos.add(offset);
@@ -508,4 +1323,103 @@ public class LightRegistry implements Destructable {
       }
       return true;
    }
+
+   private enum DirtyReason {
+      ADDED,
+      REMOVED_NO_LIGHT,
+      CULLED,
+      BLOCK_ID_CHANGED,
+      LIGHT_INFO_CHANGED
+   }
+
+   private static final class LightChurnStats {
+      private static final int MAX_SAMPLES = 4;
+      private final EnumMap<DirtyReason, LongAdder> mutationCounts = new EnumMap<>(DirtyReason.class);
+      private final Map<DirtyReason, String> samples = new LinkedHashMap<>();
+      private boolean samplesTruncated = false;
+      private final LongAdder noopSyncs = new LongAdder();
+      private volatile Frame lastFrame = new Frame(0, 0);
+
+      private LightChurnStats() {
+         for (DirtyReason reason : DirtyReason.values()) {
+            this.mutationCounts.put(reason, new LongAdder());
+         }
+      }
+
+      private Frame beginFrame(int previousCount, int gatheredCount) {
+         Frame frame = new Frame(previousCount, gatheredCount);
+         this.lastFrame = frame;
+         return frame;
+      }
+
+      private void noteMutation(DirtyReason reason, BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
+         this.mutationCounts.get(reason).increment();
+         if (!this.samples.containsKey(reason)) {
+            if (this.samples.size() < MAX_SAMPLES) {
+               this.samples.put(reason, formatSample(blockPos, previous, updated));
+            } else {
+               this.samplesTruncated = true;
+            }
+         }
+      }
+
+      private void noteNoopSync() {
+         this.noopSyncs.increment();
+      }
+
+      private String describe() {
+         Frame frame = this.lastFrame;
+         return String.format(
+            "frame(prev=%d,gathered=%d,stable=%d,added=%d,removed=%d,blockId=%d,lightInfo=%d) mutations(add=%d,remove=%d,cull=%d,blockId=%d,lightInfo=%d,noop=%d)%s",
+            frame.previousCount,
+            frame.gatheredCount,
+            frame.stableMappings,
+            frame.additions,
+            frame.removals,
+            frame.blockIdChanges,
+            frame.lightInfoChanges,
+            this.mutationCounts.get(DirtyReason.ADDED).sum(),
+            this.mutationCounts.get(DirtyReason.REMOVED_NO_LIGHT).sum(),
+            this.mutationCounts.get(DirtyReason.CULLED).sum(),
+            this.mutationCounts.get(DirtyReason.BLOCK_ID_CHANGED).sum(),
+            this.mutationCounts.get(DirtyReason.LIGHT_INFO_CHANGED).sum(),
+            this.noopSyncs.sum(),
+            this.samples.isEmpty() ? "" : " samples=" + this.samples + (this.samplesTruncated ? "..." : "")
+         );
+      }
+
+      private static String formatSample(BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
+         return String.format(
+            "(%d,%d,%d):%s->%s",
+            blockPos.getX(),
+            blockPos.getY(),
+            blockPos.getZ(),
+            describe(previous),
+            describe(updated)
+         );
+      }
+
+      private static String describe(TracedLightPosition position) {
+         if (position == null) {
+            return "null";
+         }
+         return position.blockId() + "/" + System.identityHashCode(position.lightInfo());
+      }
+
+      private static final class Frame {
+         private final int previousCount;
+         private final int gatheredCount;
+         private int stableMappings;
+         private int additions;
+         private int removals;
+         private int blockIdChanges;
+         private int lightInfoChanges;
+
+         private Frame(int previousCount, int gatheredCount) {
+            this.previousCount = previousCount;
+            this.gatheredCount = gatheredCount;
+         }
+      }
+   }
 }
+

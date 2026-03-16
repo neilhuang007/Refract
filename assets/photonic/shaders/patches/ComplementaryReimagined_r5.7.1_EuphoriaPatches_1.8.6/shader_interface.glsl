@@ -12,8 +12,8 @@ flat in vec3 sunVecWorld;
 flat in vec3 sunVec;
 flat in vec3 upVec;
 
-float sunVisibilitySaturated = clamp((dot(sunVec, upVec) + 0.0625f) / 0.125f, 0.0f, 1.0f);
-vec3 lightVecWorld = (sunVecWorld.y < 0.0f) ? -sunVecWorld : sunVecWorld;
+float sunVisibilitySaturated = smoothstep(-0.10f, 0.15f, dot(sunVec, upVec));
+vec3 lightVecWorld = normalize(sunVecWorld);
 #endreplace
 
 #replace "vec3 load_world_position();"

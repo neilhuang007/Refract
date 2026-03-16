@@ -23,8 +23,23 @@ struct Frag {
 uniform float ph_mod_shadow_pixelation_enabled;
 uniform float ph_mod_shadow_pixel_size_rt;
 uniform float light_blend_factor;
+uniform int light_blend_region_count;
 uniform vec3 light_blend_min;
 uniform vec3 light_blend_max;
+uniform vec3 light_blend_min_1;
+uniform vec3 light_blend_max_1;
+uniform vec3 light_blend_min_2;
+uniform vec3 light_blend_max_2;
+uniform vec3 light_blend_min_3;
+uniform vec3 light_blend_max_3;
+uniform vec3 light_blend_min_4;
+uniform vec3 light_blend_max_4;
+uniform vec3 light_blend_min_5;
+uniform vec3 light_blend_max_5;
+uniform vec3 light_blend_min_6;
+uniform vec3 light_blend_max_6;
+uniform vec3 light_blend_min_7;
+uniform vec3 light_blend_max_7;
 
 //ph_required: uniform int frameCounter, frameTime;
 //ph_required: uniform float frameTimeCounter, rainStrength, shadowFade, viewWidth, viewHeight;
@@ -179,13 +194,31 @@ Frag ph_mixNullable4(Frag s1, Frag s2, float a) {
     return Frag(direct, direct_soft);
 }
 
+bool ph_light_blend_region_contains(vec3 world_pos, vec3 regionMin, vec3 regionMax) {
+    bvec3 insideMin = greaterThanEqual(world_pos, regionMin);
+    bvec3 insideMax = lessThan(world_pos, regionMax);
+    return all(insideMin) && all(insideMax);
+}
+
 float ph_local_light_blend(vec3 world_pos) {
-    if (light_blend_factor <= 0.0f) {
+    if (light_blend_factor <= 0.0f || light_blend_region_count <= 0) {
         return 0.0f;
     }
-    bvec3 insideMin = greaterThanEqual(world_pos, light_blend_min);
-    bvec3 insideMax = lessThan(world_pos, light_blend_max);
-    return all(insideMin) && all(insideMax) ? light_blend_factor : 0.0f;
+    if (ph_light_blend_region_contains(world_pos, light_blend_min, light_blend_max)) return light_blend_factor;
+    if (light_blend_region_count <= 1) return 0.0f;
+    if (ph_light_blend_region_contains(world_pos, light_blend_min_1, light_blend_max_1)) return light_blend_factor;
+    if (light_blend_region_count <= 2) return 0.0f;
+    if (ph_light_blend_region_contains(world_pos, light_blend_min_2, light_blend_max_2)) return light_blend_factor;
+    if (light_blend_region_count <= 3) return 0.0f;
+    if (ph_light_blend_region_contains(world_pos, light_blend_min_3, light_blend_max_3)) return light_blend_factor;
+    if (light_blend_region_count <= 4) return 0.0f;
+    if (ph_light_blend_region_contains(world_pos, light_blend_min_4, light_blend_max_4)) return light_blend_factor;
+    if (light_blend_region_count <= 5) return 0.0f;
+    if (ph_light_blend_region_contains(world_pos, light_blend_min_5, light_blend_max_5)) return light_blend_factor;
+    if (light_blend_region_count <= 6) return 0.0f;
+    if (ph_light_blend_region_contains(world_pos, light_blend_min_6, light_blend_max_6)) return light_blend_factor;
+    if (light_blend_region_count <= 7) return 0.0f;
+    return ph_light_blend_region_contains(world_pos, light_blend_min_7, light_blend_max_7) ? light_blend_factor : 0.0f;
 }
 
 // TODO: reproject in voxel pattern to hide noise in texture
@@ -255,16 +288,21 @@ void ph_process_indirect() {
     vec3 sample_position = base_position + world_offset;
     float localBlend = ph_local_light_blend(sample_position);
     ivec3 write = ph_write(sample_position, base_normal, modelview_projection, world_camera_position);
+    if (write == ivec3(NULL)) {
+        return;
+    }
 
     uint w = imageAtomicAdd(gi_w, write, uint(1));
     if (w == 0) {
         ivec3 read = ph_read(sample_position, base_normal, previous_modelview_projection, previous_world_camera_position);
 
         vec4 result = vec4(0.0f);
-        result.x += imageLoad(gi_x, read).x / 255.0f;
-        result.y += imageLoad(gi_y, read).x / 255.0f;
-        result.z += imageLoad(gi_z, read).x / 255.0f;
-        result.w = imageLoad(gi_w, read).x;
+        if (read != ivec3(NULL)) {
+            result.x += imageLoad(gi_x, read).x / 1024.0f;
+            result.y += imageLoad(gi_y, read).x / 1024.0f;
+            result.z += imageLoad(gi_z, read).x / 1024.0f;
+            result.w = imageLoad(gi_w, read).x;
+        }
 
         // Adaptive history decay: fast convergence initially, stable once accumulated
         // result.w tracks sample count from previous frame
@@ -274,27 +312,24 @@ void ph_process_indirect() {
         } else if (localBlend > 0.0f) {
             historyDecay = mix(0.9f, 0.5f, localBlend * 2.0f);
         } else if (result.w < 32.0f) {
-            // Early frames: aggressive decay for fast initial convergence
-            historyDecay = 0.9f;
+            historyDecay = mix(0.9f, 0.95f, result.w / 32.0f);
         } else if (result.w < 256.0f) {
-            // Medium convergence: transition to stable
-            historyDecay = 0.95f;
+            historyDecay = mix(0.95f, 0.985f, (result.w - 32.0f) / 224.0f);
         } else {
-            // Fully converged: slow decay for temporal stability
             historyDecay = 0.985f;
         }
         result *= historyDecay;
 
-        imageAtomicAdd(gi_x, write, uint(result.x * 255.0f));
-        imageAtomicAdd(gi_y, write, uint(result.y * 255.0f));
-        imageAtomicAdd(gi_z, write, uint(result.z * 255.0f));
+        imageAtomicAdd(gi_x, write, uint(result.x * 1024.0f));
+        imageAtomicAdd(gi_y, write, uint(result.y * 1024.0f));
+        imageAtomicAdd(gi_z, write, uint(result.z * 1024.0f));
         imageAtomicAdd(gi_w, write, uint(result.w));
     } else if (w < 4096) {
         vec3 result = ph_sample_indirect_lighting();
 
-        imageAtomicAdd(gi_x, write, uint(result.x * 255.0f));
-        imageAtomicAdd(gi_y, write, uint(result.y * 255.0f));
-        imageAtomicAdd(gi_z, write, uint(result.z * 255.0f));
+        imageAtomicAdd(gi_x, write, uint(result.x * 1024.0f));
+        imageAtomicAdd(gi_y, write, uint(result.y * 1024.0f));
+        imageAtomicAdd(gi_z, write, uint(result.z * 1024.0f));
     } else {
         imageAtomicAdd(gi_w, write, uint(-1));
     }
@@ -315,6 +350,16 @@ vec3 ph_sample_indirect_lighting() {
     vec3 indirect_color = vec3(1.0f);
 
     for (int i = 0; i < 2; i++) {
+        // Russian roulette after first bounce
+        if (i > 0) {
+            float max_throughput = max(indirect_color.r, max(indirect_color.g, indirect_color.b));
+            float survival_prob = clamp(max_throughput, 0.05f, 1.0f);
+            if (RandomFloat01(rngState) > survival_prob) {
+                return vec3(0.0f);
+            }
+            indirect_color /= survival_prob;
+        }
+
         lightEmittance = vec3(0.0f);
         light_ray.origin = light_ray.result_position + 0.1f * light_ray.result_normal;
         // Blue noise hemisphere sampling for lower-variance GI

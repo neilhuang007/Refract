@@ -1,7 +1,7 @@
 package at.redi2go.photonic.client.mixin;
 
-import at.redi2go.photonic.client.BakedQuadExt;
 import at.redi2go.photonic.client.BlockBuilder;
+import at.redi2go.photonic.client.Raytracer;
 import java.util.List;
 import net.caffeinemc.mods.sodium.fabric.model.FabricModelAccess;
 import net.minecraft.block.BlockState;
@@ -25,6 +25,6 @@ public class FabricModelAccessMixin {
    public List<BakedQuad> getQuads(BakedModel instance, BlockState state, Direction direction, Random random) {
       return !BlockBuilder.IS_BUILDING_BLOCK_BUFFER
          ? instance.getQuads(state, direction, random)
-         : instance.getQuads(state, direction, random).stream().filter(bakedQuad -> ((BakedQuadExt)bakedQuad).photonic$shouldBeVoxelized()).toList();
+         : instance.getQuads(state, direction, random).stream().filter(Raytracer::getBakedQuadVoxelized).toList();
    }
 }

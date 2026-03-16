@@ -29,6 +29,7 @@ public class ColorFramebuffer extends GlFramebuffer {
    private int realWidth;
    private int realHeight;
    private int previousDrawFramebuffer;
+   private int[] drawBuffers;
    private int viewportSide = -1;
    private int lastFrameUpdate = -1;
    private boolean needsClear = false;
@@ -65,12 +66,10 @@ public class ColorFramebuffer extends GlFramebuffer {
       }
 
       int i = 0;
-      IntBuffer buffer = BufferUtils.createIntBuffer(this.writeAttachment.size());
 
       for (String name : this.attachmentNames) {
          int texture = name == null ? 0 : this.writeAttachment.get(name).getTextureId();
          if (!Objects.equals(name, "depth")) {
-            buffer.put(36064 + i);
             GL30.glFramebufferTexture2D(36160, 36064 + i, 3553, texture, 0);
             i++;
          } else {
@@ -78,8 +77,15 @@ public class ColorFramebuffer extends GlFramebuffer {
          }
       }
 
+      int[] resolvedDrawBuffers = resolveDrawBuffers(this.drawBuffers, i);
+      IntBuffer buffer = BufferUtils.createIntBuffer(resolvedDrawBuffers.length);
+      for (int drawBuffer : resolvedDrawBuffers) {
+         buffer.put(drawBuffer);
+      }
+
+      int drawBufferCount = resolvedDrawBuffers.length;
       buffer.position(0);
-      buffer.limit(i);
+      buffer.limit(drawBufferCount);
       GL20.glDrawBuffers(buffer);
       int status = GL30.glCheckFramebufferStatus(36160);
       if (status != 36053) {
@@ -105,6 +111,10 @@ public class ColorFramebuffer extends GlFramebuffer {
       Map<String, ColorFramebuffer.FramebufferAttachment> tmp = this.readAttachment;
       this.readAttachment = this.writeAttachment;
       this.writeAttachment = tmp;
+   }
+
+   public void setDrawBuffers(int[] drawBuffers) {
+      this.drawBuffers = drawBuffers == null ? null : drawBuffers.clone();
    }
 
    public void clear(Vector4f clearColor) {
@@ -157,6 +167,30 @@ public class ColorFramebuffer extends GlFramebuffer {
 
    public int getHeight() {
       return this.height;
+   }
+
+   static int[] resolveDrawBuffers(int[] drawBuffers, int colorAttachmentCount) {
+      if (drawBuffers == null) {
+         int[] resolved = new int[colorAttachmentCount];
+         for (int drawBuffer = 0; drawBuffer < colorAttachmentCount; drawBuffer++) {
+            resolved[drawBuffer] = GL30.GL_COLOR_ATTACHMENT0 + drawBuffer;
+         }
+         return resolved;
+      }
+
+      for (int drawBuffer : drawBuffers) {
+         if (drawBuffer < 0 || drawBuffer >= colorAttachmentCount) {
+            throw new IllegalArgumentException(
+               "Draw buffer " + drawBuffer + " is outside the color attachment range 0.." + Math.max(colorAttachmentCount - 1, 0)
+            );
+         }
+      }
+
+      int[] resolved = new int[drawBuffers.length];
+      for (int i = 0; i < drawBuffers.length; i++) {
+         resolved[i] = GL30.GL_COLOR_ATTACHMENT0 + drawBuffers[i];
+      }
+      return resolved;
    }
 
    public int getViewportSide() {
@@ -271,3 +305,6 @@ public class ColorFramebuffer extends GlFramebuffer {
       }
    }
 }
+
+
+

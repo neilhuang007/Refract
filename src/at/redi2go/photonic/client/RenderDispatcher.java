@@ -45,6 +45,11 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
    private static final MinecraftClient MC_INSTANCE = MinecraftClient.getInstance();
    private final AtomicIntegerImage[] gi;
    private final Map<Integer, Integer> boundTextures = new HashMap<>();
+   private final Set<PChunkPos> inboundChunks = new HashSet<>();
+   private int cachedInboundCenterX = Integer.MIN_VALUE;
+   private int cachedInboundCenterY = Integer.MIN_VALUE;
+   private int cachedInboundCenterZ = Integer.MIN_VALUE;
+   private int cachedInboundRenderRadius = Integer.MIN_VALUE;
 
    public RenderDispatcher(float renderScale) {
       this.gi = IntStream.range(0, 5).mapToObj(i -> new AtomicIntegerImage(() -> {
@@ -71,25 +76,41 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
 
    @Override
    public Set<PChunkPos> getInboundChunks() {
-      Set<PChunkPos> chunks = new HashSet<>();
       Entity cameraEntity = MinecraftClient.getInstance().getCameraEntity();
       if (cameraEntity == null) {
+         this.inboundChunks.clear();
+         this.cachedInboundCenterX = Integer.MIN_VALUE;
+         this.cachedInboundCenterY = Integer.MIN_VALUE;
+         this.cachedInboundCenterZ = Integer.MIN_VALUE;
+         this.cachedInboundRenderRadius = Integer.MIN_VALUE;
          return Set.of();
-      } else {
-         Vec3d chunkPos = cameraEntity.getPos().multiply(0.0625, 0.0625, 0.0625);
-         int renderRadius = (Integer)MinecraftClient.getInstance().options.getViewDistance().getValue() + 1;
+      }
 
-         for (int x = -renderRadius; x < renderRadius; x++) {
-            for (int y = -renderRadius; y < renderRadius; y++) {
-               for (int z = -renderRadius; z < renderRadius; z++) {
-                  PChunkPos worldChunkPos = new PChunkPos((int)(chunkPos.x + x), (int)(chunkPos.y + y), (int)(chunkPos.z + z));
-                  chunks.add(worldChunkPos);
-               }
+      Vec3d chunkPos = cameraEntity.getPos().multiply(0.0625, 0.0625, 0.0625);
+      int centerX = (int) chunkPos.x;
+      int centerY = (int) chunkPos.y;
+      int centerZ = (int) chunkPos.z;
+      int renderRadius = (Integer) MinecraftClient.getInstance().options.getViewDistance().getValue() + 1;
+      if (centerX == this.cachedInboundCenterX
+         && centerY == this.cachedInboundCenterY
+         && centerZ == this.cachedInboundCenterZ
+         && renderRadius == this.cachedInboundRenderRadius) {
+         return this.inboundChunks;
+      }
+
+      this.cachedInboundCenterX = centerX;
+      this.cachedInboundCenterY = centerY;
+      this.cachedInboundCenterZ = centerZ;
+      this.cachedInboundRenderRadius = renderRadius;
+      this.inboundChunks.clear();
+      for (int x = -renderRadius; x < renderRadius; x++) {
+         for (int y = -renderRadius; y < renderRadius; y++) {
+            for (int z = -renderRadius; z < renderRadius; z++) {
+               this.inboundChunks.add(new PChunkPos(centerX + x, centerY + y, centerZ + z));
             }
          }
-
-         return chunks;
       }
+      return this.inboundChunks;
    }
 
    @Override

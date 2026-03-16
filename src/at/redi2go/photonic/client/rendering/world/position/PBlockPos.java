@@ -49,7 +49,7 @@ public class PBlockPos {
    }
 
    public LightNodePos toLightPos(int nodeSize, PBlockPos offset) {
-      return new LightNodePos((this.x - offset.x) / nodeSize, (this.y - offset.y) / nodeSize, (this.z - offset.z) / nodeSize);
+      return new LightNodePos(Math.floorDiv(this.x - offset.x, nodeSize), Math.floorDiv(this.y - offset.y, nodeSize), Math.floorDiv(this.z - offset.z, nodeSize));
    }
 
    public Vector3i toVector() {

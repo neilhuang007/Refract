@@ -5,15 +5,16 @@ import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.rendering.MinecraftAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
-import at.redi2go.photonic.client.rendering.opengl.objects.GlTarget;
 import at.redi2go.photonic.client.rendering.opengl.rendering.IRenderDispatcher;
 import at.redi2go.photonic.client.rendering.schematics.Schematic;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryManager;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryOwner;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryRegion;
+import at.redi2go.photonic.client.rendering.world.octray.OctrayChunk;
 import at.redi2go.photonic.client.rendering.world.position.PBlockPos;
 import at.redi2go.photonic.client.rendering.world.position.PChunkPos;
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -25,6 +26,7 @@ import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.Map.Entry;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import net.minecraft.client.world.ClientWorld;
@@ -32,15 +34,23 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.world.LightType;
 import net.minecraft.world.chunk.light.ChunkLightingView;
+import net.irisshaders.iris.uniforms.SystemTimeUniforms;
 import org.joml.Vector3d;
 import org.joml.Vector3f;
 
 public class WorldRegistry implements MemoryOwner, Destructable {
    private static final Direction[] FACES = new Direction[6];
    private static final int INITIAL_CHUNK_LOAD_BUDGET = 512;
+   private static final int CHUNK_UPLOAD_BATCH_SIZE = 2048;
+   private static final int ROOT_UPLOAD_BATCH_SIZE = 2048;
+   private static final int LIGHT_BLEND_EXPANSION_BLOCKS = 16;
+   static final int MAX_LIGHT_BLEND_REGIONS = 8;
+   private static final int MAX_INCREMENTAL_LIGHT_REBUILDS_PER_FRAME = 1;
+   private static final int MAX_DEFERRED_LIGHT_REBUILD_QUEUE = 3;
    private final IRenderDispatcher renderDispatcher;
    private final WorldCompilerThread worldCompilerThread;
    private final LightRegistry lightRegistry;
+   private final WorldBackend backend;
    private final GlMemoryManager cbMemoryManager;
    private final BlockRegistry blockRegistry;
    private final GlMemoryManager rootMemoryManager;
@@ -48,7 +58,8 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private final Schematic rootSchematic;
    private final ConcurrentLinkedQueue<Runnable> buildQueue = new ConcurrentLinkedQueue<>();
    private final ConcurrentLinkedQueue<Runnable> glQueue = new ConcurrentLinkedQueue<>();
-   private final Map<PChunkPos, PChunk> chunks = new HashMap<>();
+   private final Set<PChunkPos> pendingBuildChunks = ConcurrentHashMap.newKeySet();
+   private final Map<PChunkPos, WorldChunk> chunks = new HashMap<>();
    private PBlockPos rtToWorldBlockOffset = new PBlockPos(0, 0, 0);
    private PChunkPos rtToWorldChunkOffset = new PChunkPos(0, 0, 0);
    private Vector3d liveWorldBlockOffset = new Vector3d();
@@ -56,8 +67,8 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private PBlockPos liveWorldMaxVoxel = new PBlockPos(0, 0, 0);
    private WorldRegistry.BuildStage buildStage = WorldRegistry.BuildStage.IDLE;
    private boolean closeChunkUpdate = false;
-   private boolean closeChunkUpload = false;
-   private int chunkUploadAge = 0;
+   private int lightBlendAge = 0;
+   private int lastLightBlendFrame = -1;
    private Vector3f previousCameraPosition = new Vector3f();
    private boolean forceTemporalReset = false;
    private static final int TEMPORAL_BLEND_FRAMES = 8;
@@ -65,10 +76,19 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private final int worldChunkSize;
    private PBlockPos worldMinVoxel = new PBlockPos(0, 0, 0);
    private PBlockPos worldMaxVoxel = new PBlockPos(0, 0, 0);
+   private final PBlockPos[] pendingLightBlendMin = new PBlockPos[MAX_LIGHT_BLEND_REGIONS];
+   private final PBlockPos[] pendingLightBlendMax = new PBlockPos[MAX_LIGHT_BLEND_REGIONS];
+   private final PBlockPos[] liveLightBlendMin = new PBlockPos[MAX_LIGHT_BLEND_REGIONS];
+   private final PBlockPos[] liveLightBlendMax = new PBlockPos[MAX_LIGHT_BLEND_REGIONS];
+   private int pendingLightBlendRegionCount = 0;
+   private int liveLightBlendRegionCount = 0;
+   private boolean pendingLightBlendDirty = false;
+   private boolean pendingFullLightBlendReset = true;
+   private boolean fullLightBlendActive = false;
    private boolean dirty = true;
    private boolean rootDataValid = false;
    private final boolean blockLightEnabled;
-   private volatile boolean shadowStateDirty = true;
+   private final boolean useOctrayChunks;
    private volatile boolean chunkSyncNeeded = true;
    private final PriorityQueue<PChunkPos> pendingChunkLoads = new PriorityQueue<>(
       Comparator.comparingDouble(this::chunkDistanceToCamera)
@@ -76,41 +96,62 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private final Set<PChunkPos> pendingChunkSet = new HashSet<>();
    private static final int CHUNK_LOAD_BUDGET = 256;
 
-   public WorldRegistry(IRenderDispatcher renderDispatcher, int maxLights, int maxLightsPerNode, boolean blockLightEnabled, boolean lightBinningEnabled) {
+   public WorldRegistry(IRenderDispatcher renderDispatcher, int maxLights, int maxLightsPerNode, boolean blockLightEnabled, boolean lightBinningEnabled, boolean useOctrayChunks) {
       this.renderDispatcher = renderDispatcher;
       this.blockLightEnabled = blockLightEnabled;
+      this.useOctrayChunks = useOctrayChunks;
       this.worldChunkSize = 32;
       this.worldBlockSize = 16 * this.worldChunkSize;
-      this.rootSchematic = new Schematic(this.worldChunkSize, this.worldChunkSize, this.worldChunkSize);
+      this.backend = this.createBackend();
+      this.rootSchematic = this.backend.getRootSchematic();
       this.lightRegistry = new LightRegistry(maxLights, maxLightsPerNode, 8, this.worldBlockSize, renderDispatcher::isChunkEmpty, lightBinningEnabled);
-      this.cbMemoryManager = new GlMemoryManager(GlTarget.SSBO, "cb_block", 536870912, true);
+      this.cbMemoryManager = this.backend.getCbMemoryManager();
+      this.cbMemoryManager.setUploadBatchSize(CHUNK_UPLOAD_BATCH_SIZE);
       this.blockRegistry = new BlockRegistry(this.cbMemoryManager.allocateRegion(4096 * PBlock.BYTE_SIZE));
-      this.rootMemoryManager = new GlMemoryManager(GlTarget.SSBO, "root_uniform", 4 * this.worldChunkSize * this.worldChunkSize * this.worldChunkSize, false);
+      this.rootMemoryManager = this.backend.getRootMemoryManager();
+      this.rootMemoryManager.setUploadBatchSize(ROOT_UPLOAD_BATCH_SIZE);
       this.worldCompilerThread = new WorldCompilerThread(this);
       this.allocate(this.rootMemoryManager);
    }
 
    public void upload() {
       if (this.buildStage != WorldRegistry.BuildStage.WAIT_FOR_UPLOAD) {
-         this.lightRegistry.clearLightMappings();
+         if (this.blockLightEnabled && this.lightRegistry.queueIdentityLightMappingsIfNeeded()) {
+            this.lightRegistry.getLightMappingMemoryManager().upload();
+         }
          return;
       }
       long profilerStart = PhotonicsStorage.PROFILER_ENABLED.value ? System.nanoTime() : 0;
       this.changeBuildStage(WorldRegistry.BuildStage.UPLOAD);
       boolean uploadDone = true;
+      int lightUploadsBefore = this.lightRegistry.getRegistryMemoryManager().getPendingUploadCount();
+      int cbUploadsBefore = this.cbMemoryManager.getPendingUploadCount();
+      int rootUploadsBefore = this.rootMemoryManager.getPendingUploadCount();
       uploadDone &= this.lightRegistry.upload();
       uploadDone &= this.blockRegistry.upload();
       uploadDone &= this.cbMemoryManager.upload();
       if (!uploadDone) {
          this.buildStage = WorldRegistry.BuildStage.WAIT_FOR_UPLOAD;
       } else {
-         this.rootMemoryManager.upload();
+         uploadDone &= this.rootMemoryManager.upload();
+         if (!uploadDone) {
+            this.buildStage = WorldRegistry.BuildStage.WAIT_FOR_UPLOAD;
+            return;
+         }
          this.liveWorldBlockOffset = new Vector3d(this.rtToWorldBlockOffset.x, this.rtToWorldBlockOffset.y, this.rtToWorldBlockOffset.z);
          this.liveWorldMinVoxel = this.worldMinVoxel;
          this.liveWorldMaxVoxel = this.worldMaxVoxel;
+         String blendMode = "none";
+         if (this.pendingFullLightBlendReset) {
+            this.activateFullLightBlendReset();
+            this.pendingFullLightBlendReset = false;
+            this.clearPendingLightBlendRegions();
+            blendMode = "full";
+         } else {
+            blendMode = this.activatePendingLightBlend() ? "region" : "none";
+         }
          if (this.closeChunkUpdate) {
             this.renderDispatcher.onChunkLoad();
-            this.closeChunkUpload = true;
             this.closeChunkUpdate = false;
          }
          this.changeBuildStage(WorldRegistry.BuildStage.IDLE);
@@ -119,14 +160,38 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          }
          if (profilerStart != 0) {
             long uploadMs = (System.nanoTime() - profilerStart) / 1_000_000L;
-            Photonic.info("[Profiler] upload: chunks={} lights={} ms={}", this.chunks.size(), this.lightRegistry.lightCount(), uploadMs);
+            Photonic.info("[Profiler] upload: ms={} chunks={} lights={}/{} glQueueSize={} queueBefore(light={},chunk={},root={}) uploaded(light={}B/{} ops,chunk={}B/{} ops,root={}B/{} ops)",
+               uploadMs,
+               this.chunks.size(),
+               this.lightRegistry.lightCount(),
+               this.lightRegistry.totalLights(),
+               this.glQueue.size(),
+               lightUploadsBefore,
+               cbUploadsBefore,
+               rootUploadsBefore,
+               this.lightRegistry.getRegistryMemoryManager().getLastUploadedBytes(),
+               this.lightRegistry.getRegistryMemoryManager().getLastUploadCount(),
+               this.cbMemoryManager.getLastUploadedBytes(),
+               this.cbMemoryManager.getLastUploadCount(),
+               this.rootMemoryManager.getLastUploadedBytes(),
+               this.rootMemoryManager.getLastUploadCount());
+            Photonic.info("[Profiler] lightBlend: mode={} age={} globalReload={} liveRegions={} liveVolume={} largestRegion={} pendingRegions={} pendingDirty={}",
+               blendMode,
+               this.lightBlendAge,
+               this.fetchLightReload(),
+               this.liveLightBlendRegionCount,
+               totalLightBlendVolume(this.liveLightBlendMin, this.liveLightBlendMax, this.liveLightBlendRegionCount),
+               largestLightBlendRegionVolume(this.liveLightBlendMin, this.liveLightBlendMax, this.liveLightBlendRegionCount),
+               this.pendingLightBlendRegionCount,
+               this.pendingLightBlendDirty);
          }
       }
    }
 
    public void compileWorld() {
       if (this.buildStage == WorldRegistry.BuildStage.IDLE) {
-         long profilerStart = PhotonicsStorage.PROFILER_ENABLED.value ? System.nanoTime() : 0;
+         boolean profiling = PhotonicsStorage.PROFILER_ENABLED.value;
+         long t0 = profiling ? System.nanoTime() : 0;
          this.ensureWorldThread();
          this.changeBuildStage(WorldRegistry.BuildStage.COMPILE);
          PBlockPos previousBlockOffset = this.rtToWorldBlockOffset;
@@ -134,6 +199,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          while (!this.buildQueue.isEmpty()) {
             this.buildQueue.poll().run();
          }
+         long t1 = profiling ? System.nanoTime() : 0;
 
          this.checkCameraJump(new Vector3f(MinecraftAccessor.getCameraPosition()));
          Vector3f worldOffset = new Vector3f(MinecraftAccessor.getCameraPosition());
@@ -146,29 +212,69 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          this.rtToWorldChunkOffset = newRtToWorldChunkOffset;
          this.rtToWorldBlockOffset = new PChunkPos(this.rtToWorldChunkOffset.x, this.rtToWorldChunkOffset.y, this.rtToWorldChunkOffset.z).toBlockPos();
          boolean chunkTopologyChanged = false;
-         if (worldOffsetChanged || this.chunkSyncNeeded || !this.pendingChunkLoads.isEmpty()) {
+         boolean needsChunkDiscovery = this.chunks.isEmpty();
+         this.profLoadChunkCount = 0;
+         this.profLoadChunkNanos = 0;
+         if (worldOffsetChanged || this.chunkSyncNeeded || !this.pendingChunkLoads.isEmpty() || needsChunkDiscovery) {
             this.chunkSyncNeeded = false;
             chunkTopologyChanged = this.synchronizeChunks();
          }
+         long t2 = profiling ? System.nanoTime() : 0;
 
-         boolean rootNeedsRebuild = worldOffsetChanged || chunkTopologyChanged;
-         boolean chunkContentChanged = this.update(this.rootMemoryManager, rootNeedsRebuild, chunkTopologyChanged);
+         boolean rootUploadNeeded = worldOffsetChanged || chunkTopologyChanged || !this.rootDataValid;
+         boolean fullRootRebuild = worldOffsetChanged || !this.rootDataValid || !this.useOctrayFastPath() && chunkTopologyChanged;
+         this.profRootOptNanos = 0;
+         boolean chunkContentChanged = this.update(this.rootMemoryManager, rootUploadNeeded, fullRootRebuild);
+         boolean tracedLightSetDirty = this.blockLightEnabled && this.lightRegistry.consumeTracedLightSetDirty();
+         boolean lightWorkNeeded = this.blockLightEnabled && (chunkTopologyChanged || tracedLightSetDirty);
          if (chunkContentChanged) {
             this.closeChunkUpdate = true;
          }
+         long t3 = profiling ? System.nanoTime() : 0;
 
-         if (this.blockLightEnabled && (rootNeedsRebuild || this.consumeShadowStateDirty() || this.lightRegistry.consumeTracedLightSetDirty())) {
-            this.lightRegistry.compileRegistry(this.rtToWorldBlockOffset, previousBlockOffset);
+         if (worldOffsetChanged) {
+            this.pendingFullLightBlendReset = true;
          }
+         if (this.forceTemporalReset) {
+            this.pendingFullLightBlendReset = true;
+            this.forceTemporalReset = false;
+         }
+         boolean lightCompiled = false;
+         if (lightWorkNeeded) {
+            this.lightRegistry.compileRegistry(this.rtToWorldBlockOffset, previousBlockOffset, chunkTopologyChanged);
+            lightCompiled = true;
+            if (chunkTopologyChanged) {
+               this.pendingFullLightBlendReset = true;
+            }
+         }
+         long t4 = profiling ? System.nanoTime() : 0;
 
          this.changeBuildStage(WorldRegistry.BuildStage.WAIT_FOR_UPLOAD);
-         if (profilerStart != 0) {
-            long compileMs = (System.nanoTime() - profilerStart) / 1_000_000L;
-            Photonic.info("[Profiler] compileWorld: chunks={} pendingLoads={} topologyChanged={} ms={}",
-               this.chunks.size(), this.pendingChunkLoads.size(), chunkTopologyChanged, compileMs);
+         if (profiling) {
+            long totalMs = (t4 - t0) / 1_000_000L;
+            long buildQueueMs = (t1 - t0) / 1_000_000L;
+            long syncMs = (t2 - t1) / 1_000_000L;
+            long updateMs = (t3 - t2) / 1_000_000L;
+            long rootOptMs = this.profRootOptNanos / 1_000_000L;
+            long chunkUpdateMs = updateMs - rootOptMs;
+            long lightMs = (t4 - t3) / 1_000_000L;
+            long loadMs = this.profLoadChunkNanos / 1_000_000L;
+            int dirtyCount = this.profDirtyChunkCount;
+            Photonic.info(
+               "[Profiler] compileWorld: total={}ms | queue={}ms sync={}ms (load={}ms x{}) update={}ms (rootOpt={}ms dirty={}ms x{}) light={}ms (compiled={} workNeeded={} tracedDirty={} offsetChanged={} topology={} rootUpload={} fullRoot={} chunkContent={} blendPendingReset={} blendPendingDirty={}) | chunks={} pending={} tracedLights={}/{}",
+               totalMs, buildQueueMs, syncMs, loadMs, this.profLoadChunkCount,
+               updateMs, rootOptMs, chunkUpdateMs, dirtyCount,
+               lightMs, lightCompiled, lightWorkNeeded, tracedLightSetDirty, worldOffsetChanged, chunkTopologyChanged, rootUploadNeeded, fullRootRebuild, chunkContentChanged, this.pendingFullLightBlendReset, this.pendingLightBlendDirty,
+               this.chunks.size(), this.pendingChunkLoads.size(),
+               this.lightRegistry.lightCount(), this.lightRegistry.totalLights());
          }
       }
    }
+
+   private int profLoadChunkCount;
+   private long profLoadChunkNanos;
+   private long profRootOptNanos;
+   private int profDirtyChunkCount;
 
    public boolean synchronizeChunks() {
       this.ensureWorldThread();
@@ -213,8 +319,13 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
       if (!chunksToLoad.isEmpty()) {
          changed = true;
+         long clStart = PhotonicsStorage.PROFILER_ENABLED.value ? System.nanoTime() : 0;
          for (PChunkPos chunkPos : chunksToLoad) {
             this.loadChunk(chunkPos);
+         }
+         if (clStart != 0) {
+            this.profLoadChunkNanos = System.nanoTime() - clStart;
+            this.profLoadChunkCount = chunksToLoad.size();
          }
       }
 
@@ -253,20 +364,32 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
    public void loadChunk(PChunkPos chunkPos) {
       this.ensureWorldThread();
-      this.onChunkLoad(chunkPos);
-      PChunk chunk = this.chunks.computeIfAbsent(chunkPos, k -> {
-         PChunk newChunk = new PChunk();
+      boolean[] chunkCreated = new boolean[1];
+      WorldChunk chunk = this.chunks.computeIfAbsent(chunkPos, k -> {
+         WorldChunk newChunk = this.createChunk();
          newChunk.allocate(this.cbMemoryManager);
          this.chunkSyncNeeded = true;
+         chunkCreated[0] = true;
          return newChunk;
       });
+      if (chunkCreated[0]) {
+         this.onChunkLoad(chunkPos);
+         this.markLightBlendChunk(chunkPos);
+         this.markRootEntryDirty(chunkPos);
+      }
       chunk.freeBlocks();
+      ClientWorld level = MinecraftAccessor.getLevel();
+      ChunkLightingView skyLightView = level != null ? level.getLightingProvider().get(LightType.SKY) : null;
+      PBlockPos rtBlockPos = new PBlockPos(0, 0, 0);
+      BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
 
       for (int x = 0; x < 16; x++) {
          for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
-               PBlockPos rtBlockPos = new PBlockPos(16 * chunkPos.x + x, 16 * chunkPos.y + y, 16 * chunkPos.z + z);
-               BlockPos blockPos = new BlockPos(rtBlockPos.x, rtBlockPos.y, rtBlockPos.z);
+               rtBlockPos.x = 16 * chunkPos.x + x;
+               rtBlockPos.y = 16 * chunkPos.y + y;
+               rtBlockPos.z = 16 * chunkPos.z + z;
+               mutableBlockPos.set(rtBlockPos.x, rtBlockPos.y, rtBlockPos.z);
                PBlock block = this.blockRegistry.getBlock(rtBlockPos);
                if (block != null) {
                   if (!block.isUsed() || !block.isAllocated()) {
@@ -282,13 +405,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
                   chunk.set(x, y, z, null, -1);
                } else {
                   int skyBrightness = 0;
-                  ClientWorld level = MinecraftAccessor.getLevel();
                   if (level != null) {
-                     ChunkLightingView skyLightView = level.getLightingProvider().get(LightType.SKY);
-                     int brightness = skyLightView.getLightLevel(blockPos) / 2;
+                     int brightness = skyLightView.getLightLevel(mutableBlockPos) / 2;
 
                      for (int i = 5; i >= 0; i--) {
-                        skyBrightness = skyBrightness << 3 | Math.max(skyLightView.getLightLevel(blockPos.offset(FACES[i])) / 2, brightness);
+                        skyBrightness = skyBrightness << 3 | Math.max(skyLightView.getLightLevel(mutableBlockPos.offset(FACES[i])) / 2, brightness);
                      }
                   }
 
@@ -297,26 +418,79 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             }
          }
       }
+      if (this.blockLightEnabled && level != null) {
+         this.lightRegistry.synchronizeChunkLights(level, chunkPos);
+      }
    }
 
    public void unloadChunk(PChunkPos chunkPos) {
       this.ensureWorldThread();
-      PChunk chunk = this.chunks.remove(chunkPos);
+      this.markLightBlendChunk(chunkPos);
+      if (this.blockLightEnabled) {
+         this.lightRegistry.clearChunkLights(chunkPos);
+      }
+      this.markRootEntryDirty(chunkPos);
+      WorldChunk chunk = this.chunks.remove(chunkPos);
       if (chunk != null) {
          chunk.free(this.cbMemoryManager);
          chunk.freeBlocks();
       }
    }
 
+   private WorldBackend createBackend() {
+      if (this.useOctrayChunks) {
+         return new OctrayWorldBackend(this.worldChunkSize, this.chunks);
+      }
+      return new LegacyWorldBackend(this.worldChunkSize, this.chunks);
+   }
+
+   private WorldChunk createChunk() {
+      if (this.useOctrayChunks) {
+         return new OctrayChunk();
+      }
+      return new PChunk();
+   }
+
+   private boolean useOctrayFastPath() {
+      return this.backend.usesIncrementalRootUpdates();
+   }
+
+   private void markRootEntryDirty(PChunkPos chunkPos) {
+      this.backend.markRootEntryDirty(chunkPos, this.rtToWorldChunkOffset, this.worldChunkSize);
+   }
+
+   private PChunkPos toRtChunkPos(PChunkPos chunkPos) {
+      PChunkPos rtChunkPos = new PChunkPos(chunkPos.x, chunkPos.y, chunkPos.z);
+      rtChunkPos.sub(this.rtToWorldChunkOffset.x, this.rtToWorldChunkOffset.y, this.rtToWorldChunkOffset.z);
+      return rtChunkPos;
+   }
+
+   private boolean isRtChunkInBounds(PChunkPos rtChunkPos) {
+      return rtChunkPos.x >= 0 && rtChunkPos.x < this.worldChunkSize
+         && rtChunkPos.y >= 0 && rtChunkPos.y < this.worldChunkSize
+         && rtChunkPos.z >= 0 && rtChunkPos.z < this.worldChunkSize;
+   }
+
+   private void rebuildRootData() {
+      if (this.rootMemory == null) {
+         return;
+      }
+      IntBuffer rootBuffer = this.rootMemory.getBuffer().asIntBuffer();
+      rootBuffer.position(0);
+      rootBuffer.put(this.rootSchematic.getData());
+   }
+
    @Override
    public void allocate(MemoryManager memoryManager) {
       this.rootMemory = memoryManager.allocate(this.getSize());
+      this.backend.setRootMemory(this.rootMemory);
    }
 
    @Override
    public void free(MemoryManager memoryManager) {
       memoryManager.free(this.rootMemory);
       this.rootMemory = null;
+      this.backend.setRootMemory(null);
    }
 
    @Override
@@ -331,7 +505,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    public boolean update(MemoryManager memoryManager, boolean forceRootUpload, boolean fullRootRebuild) {
       if (!forceRootUpload) {
          boolean anyChunkDirty = false;
-         for (PChunk chunk : this.chunks.values()) {
+         for (WorldChunk chunk : this.chunks.values()) {
             if (chunk.isDirty()) {
                anyChunkDirty = true;
                break;
@@ -349,23 +523,27 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       }
 
       List<CompletableFuture<Void>> pendingOptimizations = new ArrayList<>();
-      List<PChunk> dirtyChunks = new ArrayList<>();
+      List<WorldChunk> dirtyChunks = new ArrayList<>();
 
-      for (Entry<PChunkPos, PChunk> entry : this.chunks.entrySet()) {
+      for (Entry<PChunkPos, WorldChunk> entry : this.chunks.entrySet()) {
          PChunkPos chunkPos = entry.getKey();
-         PChunk chunk = entry.getValue();
-         PChunkPos rtChunkPos = new PChunkPos(chunkPos.x, chunkPos.y, chunkPos.z);
-         rtChunkPos.sub(this.rtToWorldChunkOffset.x, this.rtToWorldChunkOffset.y, this.rtToWorldChunkOffset.z);
-         if (isRtChunkInBounds(rtChunkPos)) {
-            if (chunk.isDirty()) {
-               pendingOptimizations.add(chunk.optimizeAsync());
-               dirtyChunks.add(chunk);
-            }
-            if (forceRootUpload) {
-               this.rootSchematic.setEntry(rtChunkPos.x, rtChunkPos.y, rtChunkPos.z, chunk.getMemory().begin >> 2);
-            }
+         WorldChunk chunk = entry.getValue();
+         PChunkPos rtChunkPos = this.toRtChunkPos(chunkPos);
+         if (!isRtChunkInBounds(rtChunkPos)) {
+            continue;
+         }
+
+         if (chunk.isDirty()) {
+            pendingOptimizations.add(chunk.optimizeAsync());
+            dirtyChunks.add(chunk);
+         }
+
+         if (forceRootUpload && !this.useOctrayFastPath()) {
+            this.rootSchematic.setEntry(rtChunkPos.x, rtChunkPos.y, rtChunkPos.z, chunk.getMemory().begin >> 2);
          }
       }
+
+      this.profDirtyChunkCount = dirtyChunks.size();
 
       if (!pendingOptimizations.isEmpty()) {
          try {
@@ -373,37 +551,25 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
          }
-         for (PChunk chunk : dirtyChunks) {
+         for (WorldChunk chunk : dirtyChunks) {
             chunk.finishUpdate(this.cbMemoryManager);
          }
       }
 
       if (forceRootUpload) {
-         try {
-            this.rootSchematic.reset();
-            this.rootSchematic.initialize();
-            this.rootSchematic.optimizeThreaded().get();
-            this.rootMemory.getBuffer().asIntBuffer().put(this.rootSchematic.getData());
-            memoryManager.queueUpload(this);
-            this.rootDataValid = true;
-         } catch (ExecutionException | InterruptedException e) {
-            throw new RuntimeException(e);
+         if (this.useOctrayFastPath()) {
+            this.backend.updateRootData(this.rtToWorldChunkOffset, this.worldChunkSize, fullRootRebuild || !this.rootDataValid);
+         } else {
+            this.rebuildRootData();
+            memoryManager.queueUploadPriority(this);
          }
+         this.rootDataValid = true;
       }
 
       this.dirty = true;
       return true;
    }
 
-   private boolean isRtChunkInBounds(PChunkPos rtChunkPos) {
-      return rtChunkPos.x >= 0 && rtChunkPos.x < this.worldChunkSize
-          && rtChunkPos.y >= 0 && rtChunkPos.y < this.worldChunkSize
-          && rtChunkPos.z >= 0 && rtChunkPos.z < this.worldChunkSize;
-   }
-
-   public BlockRegistry getBlockRegistry() {
-      return this.blockRegistry;
-   }
 
    @Override
    public void afterUpload() {
@@ -443,8 +609,12 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       this.rootMemoryManager.free();
    }
 
-   public Map<PChunkPos, PChunk> getChunks() {
+   public Map<PChunkPos, WorldChunk> getChunks() {
       return this.chunks;
+   }
+
+   public BlockRegistry getBlockRegistry() {
+      return this.blockRegistry;
    }
 
    public void ensureWorldThread() {
@@ -455,7 +625,85 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
    public void queueBuildJob(Runnable job) {
       this.buildQueue.add(job);
-      this.shadowStateDirty = true;
+   }
+
+   public void queueChunkLoad(PChunkPos chunkPos) {
+      if (this.pendingBuildChunks.add(chunkPos)) {
+         this.buildQueue.add(() -> {
+            this.pendingBuildChunks.remove(chunkPos);
+            this.loadChunk(chunkPos);
+         });
+      }
+   }
+
+   private void markLightBlendChunk(PChunkPos chunkPos) {
+      PBlockPos chunkMin = chunkPos.toBlockPos();
+      int expand = LIGHT_BLEND_EXPANSION_BLOCKS;
+      this.markLightBlendRegion(
+         chunkMin.x - expand,
+         chunkMin.y - expand,
+         chunkMin.z - expand,
+         chunkMin.x + 16 + expand,
+         chunkMin.y + 16 + expand,
+         chunkMin.z + 16 + expand
+      );
+   }
+
+   private void markLightBlendRegion(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+      PBlockPos newMin = new PBlockPos(minX, minY, minZ);
+      PBlockPos newMax = new PBlockPos(maxX, maxY, maxZ);
+      if (lightBlendRegionsContain(this.pendingLightBlendMin, this.pendingLightBlendMax, this.pendingLightBlendRegionCount, newMin, newMax)
+         || this.lightBlendAge > 0
+         && lightBlendRegionsContain(this.liveLightBlendMin, this.liveLightBlendMax, this.liveLightBlendRegionCount, newMin, newMax)) {
+         return;
+      }
+
+      this.pendingLightBlendRegionCount = appendLightBlendRegion(
+         this.pendingLightBlendMin,
+         this.pendingLightBlendMax,
+         this.pendingLightBlendRegionCount,
+         MAX_LIGHT_BLEND_REGIONS,
+         minX,
+         minY,
+         minZ,
+         maxX,
+         maxY,
+         maxZ
+      );
+      this.pendingLightBlendDirty = this.pendingLightBlendRegionCount > 0;
+   }
+
+   private boolean activatePendingLightBlend() {
+      if (!this.pendingLightBlendDirty) {
+         return false;
+      }
+      this.liveLightBlendRegionCount = copyLightBlendRegions(
+         this.pendingLightBlendMin,
+         this.pendingLightBlendMax,
+         this.pendingLightBlendRegionCount,
+         this.liveLightBlendMin,
+         this.liveLightBlendMax
+      );
+      this.lightBlendAge = TEMPORAL_BLEND_FRAMES;
+      this.fullLightBlendActive = false;
+      this.clearPendingLightBlendRegions();
+      return this.liveLightBlendRegionCount > 0;
+   }
+
+   private void activateFullLightBlendReset() {
+      this.liveLightBlendMin[0] = new PBlockPos(
+         (int) this.liveWorldBlockOffset.x - this.worldBlockSize,
+         (int) this.liveWorldBlockOffset.y - this.worldBlockSize,
+         (int) this.liveWorldBlockOffset.z - this.worldBlockSize
+      );
+      this.liveLightBlendMax[0] = new PBlockPos(
+         (int) this.liveWorldBlockOffset.x + this.worldBlockSize,
+         (int) this.liveWorldBlockOffset.y + this.worldBlockSize,
+         (int) this.liveWorldBlockOffset.z + this.worldBlockSize
+      );
+      this.liveLightBlendRegionCount = 1;
+      this.lightBlendAge = TEMPORAL_BLEND_FRAMES;
+      this.fullLightBlendActive = true;
    }
 
    public void queueGlJob(Runnable job) {
@@ -467,25 +715,35 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    public boolean fetchLightReload() {
-      if (this.closeChunkUpload) {
-         this.closeChunkUpload = false;
-         this.chunkUploadAge = TEMPORAL_BLEND_FRAMES;
-      }
-      if (this.forceTemporalReset) {
-         this.forceTemporalReset = false;
-         this.chunkUploadAge = TEMPORAL_BLEND_FRAMES;
-      }
-      if (this.chunkUploadAge > 0) {
-         this.chunkUploadAge--;
-      }
-      return this.chunkUploadAge > 0;
+      return isGlobalLightReloadActive(this.lightBlendAge, this.fullLightBlendActive);
    }
 
    public float fetchLightBlendFactor() {
-      if (this.chunkUploadAge > 0) {
-         return (float) this.chunkUploadAge / TEMPORAL_BLEND_FRAMES;
+      if (this.lightBlendAge > 0) {
+         return (float) this.lightBlendAge / TEMPORAL_BLEND_FRAMES;
       }
       return 0.0f;
+   }
+
+   public void advanceLightBlendFrame() {
+      int frame = SystemTimeUniforms.COUNTER.getAsInt();
+      if (frame == this.lastLightBlendFrame) {
+         return;
+      }
+      this.lastLightBlendFrame = frame;
+      if (this.lightBlendAge > 0) {
+         this.lightBlendAge--;
+         if (this.lightBlendAge <= 0) {
+            this.fullLightBlendActive = false;
+            Arrays.fill(this.liveLightBlendMin, null);
+            Arrays.fill(this.liveLightBlendMax, null);
+            this.liveLightBlendRegionCount = 0;
+         }
+      }
+   }
+
+   static boolean isGlobalLightReloadActive(int lightBlendAge, boolean fullLightBlendActive) {
+      return lightBlendAge > 0 && fullLightBlendActive;
    }
 
    public void checkCameraJump(Vector3f currentCameraPosition) {
@@ -499,33 +757,143 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       this.previousCameraPosition.set(currentCameraPosition);
    }
 
+   public int getLightBlendRegionCount() {
+      return this.lightBlendAge > 0 ? this.liveLightBlendRegionCount : 0;
+   }
+
    public Vector3d getLightBlendMin() {
-      if (this.chunkUploadAge > 0) {
-         // Cover entire world in world-space block coordinates
-         return new Vector3d(
-            this.liveWorldBlockOffset.x - this.worldBlockSize,
-            this.liveWorldBlockOffset.y - this.worldBlockSize,
-            this.liveWorldBlockOffset.z - this.worldBlockSize
-         );
-      }
-      return new Vector3d(0, 0, 0);
+      return this.getLightBlendMin(0);
    }
 
    public Vector3d getLightBlendMax() {
-      if (this.chunkUploadAge > 0) {
-         return new Vector3d(
-            this.liveWorldBlockOffset.x + this.worldBlockSize,
-            this.liveWorldBlockOffset.y + this.worldBlockSize,
-            this.liveWorldBlockOffset.z + this.worldBlockSize
-         );
+      return this.getLightBlendMax(0);
+   }
+
+   public Vector3d getLightBlendMin(int index) {
+      if (this.lightBlendAge > 0 && index >= 0 && index < this.liveLightBlendRegionCount && this.liveLightBlendMin[index] != null) {
+         return new Vector3d(this.liveLightBlendMin[index].x, this.liveLightBlendMin[index].y, this.liveLightBlendMin[index].z);
       }
       return new Vector3d(0, 0, 0);
    }
 
-   public boolean consumeShadowStateDirty() {
-      boolean shadowDirty = this.shadowStateDirty;
-      this.shadowStateDirty = false;
-      return shadowDirty;
+   public Vector3d getLightBlendMax(int index) {
+      if (this.lightBlendAge > 0 && index >= 0 && index < this.liveLightBlendRegionCount && this.liveLightBlendMax[index] != null) {
+         return new Vector3d(this.liveLightBlendMax[index].x, this.liveLightBlendMax[index].y, this.liveLightBlendMax[index].z);
+      }
+      return new Vector3d(0, 0, 0);
+   }
+
+   private void clearPendingLightBlendRegions() {
+      Arrays.fill(this.pendingLightBlendMin, null);
+      Arrays.fill(this.pendingLightBlendMax, null);
+      this.pendingLightBlendRegionCount = 0;
+      this.pendingLightBlendDirty = false;
+   }
+
+   static int appendLightBlendRegion(PBlockPos[] mins,
+                                     PBlockPos[] maxs,
+                                     int regionCount,
+                                     int maxRegions,
+                                     int minX,
+                                     int minY,
+                                     int minZ,
+                                     int maxX,
+                                     int maxY,
+                                     int maxZ) {
+      PBlockPos newMin = new PBlockPos(minX, minY, minZ);
+      PBlockPos newMax = new PBlockPos(maxX, maxY, maxZ);
+
+      for (int i = 0; i < regionCount; i++) {
+         if (lightBlendRegionContains(mins[i], maxs[i], newMin, newMax)
+            || lightBlendRegionContains(newMin, newMax, mins[i], maxs[i])) {
+            mins[i].min(minX, minY, minZ);
+            maxs[i].max(maxX, maxY, maxZ);
+            return regionCount;
+         }
+      }
+
+      if (regionCount < maxRegions) {
+         mins[regionCount] = newMin;
+         maxs[regionCount] = newMax;
+         return regionCount + 1;
+      }
+
+      int bestIndex = 0;
+      long bestAddedVolume = Long.MAX_VALUE;
+      for (int i = 0; i < regionCount; i++) {
+         long addedVolume = lightBlendRegionUnionVolume(mins[i], maxs[i], newMin, newMax) - lightBlendRegionVolume(mins[i], maxs[i]);
+         if (addedVolume < bestAddedVolume) {
+            bestAddedVolume = addedVolume;
+            bestIndex = i;
+         }
+      }
+
+      mins[bestIndex].min(minX, minY, minZ);
+      maxs[bestIndex].max(maxX, maxY, maxZ);
+      return regionCount;
+   }
+
+   private static int copyLightBlendRegions(PBlockPos[] sourceMins,
+                                            PBlockPos[] sourceMaxs,
+                                            int sourceCount,
+                                            PBlockPos[] targetMins,
+                                            PBlockPos[] targetMaxs) {
+      Arrays.fill(targetMins, null);
+      Arrays.fill(targetMaxs, null);
+      for (int i = 0; i < sourceCount; i++) {
+         targetMins[i] = new PBlockPos(sourceMins[i].x, sourceMins[i].y, sourceMins[i].z);
+         targetMaxs[i] = new PBlockPos(sourceMaxs[i].x, sourceMaxs[i].y, sourceMaxs[i].z);
+      }
+      return sourceCount;
+   }
+
+   private static boolean lightBlendRegionContains(PBlockPos outerMin, PBlockPos outerMax, PBlockPos innerMin, PBlockPos innerMax) {
+      return outerMin.x <= innerMin.x && outerMax.x >= innerMax.x
+         && outerMin.y <= innerMin.y && outerMax.y >= innerMax.y
+         && outerMin.z <= innerMin.z && outerMax.z >= innerMax.z;
+   }
+
+   private static boolean lightBlendRegionsContain(PBlockPos[] mins,
+                                                   PBlockPos[] maxs,
+                                                   int regionCount,
+                                                   PBlockPos innerMin,
+                                                   PBlockPos innerMax) {
+      for (int i = 0; i < regionCount; i++) {
+         if (mins[i] != null && maxs[i] != null && lightBlendRegionContains(mins[i], maxs[i], innerMin, innerMax)) {
+            return true;
+         }
+      }
+      return false;
+   }
+
+   private static long lightBlendRegionUnionVolume(PBlockPos minA, PBlockPos maxA, PBlockPos minB, PBlockPos maxB) {
+      return lightBlendRegionVolume(
+         new PBlockPos(Math.min(minA.x, minB.x), Math.min(minA.y, minB.y), Math.min(minA.z, minB.z)),
+         new PBlockPos(Math.max(maxA.x, maxB.x), Math.max(maxA.y, maxB.y), Math.max(maxA.z, maxB.z))
+      );
+   }
+
+   private static long lightBlendRegionVolume(PBlockPos min, PBlockPos max) {
+      long dx = Math.max(1, (long) max.x - min.x);
+      long dy = Math.max(1, (long) max.y - min.y);
+      long dz = Math.max(1, (long) max.z - min.z);
+      return dx * dy * dz;
+   }
+
+   private static long totalLightBlendVolume(PBlockPos[] mins, PBlockPos[] maxs, int regionCount) {
+      long total = 0L;
+      for (int i = 0; i < regionCount; i++) {
+         total += lightBlendRegionVolume(mins[i], maxs[i]);
+      }
+      return total;
+   }
+
+   private static long largestLightBlendRegionVolume(PBlockPos[] mins, PBlockPos[] maxs, int regionCount) {
+      long largest = 0L;
+      for (int i = 0; i < regionCount; i++) {
+         largest = Math.max(largest, lightBlendRegionVolume(mins[i], maxs[i]));
+      }
+      return largest;
    }
 
    public void startWorldBuilder() {
@@ -614,3 +982,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       public WorldRegistry.BuildStage before;
    }
 }
+
+
+
+

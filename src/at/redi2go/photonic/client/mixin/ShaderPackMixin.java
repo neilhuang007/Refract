@@ -1,6 +1,5 @@
 package at.redi2go.photonic.client.mixin;
 
-import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.ShaderPackPath;
 import at.redi2go.photonic.client.UniformPatcher;
@@ -20,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
+import net.fabricmc.loader.api.ModContainer;
 import net.fabricmc.loader.api.SemanticVersion;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.helpers.StringPair;
@@ -77,7 +77,7 @@ public abstract class ShaderPackMixin {
       } catch (IOException var7) {
          Raytracer.SHADERPACK_PROPERTIES = new Properties();
          Raytracer.PATCHED_SHADERPACK_PROPERTIES = new Properties();
-         Photonic.error(var7);
+         var7.printStackTrace();
       }
    }
 
@@ -150,7 +150,8 @@ public abstract class ShaderPackMixin {
    ) {
       envDefines1.add(new StringPair("PHOTONICS", ""));
       String versionString = "0";
-      if (Photonic.VERSION instanceof SemanticVersion version) {
+      Optional<ModContainer> photonics = net.fabricmc.loader.api.FabricLoader.getInstance().getModContainer("photonics");
+      if (photonics.isPresent() && photonics.get().getMetadata().getVersion() instanceof SemanticVersion version) {
          String major = version.getVersionComponentCount() >= 1 ? Integer.toString(version.getVersionComponent(0)) : "0";
          String minor = version.getVersionComponentCount() >= 2 ? Integer.toString(version.getVersionComponent(1)) : "0";
          String increment = version.getVersionComponentCount() >= 3 ? Integer.toString(version.getVersionComponent(2)) : "0";

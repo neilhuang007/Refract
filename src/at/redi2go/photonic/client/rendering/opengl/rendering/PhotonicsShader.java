@@ -15,16 +15,25 @@ public class PhotonicsShader {
    private final String vertexName;
    private final GLMemoryCollection memoryCollection;
    private final ColorFramebuffer framebuffer;
+   private final int[] drawBuffers;
 
    public PhotonicsShader(String fragmentName, String vertexName, GLMemoryCollection memoryCollection, ColorFramebuffer framebuffer) {
+      this(fragmentName, vertexName, memoryCollection, framebuffer, null);
+   }
+
+   public PhotonicsShader(String fragmentName, String vertexName, GLMemoryCollection memoryCollection, ColorFramebuffer framebuffer, int[] drawBuffers) {
       this.fragmentName = fragmentName;
       this.vertexName = vertexName;
       this.memoryCollection = memoryCollection;
       this.framebuffer = framebuffer;
+      this.drawBuffers = drawBuffers;
    }
 
    public void bindFramebuffer() {
       Raytracer.CURRENT_FRAMEBUFFER = this.framebuffer;
+      if (this.framebuffer != null) {
+         this.framebuffer.setDrawBuffers(this.drawBuffers);
+      }
    }
 
    public void bind(int shaderId) {

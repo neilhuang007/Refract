@@ -24,6 +24,7 @@ public abstract class MainRenderer implements Destructable {
    protected final float renderScale;
    protected final GLMemoryCollection memoryCollection;
    protected final Int2ObjectMap<List<Map.Entry<Integer, GlMemoryManager>>> foundMemories;
+   private String currentPhotonicsFragment = "";
 
    public MainRenderer(WorldRegistry worldRegistry, float renderScale) {
       this.worldRegistry = worldRegistry;
@@ -47,6 +48,18 @@ public abstract class MainRenderer implements Destructable {
    public abstract void registerCustomUniforms(DynamicUniformHolder uniforms);
 
    public abstract void render();
+
+   public void setCurrentPhotonicsFragment(String fragmentName) {
+      this.currentPhotonicsFragment = fragmentName == null ? "" : fragmentName;
+   }
+
+   protected boolean isCurrentPhotonicsFragment(String fragmentName) {
+      return fragmentName.equals(this.currentPhotonicsFragment);
+   }
+
+   public Map<String, TextureObject> getAutomationTextures() {
+      return Map.of();
+   }
 
    public abstract void recalculateSizes();
 

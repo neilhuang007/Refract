@@ -1,10 +1,12 @@
 package at.redi2go.photonic.client;
 
+import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.rendering.world.LightBlock;
 import at.redi2go.photonic.client.rendering.world.LightType;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -12,6 +14,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+import com.mojang.blaze3d.systems.RenderSystem;
+import net.irisshaders.iris.Iris;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.Block;
 import net.minecraft.text.Text;
@@ -37,6 +41,7 @@ import net.minecraft.client.gui.widget.SliderWidget;
 import org.jetbrains.annotations.NotNull;
 
 public class ModSettingsScreen extends Screen {
+   private static final LightingMode[] LIGHTING_MODE_VALUES = LightingMode.values();
    private static final ToggleableListScreen.Model BLOCKS_3D_MODEL = new ToggleableListScreen.Model(Registries.BLOCK.stream().filter(block -> {
       Set<Block> blacklistedBlocks = Set.of(Blocks.AIR, Blocks.WATER, Blocks.LAVA);
       return !blacklistedBlocks.contains(block);
@@ -75,6 +80,17 @@ public class ModSettingsScreen extends Screen {
          PhotonicsConfig.setMultiThreadingEnabled(!PhotonicsConfig.isMultiThreadingEnabled());
          w.setMessage(Text.of("MultiThreading: " + (PhotonicsConfig.isMultiThreadingEnabled() ? "On" : "Off")));
       }, "Turns MultiThreading on or off; MultiThreading is considerably faster, but can cause bugs.", () -> true));
+      buttons.add(new ModSettingsScreen.PButton(this.getLightingModeButtonText(), w -> {
+         this.cycleLightingModeOverride();
+         w.setMessage(Text.of(this.getLightingModeButtonText()));
+         this.reloadShaders();
+      }, "Cycles between shader-pack default, OFF, BASIC, RESTIR,\nand OCTRAY lighting modes, then reloads Iris.", () -> true));
+      PhotonicsStorage.Parameter<Boolean> useOctrayChunks = PhotonicsStorage.USE_OCTRAY_CHUNKS;
+      buttons.add(new ModSettingsScreen.PButton("Chunk Backend: " + (useOctrayChunks.value ? "Octray" : "Legacy"), w -> {
+         useOctrayChunks.value = !useOctrayChunks.value;
+         useOctrayChunks.modified();
+         w.setMessage(Text.of("Chunk Backend: " + (useOctrayChunks.value ? "Octray" : "Legacy")));
+      }, "Switches the chunk memory backend used by Photonics.\nOCTRAY lighting mode always forces the octray backend.", () -> true));
       PhotonicsStorage.Parameter<Boolean> profilerEnabled = PhotonicsStorage.PROFILER_ENABLED;
       buttons.add(new ModSettingsScreen.PButton("Performance Profiler: " + (profilerEnabled.value ? "On" : "Off"), w -> {
          profilerEnabled.value = !profilerEnabled.value;
@@ -190,6 +206,40 @@ public class ModSettingsScreen extends Screen {
       } catch (Exception e) {
          Photonic.error("error saving config", e);
       }
+   }
+
+   private String getLightingModeButtonText() {
+      String override = PhotonicsStorage.getEffectiveStringOverride(PhotonicsStorage.LIGHTING_MODE_OVERRIDE, "photonics.lightingMode");
+      return "Lighting Mode: " + (override == null || override.isBlank() ? "Shader Pack" : override);
+   }
+
+   private void cycleLightingModeOverride() {
+      String current = PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value;
+      if (current == null || current.isBlank()) {
+         PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = LIGHTING_MODE_VALUES[0].name();
+      } else {
+         for (int i = 0; i < LIGHTING_MODE_VALUES.length; i++) {
+            if (LIGHTING_MODE_VALUES[i].name().equals(current)) {
+               PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = i == LIGHTING_MODE_VALUES.length - 1 ? "" : LIGHTING_MODE_VALUES[i + 1].name();
+               PhotonicsStorage.LIGHTING_MODE_OVERRIDE.modified();
+               PhotonicsStorage.applySystemPropertyOverrides();
+               return;
+            }
+         }
+         PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = "";
+      }
+      PhotonicsStorage.LIGHTING_MODE_OVERRIDE.modified();
+      PhotonicsStorage.applySystemPropertyOverrides();
+   }
+
+   private void reloadShaders() {
+      RenderSystem.recordRenderCall(() -> {
+         try {
+            Iris.reload();
+         } catch (IOException e) {
+            Photonic.error("error reloading shaders after lighting mode override update", e);
+         }
+      });
    }
 
    private static SplashOverlay buildLoadingOverlay(Supplier<Float> progressSupplier) {

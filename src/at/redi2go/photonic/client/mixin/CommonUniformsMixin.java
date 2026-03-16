@@ -3,7 +3,6 @@ package at.redi2go.photonic.client.mixin;
 import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.RenderDispatcher;
-import at.redi2go.photonic.client.rendering.MinecraftAccessor;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ShaderUtil;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
 import java.util.function.Supplier;
@@ -16,6 +15,8 @@ import net.irisshaders.iris.shaderpack.properties.PackDirectives;
 import net.irisshaders.iris.uniforms.CapturedRenderingState;
 import net.irisshaders.iris.uniforms.CommonUniforms;
 import net.irisshaders.iris.uniforms.FrameUpdateNotifier;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 import org.joml.Vector3d;
 import org.joml.Vector3f;
@@ -39,7 +40,7 @@ public class CommonUniformsMixin {
       if (Raytracer.shouldBeEnabled()) {
          Supplier<WorldRegistry> worldRegistry = () -> Raytracer.INSTANCE.getWorldRegistry();
          Supplier<RenderDispatcher> renderDispatcher = () -> Raytracer.INSTANCE.getRenderDispatcher();
-         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_camera_position", () -> new Vector3d(MinecraftAccessor.getCameraPosition()));
+         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_camera_position", CommonUniformsMixin::photonic$getWorldCameraPosition);
          uniforms.uniformMatrix(
             UniformUpdateFrequency.PER_FRAME,
             "direction_transformation_matrix_in",
@@ -50,16 +51,16 @@ public class CommonUniformsMixin {
          uniforms.uniformMatrix(
             UniformUpdateFrequency.PER_FRAME,
             "modelview_projection",
-            () -> renderDispatcher.get().getModelViewProjectionMatrix(new Vector3f(MinecraftAccessor.getCameraPosition()))
+            () -> renderDispatcher.get().getModelViewProjectionMatrix(new Vector3f(photonic$getCameraPosition()))
          );
          uniforms.uniformMatrix(UniformUpdateFrequency.PER_FRAME, "previous_modelview_projection", () -> {
             Matrix4f previous = previousModelViewProjection;
-            previousModelViewProjection = renderDispatcher.get().getModelViewProjectionMatrix(new Vector3f(MinecraftAccessor.getCameraPosition()));
+            previousModelViewProjection = renderDispatcher.get().getModelViewProjectionMatrix(new Vector3f(photonic$getCameraPosition()));
             return previous;
          });
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "previous_world_camera_position", () -> {
             Vector3d previous = previousWorldCameraPosition;
-            previousWorldCameraPosition = new Vector3d(MinecraftAccessor.getCameraPosition());
+            previousWorldCameraPosition = photonic$getWorldCameraPosition();
             return previous;
          });
          uniforms.uniform3f(UniformUpdateFrequency.PER_FRAME, "handheld_color", () -> renderDispatcher.get().getHandheldColor());
@@ -79,15 +80,43 @@ public class CommonUniformsMixin {
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_offset", () -> worldRegistry.get().getWorldOffset());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_min_voxel", () -> new Vector3d(worldRegistry.get().getWorldMinVoxel().toVector()));
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_max_voxel", () -> new Vector3d(worldRegistry.get().getWorldMaxVoxel().toVector()));
-         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "rt_camera_position", () -> worldRegistry.get().toRt(new Vector3d(MinecraftAccessor.getCameraPosition())));
+         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "rt_camera_position", () -> worldRegistry.get().toRt(photonic$getWorldCameraPosition()));
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_light_count", () -> {
             Raytracer rt = Raytracer.INSTANCE;
             return rt == null ? 0 : rt.getWorldRegistry().getLightRegistry().lightCount();
          });
+         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "light_blend_region_count", () -> worldRegistry.get().getLightBlendRegionCount());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "light_blend_factor", () -> worldRegistry.get().fetchLightBlendFactor());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_min", () -> worldRegistry.get().getLightBlendMin());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_max", () -> worldRegistry.get().getLightBlendMax());
+         photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 1);
+         photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 2);
+         photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 3);
+         photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 4);
+         photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 5);
+         photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 6);
+         photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 7);
          Raytracer.INSTANCE.getMainRenderer().registerCustomUniforms(uniforms);
       }
+   }
+
+   @Unique
+   private static void photonic$registerLightBlendRegionUniform(
+      DynamicUniformHolder uniforms, Supplier<WorldRegistry> worldRegistry, int index
+   ) {
+      uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_min_" + index, () -> worldRegistry.get().getLightBlendMin(index));
+      uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_max_" + index, () -> worldRegistry.get().getLightBlendMax(index));
+   }
+
+   @Unique
+   private static Vector3f photonic$getCameraPosition() {
+      Vec3d position = MinecraftClient.getInstance().gameRenderer.getCamera().getPos();
+      return new Vector3f((float) position.x, (float) position.y, (float) position.z);
+   }
+
+   @Unique
+   private static Vector3d photonic$getWorldCameraPosition() {
+      Vector3f position = photonic$getCameraPosition();
+      return new Vector3d(position.x, position.y, position.z);
    }
 }
