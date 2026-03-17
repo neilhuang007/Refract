@@ -114,7 +114,8 @@ void main() {
         if (historyLength < INDIRECT_HISTORY_SHORT) {
             ivec2 tex_size = textureSize(radiosity_indirect, 0);
             float centerDepth = ph_linearize_depth(texelFetch(depthtex0, tex_coord, 0).r);
-            vec3 centerNormal = texelFetch(radiosity_normal, tex_coord, 0).xyz;
+            vec3 centerGeometryNormal = texelFetch(radiosity_normal, tex_coord, 0).xyz;
+            vec3 centerMappedNormal = texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz;
             float centerLuma = dot(color_frag_out, LUM_COEFF);
             float centerVariance = max(varianceData.y - varianceData.x * varianceData.x, 0.0f);
             float phiDepth = max(centerDepth, 1e-4f) * mix(4.5f, 2.5f, ph_confidence_from_history(historyLength));
@@ -132,8 +133,8 @@ void main() {
                     vec3 sampleColor = ph_clamp_indirect_radiance(samplePacked.rgb);
                     float sampleLuma = dot(sampleColor, LUM_COEFF);
                     float sampleDepth = ph_linearize_depth(texelFetch(depthtex0, p, 0).r);
-                    vec3 sampleNormal = texelFetch(radiosity_normal, p, 0).xyz;
-                    float wN = normal_edge_stopping_weight(centerNormal, sampleNormal, normalPower);
+                    vec3 sampleMappedNormal = texelFetch(radiosity_mapped_normal, p, 0).xyz;
+                    float wN = normal_edge_stopping_weight(centerMappedNormal, sampleMappedNormal, normalPower);
                     float wD = exp(-abs(centerDepth - sampleDepth) / max(phiDepth * length(vec2(xx, yy)), 1e-4f));
                     float wL = luma_edge_stopping_weight(centerLuma, sampleLuma, phiLuma);
                     float w = wN * wD * wL;
@@ -156,9 +157,9 @@ void main() {
                         float sampleHistory = samplePacked.a;
                         float sampleLuma = dot(sampleColor, LUM_COEFF);
                         float sampleDepth = ph_linearize_depth(texelFetch(depthtex0, p, 0).r);
-                        vec3 sampleNormal = texelFetch(radiosity_normal, p, 0).xyz;
+                        vec3 sampleMappedNormal = texelFetch(radiosity_mapped_normal, p, 0).xyz;
                         // Relaxed edge stopping: normal power 32 instead of 128
-                        float wN = normal_edge_stopping_weight(centerNormal, sampleNormal, 18.0f);
+                        float wN = normal_edge_stopping_weight(centerMappedNormal, sampleMappedNormal, 18.0f);
                         float wD = exp(-abs(centerDepth - sampleDepth) / max(phiDepth * length(vec2(xx, yy) * 4.0f), 1e-4f));
                         float wL = luma_edge_stopping_weight(centerLuma, sampleLuma, phiLuma);
                         // Prefer neighbors with longer history
@@ -190,7 +191,7 @@ void main() {
 
     vec3 C0 = texelFetch(prev_indirect_denoise_color, tex_coord, 0).rgb;
     float L0 = dot(C0, LUM_COEFF);
-    vec3 N0 = texelFetch(radiosity_normal, tex_coord, 0).xyz;
+    vec3 N0 = texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz;
     ivec2 tex_size = textureSize(prev_indirect_denoise_color, 0);
     float D0 = ph_linearize_depth(texelFetch(depthtex0, tex_coord, 0).r);
     float D_right = ph_linearize_depth(texelFetch(depthtex0, clamp(tex_coord + ivec2(1, 0), ivec2(0), tex_size - 1), 0).r);
@@ -233,7 +234,7 @@ void main() {
             vec3 Ci = texelFetch(prev_indirect_denoise_color, p, 0).rgb;
             float Vi = texelFetch(prev_indirect_denoise_variance, p, 0).x;
             float Li = dot(Ci.xyz, LUM_COEFF);
-            vec3 Ni = texelFetch(radiosity_normal, p, 0).xyz;
+            vec3 Ni = texelFetch(radiosity_mapped_normal, p, 0).xyz;
             float Di = ph_linearize_depth(texelFetch(depthtex0, p, 0).x);
             float k = kernel_5x5(localOffset);
 

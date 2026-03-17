@@ -12,6 +12,7 @@ layout(std430) restrict readonly buffer ph_light_tree_indices {
 uniform int ph_light_tree_node_count;
 
 const float lt_min_distance_sq = 0.01f;
+const float lt_min_traversal_pdf = 0.003f;
 float lt_last_traversal_pdf = 1.0f;
 
 struct LightTreeNode {
@@ -108,6 +109,7 @@ int lt_stochastic_traverse(vec3 shadingPos, inout uint rng) {
         float choice = lt_random_float(rng);
         bool chooseLeft = choice < leftPdf;
         lt_last_traversal_pdf *= chooseLeft ? leftPdf : (1.0f - leftPdf);
+        lt_last_traversal_pdf = max(lt_last_traversal_pdf, lt_min_traversal_pdf);
         nodeIndex = chooseLeft ? node.leftChild : node.rightChild;
     }
 
@@ -121,12 +123,67 @@ void lt_select_light_from_leaf(LightTreeNode leaf, vec3 shadingPos, inout uint r
         return;
     }
 
-    int offset = int(floor(lt_random_float(rng) * float(leaf.leafCount)));
-    offset = clamp(offset, 0, leaf.leafCount - 1);
-    lightIndex = light_tree_indices[leaf.leafStart + offset];
+    if (leaf.leafCount <= 2) {
+        int offset = int(floor(lt_random_float(rng) * float(leaf.leafCount)));
+        offset = clamp(offset, 0, leaf.leafCount - 1);
+        lightIndex = light_tree_indices[leaf.leafStart + offset];
+        float uniformLeafPdf = 1.0f / float(leaf.leafCount);
+        pdf = lt_last_traversal_pdf * uniformLeafPdf;
+        pdf = max(pdf, 1e-6f);
+        return;
+    }
 
-    float uniformLeafPdf = 1.0f / float(leaf.leafCount);
-    pdf = lt_last_traversal_pdf * uniformLeafPdf;
+    float totalImportance = 0.0f;
+    int leafCount = min(leaf.leafCount, 32);
+
+    for (int i = 0; i < leafCount; i++) {
+        int idx = light_tree_indices[leaf.leafStart + i];
+        Light light = load_light(idx);
+        vec3 toLight = light.position - shadingPos;
+        float distSq = max(dot(toLight, toLight), lt_min_distance_sq);
+        float importance = light.intensity / distSq;
+        totalImportance += importance;
+    }
+
+    if (totalImportance <= 0.0f) {
+        int offset = int(floor(lt_random_float(rng) * float(leafCount)));
+        offset = clamp(offset, 0, leafCount - 1);
+        lightIndex = light_tree_indices[leaf.leafStart + offset];
+        float uniformLeafPdf = 1.0f / float(leafCount);
+        pdf = lt_last_traversal_pdf * uniformLeafPdf;
+        pdf = max(pdf, 1e-6f);
+        return;
+    }
+
+    float target = lt_random_float(rng) * totalImportance;
+    float cumulative = 0.0f;
+    float selectedImportance = 0.0f;
+
+    for (int i = 0; i < leafCount; i++) {
+        int idx = light_tree_indices[leaf.leafStart + i];
+        Light light = load_light(idx);
+        vec3 toLight = light.position - shadingPos;
+        float distSq = max(dot(toLight, toLight), lt_min_distance_sq);
+        float importance = light.intensity / distSq;
+        cumulative += importance;
+
+        if (cumulative >= target) {
+            lightIndex = idx;
+            selectedImportance = importance;
+            break;
+        }
+    }
+
+    if (lightIndex < 0) {
+        lightIndex = light_tree_indices[leaf.leafStart + leafCount - 1];
+        Light light = load_light(lightIndex);
+        vec3 toLight = light.position - shadingPos;
+        float distSq = max(dot(toLight, toLight), lt_min_distance_sq);
+        selectedImportance = light.intensity / distSq;
+    }
+
+    float leafPdf = selectedImportance / totalImportance;
+    pdf = lt_last_traversal_pdf * leafPdf;
     pdf = max(pdf, 1e-6f);
 }
 

@@ -6,11 +6,6 @@ layout(location = 0) out vec4 filtered_direct_frag_out;
 
 #include "/photonics/common/header.glsl"
 
-uniform sampler2D radiosity_lighting;
-uniform sampler2D radiosity_lighting_variance;
-uniform sampler2D radiosity_position;
-uniform sampler2D radiosity_normal;
-
 const float lt_filter_sigma_normal = 128.0f;
 const float lt_filter_sigma_position = 4.0f;
 const float lt_filter_sigma_luma = 4.0f;

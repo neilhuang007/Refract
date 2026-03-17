@@ -82,32 +82,35 @@ public class Raytracer implements Destructable {
 
       PhotonicsProperties properties = getProperties().orElseThrow();
       this.renderDispatcher = new RenderDispatcher(properties.getRenderScale());
-      boolean useOctrayChunks = properties.getLightingMode() == LightingMode.OCTRAY
-         || PhotonicsStorage.USE_OCTRAY_CHUNKS.value;
-      boolean lightBinningEnabled = properties.isLightBinningEnabled().orElse(properties.getLightingMode() == LightingMode.BASIC);
+      boolean lightBinningEnabled = resolveLightBinningEnabled(properties);
       this.worldRegistry = new WorldRegistry(
          this.renderDispatcher,
          properties.getMaxLights(),
          properties.getMaxSamples(),
+         properties.getMinTracedLightLuma(),
          properties.isBlockLightEnabled().orElse(true),
-         lightBinningEnabled,
-         useOctrayChunks
+         lightBinningEnabled
       );
       Photonic.info(
-         "[Startup] photonics: lightingMode={} octrayChunks={} multithreading={} lightBinning={} blockLight={} gi={} restirSamples={}/{} denoiserPasses={}",
+         "[Startup] photonics: lightingMode={} multithreading={} lightBinning={} blockLight={} gi={}",
          properties.getLightingMode(),
-         useOctrayChunks,
          PhotonicsStorage.DO_MULTITHREADING.value,
          lightBinningEnabled,
          properties.isBlockLightEnabled().orElse(true),
-         properties.isGiEnabled().orElse(true),
-         properties.getRestirInitialSamples(),
-         properties.getRestirSpatialReuseSamples(),
-         properties.getRestirDenoiserPasses()
+         properties.isGiEnabled().orElse(true)
       );
       this.mainRenderer = properties.getLightingMode().createMainRenderer(this.worldRegistry, properties.getRenderScale(), properties);
       this.worldRegistry.startWorldBuilder();
       this.voxelizedBlockObserver = PhotonicsConfig.observe(c -> c.voxelizedBlocks, unused -> MinecraftClient.getInstance().worldRenderer.reload());
+   }
+
+   public static boolean resolveLightBinningEnabled(PhotonicsProperties properties) {
+      String override = PhotonicsStorage.getEffectiveLightBinningOverride();
+      if (!override.isBlank()) {
+         return Boolean.parseBoolean(override);
+      }
+      return properties.isLightBinningEnabled()
+         .orElse(properties.getLightingMode() == LightingMode.BASIC || properties.getLightingMode() == LightingMode.LIGHT_TREE);
    }
 
    public static Optional<PhotonicsProperties> getProperties() {

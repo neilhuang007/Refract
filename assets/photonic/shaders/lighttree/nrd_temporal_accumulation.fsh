@@ -9,15 +9,15 @@ layout(location = 2) out vec4 nrd_history_length_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
-uniform sampler2D stage_radiosity_direct;
 uniform sampler2D stage_radiosity_position;
 uniform sampler2D stage_radiosity_normal;
 
 uniform sampler2D prev_nrd_diff_slow;
 uniform sampler2D prev_nrd_diff_fast;
 uniform sampler2D prev_nrd_history_length;
-uniform sampler2D prev_radiosity_position;
-uniform sampler2D prev_radiosity_normal;
+
+// Debug: when enabled, light_reload is ignored and temporal history is never wiped
+uniform float ph_debug_disable_temporal_reset;
 
 const float nrd_diff_max_accumulated_frames = 30.0f;
 const float nrd_diff_max_fast_accumulated_frames = 6.0f;
@@ -111,8 +111,9 @@ void main() {
         get_taa_jitter()
     );
 
-    ivec2 previousUv;
-    bool canReuseHistory = !light_reload
+    ivec2 previousUv = ivec2(0);
+    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
+    bool canReuseHistory = !lightReloadActive
         && nrd_is_valid_reprojection(reprojectionUv, currentPosition, currentNormal, previousUv);
 
     if (!canReuseHistory) {

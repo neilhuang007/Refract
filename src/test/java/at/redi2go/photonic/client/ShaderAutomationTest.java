@@ -1,13 +1,13 @@
 package at.redi2go.photonic.client;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
 import org.junit.jupiter.api.Test;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ShaderAutomationTest {
    private static final double EPSILON = 1.0e-9;
@@ -35,14 +35,14 @@ class ShaderAutomationTest {
 
    @Test
    void blankExpectedPatchIdPrefixMatchesAnything() {
-      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix("", "BASIC:native"));
-      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix(null, "OCTRAY:patched"));
+      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix("", "LIGHT_TREE:stable"));
+      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix(null, "LIGHT_TREE:patched"));
    }
 
    @Test
    void expectedPatchIdPrefixRequiresMatchingPatchIdPrefix() {
-      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix("OCTRAY:", "OCTRAY:native"));
-      assertFalse(ShaderAutomation.matchesExpectedPatchIdPrefix("OCTRAY:", "BASIC:native"));
+      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix("LIGHT_TREE:", "LIGHT_TREE:native"));
+      assertFalse(ShaderAutomation.matchesExpectedPatchIdPrefix("LIGHT_TREE:", "BASIC:native"));
    }
 
    @Test
@@ -113,5 +113,55 @@ class ShaderAutomationTest {
    void parseLongSequenceHandlesBlankAndCommaSeparatedValues() {
       assertTrue(Arrays.equals(new long[0], ShaderAutomation.parseLongSequence("")));
       assertTrue(Arrays.equals(new long[]{6000L, 9000L, 12000L}, ShaderAutomation.parseLongSequence("6000, 9000,12000")));
+   }
+
+   @Test
+   void brightnessVarianceIsZeroForUniformImage() {
+      BufferedImage image = solidImage(2, 2, new Color(128, 128, 128, 255));
+
+      assertEquals(0.0, ShaderAutomation.computeImageBrightnessVariance(image), EPSILON);
+      assertEquals(0.0, ShaderAutomation.computeImageBrightnessStdDev(image), EPSILON);
+   }
+
+   @Test
+   void brightnessVarianceTracksSpreadInPixelLuma() {
+      BufferedImage image = new BufferedImage(2, 1, BufferedImage.TYPE_INT_ARGB);
+      image.setRGB(0, 0, new Color(0, 0, 0, 255).getRGB());
+      image.setRGB(1, 0, new Color(255, 255, 255, 255).getRGB());
+
+      assertEquals(0.25, ShaderAutomation.computeImageBrightnessVariance(image), EPSILON);
+      assertEquals(0.5, ShaderAutomation.computeImageBrightnessStdDev(image), EPSILON);
+   }
+
+   @Test
+   void maxLumaPixelDeltaTracksLargestPerPixelChange() {
+      BufferedImage previousImage = solidImage(2, 1, new Color(0, 0, 0, 255));
+      BufferedImage currentImage = new BufferedImage(2, 1, BufferedImage.TYPE_INT_ARGB);
+      currentImage.setRGB(0, 0, new Color(255, 0, 0, 255).getRGB());
+      currentImage.setRGB(1, 0, new Color(255, 255, 255, 255).getRGB());
+
+      assertEquals(1.0, ShaderAutomation.computeMaxLumaPixelDelta(previousImage, currentImage), EPSILON);
+   }
+
+   @Test
+   void alphaDeltaAveragesPerPixelAlphaChange() {
+      BufferedImage previousImage = new BufferedImage(2, 1, BufferedImage.TYPE_INT_ARGB);
+      BufferedImage currentImage = new BufferedImage(2, 1, BufferedImage.TYPE_INT_ARGB);
+      previousImage.setRGB(0, 0, new Color(0, 0, 0, 255).getRGB());
+      previousImage.setRGB(1, 0, new Color(0, 0, 0, 0).getRGB());
+      currentImage.setRGB(0, 0, new Color(0, 0, 0, 255).getRGB());
+      currentImage.setRGB(1, 0, new Color(0, 0, 0, 255).getRGB());
+
+      assertEquals(0.5, ShaderAutomation.computeAlphaDelta(previousImage, currentImage), EPSILON);
+   }
+
+   private static BufferedImage solidImage(int width, int height, Color color) {
+      BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+      for (int y = 0; y < height; y++) {
+         for (int x = 0; x < width; x++) {
+            image.setRGB(x, y, color.getRGB());
+         }
+      }
+      return image;
    }
 }

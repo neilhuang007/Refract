@@ -6,6 +6,7 @@ import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.opengl.rendering.IRenderDispatcher;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.config.lights.BlockLightInfo;
+import at.redi2go.photonic.client.mixin.SodiumWorldRendererAccessor;
 import at.redi2go.photonic.client.rendering.world.position.PChunkPos;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -16,6 +17,12 @@ import java.util.Set;
 import java.util.stream.IntStream;
 import kroppeb.stareval.function.FunctionReturn;
 import kroppeb.stareval.function.Type;
+import net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer;
+import net.caffeinemc.mods.sodium.client.render.chunk.RenderSection;
+import net.caffeinemc.mods.sodium.client.render.chunk.RenderSectionManager;
+import net.caffeinemc.mods.sodium.client.render.chunk.lists.ChunkRenderList;
+import net.caffeinemc.mods.sodium.client.render.chunk.lists.SortedRenderLists;
+import net.caffeinemc.mods.sodium.client.util.iterator.ByteIterator;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.parsing.MatrixType;
 import net.irisshaders.iris.parsing.VectorType;
@@ -24,25 +31,29 @@ import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
 import net.irisshaders.iris.uniforms.CapturedRenderingState;
 import net.irisshaders.iris.uniforms.custom.CustomUniforms;
 import net.irisshaders.iris.uniforms.custom.cached.CachedUniform;
+import net.minecraft.block.Block;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.util.Window;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
-import net.minecraft.world.World;
-import net.minecraft.block.Block;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.RegistryKey;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.World;
 import net.minecraft.world.chunk.ChunkSection;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.registry.Registries;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 public class RenderDispatcher implements IRenderDispatcher, Destructable {
    private static final MinecraftClient MC_INSTANCE = MinecraftClient.getInstance();
+   private static final int INBOUND_NEAR_KEEP_CHUNKS = 2;
+   private static final int INBOUND_VERTICAL_KEEP_CHUNKS = 3;
+   private static final float INBOUND_FORWARD_DOT = 0.3F;
+   private static final float INBOUND_SIDE_DOT_LIMIT = 0.9848077F;
    private final AtomicIntegerImage[] gi;
    private final Map<Integer, Integer> boundTextures = new HashMap<>();
    private final Set<PChunkPos> inboundChunks = new HashSet<>();
@@ -103,14 +114,110 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
       this.cachedInboundCenterZ = centerZ;
       this.cachedInboundRenderRadius = renderRadius;
       this.inboundChunks.clear();
-      for (int x = -renderRadius; x < renderRadius; x++) {
-         for (int y = -renderRadius; y < renderRadius; y++) {
-            for (int z = -renderRadius; z < renderRadius; z++) {
-               this.inboundChunks.add(new PChunkPos(centerX + x, centerY + y, centerZ + z));
+
+      if (this.collectVisibleSodiumChunks()) {
+         return this.inboundChunks;
+      }
+
+      Vec3d cameraPos = cameraEntity.getPos();
+      Vector3f forward = this.resolveCameraForward();
+      int minY = Math.max(-INBOUND_VERTICAL_KEEP_CHUNKS, -renderRadius);
+      int maxY = Math.min(INBOUND_VERTICAL_KEEP_CHUNKS, renderRadius);
+      for (int x = -renderRadius; x <= renderRadius; x++) {
+         for (int y = minY; y <= maxY; y++) {
+            for (int z = -renderRadius; z <= renderRadius; z++) {
+               PChunkPos candidate = new PChunkPos(centerX + x, centerY + y, centerZ + z);
+               if (this.isChunkRelevantToCamera(candidate, cameraPos, forward)) {
+                  this.inboundChunks.add(candidate);
+               }
             }
          }
       }
       return this.inboundChunks;
+   }
+
+   private boolean collectVisibleSodiumChunks() {
+      SodiumWorldRenderer sodiumWorldRenderer = SodiumWorldRenderer.instanceNullable();
+      if (sodiumWorldRenderer == null) {
+         return false;
+      }
+
+      RenderSectionManager renderSectionManager = ((SodiumWorldRendererAccessor) sodiumWorldRenderer).getRenderSectionManager();
+      if (renderSectionManager == null) {
+         return false;
+      }
+
+      SortedRenderLists renderLists = renderSectionManager.getRenderLists();
+      if (renderLists == null) {
+         return false;
+      }
+
+      for (java.util.Iterator<ChunkRenderList> it = renderLists.iterator(false); it.hasNext(); ) {
+         ChunkRenderList renderList = it.next();
+         ByteIterator iterator = renderList.sectionsWithGeometryIterator(false);
+         while (iterator.hasNext()) {
+            int sectionIndex = iterator.nextByteAsInt();
+            RenderSection renderSection = renderList.getRegion().getSection(sectionIndex);
+            if (renderSection != null && renderSection.isBuilt()) {
+               this.inboundChunks.add(new PChunkPos(renderSection.getChunkX(), renderSection.getChunkY(), renderSection.getChunkZ()));
+            }
+         }
+      }
+      return !this.inboundChunks.isEmpty();
+   }
+
+   private boolean isChunkRelevantToCamera(PChunkPos pos, Vec3d cameraPos, Vector3f forward) {
+      BlockPos chunkMin = new BlockPos(pos.x * 16, pos.y * 16, pos.z * 16);
+      double centerX = chunkMin.getX() + 8.0;
+      double centerY = chunkMin.getY() + 8.0;
+      double centerZ = chunkMin.getZ() + 8.0;
+      double dx = centerX - cameraPos.x;
+      double dy = centerY - cameraPos.y;
+      double dz = centerZ - cameraPos.z;
+      double horizontalDistanceSquared = dx * dx + dz * dz;
+      if (horizontalDistanceSquared <= (double)(INBOUND_NEAR_KEEP_CHUNKS * 16 * INBOUND_NEAR_KEEP_CHUNKS * 16)) {
+         return true;
+      }
+      double fullDistanceSquared = horizontalDistanceSquared + dy * dy;
+      if (fullDistanceSquared <= 1.0E-4) {
+         return true;
+      }
+
+      Vector3f toChunk = new Vector3f((float)dx, (float)dy, (float)dz);
+      toChunk.normalize();
+      float forwardDot = forward.dot(toChunk);
+      if (forwardDot < INBOUND_FORWARD_DOT) {
+         return false;
+      }
+
+      Vector3f horizontalForward = new Vector3f(forward.x, 0.0F, forward.z);
+      if (horizontalForward.lengthSquared() <= 1.0E-4F) {
+         horizontalForward.set(0.0F, 0.0F, 1.0F);
+      } else {
+         horizontalForward.normalize();
+      }
+
+      Vector3f horizontalRight = new Vector3f(horizontalForward.z, 0.0F, -horizontalForward.x);
+      Vector3f horizontalToChunk = new Vector3f((float)dx, 0.0F, (float)dz);
+      if (horizontalToChunk.lengthSquared() <= 1.0E-4F) {
+         return true;
+      }
+
+      horizontalToChunk.normalize();
+      float sideDot = Math.abs(horizontalRight.dot(horizontalToChunk));
+      return sideDot <= INBOUND_SIDE_DOT_LIMIT;
+   }
+
+   private Vector3f resolveCameraForward() {
+      if (MC_INSTANCE.gameRenderer != null && MC_INSTANCE.gameRenderer.getCamera() != null) {
+         Vector3f horizontalPlane = MC_INSTANCE.gameRenderer.getCamera().getHorizontalPlane();
+         Vector3f forward = new Vector3f(horizontalPlane.x, horizontalPlane.y, horizontalPlane.z);
+         if (forward.lengthSquared() > 1.0E-4F) {
+            return forward.normalize();
+         }
+      }
+
+      return new Vector3f(0.0F, 0.0F, 1.0F);
    }
 
    @Override
@@ -220,3 +327,6 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
       }
    }
 }
+
+
+

@@ -45,6 +45,7 @@ public final class ShaderAutomation {
    private final boolean requireDirectSignal;
    private final boolean autoStop;
    private final boolean releaseMouse;
+   private final boolean fullscreen;
    private final String cameraMotionMode;
    private final int cameraMotionStartActiveTick;
    private final int cameraMotionPeriodTicks;
@@ -65,6 +66,13 @@ public final class ShaderAutomation {
    private int ticksElapsed = 0;
    private int activeTicks = 0;
    private int renderedFrames = 0;
+   private long fpsCounterStartTime = 0;
+   private int fpsFrameCount = 0;
+   private float currentFps = 0;
+   private float minFps = Float.MAX_VALUE;
+   private float maxFps = 0;
+   private float avgFpsSum = 0;
+   private int avgFpsCount = 0;
    private int capturesTaken = 0;
    private int litCapturesTaken = 0;
    private int lastCapturedActiveTick = Integer.MIN_VALUE;
@@ -97,6 +105,22 @@ public final class ShaderAutomation {
    private double latestDirectMeanRed = 0.0;
    private double latestDirectMeanGreen = 0.0;
    private double latestDirectMeanBlue = 0.0;
+   private double latestDirectMeanAlpha = 0.0;
+   private double latestDirectZeroAlphaFraction = 0.0;
+   private double latestDirectAlphaDelta = 0.0;
+   private double directAlphaDeltaSum = 0.0;
+   private double directAlphaDeltaMax = 0.0;
+   private int directAlphaDeltaSamples = 0;
+   private double latestDirectBrightnessVariance = 0.0;
+   private double latestDirectBrightnessStdDev = 0.0;
+   private double directBrightnessVarianceSum = 0.0;
+   private double directBrightnessVarianceMax = 0.0;
+   private int directBrightnessVarianceSamples = 0;
+   private double latestHandheldBrightnessVariance = 0.0;
+   private double latestHandheldBrightnessStdDev = 0.0;
+   private double handheldBrightnessVarianceSum = 0.0;
+   private double handheldBrightnessVarianceMax = 0.0;
+   private int handheldBrightnessVarianceSamples = 0;
    private double latestLightingMeanRed = 0.0;
    private double latestLightingMeanGreen = 0.0;
    private double latestLightingMeanBlue = 0.0;
@@ -126,9 +150,22 @@ public final class ShaderAutomation {
    private double latestLightBlendFactor = 0.0;
    private boolean latestLightSelectionCapped = false;
    private boolean latestGlobalLightReload = false;
+   private double directTemporalDeltaSum = 0.0;
+   private double directTemporalDeltaMax = 0.0;
+   private int directTemporalDeltaSamples = 0;
+   private double latestDirectTemporalDelta = 0.0;
+   private double latestDirectTemporalMaxPixelDelta = 0.0;
+   private double directTemporalMaxPixelDeltaSum = 0.0;
+   private double directTemporalMaxPixelDeltaMax = 0.0;
+   private int directTemporalMaxPixelDeltaSamples = 0;
    private double directSoftTemporalDeltaSum = 0.0;
    private double directSoftTemporalDeltaMax = 0.0;
    private int directSoftTemporalDeltaSamples = 0;
+   private double latestDirectSoftTemporalDelta = 0.0;
+   private int directSoftZeroCaptureCount = 0;
+   private int directSoftSignalCaptureCount = 0;
+   private boolean directSoftSignalDetected = false;
+   private boolean directSoftMissingSignalWarningIssued = false;
    private double indirectTemporalDeltaSum = 0.0;
    private double indirectTemporalDeltaMax = 0.0;
    private int indirectTemporalDeltaSamples = 0;
@@ -168,6 +205,7 @@ public final class ShaderAutomation {
    private float motionYawOffsetMax = 0.0f;
    private float motionPitchOffsetMin = 0.0f;
    private float motionPitchOffsetMax = 0.0f;
+   private BufferedImage previousDirectImage = null;
    private BufferedImage previousDirectSoftImage = null;
    private BufferedImage previousIndirectImage = null;
    private final Map<MotionRepeatKey, MotionPhaseSample> previousDirectImagesByPhase = new HashMap<>();
@@ -179,6 +217,7 @@ public final class ShaderAutomation {
    private boolean lightingSignalDetected = false;
    private boolean finished = false;
    private boolean reportInitialized = false;
+   private boolean fullscreenApplied = false;
    private boolean cameraBaselineCaptured = false;
    private boolean worldAutomationPrepared = false;
    private String failureReason = "";
@@ -227,6 +266,7 @@ public final class ShaderAutomation {
       this.requireDirectSignal = Boolean.parseBoolean(System.getProperty("photonics.automation.requireDirectSignal", "true"));
       this.autoStop = Boolean.parseBoolean(System.getProperty("photonics.automation.autoStop", "false"));
       this.releaseMouse = Boolean.parseBoolean(System.getProperty("photonics.automation.releaseMouse", "true"));
+      this.fullscreen = Boolean.parseBoolean(System.getProperty("photonics.automation.fullscreen", "false"));
       this.cameraMotionMode = System.getProperty("photonics.automation.cameraMotion", "none").trim().toLowerCase(Locale.ROOT);
       this.cameraMotionStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.cameraMotionStartActiveTick", this.startDelayTicks + Math.max(this.captureEveryActiveTicks, 30)));
       this.cameraMotionPeriodTicks = Math.max(0, Integer.getInteger("photonics.automation.cameraMotionPeriodTicks", 120));
@@ -409,6 +449,85 @@ public final class ShaderAutomation {
       };
    }
 
+   static double computeImageBrightnessVariance(BufferedImage image) {
+      if (image == null) {
+         return 0.0;
+      }
+
+      int width = image.getWidth();
+      int height = image.getHeight();
+      if (width <= 0 || height <= 0) {
+         return 0.0;
+      }
+
+      double pixelCount = Math.max(1, width * height);
+      double meanLuma = computeImageStats(image)[1];
+      double varianceSum = 0.0;
+      for (int y = 0; y < height; y++) {
+         for (int x = 0; x < width; x++) {
+            double luma = computeLuma(image.getRGB(x, y));
+            double delta = luma - meanLuma;
+            varianceSum += delta * delta;
+         }
+      }
+      return varianceSum / pixelCount;
+   }
+
+   static double computeImageBrightnessStdDev(BufferedImage image) {
+      return Math.sqrt(computeImageBrightnessVariance(image));
+   }
+
+   static double computeMaxLumaPixelDelta(BufferedImage previousImage, BufferedImage currentImage) {
+      if (previousImage == null || currentImage == null) {
+         return 0.0;
+      }
+
+      int width = Math.min(previousImage.getWidth(), currentImage.getWidth());
+      int height = Math.min(previousImage.getHeight(), currentImage.getHeight());
+      if (width <= 0 || height <= 0) {
+         return 0.0;
+      }
+
+      double maxDelta = 0.0;
+      for (int y = 0; y < height; y++) {
+         for (int x = 0; x < width; x++) {
+            double delta = Math.abs(computeLuma(currentImage.getRGB(x, y)) - computeLuma(previousImage.getRGB(x, y)));
+            maxDelta = Math.max(maxDelta, delta);
+         }
+      }
+      return maxDelta;
+   }
+
+   private static double computeLuma(int argb) {
+      double red = ((argb >> 16) & 255) / 255.0;
+      double green = ((argb >> 8) & 255) / 255.0;
+      double blue = (argb & 255) / 255.0;
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+   }
+
+   static double computeAlphaDelta(BufferedImage previousImage, BufferedImage currentImage) {
+      if (previousImage == null || currentImage == null) {
+         return 0.0;
+      }
+
+      int width = Math.min(previousImage.getWidth(), currentImage.getWidth());
+      int height = Math.min(previousImage.getHeight(), currentImage.getHeight());
+      if (width <= 0 || height <= 0) {
+         return 0.0;
+      }
+
+      double pixelCount = Math.max(1, width * height);
+      double deltaSum = 0.0;
+      for (int y = 0; y < height; y++) {
+         for (int x = 0; x < width; x++) {
+            double previousAlpha = ((previousImage.getRGB(x, y) >> 24) & 255) / 255.0;
+            double currentAlpha = ((currentImage.getRGB(x, y) >> 24) & 255) / 255.0;
+            deltaSum += Math.abs(currentAlpha - previousAlpha);
+         }
+      }
+      return deltaSum / pixelCount;
+   }
+
    static double computeMaxLuma(BufferedImage image) {
       return computeImageStats(image)[0];
    }
@@ -427,15 +546,7 @@ public final class ShaderAutomation {
       int pixelCount = width * height;
       for (int y = 0; y < height; y++) {
          for (int x = 0; x < width; x++) {
-            int prevArgb = previousImage.getRGB(x, y);
-            int currArgb = currentImage.getRGB(x, y);
-            double prevLuma = 0.2126 * (((prevArgb >> 16) & 255) / 255.0)
-               + 0.7152 * (((prevArgb >> 8) & 255) / 255.0)
-               + 0.0722 * ((prevArgb & 255) / 255.0);
-            double currLuma = 0.2126 * (((currArgb >> 16) & 255) / 255.0)
-               + 0.7152 * (((currArgb >> 8) & 255) / 255.0)
-               + 0.0722 * ((currArgb & 255) / 255.0);
-            deltaSum += Math.abs(currLuma - prevLuma);
+            deltaSum += Math.abs(computeLuma(currentImage.getRGB(x, y)) - computeLuma(previousImage.getRGB(x, y)));
          }
       }
 
@@ -483,6 +594,7 @@ public final class ShaderAutomation {
       }
 
       if (client.world != null && this.raytracerActive) {
+         this.applyFullscreen(client);
          this.activeTicks++;
          this.applyCameraMotion(client);
          this.applyWorldAutomation(client);
@@ -521,6 +633,7 @@ public final class ShaderAutomation {
       }
 
       this.renderedFrames++;
+      this.recordFps();
       if (this.buildSuccess()) {
          this.finish("");
          return;
@@ -573,6 +686,7 @@ public final class ShaderAutomation {
          double[] handheldStats = computeImageStats(handheldImage);
          double[] indirectRawStats = computeImageStats(indirectRawImage);
          double[] indirectStats = computeImageStats(indirectImage);
+         double[] directAlphaStats = computeImageAlphaStats(directImage);
          double[] stageIndirectAlphaStats = computeImageAlphaStats(stageIndirectImage);
          double[] indirectAlphaStats = computeImageAlphaStats(indirectImage);
          double directLuma = directStats[0];
@@ -612,6 +726,24 @@ public final class ShaderAutomation {
          this.latestDirectMeanRed = directStats[2];
          this.latestDirectMeanGreen = directStats[3];
          this.latestDirectMeanBlue = directStats[4];
+         this.latestDirectMeanAlpha = directAlphaStats[0];
+         this.latestDirectZeroAlphaFraction = directAlphaStats[3];
+         this.latestDirectAlphaDelta = computeAlphaDelta(this.previousDirectImage, directImage);
+         if (this.previousDirectImage != null) {
+            this.directAlphaDeltaSum += this.latestDirectAlphaDelta;
+            this.directAlphaDeltaMax = Math.max(this.directAlphaDeltaMax, this.latestDirectAlphaDelta);
+            this.directAlphaDeltaSamples++;
+         }
+         this.latestDirectBrightnessVariance = computeImageBrightnessVariance(directImage);
+         this.latestDirectBrightnessStdDev = Math.sqrt(this.latestDirectBrightnessVariance);
+         this.directBrightnessVarianceSum += this.latestDirectBrightnessVariance;
+         this.directBrightnessVarianceMax = Math.max(this.directBrightnessVarianceMax, this.latestDirectBrightnessVariance);
+         this.directBrightnessVarianceSamples++;
+         this.latestHandheldBrightnessVariance = computeImageBrightnessVariance(handheldImage);
+         this.latestHandheldBrightnessStdDev = Math.sqrt(this.latestHandheldBrightnessVariance);
+         this.handheldBrightnessVarianceSum += this.latestHandheldBrightnessVariance;
+         this.handheldBrightnessVarianceMax = Math.max(this.handheldBrightnessVarianceMax, this.latestHandheldBrightnessVariance);
+         this.handheldBrightnessVarianceSamples++;
          this.latestLightingMeanRed = lightingStats[2];
          this.latestLightingMeanGreen = lightingStats[3];
          this.latestLightingMeanBlue = lightingStats[4];
@@ -628,6 +760,10 @@ public final class ShaderAutomation {
          this.latestStageIndirectZeroAlphaFraction = stageIndirectAlphaStats[3];
          this.latestIndirectMeanAlpha = indirectAlphaStats[0];
          this.latestIndirectZeroAlphaFraction = indirectAlphaStats[3];
+         this.updateDirectSoftSignalState(directSoftLuma, captureIndex);
+         this.recordTemporalDelta(directImage, false, false);
+         this.recordTemporalDelta(directSoftImage, true, false);
+         this.recordTemporalDelta(indirectImage, false, true);
          WorldRegistry worldRegistry = Raytracer.INSTANCE.getWorldRegistry();
          LightRegistry lightRegistry = worldRegistry.getLightRegistry();
          this.latestTracedLightCount = lightRegistry.lightCount();
@@ -644,8 +780,6 @@ public final class ShaderAutomation {
          if (this.latestGlobalLightReload) {
             this.globalLightReloadCaptures++;
          }
-         this.recordTemporalDelta(directImage, true);
-         this.recordTemporalDelta(indirectImage, false);
          this.updatePostMotionDropMetrics();
          this.latestDirectDenoiserGain = computeRelativeImprovement(directRawStats[1], directDenoisedStats[1]);
          this.latestIndirectResolveGain = computeRelativeImprovement(stageIndirectStats[1], indirectStats[1]);
@@ -671,10 +805,11 @@ public final class ShaderAutomation {
          }
          this.directSignalDetected = this.directMaxLuma > 0.0 || this.directSoftMaxLuma > 0.0 || this.directRawMaxLuma > 0.0 || this.handheldMaxLuma > 0.0;
          this.lightingSignalDetected = this.directMaxLuma > 0.0 || this.directSoftMaxLuma > 0.0 || this.handheldMaxLuma > 0.0 || this.indirectMaxLuma > 0.0;
-         Photonic.info("[Automation] capture={} signal={} directSignal={} litCaptures={}/{} activeTicks={} renderedFrames={} lights={}/{} capped={} blendFactor={} blendRegions={} globalReload={} luma(direct={}, soft={}, denoised={}, rawDirect={}, lighting={}, stageLighting={}, stageIndirect={}, handheld={}, rawIndirect={}, indirect={}) mean(direct={}, denoised={}, rawDirect={}, lighting={}, stageLighting={}, stageIndirect={}, rawIndirect={}, indirect={}) linearIndirect(rawMean={}, rawMax={}, rawOverbright={}, stageMean={}, stageMax={}, stageOverbright={}) meanRgb(direct=({}, {}, {}), lighting=({}, {}, {}), stageLighting=({}, {}, {}), stageIndirect=({}, {}, {}), indirect=({}, {}, {})) indirectAlpha(mainMean={}, mainZeroFrac={}, stageMean={}, stageZeroFrac={}) temporalDelta(directAvg={}, directMax={}, indirectAvg={}, indirectMax={})",
+         Photonic.info("[Automation] capture={} signal={} directSignal={} directSoftSignal={} litCaptures={}/{} activeTicks={} renderedFrames={} lights={}/{} capped={} blendFactor={} blendRegions={} globalReload={} luma(direct={}, soft={}, denoised={}, rawDirect={}, lighting={}, stageLighting={}, stageIndirect={}, handheld={}, rawIndirect={}, indirect={}) mean(direct={}, denoised={}, rawDirect={}, lighting={}, stageLighting={}, stageIndirect={}, rawIndirect={}, indirect={}) variance(direct={}, handheld={}) stddev(direct={}, handheld={}) directAlpha(mean={}, zeroFrac={}) linearIndirect(rawMean={}, rawMax={}, rawOverbright={}, stageMean={}, stageMax={}, stageOverbright={}) meanRgb(direct=({}, {}, {}), lighting=({}, {}, {}), stageLighting=({}, {}, {}), stageIndirect=({}, {}, {}), indirect=({}, {}, {})) indirectAlpha(mainMean={}, mainZeroFrac={}, stageMean={}, stageZeroFrac={}) temporalDelta(directAvg={}, directMax={}, directPixelMaxLatest={}, directPixelMaxAvg={}, softAvg={}, softMax={}, indirectAvg={}, indirectMax={})",
             this.capturesTaken,
             successSignalThisCapture,
             directThisCapture,
+            this.directSoftSignalDetected,
             this.litCapturesTaken,
             this.minLitCaptures,
             this.activeTicks,
@@ -703,6 +838,12 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", stageIndirectStats[1]),
             String.format(Locale.ROOT, "%.5f", indirectRawStats[1]),
             String.format(Locale.ROOT, "%.5f", indirectStats[1]),
+            String.format(Locale.ROOT, "%.6f", this.latestDirectBrightnessVariance),
+            String.format(Locale.ROOT, "%.6f", this.latestHandheldBrightnessVariance),
+            String.format(Locale.ROOT, "%.6f", this.latestDirectBrightnessStdDev),
+            String.format(Locale.ROOT, "%.6f", this.latestHandheldBrightnessStdDev),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectMeanAlpha),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectZeroAlphaFraction),
             String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearMeanLuma),
             String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearMaxLuma),
             String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearOverbrightFraction),
@@ -728,9 +869,13 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", this.latestIndirectZeroAlphaFraction),
             String.format(Locale.ROOT, "%.5f", this.latestStageIndirectMeanAlpha),
             String.format(Locale.ROOT, "%.5f", this.latestStageIndirectZeroAlphaFraction),
-            String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(true)),
+            String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(false, false)),
+            String.format(Locale.ROOT, "%.5f", this.directTemporalDeltaMax),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectTemporalMaxPixelDelta),
+            String.format(Locale.ROOT, "%.5f", this.averageDirectTemporalMaxPixelDelta()),
+            String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(true, false)),
             String.format(Locale.ROOT, "%.5f", this.directSoftTemporalDeltaMax),
-            String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(false)),
+            String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(false, true)),
             String.format(Locale.ROOT, "%.5f", this.indirectTemporalDeltaMax));
          Photonic.info("[Automation] denoise gain capture={} direct(latest={}, avg={}, max={}) indirect(latest={}, avg={}, max={})",
             this.capturesTaken,
@@ -932,20 +1077,35 @@ public final class ShaderAutomation {
       this.postMotionDropSamples++;
    }
 
-   private void recordTemporalDelta(BufferedImage currentImage, boolean directSoft) {
+   private void updateDirectSoftSignalState(double directSoftLuma, int captureIndex) {
+      if (directSoftLuma > 0.0) {
+         this.directSoftSignalDetected = true;
+         this.directSoftSignalCaptureCount++;
+         return;
+      }
+
+      this.directSoftZeroCaptureCount++;
+      if (this.directSoftMissingSignalWarningIssued || this.directSoftZeroCaptureCount < 50) {
+         return;
+      }
+
+      this.directSoftMissingSignalWarningIssued = true;
+      Photonic.warn(
+         "[Automation] direct_soft remained black for {} captures; capture={} activeTicks={} directMaxLuma={} directRawMaxLuma={} handheldMaxLuma={}",
+         this.directSoftZeroCaptureCount,
+         captureIndex,
+         this.activeTicks,
+         String.format(Locale.ROOT, "%.4f", this.directMaxLuma),
+         String.format(Locale.ROOT, "%.4f", this.directRawMaxLuma),
+         String.format(Locale.ROOT, "%.4f", this.handheldMaxLuma));
+   }
+
+   private void recordTemporalDelta(BufferedImage currentImage, boolean directSoft, boolean indirect) {
       if (currentImage == null) {
          return;
       }
 
-      if (directSoft) {
-         double delta = computeMeanLumaDelta(this.previousDirectSoftImage, currentImage);
-         if (this.previousDirectSoftImage != null) {
-            this.directSoftTemporalDeltaSum += delta;
-            this.directSoftTemporalDeltaMax = Math.max(this.directSoftTemporalDeltaMax, delta);
-            this.directSoftTemporalDeltaSamples++;
-         }
-         this.previousDirectSoftImage = currentImage;
-      } else {
+      if (indirect) {
          double delta = computeMeanLumaDelta(this.previousIndirectImage, currentImage);
          if (this.previousIndirectImage != null) {
             this.indirectTemporalDeltaSum += delta;
@@ -953,7 +1113,34 @@ public final class ShaderAutomation {
             this.indirectTemporalDeltaSamples++;
          }
          this.previousIndirectImage = currentImage;
+         return;
       }
+
+      if (directSoft) {
+         double delta = computeMeanLumaDelta(this.previousDirectSoftImage, currentImage);
+         if (this.previousDirectSoftImage != null) {
+            this.latestDirectSoftTemporalDelta = delta;
+            this.directSoftTemporalDeltaSum += delta;
+            this.directSoftTemporalDeltaMax = Math.max(this.directSoftTemporalDeltaMax, delta);
+            this.directSoftTemporalDeltaSamples++;
+         }
+         this.previousDirectSoftImage = currentImage;
+         return;
+      }
+
+      double delta = computeMeanLumaDelta(this.previousDirectImage, currentImage);
+      double maxPixelDelta = computeMaxLumaPixelDelta(this.previousDirectImage, currentImage);
+      if (this.previousDirectImage != null) {
+         this.latestDirectTemporalDelta = delta;
+         this.latestDirectTemporalMaxPixelDelta = maxPixelDelta;
+         this.directTemporalDeltaSum += delta;
+         this.directTemporalDeltaMax = Math.max(this.directTemporalDeltaMax, delta);
+         this.directTemporalDeltaSamples++;
+         this.directTemporalMaxPixelDeltaSum += maxPixelDelta;
+         this.directTemporalMaxPixelDeltaMax = Math.max(this.directTemporalMaxPixelDeltaMax, maxPixelDelta);
+         this.directTemporalMaxPixelDeltaSamples++;
+      }
+      this.previousDirectImage = currentImage;
    }
 
    private void recordMotionRepeatDelta(BufferedImage currentImage, boolean direct, int captureIndex) {
@@ -1016,11 +1203,32 @@ public final class ShaderAutomation {
       );
    }
 
-   private double averageTemporalDelta(boolean directSoft) {
+   private double averageTemporalDelta(boolean directSoft, boolean indirect) {
+      if (indirect) {
+         return this.indirectTemporalDeltaSamples == 0 ? 0.0 : this.indirectTemporalDeltaSum / this.indirectTemporalDeltaSamples;
+      }
       if (directSoft) {
          return this.directSoftTemporalDeltaSamples == 0 ? 0.0 : this.directSoftTemporalDeltaSum / this.directSoftTemporalDeltaSamples;
       }
-      return this.indirectTemporalDeltaSamples == 0 ? 0.0 : this.indirectTemporalDeltaSum / this.indirectTemporalDeltaSamples;
+      return this.directTemporalDeltaSamples == 0 ? 0.0 : this.directTemporalDeltaSum / this.directTemporalDeltaSamples;
+   }
+
+   private double averageDirectTemporalMaxPixelDelta() {
+      return this.directTemporalMaxPixelDeltaSamples == 0
+         ? 0.0
+         : this.directTemporalMaxPixelDeltaSum / this.directTemporalMaxPixelDeltaSamples;
+   }
+
+   private double averageDirectAlphaDelta() {
+      return this.directAlphaDeltaSamples == 0 ? 0.0 : this.directAlphaDeltaSum / this.directAlphaDeltaSamples;
+   }
+
+   private double averageDirectBrightnessVariance() {
+      return this.directBrightnessVarianceSamples == 0 ? 0.0 : this.directBrightnessVarianceSum / this.directBrightnessVarianceSamples;
+   }
+
+   private double averageHandheldBrightnessVariance() {
+      return this.handheldBrightnessVarianceSamples == 0 ? 0.0 : this.handheldBrightnessVarianceSum / this.handheldBrightnessVarianceSamples;
    }
 
    private double averageMotionRepeatDelta(boolean direct) {
@@ -1083,6 +1291,56 @@ public final class ShaderAutomation {
       if (this.releaseMouse && client.mouse != null) {
          client.mouse.unlockCursor();
       }
+   }
+
+   private void applyFullscreen(MinecraftClient client) {
+      if (!this.fullscreen || this.fullscreenApplied) {
+         return;
+      }
+      if (client.getWindow().isFullscreen()) {
+         this.fullscreenApplied = true;
+         return;
+      }
+
+      client.getWindow().toggleFullscreen();
+      this.fullscreenApplied = client.getWindow().isFullscreen();
+   }
+
+   private void recordFps() {
+      long now = System.nanoTime();
+      if (this.fpsCounterStartTime == 0L) {
+         this.fpsCounterStartTime = now;
+      }
+
+      this.fpsFrameCount++;
+      long elapsedNanos = now - this.fpsCounterStartTime;
+      boolean shouldLogFps = this.fpsFrameCount >= 60 || elapsedNanos >= 1_000_000_000L;
+      if (!shouldLogFps || elapsedNanos <= 0L) {
+         return;
+      }
+
+      float elapsedSeconds = elapsedNanos / 1_000_000_000.0f;
+      this.currentFps = this.fpsFrameCount / elapsedSeconds;
+      this.minFps = Math.min(this.minFps, this.currentFps);
+      this.maxFps = Math.max(this.maxFps, this.currentFps);
+      this.avgFpsSum += this.currentFps;
+      this.avgFpsCount++;
+      Photonic.info(
+         "[Profiler] FPS: current={} avg={} min={} max={}",
+         formatFps(this.currentFps),
+         formatFps(this.averageFps()),
+         formatFps(this.minFps),
+         formatFps(this.maxFps));
+      this.fpsCounterStartTime = now;
+      this.fpsFrameCount = 0;
+   }
+
+   private float averageFps() {
+      return this.avgFpsCount == 0 ? 0.0f : this.avgFpsSum / this.avgFpsCount;
+   }
+
+   private static String formatFps(float fps) {
+      return String.format(Locale.ROOT, "%.2f", fps);
    }
 
    private void applyCameraMotion(MinecraftClient client) {
@@ -1233,7 +1491,7 @@ public final class ShaderAutomation {
       }
       this.refreshRuntimeState();
       this.finished = true;
-      Photonic.info("[Automation] finish success={} reason='{}' activeTicks={} renderedFrames={} captures={}/{} litCaptures={}/{} directSignal={} ticksSinceSignal={} thresholds(active>={} afterSignal>={})",
+      Photonic.info("[Automation] finish success={} reason='{}' activeTicks={} renderedFrames={} captures={}/{} litCaptures={}/{} directSignal={} ticksSinceSignal={} thresholds(active>={} afterSignal>={}) fps(current={} avg={} min={} max={})",
          this.failureReason.isBlank() && this.buildSuccess(),
          this.failureReason.isBlank() ? "success" : this.failureReason,
          this.activeTicks,
@@ -1245,7 +1503,11 @@ public final class ShaderAutomation {
          this.directSignalDetected,
          activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick),
          this.minActiveTicksBeforeSuccess,
-         this.minActiveTicksAfterSignal);
+         this.minActiveTicksAfterSignal,
+         formatFps(this.currentFps),
+         formatFps(this.averageFps()),
+         formatFps(this.minFps == Float.MAX_VALUE ? 0.0f : this.minFps),
+         formatFps(this.maxFps));
       this.writeReport(true);
       if (this.autoStop) {
          MinecraftClient.getInstance().scheduleStop();
@@ -1273,6 +1535,12 @@ public final class ShaderAutomation {
          props.setProperty("ticksElapsed", Integer.toString(this.ticksElapsed));
          props.setProperty("activeTicks", Integer.toString(this.activeTicks));
          props.setProperty("renderedFrames", Integer.toString(this.renderedFrames));
+         props.setProperty("fullscreen", Boolean.toString(this.fullscreen));
+         props.setProperty("fullscreenApplied", Boolean.toString(this.fullscreenApplied));
+         props.setProperty("currentFps", Float.toString(this.currentFps));
+         props.setProperty("minFps", Float.toString(this.minFps == Float.MAX_VALUE ? 0.0f : this.minFps));
+         props.setProperty("maxFps", Float.toString(this.maxFps));
+         props.setProperty("avgFps", Float.toString(this.averageFps()));
          props.setProperty("capturesTaken", Integer.toString(this.capturesTaken));
          props.setProperty("litCapturesTaken", Integer.toString(this.litCapturesTaken));
          props.setProperty("captureTarget", Integer.toString(this.captureTarget));
@@ -1350,6 +1618,19 @@ public final class ShaderAutomation {
          props.setProperty("latestDirectMeanRed", Double.toString(this.latestDirectMeanRed));
          props.setProperty("latestDirectMeanGreen", Double.toString(this.latestDirectMeanGreen));
          props.setProperty("latestDirectMeanBlue", Double.toString(this.latestDirectMeanBlue));
+         props.setProperty("latestDirectMeanAlpha", Double.toString(this.latestDirectMeanAlpha));
+         props.setProperty("latestDirectZeroAlphaFraction", Double.toString(this.latestDirectZeroAlphaFraction));
+         props.setProperty("latestDirectAlphaDelta", Double.toString(this.latestDirectAlphaDelta));
+         props.setProperty("directAlphaDeltaAvg", Double.toString(this.averageDirectAlphaDelta()));
+         props.setProperty("directAlphaDeltaMax", Double.toString(this.directAlphaDeltaMax));
+         props.setProperty("latestDirectBrightnessVariance", Double.toString(this.latestDirectBrightnessVariance));
+         props.setProperty("latestDirectBrightnessStdDev", Double.toString(this.latestDirectBrightnessStdDev));
+         props.setProperty("directBrightnessVarianceAvg", Double.toString(this.averageDirectBrightnessVariance()));
+         props.setProperty("directBrightnessVarianceMax", Double.toString(this.directBrightnessVarianceMax));
+         props.setProperty("latestHandheldBrightnessVariance", Double.toString(this.latestHandheldBrightnessVariance));
+         props.setProperty("latestHandheldBrightnessStdDev", Double.toString(this.latestHandheldBrightnessStdDev));
+         props.setProperty("handheldBrightnessVarianceAvg", Double.toString(this.averageHandheldBrightnessVariance()));
+         props.setProperty("handheldBrightnessVarianceMax", Double.toString(this.handheldBrightnessVarianceMax));
          props.setProperty("latestLightingMeanRed", Double.toString(this.latestLightingMeanRed));
          props.setProperty("latestLightingMeanGreen", Double.toString(this.latestLightingMeanGreen));
          props.setProperty("latestLightingMeanBlue", Double.toString(this.latestLightingMeanBlue));
@@ -1376,9 +1657,20 @@ public final class ShaderAutomation {
          props.setProperty("latestLightBlendRegionCount", Integer.toString(this.latestLightBlendRegionCount));
          props.setProperty("latestGlobalLightReload", Boolean.toString(this.latestGlobalLightReload));
          props.setProperty("globalLightReloadCaptures", Integer.toString(this.globalLightReloadCaptures));
-         props.setProperty("directSoftTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(true)));
+         props.setProperty("directSoftSignalDetected", Boolean.toString(this.directSoftSignalDetected));
+         props.setProperty("directSoftSignalCaptureCount", Integer.toString(this.directSoftSignalCaptureCount));
+         props.setProperty("directSoftZeroCaptureCount", Integer.toString(this.directSoftZeroCaptureCount));
+         props.setProperty("directSoftMissingSignalWarningIssued", Boolean.toString(this.directSoftMissingSignalWarningIssued));
+         props.setProperty("latestDirectTemporalDelta", Double.toString(this.latestDirectTemporalDelta));
+         props.setProperty("directTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(false, false)));
+         props.setProperty("directTemporalDeltaMax", Double.toString(this.directTemporalDeltaMax));
+         props.setProperty("latestDirectTemporalMaxPixelDelta", Double.toString(this.latestDirectTemporalMaxPixelDelta));
+         props.setProperty("directTemporalMaxPixelDeltaAvg", Double.toString(this.averageDirectTemporalMaxPixelDelta()));
+         props.setProperty("directTemporalMaxPixelDeltaMax", Double.toString(this.directTemporalMaxPixelDeltaMax));
+         props.setProperty("latestDirectSoftTemporalDelta", Double.toString(this.latestDirectSoftTemporalDelta));
+         props.setProperty("directSoftTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(true, false)));
          props.setProperty("directSoftTemporalDeltaMax", Double.toString(this.directSoftTemporalDeltaMax));
-         props.setProperty("indirectTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(false)));
+         props.setProperty("indirectTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(false, true)));
          props.setProperty("indirectTemporalDeltaMax", Double.toString(this.indirectTemporalDeltaMax));
          props.setProperty("latestDirectDenoiserGain", Double.toString(this.latestDirectDenoiserGain));
          props.setProperty("latestIndirectResolveGain", Double.toString(this.latestIndirectResolveGain));
@@ -1431,6 +1723,7 @@ public final class ShaderAutomation {
          && this.patchIdMatches()
          && this.raytracerActive
          && (!this.requireDirectSignal || this.directSignalDetected)
+         && this.directSoftSignalSatisfied()
          && this.worldAutomationSatisfied()
          && this.motionRepeatValidationSatisfied()
          && isCompletionSatisfied(
@@ -1481,6 +1774,10 @@ public final class ShaderAutomation {
       return this.blockToggleCount <= 0 || this.blockToggleCommandsIssued >= this.blockToggleCount;
    }
 
+   private boolean directSoftSignalSatisfied() {
+      return this.directSoftSignalDetected || this.directSoftZeroCaptureCount < 50;
+   }
+
    private boolean motionRepeatValidationSatisfied() {
       if (!this.isMotionRepeatValidationEnabled()) {
          return true;
@@ -1527,6 +1824,9 @@ public final class ShaderAutomation {
             + ", lightingBufferMaxLuma=" + this.lightingBufferMaxLuma
             + ", stageLightingMaxLuma=" + this.stageLightingMaxLuma
             + ")";
+      }
+      if (!this.directSoftSignalSatisfied()) {
+         return "direct_soft remained black for " + this.directSoftZeroCaptureCount + " captures";
       }
       if (this.litCapturesTaken < this.minLitCaptures) {
          return "Insufficient lit captures: " + this.litCapturesTaken + "/" + this.minLitCaptures;

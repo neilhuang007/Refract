@@ -3,17 +3,15 @@ package at.redi2go.photonic.client.api;
 import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.BasicRenderer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.DisabledRenderer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.LightTreeRenderer;
-import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.MainRenderer;
-import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.OctrayRenderer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.RestirRenderer;
+import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.MainRenderer;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
 
 public enum LightingMode {
    OFF(DisabledRenderer::new),
    BASIC(BasicRenderer::new),
-   RESTIR(RestirRenderer::new),
-   OCTRAY(OctrayRenderer::new),
-   LIGHT_TREE(LightTreeRenderer::new);
+   LIGHT_TREE(LightTreeRenderer::new),
+   RESTIR(RestirRenderer::new);
 
    @FunctionalInterface
    public interface RendererFactory {

@@ -120,10 +120,10 @@ void trace_ray(inout RayJob job, bool transparency) {
                 if (entries.y < 0) { // found block
                     int block_data = -entries.y;
 
-                    block_index = block_data & 0xfff;
+                    block_index = block_data & 0x1fff;
                     block_index = block_index * (ph_byte_size / 4);
 
-                    ph_result_sky_brightness = block_data >> 12;
+                    ph_result_sky_brightness = block_data >> 13;
 
                     result_block_id = cb_array[block_index];
                     emission_ptr = block_index + 1;
@@ -359,46 +359,9 @@ int ph_get_world_index(ivec3 position) {
 #ifndef PH_CHUNK_LOOKUP_DEFINED
 #define PH_CHUNK_LOOKUP_DEFINED
 
-#ifdef PH_OCTRAY_CHUNK_LOOKUP
-int ph_get_octray_sub_chunk_lod_base_addr(int lod) {
-    if (lod == 1) return 4096;
-    if (lod == 2) return 4608;
-    if (lod == 3) return 4672;
-    if (lod == 4) return 4680;
-    return 0;
-}
-
-int ph_get_octray_sub_chunk_addr(ivec3 block_position, int lod) {
-    ivec3 voxel_pos = (block_position & 15) >> lod;
-    int edge = 16 >> lod;
-    return ph_get_octray_sub_chunk_lod_base_addr(lod)
-        + voxel_pos.x * edge
-        + voxel_pos.y * edge * edge
-        + voxel_pos.z;
-}
-
-int ph_lookup_chunk_entry(int chunk_base, ivec3 block_position) {
-    int leaf_entry = cb_array[chunk_base + ph_get_index(block_position & 15)];
-    if (leaf_entry < 0) {
-        return leaf_entry;
-    }
-
-    for (int lod = 4; lod >= 1; lod--) {
-        int mip_entry = cb_array[chunk_base + ph_get_octray_sub_chunk_addr(block_position, lod)];
-        if (mip_entry == 0) {
-            ivec3 cell_min = ((block_position & 15) >> lod) << lod;
-            int span = 1 << lod;
-            return ph_to_air_entry_bounds(cell_min, cell_min + ivec3(span));
-        }
-    }
-
-    return leaf_entry;
-}
-#else
 int ph_lookup_chunk_entry(int chunk_base, ivec3 block_position) {
     return cb_array[chunk_base + ph_get_index(block_position & 15)];
 }
-#endif
 
 #endif
 

@@ -52,6 +52,11 @@ const float GI_DISOCCLUSION_BOOST_SAMPLES = 3.0f;
 const float GI_BOILING_FILTER_STRENGTH = 0.75f;
 const int GI_BOILING_FILTER_RADIUS = 1;
 
+// NOTE: The glossy MIS system below (gi_gloss_proxy, gi_specular_power,
+// gi_surface_response, gi_get_mis_weight) is defined but currently dormant.
+// The final shading path uses pure Lambertian BRDF (cosine/π).
+// These functions are preserved for potential future glossy support.
+
 #include "/photonics/restir/restir.glsl"
 #include "/photonics/common/lighting.glsl"
 
@@ -328,7 +333,7 @@ void main() {
                     giReservoir.giSample,
                     neighborSourcePosition,
                     neighborSourceNormal
-                );
+                ) / selectedJacobian;
             }
             rng_state = giSpatialLoopPostState;
         }
@@ -342,6 +347,8 @@ void main() {
             rt_pos,
             block_normal
         ) * PH_INV_PI;
+        // ReSTIR outputs store lighting without albedo, matching the direct path.
+        // The shaderpack applies albedo downstream during deferred composition.
         vec3 resolvedIndirect = gi_sample_trace_visibility(giReservoir.giSample)
             * (giReservoir.weight * resolvedBrdfFactor);
         indirect_frag_out = vec4(ph_clamp_indirect_radiance(resolvedIndirect), 1.0f);

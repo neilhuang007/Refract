@@ -159,8 +159,10 @@ public class LightRegistry implements Destructable {
    private final LightChurnStats churnStats = new LightChurnStats();
    private boolean identityLightMappingPending = false;
    private boolean loggedAutomationLightColors = false;
+   private boolean lastCompileTopologyResetRecommended = true;
+   private int pendingTracedLightMutations = 0;
 
-   public LightRegistry(int maxLights, int maxLightsPerNode, int nodeSize, int worldSize, Predicate<PChunkPos> chunkEmptyPredicate, boolean lightBinningEnabled) {
+   public LightRegistry(int maxLights, int maxLightsPerNode, float minTracedLightSelectionLuma, int nodeSize, int worldSize, Predicate<PChunkPos> chunkEmptyPredicate, boolean lightBinningEnabled) {
       if (16 % nodeSize != 0) {
          throw new IllegalArgumentException();
       }
@@ -271,6 +273,7 @@ public class LightRegistry implements Destructable {
          }
 
          boolean lightsChanged = this.createTracedLights(lights, previousOffset);
+         this.lastCompileTopologyResetRecommended = !forceFullRebuild || lightsChanged;
          if (profiling) {
             tDiff = System.nanoTime();
          }
@@ -652,7 +655,13 @@ public class LightRegistry implements Destructable {
             boolean nodeChanged = false;
             for (int j = 1; j <= length; j++) {
                short oldIdx = this.lightRegions[i + j];
+               if (oldIdx < 0 || oldIdx >= this.newLightIndices.length) {
+                  continue;
+               }
                short newIdx = this.newLightIndices[oldIdx];
+               if (newIdx < 0) {
+                  continue;
+               }
                if (oldIdx != newIdx) {
                   this.lightRegions[i + j] = newIdx;
                   buffer.put(i + j, newIdx);
@@ -761,6 +770,7 @@ public class LightRegistry implements Destructable {
       }
 
       this.tracedLights = lights;
+      this.pendingTracedLightMutations = anyDirty ? frameStats.additions + frameStats.removals + frameStats.blockIdChanges + frameStats.lightInfoChanges : 0;
       return anyDirty;
    }
 
@@ -868,6 +878,18 @@ public class LightRegistry implements Destructable {
       boolean dirty = this.tracedLightSetDirty;
       this.tracedLightSetDirty = false;
       return dirty;
+   }
+
+   public int consumePendingTracedLightMutations() {
+      int pending = this.pendingTracedLightMutations;
+      this.pendingTracedLightMutations = 0;
+      return pending;
+   }
+
+   public boolean consumeLastCompileTopologyResetRecommended() {
+      boolean recommended = this.lastCompileTopologyResetRecommended;
+      this.lastCompileTopologyResetRecommended = true;
+      return recommended;
    }
 
    public boolean isLightBinningEnabled() {
@@ -1422,4 +1444,6 @@ public class LightRegistry implements Destructable {
       }
    }
 }
+
+
 

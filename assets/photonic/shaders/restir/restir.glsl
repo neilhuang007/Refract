@@ -249,10 +249,10 @@ const int PH_RESTIR_GI_INITIAL_SAMPLES = 16;
 const float PH_RESTIR_GI_TARGET_EPSILON = 1e-4f;
 const float PH_RESTIR_GI_POSITION_THRESHOLD_SQ = 0.35f;
 const float PH_RESTIR_GI_NORMAL_THRESHOLD = 0.93f;
-const float PH_RESTIR_GI_MAX_HISTORY = 20.0f;
-const float PH_RESTIR_GI_JACOBIAN_REJECT = 10.0f;
-const float PH_RESTIR_GI_JACOBIAN_CLAMP_MIN = 1.0f / 3.0f;
-const float PH_RESTIR_GI_JACOBIAN_CLAMP_MAX = 3.0f;
+const float PH_RESTIR_GI_MAX_HISTORY = 30.0f;
+const float PH_RESTIR_GI_JACOBIAN_REJECT = 30.0f;
+const float PH_RESTIR_GI_JACOBIAN_CLAMP_MIN = 1.0f / 10.0f;
+const float PH_RESTIR_GI_JACOBIAN_CLAMP_MAX = 10.0f;
 const float PH_RESTIR_GI_FLAG_SKY = 1.0f;
 const float PH_INV_PI = 0.31830988618f;
 
@@ -280,6 +280,10 @@ GIReservoir gi_reservoir_new() {
     return GIReservoir(gi_sample_null(), 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
+// Target function p_hat for ReSTIR GI: luminance × cosine.
+// Paper specifies p_hat ∝ L_i × f_r × cos(θ), but we omit albedo (f_r = albedo/π)
+// since albedo is not available at neighbor pixels during spatial reuse.
+// Albedo is applied at final shading (lighting.fsh resolved output).
 float gi_sample_target_at_surface(GISample giSample, vec3 surfacePosition, vec3 surfaceNormal) {
     if (giSample.pdf <= 0.0f) {
         return 0.0f;
@@ -735,28 +739,8 @@ void sample_history_reproject(out SampleHistory smple) {
 
 void sample_history_combine_lighting(inout SampleHistory history, in SampleHistory smple) {
     #if PH_RESTIR_DENOISER_PASSES != 0
-    float previousHistory = min(history.lighting.w, PH_RESTIR_ACCUMULATION_FRAMES);
-    float sampleLuma = dot(smple.lighting.rgb, PH_HISTORY_LUMA_COEFF);
-    float historyLuma = dot(history.lighting.rgb, PH_HISTORY_LUMA_COEFF);
-    float variance = max(history.variance.y - history.variance.x * history.variance.x, 0.0f);
-    float expectedStd = sqrt(max(variance, 1e-6f));
-    float deviation = abs(sampleLuma - historyLuma);
-    float deviationRatio = previousHistory > 5.0f
-        ? deviation / max(4.0f * expectedStd + 0.02f * max(max(sampleLuma, historyLuma), 0.08f), 1e-4f)
-        : 0.0f;
-    float changeResponse = clamp(deviationRatio - 0.8f, 0.0f, 1.0f);
-    float antilag = changeResponse * changeResponse;
-    float steadyState = 1.0f - antilag;
-    float effectiveHistory = previousHistory > 0.0f
-        ? min(max(mix(previousHistory + 1.0f, previousHistory * (0.85f + 0.15f * steadyState), antilag), 1.0f), float(PH_RESTIR_ACCUMULATION_FRAMES))
-        : 1.0f;
-    history.lighting.w = effectiveHistory;
-    float alpha = previousHistory > 0.0f
-        ? max(1.0f / max(history.lighting.w, 1.0f), mix(0.015f, 0.10f, antilag))
-        : 1.0f;
-    history.lighting.rgb = mix(history.lighting.rgb, smple.lighting.rgb, alpha);
-    float historyConfidence = clamp((history.lighting.w - 1.0f) / max(float(PH_RESTIR_ACCUMULATION_FRAMES - 1), 1.0f), 0.0f, 1.0f);
-    history.variance.w = historyConfidence;
+    history.lighting.w = min(history.lighting.w, PH_RESTIR_ACCUMULATION_FRAMES);
+    history.lighting.rgb = mix(history.lighting.rgb, smple.lighting.rgb, 1f / (++history.lighting.w));
     #else
     if (history.lighting.a >= PH_RESTIR_ACCUMULATION_FRAMES - 1f)
         history.lighting *= ((PH_RESTIR_ACCUMULATION_FRAMES - 1f) / history.lighting.a);
@@ -782,10 +766,10 @@ void sample_history_compute_variance(inout SampleHistory history, in SampleHisto
         history.variance.y - (history.variance.x * history.variance.x),
 
         // With few samples, variance estimate is unreliable — use a high floor
-        step(samples, 3f)
+        (samples < 4f) ? 10f : 0
     );
 
-    history.variance.z = sample_variance;
+    history.variance.z = sample_variance / samples;
 }
 
 // --- Dirty-region invalidation ---

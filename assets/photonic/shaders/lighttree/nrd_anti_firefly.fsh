@@ -40,15 +40,16 @@ void main() {
         }
     }
 
+    // Luminance-preserving clamping: scale the center color to match the
+    // clamped luminance instead of replacing with a neighbor's color (which
+    // would corrupt the hue/chroma from stochastic light tree sampling).
     vec3 result = center.rgb;
-
-    if (centerLuma > maxLuma) {
-        result = maxColor;
-    }
-
-    if (centerLuma < minLuma) {
+    float clampedLuma = clamp(centerLuma, minLuma, maxLuma);
+    if (centerLuma > 1e-6) {
+        result = center.rgb * (clampedLuma / centerLuma);
+    } else if (centerLuma < minLuma) {
         result = minColor;
     }
 
-    nrd_anti_firefly_out = vec4(result, center.a);
+    nrd_anti_firefly_out = vec4(max(result, vec3(0.0)), center.a);
 }

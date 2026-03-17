@@ -29,8 +29,20 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> SHADOW_PIXELATION_ENABLED = boolParam("shadow_pixelation_enabled", true);
    public static final Parameter<Float> SHADOW_PIXELATION_SIZE = floatParam("shadow_pixelation_size", 8.0F);
    public static final Parameter<Boolean> PROFILER_ENABLED = boolParam("profiler_enabled", false);
+   public static final Parameter<Boolean> DEBUG_SHOW_DIRECT = boolParam("debug_show_direct", true);
+   public static final Parameter<Boolean> DEBUG_SHOW_INDIRECT = boolParam("debug_show_indirect", true);
+   public static final Parameter<Boolean> DEBUG_SHOW_HANDHELD = boolParam("debug_show_handheld", true);
+   public static final Parameter<Boolean> DEBUG_SHOW_SCENE = boolParam("debug_show_scene", true);
+   public static final Parameter<Boolean> DEBUG_SHOW_DENOISER = boolParam("debug_show_denoiser", true);
+   public static final Parameter<Boolean> DEBUG_DISABLE_DENOISER = boolParam("debug_disable_denoiser", false);
+   public static final Parameter<Boolean> DEBUG_DISABLE_SHADOW_RAYS = boolParam("debug_disable_shadow_rays", false);
+   public static final Parameter<Boolean> DEBUG_LOCK_TRAVERSAL_RNG = boolParam("debug_lock_traversal_rng", false);
+   public static final Parameter<Boolean> DEBUG_DISABLE_TEMPORAL_RESET = boolParam("debug_disable_temporal_reset", false);
+   public static final Parameter<Boolean> DEBUG_DISABLE_TAA_JITTER = boolParam("debug_disable_taa_jitter", false);
+   public static final Parameter<Boolean> DEBUG_FREEZE_RNG = boolParam("debug_freeze_rng", false);
+   public static final Parameter<Boolean> DEBUG_CONSTANT_ALBEDO = boolParam("debug_constant_albedo", false);
    public static final Parameter<String> LIGHTING_MODE_OVERRIDE = stringParam("lighting_mode_override", "");
-   public static final Parameter<Boolean> USE_OCTRAY_CHUNKS = boolParam("use_octray_chunks", true);
+   public static final Parameter<String> LIGHT_BINNING_OVERRIDE = stringParam("light_binning_override", "");
    public static final Parameter<Boolean> OILIFY_ENABLED = boolParam("oilify_enabled", false);
    public static final Parameter<Float> OILIFY_SIZE = floatParam("oilify_size", 7.0F);
    public static final Parameter<Float> OILIFY_SHARPNESS = floatParam("oilify_sharpness", 1.0F);
@@ -79,6 +91,8 @@ public final class PhotonicsStorage {
 
    public static void applySystemPropertyOverrides() {
       applyStringSystemPropertyOverride("photonics.lightingMode", LIGHTING_MODE_OVERRIDE.value);
+      applyStringSystemPropertyOverride("photonics.enableLightBinning", LIGHT_BINNING_OVERRIDE.value);
+      applyStringSystemPropertyOverride("photonics.lightBinningEnabled", LIGHT_BINNING_OVERRIDE.value);
       applyBooleanSystemPropertyOverride("photonics.profilerEnabled", PROFILER_ENABLED);
    }
 
@@ -112,5 +126,13 @@ public final class PhotonicsStorage {
       }
       String systemValue = System.getProperty(systemPropertyKey);
       return systemValue == null ? "" : systemValue;
+   }
+
+   public static String getEffectiveLightBinningOverride() {
+      String override = getEffectiveStringOverride(LIGHT_BINNING_OVERRIDE, "photonics.lightBinningEnabled");
+      if (!override.isBlank()) {
+         return override;
+      }
+      return getEffectiveStringOverride(LIGHT_BINNING_OVERRIDE, "photonics.enableLightBinning");
    }
 }

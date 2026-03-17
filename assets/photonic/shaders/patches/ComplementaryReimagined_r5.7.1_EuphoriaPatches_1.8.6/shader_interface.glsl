@@ -21,7 +21,10 @@ vec3 load_world_position() {
     vec2 texCoord = gl_FragCoord.xy / vec2(viewWidth, viewHeight);
     float z0 = texelFetch(depthtex0, ivec2(gl_FragCoord.xy), 0).r;
     #ifdef TAA
-        vec3 screenPos = vec3(TAAJitter(texCoord, -0.5), z0);
+        // Debug: bypass TAA jitter when toggle is on
+        vec3 screenPos = (ph_debug_disable_taa_jitter > 0.5f)
+            ? vec3(texCoord, z0)
+            : vec3(TAAJitter(texCoord, -0.5), z0);
     #else
         vec3 screenPos = vec3(texCoord, z0);
     #endif
@@ -33,7 +36,10 @@ vec3 load_world_position() {
 #replace "void load_fragment_variables(out vec3 albedo, out vec3 world_pos, out vec3 world_normal, out vec3 world_normal_mapped);"
 void load_fragment_variables(out vec3 albedo, out vec3 world_pos, out vec3 world_normal, out vec3 world_normal_mapped) {
     ivec2 texelCoord = ivec2(gl_FragCoord.xy);
-    albedo = texelFetch(colortex10, texelCoord, 0).xyz;
+    // Debug: use constant gray albedo to isolate g-buffer jitter
+    albedo = (ph_debug_constant_albedo > 0.5f)
+        ? vec3(0.5f)
+        : texelFetch(colortex10, texelCoord, 0).xyz;
     vec3 normalEncoded = 2.0f * texelFetch(colortex11, texelCoord, 0).xyz - 1.0f;
     world_normal = normalize(mat3(gbufferModelViewInverse) * normalEncoded);
     world_normal_mapped = world_normal;

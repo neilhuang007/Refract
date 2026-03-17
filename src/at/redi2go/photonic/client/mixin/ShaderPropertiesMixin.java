@@ -30,6 +30,8 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Unique
    private int maxSamples = DEFAULT_MAX_SAMPLES;
    @Unique
+   private float minTracedLightLuma = DEFAULT_MIN_TRACED_LIGHT_LUMA;
+   @Unique
    private AlphaMode alphaMode = DEFAULT_ALPHA_MODE;
    @Unique
    private OptionalBoolean isGiEnabled = OptionalBoolean.DEFAULT;
@@ -55,6 +57,8 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    private OptionalBoolean restirSoftShadows = OptionalBoolean.DEFAULT;
    @Unique
    private int denoiserPasses = DEFAULT_RESTIR_DENOISER_PASSES;
+   @Unique
+   private int nrdAtrousPasses = DEFAULT_NRD_ATROUS_PASSES;
 
    @Inject(
       method = "<init>(Ljava/lang/String;Lnet/irisshaders/iris/shaderpack/option/ShaderPackOptions;Ljava/lang/Iterable;)V",
@@ -89,6 +93,7 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          case "photonics.renderScale" -> photonics$parseFloat(key, value, e -> this.renderScale = e);
          case "photonics.maxLights" -> photonics$parseUnsignedInt(key, value, e -> this.maxLights = e);
          case "photonics.maxSamples" -> photonics$parseUnsignedInt(key, value, e -> this.maxSamples = e);
+         case "photonics.minTracedLightLuma" -> photonics$parseFloat(key, value, e -> this.minTracedLightLuma = e);
          case "photonics.alphaMode" -> photonics$parseAlphaMode(key, value, e -> this.alphaMode = e);
          case "photonics.enableGi" -> this.isGiEnabled = photonics$parseBoolean(value);
          case "photonics.enableBlockLight" -> this.isBlockLightEnabled = photonics$parseBoolean(value);
@@ -102,6 +107,7 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          case "photonics.restirAccumulationFrames" -> photonics$parseUnsignedInt(key, value, e -> this.restirAccumulationFrames = e);
          case "photonics.restirSoftShadows" -> this.restirSoftShadows = photonics$parseBoolean(value);
          case "photonics.restirDenoiserPasses" -> photonics$parseNonNegativeInt(key, value, e -> this.denoiserPasses = e);
+         case "photonics.nrdAtrousPasses" -> photonics$parseUnsignedInt(key, value, e -> this.nrdAtrousPasses = e);
       }
    }
 
@@ -123,6 +129,11 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Override
    public int getMaxSamples() {
       return this.maxSamples;
+   }
+
+   @Override
+   public float getMinTracedLightLuma() {
+      return this.minTracedLightLuma;
    }
 
    @Override
@@ -190,6 +201,11 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
       return this.denoiserPasses;
    }
 
+   @Override
+   public int getNrdAtrousPasses() {
+      return this.nrdAtrousPasses;
+   }
+
    @Unique
    private static void photonics$applyShaderOptionOverrides(Properties props, ShaderPackOptions shaderPackOptions) {
       if (shaderPackOptions == null) {
@@ -251,8 +267,8 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
       return switch (value) {
          case "0" -> LightingMode.OFF.name();
          case "1" -> LightingMode.BASIC.name();
-         case "2" -> LightingMode.RESTIR.name();
-         case "3" -> LightingMode.OCTRAY.name();
+         case "2" -> LightingMode.LIGHT_TREE.name();
+         case "3" -> LightingMode.RESTIR.name();
          default -> value;
       };
    }

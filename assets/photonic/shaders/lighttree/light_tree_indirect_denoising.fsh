@@ -6,11 +6,6 @@ layout(location = 0) out vec4 indirect_denoised_out;
 
 #include "/photonics/common/header.glsl"
 
-uniform sampler2D radiosity_indirect;
-uniform sampler2D radiosity_indirect_variance;
-uniform sampler2D radiosity_position;
-uniform sampler2D radiosity_normal;
-
 const float phi_luminance = 4.0;
 const float phi_normal = 128.0;
 const float phi_position = 1.0;
@@ -27,6 +22,10 @@ void main() {
     }
 
     vec4 centerData = texelFetch(radiosity_indirect, tex_coord, 0);
+    if (ph_debug_disable_denoiser > 0.5) {
+        indirect_denoised_out = centerData;
+        return;
+    }
     vec3 centerColor = centerData.rgb;
     float centerHistory = centerData.a;
 
@@ -36,7 +35,8 @@ void main() {
     }
 
     vec3 centerPosition = texelFetch(radiosity_position, tex_coord, 0).xyz;
-    vec3 centerNormal = texelFetch(radiosity_normal, tex_coord, 0).xyz;
+    vec3 centerGeometryNormal = texelFetch(radiosity_normal, tex_coord, 0).xyz;
+    vec3 centerMappedNormal = texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz;
     float centerLuma = denoiser_luminance(centerColor);
 
     vec4 varianceData = texelFetch(radiosity_indirect_variance, tex_coord, 0);
@@ -66,14 +66,14 @@ void main() {
             }
 
             vec3 samplePosition = texelFetch(radiosity_position, sampleCoord, 0).xyz;
-            vec3 sampleNormal = texelFetch(radiosity_normal, sampleCoord, 0).xyz;
-            float normalDot = max(dot(centerNormal, sampleNormal), 0.0);
+            vec3 sampleMappedNormal = texelFetch(radiosity_mapped_normal, sampleCoord, 0).xyz;
+            float normalDot = max(dot(centerMappedNormal, sampleMappedNormal), 0.0);
             float normalWeight = pow(normalDot, phi_normal);
             if (normalWeight < 0.01) {
                 continue;
             }
 
-            float planeDistance = abs(dot(samplePosition - centerPosition, centerNormal));
+            float planeDistance = abs(dot(samplePosition - centerPosition, centerGeometryNormal));
             float positionWeight = exp(-planeDistance / max(phi_position, 1e-4));
             float sampleLuma = denoiser_luminance(sampleData.rgb);
             float lumaDiff = abs(centerLuma - sampleLuma);

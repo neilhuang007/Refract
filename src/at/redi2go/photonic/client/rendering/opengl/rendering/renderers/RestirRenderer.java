@@ -95,6 +95,7 @@ public class RestirRenderer extends MainRenderer {
    public void registerCustomTextures(SamplerHolder samplers) {
       this.addTextureSampler(samplers, "radiosity_position", () -> this.lightingBuffer.getWriteAttachment("position"));
       this.addTextureSampler(samplers, "radiosity_normal", () -> this.lightingBuffer.getWriteAttachment("normal"));
+      this.addTextureSampler(samplers, "radiosity_mapped_normal", () -> this.lightingBuffer.getWriteAttachment("mapped_normal"));
       this.addTextureSampler(samplers, "radiosity_direct", this::getResolvedDirectTexture);
       this.addTextureSampler(samplers, "radiosity_direct_soft", this::getCompatDirectSoftTexture);
       this.addTextureSampler(samplers, "radiosity_reservoirs", () -> this.lightingBuffer.getWriteAttachment("reservoirs"));
@@ -108,6 +109,9 @@ public class RestirRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "radiosity_gi_reservoir_normal", () -> this.lightingBuffer.getWriteAttachment("gi_reservoir_normal"));
       this.addTextureSampler(samplers, "radiosity_gi_reservoir_radiance", () -> this.lightingBuffer.getWriteAttachment("gi_reservoir_radiance"));
       this.addTextureSampler(samplers, "radiosity_gi_reservoir_meta", () -> this.lightingBuffer.getWriteAttachment("gi_reservoir_meta"));
+      this.addTextureSampler(samplers, "stage_radiosity_position", () -> this.lightingStageBuffer.getWriteAttachment("position"));
+      this.addTextureSampler(samplers, "stage_radiosity_normal", () -> this.lightingStageBuffer.getWriteAttachment("normal"));
+      this.addTextureSampler(samplers, "stage_radiosity_mapped_normal", () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"));
       this.addTextureSampler(samplers, "stage_radiosity_reservoirs", () -> this.lightingStageBuffer.getWriteAttachment("reservoirs"));
       this.addTextureSampler(samplers, "stage_radiosity_lighting", () -> this.lightingStageBuffer.getWriteAttachment("lighting"));
       this.addTextureSampler(samplers, "stage_radiosity_handheld", () -> this.lightingStageBuffer.getWriteAttachment("handheld"));
@@ -118,6 +122,7 @@ public class RestirRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "stage_radiosity_gi_reservoir_meta", () -> this.lightingStageBuffer.getWriteAttachment("gi_reservoir_meta"));
       this.addTextureSampler(samplers, "prev_radiosity_position", () -> this.lightingBuffer.getReadAttachment("position"));
       this.addTextureSampler(samplers, "prev_radiosity_normal", () -> this.lightingBuffer.getReadAttachment("normal"));
+      this.addTextureSampler(samplers, "prev_radiosity_mapped_normal", () -> this.lightingBuffer.getReadAttachment("mapped_normal"));
       this.addTextureSampler(samplers, "prev_radiosity_direct", this::getPreviousResolvedDirectTexture);
       this.addTextureSampler(samplers, "prev_radiosity_direct_soft", this::getPreviousCompatDirectSoftTexture);
       this.addTextureSampler(samplers, "prev_radiosity_reservoirs", () -> this.lightingBuffer.getReadAttachment("reservoirs"));
@@ -244,6 +249,7 @@ public class RestirRenderer extends MainRenderer {
    private void createLightingAttachments(ColorFramebuffer framebuffer) {
       framebuffer.createAttachment("position", "RGB32F", false);
       framebuffer.createAttachment("normal", "RGB16F", false);
+      framebuffer.createAttachment("mapped_normal", "RGB16F", false);
       framebuffer.createAttachment("reservoirs", "RGBA32F", false);
       framebuffer.createAttachment("lighting", "RGBA32F", false);
       framebuffer.createAttachment("lighting_variance", "RGBA32F", false);
@@ -261,6 +267,7 @@ public class RestirRenderer extends MainRenderer {
       return this.createRoutingFramebuffer(
          () -> this.lightingBuffer.getWriteAttachment("position"),
          () -> this.lightingBuffer.getWriteAttachment("normal"),
+         () -> this.lightingBuffer.getWriteAttachment("mapped_normal"),
          () -> this.lightingBuffer.getWriteAttachment("reservoirs"),
          () -> this.lightingBuffer.getWriteAttachment("gi_reservoir_pos"),
          () -> this.lightingBuffer.getWriteAttachment("gi_reservoir_normal"),
@@ -362,6 +369,14 @@ public class RestirRenderer extends MainRenderer {
          return this.indirectDenoisingBuffer.getWriteAttachment("color");
       }
       return this.lightingBuffer.getWriteAttachment("indirect");
+   }
+
+   private TextureObject getCurrentMappedNormalTexture() {
+      return this.lightingBuffer.getWriteAttachment("mapped_normal");
+   }
+
+   private TextureObject getPreviousMappedNormalTexture() {
+      return this.lightingBuffer.getReadAttachment("mapped_normal");
    }
 
    private TextureObject getCompatDirectSoftTexture() {

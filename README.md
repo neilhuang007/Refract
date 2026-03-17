@@ -2,6 +2,8 @@
 
 A Fabric mod for Minecraft 1.21.1 that adds real-time voxel ray tracing with ReSTIR direct illumination, SVGF denoising, and hierarchical Morton-coded traversal. Designed as a companion to Iris shader packs such as Complementary Reimagined and Euphoria Patches.
 
+Photonics currently ships three lighting modes: `OFF`, `BASIC`, and `LIGHT_TREE`. `LIGHT_TREE` is the active high-end path and now defaults to light binning when the shader pack does not explicitly override that behavior. The in-game settings screen also persists a local light-binning override, so local testing can force shader-pack default, enabled, or disabled behavior across reloads without relying on a hidden backend toggle.
+
 ## Building
 
 Requires Java 21. Build and run unit tests with Gradle:
@@ -38,7 +40,14 @@ The `ShaderAutomation` class writes its results to two locations under `run/auto
 
 ### Configurable system properties
 
-All automation behavior is controlled through JVM system properties set in the `shaderGameTestClient` Loom run configuration in `build.gradle`:
+All automation behavior is controlled through JVM system properties set in the `shaderGameTestClient` Loom run configuration in `build.gradle`. The default local and automation runs force `LIGHT_TREE` mode with light binning enabled so the smoke test exercises the same backend that production patches now use by default:
+
+```bash
+-Dphotonics.lightingMode=LIGHT_TREE
+-Dphotonics.enableLightBinning=true
+```
+
+The in-game settings screen persists the same `photonics.enableLightBinning` override in local storage, which makes it possible to cycle between shader-pack default, enabled, and disabled light binning across shader reloads.
 
 | Property | Default | Purpose |
 |----------|---------|---------|
@@ -48,8 +57,9 @@ All automation behavior is controlled through JVM system properties set in the `
 | `photonics.automation.startDelayTicks` | `0` | Ticks to wait after raytracer activation before capturing |
 | `photonics.automation.timeoutTicks` | `1200` | Maximum ticks before the automation times out |
 | `photonics.automation.expectedShaderPack` | (empty) | Expected shader pack name for validation |
-| `photonics.automation.expectedPatchIdPrefix` | (empty) | Optional required prefix for the runtime `patchId` (for example `OCTRAY:`) |
+| `photonics.automation.expectedPatchIdPrefix` | (empty) | Optional required prefix for the runtime `patchId` |
 | `photonics.lightingMode` | shader pack/default | Overrides the effective Photonics lighting mode for automation or local testing |
+| `photonics.enableLightBinning` | shader pack/default | Overrides the effective light-binning setting for automation or local testing |
 | `photonics.automation.reportFile` | `run/automation/shader-report.properties` | Path for the report output |
 | `photonics.automation.captureDir` | `run/automation/captures` | Directory for captured attachment images |
 | `photonics.automation.captureEveryN` | `60` | Capture one frame every N rendered frames |

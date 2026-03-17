@@ -84,19 +84,25 @@ public class ModSettingsScreen extends Screen {
          this.cycleLightingModeOverride();
          w.setMessage(Text.of(this.getLightingModeButtonText()));
          this.reloadShaders();
-      }, "Cycles between shader-pack default, OFF, BASIC, RESTIR,\nand OCTRAY lighting modes, then reloads Iris.", () -> true));
-      PhotonicsStorage.Parameter<Boolean> useOctrayChunks = PhotonicsStorage.USE_OCTRAY_CHUNKS;
-      buttons.add(new ModSettingsScreen.PButton("Chunk Backend: " + (useOctrayChunks.value ? "Octray" : "Legacy"), w -> {
-         useOctrayChunks.value = !useOctrayChunks.value;
-         useOctrayChunks.modified();
-         w.setMessage(Text.of("Chunk Backend: " + (useOctrayChunks.value ? "Octray" : "Legacy")));
-      }, "Switches the chunk memory backend used by Photonics.\nOCTRAY lighting mode always forces the octray backend.", () -> true));
+      }, "Cycles between shader-pack default, OFF, BASIC,\nLIGHT_TREE, and RESTIR lighting modes, then reloads Iris.", () -> true));
+      buttons.add(new ModSettingsScreen.PButton(this.getLightBinningButtonText(), w -> {
+         this.cycleLightBinningOverride();
+         w.setMessage(Text.of(this.getLightBinningButtonText()));
+         this.reloadShaders();
+      }, "Cycles between shader-pack default, enabled,\nand disabled light binning, then reloads Iris.", () -> true));
       PhotonicsStorage.Parameter<Boolean> profilerEnabled = PhotonicsStorage.PROFILER_ENABLED;
       buttons.add(new ModSettingsScreen.PButton("Performance Profiler: " + (profilerEnabled.value ? "On" : "Off"), w -> {
          profilerEnabled.value = !profilerEnabled.value;
          profilerEnabled.modified();
          w.setMessage(Text.of("Performance Profiler: " + (profilerEnabled.value ? "On" : "Off")));
       }, "Logs per-frame timing data (world update, render dispatch,\nshader passes) to latest.log for performance diagnostics.", () -> true));
+      PhotonicsStorage.Parameter<Boolean> disableDenoiser = PhotonicsStorage.DEBUG_DISABLE_DENOISER;
+      buttons.add(new ModSettingsScreen.PButton("Disable Denoiser: " + (disableDenoiser.value ? "On" : "Off"), w -> {
+         disableDenoiser.value = !disableDenoiser.value;
+         disableDenoiser.modified();
+         w.setMessage(Text.of("Disable Denoiser: " + (disableDenoiser.value ? "On" : "Off")));
+         this.reloadShaders();
+      }, "Bypasses the temporal/spatial denoiser so you can inspect raw\ndirect and indirect lighting stability.", () -> true));
       OilifySlider oilifySizeSlider = new OilifySlider(PhotonicsStorage.OILIFY_SIZE, 3.0f, 15.0f, "OILIFY_SIZE", true);
       OilifySlider oilifySharpnessSlider = new OilifySlider(PhotonicsStorage.OILIFY_SHARPNESS, 0.0f, 1.0f, "Sharpness", false);
       OilifySlider oilifyScaleSlider = new OilifySlider(PhotonicsStorage.OILIFY_SCALE, 1.0f, 4.0f, "Scale", false);
@@ -213,6 +219,14 @@ public class ModSettingsScreen extends Screen {
       return "Lighting Mode: " + (override == null || override.isBlank() ? "Shader Pack" : override);
    }
 
+   private String getLightBinningButtonText() {
+      String override = PhotonicsStorage.getEffectiveLightBinningOverride();
+      if (override == null || override.isBlank()) {
+         return "Light Binning: Shader Pack";
+      }
+      return "Light Binning: " + (Boolean.parseBoolean(override) ? "On" : "Off");
+   }
+
    private void cycleLightingModeOverride() {
       String current = PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value;
       if (current == null || current.isBlank()) {
@@ -229,6 +243,19 @@ public class ModSettingsScreen extends Screen {
          PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = "";
       }
       PhotonicsStorage.LIGHTING_MODE_OVERRIDE.modified();
+      PhotonicsStorage.applySystemPropertyOverrides();
+   }
+
+   private void cycleLightBinningOverride() {
+      String current = PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value;
+      if (current == null || current.isBlank()) {
+         PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value = "true";
+      } else if (Boolean.parseBoolean(current)) {
+         PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value = "false";
+      } else {
+         PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value = "";
+      }
+      PhotonicsStorage.LIGHT_BINNING_OVERRIDE.modified();
       PhotonicsStorage.applySystemPropertyOverrides();
    }
 
@@ -367,3 +394,4 @@ public class ModSettingsScreen extends Screen {
       }
    }
 }
+

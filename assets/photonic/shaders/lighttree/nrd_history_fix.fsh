@@ -8,13 +8,11 @@ layout(location = 0) out vec4 nrd_history_fix_out;
 
 uniform sampler2D nrd_diff_input;
 uniform sampler2D nrd_history_length_tex;
-uniform sampler2D radiosity_position;
-uniform sampler2D radiosity_normal;
 
-const float nrd_history_fix_frame_num = 3.0;
-const float nrd_history_fix_base_stride = 8.0;
+const float nrd_history_fix_frame_num = 6.0;
+const float nrd_history_fix_base_stride = 14.0;
 const float nrd_history_fix_normal_power = 8.0;
-const float nrd_depth_threshold = 0.003;
+const float nrd_depth_threshold = 0.01;
 const float nrd_min_weight = 1e-4;
 
 ivec2 nrd_clamp_texel(ivec2 sampleCoord, ivec2 texSize) {
@@ -29,7 +27,7 @@ float nrd_plane_distance_weight(vec3 centerPosition, vec3 centerNormal, vec3 sam
     float centerDistance = max(length(centerPosition), 1e-3);
     float planeDistance = abs(dot(samplePosition - centerPosition, centerNormal));
     float threshold = nrd_depth_threshold * centerDistance;
-    return planeDistance <= threshold ? 1.0 : 0.0;
+    return exp(-planeDistance / max(threshold, 1e-6));
 }
 
 float nrd_normal_similarity_weight(vec3 centerNormal, vec3 sampleNormal) {
@@ -51,8 +49,9 @@ void main() {
     }
 
     vec3 centerPosition = texelFetch(radiosity_position, tex_coord, 0).xyz;
-    vec3 centerNormal = normalize(texelFetch(radiosity_normal, tex_coord, 0).xyz);
-    if (dot(centerNormal, centerNormal) <= 1e-6) {
+    vec3 centerGeometryNormal = normalize(texelFetch(radiosity_normal, tex_coord, 0).xyz);
+    vec3 centerMappedNormal = normalize(texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz);
+    if (dot(centerGeometryNormal, centerGeometryNormal) <= 1e-6 || dot(centerMappedNormal, centerMappedNormal) <= 1e-6) {
         nrd_history_fix_out = centerSignal;
         return;
     }
@@ -64,8 +63,8 @@ void main() {
     vec4 weightedSum = centerSignal;
     float totalWeight = 1.0;
 
-    for (int dy = -2; dy <= 2; dy++) {
-        for (int dx = -2; dx <= 2; dx++) {
+    for (int dy = -3; dy <= 3; dy++) {
+        for (int dx = -3; dx <= 3; dx++) {
             if (dx == 0 && dy == 0) {
                 continue;
             }
@@ -73,11 +72,16 @@ void main() {
             ivec2 offset = ivec2(dx * stride, dy * stride);
             ivec2 sampleCoord = nrd_clamp_texel(tex_coord + offset, texSize);
             vec3 samplePosition = texelFetch(radiosity_position, sampleCoord, 0).xyz;
-            vec3 sampleNormal = normalize(texelFetch(radiosity_normal, sampleCoord, 0).xyz);
+            vec3 sampleMappedNormal = normalize(texelFetch(radiosity_mapped_normal, sampleCoord, 0).xyz);
 
-            float geometryWeight = nrd_plane_distance_weight(centerPosition, centerNormal, samplePosition);
-            float normalWeight = nrd_normal_similarity_weight(centerNormal, sampleNormal);
-            float weight = geometryWeight * normalWeight;
+            float geometryWeight = nrd_plane_distance_weight(centerPosition, centerGeometryNormal, samplePosition);
+            float normalWeight = nrd_normal_similarity_weight(centerMappedNormal, sampleMappedNormal);
+
+            // Prefer converged neighbors (high history) over other new pixels
+            float sampleHistoryLength = nrd_safe_history_length(texelFetch(nrd_history_length_tex, sampleCoord, 0));
+            float historyWeight = clamp(sampleHistoryLength / 10.0, 0.0, 1.0);
+
+            float weight = geometryWeight * normalWeight * historyWeight;
             if (weight <= nrd_min_weight) {
                 continue;
             }

@@ -12,11 +12,13 @@ layout(location = 4) out vec4 indirect_variance_frag_out;
 
 uniform sampler2D stage_radiosity_position;
 uniform sampler2D stage_radiosity_normal;
-uniform sampler2D stage_radiosity_direct;
 uniform sampler2D stage_radiosity_handheld;
 uniform sampler2D stage_radiosity_indirect;
 
-const float lt_reproject_normal_threshold = 0.975f;
+// Debug: when enabled, light_reload is ignored and temporal history is never wiped
+uniform float ph_debug_disable_temporal_reset;
+
+const float lt_reproject_normal_threshold = 0.99f;
 const float lt_reproject_position_threshold_sq = 0.35f;
 const float lt_min_alpha = 0.05f;
 const float lt_max_history = 32.0f;
@@ -77,7 +79,9 @@ void lt_accumulate_direct(
         get_taa_jitter()
     );
 
-    if (light_reload || !lt_is_valid_reprojection(reprojectionUv, currentPosition, currentNormal)) {
+    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
+    bool canReproject = lt_is_valid_reprojection(reprojectionUv, currentPosition, currentNormal);
+    if (lightReloadActive || !canReproject) {
         vec2 currentMoments = lt_compute_moments(currentSample.rgb);
         accumulatedSignal = vec4(currentSample.rgb, 1.0f);
         accumulatedVariance = lt_encode_variance(currentMoments, 1.0f);
@@ -124,7 +128,9 @@ void lt_accumulate_indirect(
         get_taa_jitter()
     );
 
-    if (light_reload || !lt_is_valid_reprojection(reprojectionUv, currentPosition, currentNormal)) {
+    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
+    bool canReproject = lt_is_valid_reprojection(reprojectionUv, currentPosition, currentNormal);
+    if (lightReloadActive || !canReproject) {
         vec2 currentMoments = lt_compute_moments(currentSample.rgb);
         accumulatedSignal = vec4(currentSample.rgb, 1.0f);
         accumulatedVariance = lt_encode_variance(currentMoments, 1.0f);

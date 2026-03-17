@@ -10,11 +10,12 @@ in vec4 direction_vert_out;
 */
 layout(location = 0) out vec4 position_frag_out;
 layout(location = 1) out vec4 normal_frag_out;
-layout(location = 2) out vec4 reservoir_frag_out;
-layout(location = 3) out vec4 gi_reservoir_pos_frag_out;
-layout(location = 4) out vec4 gi_reservoir_normal_frag_out;
-layout(location = 5) out vec4 gi_reservoir_radiance_frag_out;
-layout(location = 6) out vec4 gi_reservoir_meta_frag_out;
+layout(location = 2) out vec4 mapped_normal_frag_out;
+layout(location = 3) out vec4 reservoir_frag_out;
+layout(location = 4) out vec4 gi_reservoir_pos_frag_out;
+layout(location = 5) out vec4 gi_reservoir_normal_frag_out;
+layout(location = 6) out vec4 gi_reservoir_radiance_frag_out;
+layout(location = 7) out vec4 gi_reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
 vec3 ph_sun_direction = ph_signed_nudge(sun_direction);
@@ -25,6 +26,7 @@ void main() {
     if (!is_in_world()) {
         position_frag_out = vec4(0f);
         normal_frag_out = vec4(0f);
+        mapped_normal_frag_out = vec4(0f);
         reservoir_frag_out = vec4(0f);
         gi_reservoir_pos_frag_out = vec4(0f);
         gi_reservoir_normal_frag_out = vec4(0f);
@@ -39,6 +41,7 @@ void main() {
 
     position_frag_out = vec4(world_pos, 1f);
     normal_frag_out = vec4(block_normal, 1f);
+    mapped_normal_frag_out = vec4(normal, 1f);
 
     Reservoir reservoir = reservoir_new();
     if (ph_light_count > 0) {

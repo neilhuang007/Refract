@@ -1,9 +1,7 @@
 package at.redi2go.photonic.client.rendering.world;
 
-import at.redi2go.photonic.client.rendering.opengl.objects.GlTarget;
 import at.redi2go.photonic.client.rendering.schematics.AirEntry;
 import at.redi2go.photonic.client.rendering.schematics.Schematic;
-import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryManager;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryRegion;
 import at.redi2go.photonic.client.rendering.world.position.PChunkPos;
@@ -15,85 +13,87 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class OctrayWorldBackendIncrementalUpdateTest {
+class LegacyWorldBackendDirectRootMappingTest {
    private static final int WORLD_CHUNK_SIZE = 32;
    private static final int TOTAL_ROOT_INTS = WORLD_CHUNK_SIZE * WORLD_CHUNK_SIZE * WORLD_CHUNK_SIZE;
-   private static final int INITIAL_SENTINEL = 0x13579BDF;
-   private static final int NO_OP_SENTINEL = 0x2468ACE0;
 
    @Test
-   void incrementalRootUpdateWritesOnlyDirtyEntriesAtMortonIndicesAndClearsDirtySet() {
+   void rebuildRootDataMapsChunksDirectlyToWorldRelativeRootCells() {
       Map<PChunkPos, WorldChunk> chunks = new HashMap<>();
-      OctrayWorldBackend backend = new OctrayWorldBackend(WORLD_CHUNK_SIZE, chunks, 4096);
+      LegacyWorldBackend backend = new LegacyWorldBackend(WORLD_CHUNK_SIZE, chunks, 4096);
       MemoryRegion rootMemory = backend.getRootMemoryManager().allocate(TOTAL_ROOT_INTS * Integer.BYTES);
       backend.setRootMemory(rootMemory);
-      fillInts(rootMemory, INITIAL_SENTINEL);
 
       StubWorldChunk chunkA = new StubWorldChunk(backend.getCbMemoryManager().allocate(64));
       StubWorldChunk chunkB = new StubWorldChunk(backend.getCbMemoryManager().allocate(64));
       PChunkPos worldOffset = new PChunkPos(10, 20, 30);
-      PChunkPos rtChunkA = new PChunkPos(1, 2, 3);
-      PChunkPos rtChunkB = new PChunkPos(4, 5, 6);
       chunks.put(new PChunkPos(11, 22, 33), chunkA);
       chunks.put(new PChunkPos(14, 25, 36), chunkB);
 
-      backend.markRtRootEntryDirty(rtChunkA, WORLD_CHUNK_SIZE);
-      backend.markRtRootEntryDirty(rtChunkB, WORLD_CHUNK_SIZE);
-      backend.updateRootData(worldOffset, WORLD_CHUNK_SIZE, false);
+      int[] rootData = backend.getRootSchematic().getData();
+      for (int i = 0; i < rootData.length; i++) {
+         rootData[i] = -1;
+      }
+
+      rebuildRootData(backend, worldOffset);
 
       IntBuffer updatedRoot = rootMemory.getBuffer().asIntBuffer();
-      int indexA = Schematic.toSchematicIndex(rtChunkA.x, rtChunkA.y, rtChunkA.z);
-      int indexB = Schematic.toSchematicIndex(rtChunkB.x, rtChunkB.y, rtChunkB.z);
+      int indexA = Schematic.toSchematicIndex(1, 2, 3);
+      int indexB = Schematic.toSchematicIndex(4, 5, 6);
       int untouchedIndex = Schematic.toSchematicIndex(7, 8, 9);
       assertEquals(-(chunkA.getMemory().begin >> 2), updatedRoot.get(indexA));
       assertEquals(-(chunkB.getMemory().begin >> 2), updatedRoot.get(indexB));
-      assertEquals(INITIAL_SENTINEL, updatedRoot.get(untouchedIndex));
-
-      fillInts(rootMemory, NO_OP_SENTINEL);
-      backend.updateRootData(worldOffset, WORLD_CHUNK_SIZE, false);
-
-      IntBuffer noOpRoot = rootMemory.getBuffer().asIntBuffer();
-      assertEquals(NO_OP_SENTINEL, noOpRoot.get(indexA));
-      assertEquals(NO_OP_SENTINEL, noOpRoot.get(indexB));
-      assertEquals(NO_OP_SENTINEL, noOpRoot.get(untouchedIndex));
+      assertEquals(AirEntry.toAirEntry(7, 8, 9, 8, 9, 10), updatedRoot.get(untouchedIndex));
 
       backend.free();
    }
 
-
    @Test
-   void largeDirtyRootSetsFallBackToSingleBulkUpload() {
+   void rebuildRootDataResetsOldMappingsBackToAir() {
       Map<PChunkPos, WorldChunk> chunks = new HashMap<>();
-      OctrayWorldBackend backend = new OctrayWorldBackend(WORLD_CHUNK_SIZE, chunks, 16384);
+      LegacyWorldBackend backend = new LegacyWorldBackend(WORLD_CHUNK_SIZE, chunks, 4096);
       MemoryRegion rootMemory = backend.getRootMemoryManager().allocate(TOTAL_ROOT_INTS * Integer.BYTES);
       backend.setRootMemory(rootMemory);
       PChunkPos worldOffset = new PChunkPos(0, 0, 0);
 
-      backend.updateRootData(worldOffset, WORLD_CHUNK_SIZE, true);
-      fillInts(rootMemory, NO_OP_SENTINEL);
+      StubWorldChunk chunk = new StubWorldChunk(backend.getCbMemoryManager().allocate(64));
+      PChunkPos worldChunkPos = new PChunkPos(2, 3, 4);
+      chunks.put(worldChunkPos, chunk);
+      rebuildRootData(backend, worldOffset);
 
-      for (int i = 0; i < 64; i++) {
-         PChunkPos rtChunkPos = new PChunkPos(i & 31, (i >> 5) & 31, (i >> 10) & 31);
-         StubWorldChunk chunk = new StubWorldChunk(backend.getCbMemoryManager().allocate(64));
-         chunks.put(new PChunkPos(rtChunkPos.x, rtChunkPos.y, rtChunkPos.z), chunk);
-         backend.markRtRootEntryDirty(rtChunkPos, WORLD_CHUNK_SIZE);
-      }
-
-      backend.updateRootData(worldOffset, WORLD_CHUNK_SIZE, false);
+      chunks.clear();
+      rebuildRootData(backend, worldOffset);
 
       IntBuffer updatedRoot = rootMemory.getBuffer().asIntBuffer();
-      int touchedIndex = Schematic.toSchematicIndex(0, 0, 0);
-      int untouchedIndex = Schematic.toSchematicIndex(31, 31, 31);
-      assertEquals(-(chunks.get(new PChunkPos(0, 0, 0)).getMemory().begin >> 2), updatedRoot.get(touchedIndex));
-      assertEquals(AirEntry.toAirEntry(31, 31, 31, 32, 32, 32), updatedRoot.get(untouchedIndex));
+      assertEquals(AirEntry.toAirEntry(2, 3, 4, 3, 4, 5), updatedRoot.get(Schematic.toSchematicIndex(2, 3, 4)));
 
       backend.free();
    }
-   private static void fillInts(MemoryRegion memoryRegion, int value) {
-      IntBuffer buffer = memoryRegion.getBuffer().asIntBuffer();
-      for (int i = 0; i < TOTAL_ROOT_INTS; i++) {
-         buffer.put(i, value);
+
+   private static void rebuildRootData(LegacyWorldBackend backend, PChunkPos rtToWorldChunkOffset) {
+      int[] rootData = backend.getRootSchematic().getData();
+      for (int y = 0; y < WORLD_CHUNK_SIZE; y++) {
+         for (int x = 0; x < WORLD_CHUNK_SIZE; x++) {
+            for (int z = 0; z < WORLD_CHUNK_SIZE; z++) {
+               rootData[Schematic.toSchematicIndex(x, y, z)] = AirEntry.toAirEntry(x, y, z, x + 1, y + 1, z + 1);
+            }
+         }
       }
+
+      for (Map.Entry<PChunkPos, WorldChunk> entry : backend.getChunks().entrySet()) {
+         PChunkPos worldChunkPos = entry.getKey();
+         int rtX = worldChunkPos.x - rtToWorldChunkOffset.x;
+         int rtY = worldChunkPos.y - rtToWorldChunkOffset.y;
+         int rtZ = worldChunkPos.z - rtToWorldChunkOffset.z;
+         if (rtX < 0 || rtY < 0 || rtZ < 0 || rtX >= WORLD_CHUNK_SIZE || rtY >= WORLD_CHUNK_SIZE || rtZ >= WORLD_CHUNK_SIZE) {
+            continue;
+         }
+         rootData[Schematic.toSchematicIndex(rtX, rtY, rtZ)] = -(entry.getValue().getMemory().begin >> 2);
+      }
+
+      IntBuffer rootBuffer = backend.getRootMemory().getBuffer().asIntBuffer();
+      rootBuffer.position(0);
+      rootBuffer.put(rootData);
    }
 
    private static final class StubWorldChunk implements WorldChunk {

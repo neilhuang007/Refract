@@ -196,7 +196,7 @@ public abstract class ShaderPackMixin {
          stringDefine(newEnvDefines, "PH_ENABLE_HANDHELD_LIGHT", "");
       }
 
-      if (properties.isLightBinningEnabled().orElse(properties.getLightingMode() == LightingMode.BASIC)) {
+      if (Raytracer.resolveLightBinningEnabled(properties)) {
          stringDefine(newEnvDefines, "PH_ENABLE_LIGHT_BINNING", "");
       }
 
@@ -206,6 +206,7 @@ public abstract class ShaderPackMixin {
       floatDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_RADIUS", properties.getRestirSpatialReuseRadius());
       intDefine(newEnvDefines, "PH_RESTIR_ACCUMULATION_FRAMES", properties.getRestirAccumulationFrames());
       intDefine(newEnvDefines, "PH_RESTIR_DENOISER_PASSES", properties.getRestirDenoiserPasses());
+      intDefine(newEnvDefines, "PH_NRD_ATROUS_PASSES", properties.getNrdAtrousPasses());
       if (properties.useRestirSoftShadows().orElse(true)) {
          stringDefine(newEnvDefines, "PH_RESTIR_SOFT_SHADOWS", "");
       }

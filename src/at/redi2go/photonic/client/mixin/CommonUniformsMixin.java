@@ -70,6 +70,30 @@ public class CommonUniformsMixin {
             () -> PhotonicsStorage.SHADOW_PIXELATION_ENABLED.value ? 1.0F : 0.0F);
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_mod_shadow_pixel_size_rt",
             () -> PhotonicsStorage.SHADOW_PIXELATION_SIZE.value);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_show_direct",
+            () -> PhotonicsStorage.DEBUG_SHOW_DIRECT.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_show_indirect",
+            () -> PhotonicsStorage.DEBUG_SHOW_INDIRECT.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_show_handheld",
+            () -> PhotonicsStorage.DEBUG_SHOW_HANDHELD.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_show_scene",
+            () -> PhotonicsStorage.DEBUG_SHOW_SCENE.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_show_denoiser",
+            () -> PhotonicsStorage.DEBUG_SHOW_DENOISER.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_disable_denoiser",
+            () -> PhotonicsStorage.DEBUG_DISABLE_DENOISER.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_disable_shadow_rays",
+            () -> PhotonicsStorage.DEBUG_DISABLE_SHADOW_RAYS.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_lock_traversal_rng",
+            () -> PhotonicsStorage.DEBUG_LOCK_TRAVERSAL_RNG.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_disable_temporal_reset",
+            () -> PhotonicsStorage.DEBUG_DISABLE_TEMPORAL_RESET.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_disable_taa_jitter",
+            () -> PhotonicsStorage.DEBUG_DISABLE_TAA_JITTER.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_freeze_rng",
+            () -> PhotonicsStorage.DEBUG_FREEZE_RNG.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_constant_albedo",
+            () -> PhotonicsStorage.DEBUG_CONSTANT_ALBEDO.value ? 1.0F : 0.0F);
       }
    }
 
