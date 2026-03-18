@@ -4,12 +4,9 @@
 #include "/photonics/common/header.glsl"
 #include "/photonics/write_indirect.glsl"
 
+
 vec3 ph_loadIndirectRough(vec3 pos) {
     ivec3 read = ph_read(pos, block_normal, modelview_projection, world_camera_position);
-    if (read == ivec3(NULL)) {
-        return NULL;
-    }
-
     vec3 indirect_voxel = vec3(0.0f);
     float w = imageLoad(gi_w, read).x;
     if (w <= 10.0f) {
@@ -19,7 +16,7 @@ vec3 ph_loadIndirectRough(vec3 pos) {
     indirect_voxel.x = imageLoad(gi_x, read).x;
     indirect_voxel.y = imageLoad(gi_y, read).x;
     indirect_voxel.z = imageLoad(gi_z, read).x;
-    indirect_voxel /= 1024.0f * w;
+    indirect_voxel /= 255.0f * w;
 
     return indirect_voxel.xyz;
 }
@@ -40,6 +37,7 @@ vec3 ph_fetchInterpolatedLighting(vec3 world_pos) {
     vec3 center = floor(world_pos) + 0.5f + 0.49f * block_normal;
     vec3 center_delta = (world_pos - center);
 
+    // TODO: better utilize vector arithmetic
     vec3 abs_normal = abs(block_normal);
     int t_index = int(abs_normal.y > abs_normal.x);
     t_index = abs_normal[t_index] > abs_normal.z ? t_index : 2;
@@ -60,7 +58,7 @@ vec3 ph_fetchInterpolatedLighting(vec3 world_pos) {
     u_dir /= 2.0f;
     v_dir /= 2.0f;
 
-    vec3 t00 = ph_loadIndirectRough(center);
+    vec3 t00 = ph_loadIndirectRough(center        );
     vec3 t10 = ph_loadIndirectRough(center + u_dir);
 
     vec3 t01 = ph_loadIndirectRough(center + v_dir);
@@ -90,13 +88,23 @@ void main() {
     vec3 emission = vec3(0.0f);
     int pointer = get_block_pointer(rt_pos);
     if (pointer != -1) {
+        // blockId, emission, <schematic data>
         emission = unpackUnorm4x8(cb_array[pointer + 1]).xyz;
     }
 
+    // LightTree owns the visible indirect signal via radiosity_indirect_resolved.
+    // Use the resolved screen-space indirect as the primary writeback source and
+    // fall back to interpolated voxel GI only when no current resolved signal exists.
     vec3 indirect_rough = vec3(0.0f);
-    vec3 interpolatedLighting = ph_fetchInterpolatedLighting(world_pos);
-    if (interpolatedLighting != NULL) {
-        indirect_rough = interpolatedLighting;
+
+    vec4 resolvedIndirect = texelFetch(radiosity_indirect_resolved, tex_coord, 0);
+    if (resolvedIndirect.a > 0.0f && !any(isnan(resolvedIndirect.rgb))) {
+        indirect_rough = resolvedIndirect.rgb;
+    } else {
+        vec3 interpolatedLighting = ph_fetchInterpolatedLighting(world_pos);
+        if (interpolatedLighting != NULL) {
+            indirect_rough.xyz = interpolatedLighting;
+        }
     }
 
     float dist = clamp(distance(rt_pos, rt_camera_position) * 0.005, 0.0f, 1.0f);

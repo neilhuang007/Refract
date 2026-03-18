@@ -40,6 +40,15 @@ vec3 nrd_safe_normal(vec3 normalValue) {
     return normalValue * inversesqrt(lenSq);
 }
 
+vec3 nrd_select_surface_normal(vec3 geometryNormal, vec3 mappedNormal) {
+    vec3 safeGeometryNormal = nrd_safe_normal(geometryNormal);
+    float mappedLenSq = dot(mappedNormal, mappedNormal);
+    if (mappedLenSq <= 1e-6) {
+        return safeGeometryNormal;
+    }
+    return mappedNormal * inversesqrt(mappedLenSq);
+}
+
 float nrd_encoded_history(float historyLength) {
     return nrd_saturate(historyLength / PH_NRD_HISTORY_SCALE);
 }
@@ -51,13 +60,41 @@ float nrd_decoded_history(vec4 encodedHistory) {
 float nrd_plane_distance_weight(vec3 centerPos, vec3 centerNormal, vec3 samplePos, float depthThreshold) {
     float centerDistance = max(length(centerPos - world_camera_position), 1e-3);
     float planeDistance = abs(dot(samplePos - centerPos, centerNormal));
-    float threshold = max(depthThreshold * centerDistance, 1e-4);
-    return exp(-planeDistance / threshold);
+    float threshold = depthThreshold * centerDistance;
+    return planeDistance < threshold ? 1.0 : 0.0;
 }
 
 float nrd_normal_weight(vec3 centerNormal, vec3 sampleNormal, float powerValue) {
     float normalDot = max(dot(centerNormal, sampleNormal), 0.0);
     return pow(max(normalDot, 1e-4), powerValue);
+}
+
+// Reference NRD SmoothStep-based weight: Math::SmoothStep(1.0, 0.0, |x * px + py|)
+float nrd_compute_weight(float x, float px, float py) {
+    float t = clamp(1.0 - abs(x * px + py), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Reference: GetSpecLobeTanHalfAngle(roughness, percentOfVolume)
+float nrd_spec_lobe_tan_half_angle(float roughness, float percentOfVolume) {
+    roughness = clamp(roughness, 0.0, 1.0);
+    percentOfVolume = clamp(percentOfVolume, 0.0, 1.0);
+    return roughness * roughness * percentOfVolume / (1.0 - percentOfVolume + 1e-6);
+}
+
+// Reference: GetNormalWeightParam2(roughness, angleFraction)
+// Returns 1.0 / cutoffAngle for use with nrd_compute_weight
+float nrd_normal_weight_param(float roughness, float angleFraction) {
+    float angle = atan(nrd_spec_lobe_tan_half_angle(roughness, angleFraction));
+    return 1.0 / max(angle, 1.5 / 255.0);
+}
+
+// Angle-based normal weight matching reference RELAX_Atrous diffuse path:
+// ComputeWeight(acos(dot(n0, n1)), normalWeightParam, 0.0)
+float nrd_normal_weight_atrous(vec3 centerNormal, vec3 sampleNormal, float normalWeightParam) {
+    float cosAngle = clamp(dot(centerNormal, sampleNormal), -1.0, 1.0);
+    float angle = acos(cosAngle);
+    return nrd_compute_weight(angle, normalWeightParam, 0.0);
 }
 
 float nrd_material_weight(vec4 currentMaterial, vec4 previousMaterial) {
@@ -116,5 +153,74 @@ float nrd_hit_distance_confidence(float hitDistance, float viewDistance) {
     return 1.0 / (1.0 + normalized);
 }
 
-#endif
+struct NrdDirectSignal {
+    vec3 radiance;
+    float hitDistance;
+};
+
+struct NrdDirectHistorySample {
+    vec3 radiance;
+    float secondMoment;
+};
+
+struct NrdDirectFeatures {
+    float hitDistance;
+    float hitDistanceWeight;
+    float temporalStability;
+    float accumulationSpeed;
+};
+
+vec4 nrd_pack_direct_signal(vec3 radiance, float hitDistance) {
+    return vec4(max(radiance, vec3(0.0)), max(hitDistance, 0.0));
+}
+
+NrdDirectSignal nrd_unpack_direct_signal(vec4 encodedSignal) {
+    return NrdDirectSignal(max(encodedSignal.rgb, vec3(0.0)), max(encodedSignal.a, 0.0));
+}
+
+float nrd_direct_second_moment(vec3 radiance) {
+    float luma = nrd_luminance(max(radiance, vec3(0.0)));
+    return luma * luma;
+}
+
+vec4 nrd_pack_direct_history(vec3 radiance, float secondMoment) {
+    float clampedSecondMoment = max(secondMoment, nrd_direct_second_moment(radiance));
+    return vec4(max(radiance, vec3(0.0)), clampedSecondMoment);
+}
+
+NrdDirectHistorySample nrd_unpack_direct_history(vec4 encodedHistory) {
+    vec3 radiance = max(encodedHistory.rgb, vec3(0.0));
+    float secondMoment = max(encodedHistory.a, nrd_direct_second_moment(radiance));
+    return NrdDirectHistorySample(radiance, secondMoment);
+}
+
+NrdDirectHistorySample nrd_direct_history_from_radiance(vec3 radiance) {
+    return NrdDirectHistorySample(max(radiance, vec3(0.0)), nrd_direct_second_moment(radiance));
+}
+
+vec4 nrd_pack_direct_features(float hitDistance, float hitDistanceWeight, float temporalStability, float accumulationSpeed) {
+    return vec4(
+        max(hitDistance, 0.0),
+        nrd_saturate(hitDistanceWeight),
+        nrd_saturate(temporalStability),
+        nrd_saturate(accumulationSpeed)
+    );
+}
+
+NrdDirectFeatures nrd_unpack_direct_features(vec4 encodedFeatures) {
+    return NrdDirectFeatures(
+        max(encodedFeatures.x, 0.0),
+        nrd_saturate(encodedFeatures.y),
+        nrd_saturate(encodedFeatures.z),
+        nrd_saturate(encodedFeatures.w)
+    );
+}
+
+vec4 nrd_mix_direct_history(vec4 previousHistory, NrdDirectHistorySample currentHistory, float blendAlpha) {
+    NrdDirectHistorySample previous = nrd_unpack_direct_history(previousHistory);
+    float alpha = nrd_saturate(blendAlpha);
+    vec3 radiance = mix(previous.radiance, currentHistory.radiance, alpha);
+    float secondMoment = mix(previous.secondMoment, currentHistory.secondMoment, alpha);
+    return nrd_pack_direct_history(radiance, secondMoment);
+}
 

@@ -1,7 +1,45 @@
-#ifndef PH_RESTIR_INCLUDE
-#define PH_RESTIR_INCLUDE
+#ifndef PH_LIGHTTREE_REUSE_INCLUDE
+#define PH_LIGHTTREE_REUSE_INCLUDE
 
 float light_importance = 1f / ph_light_count;
+
+bool lt_is_viewport_uv_in_bounds(ivec2 uv) {
+    return all(greaterThanEqual(uv, ivec2(0))) && all(lessThan(uv, ivec2(viewWidth, viewHeight)));
+}
+
+bool lt_is_viewport_uv_in_bounds(vec2 uv) {
+    return all(greaterThanEqual(uv, vec2(0.0f))) && all(lessThan(uv, vec2(viewWidth, viewHeight)));
+}
+
+vec3 lt_resolve_reuse_normal(vec3 geometryNormal, vec3 mappedNormal) {
+    float mappedLengthSq = dot(mappedNormal, mappedNormal);
+    if (mappedLengthSq > 1e-6f) {
+        return normalize(mappedNormal);
+    }
+
+    float geometryLengthSq = dot(geometryNormal, geometryNormal);
+    if (geometryLengthSq > 1e-6f) {
+        return normalize(geometryNormal);
+    }
+
+    return vec3(0.0f, 1.0f, 0.0f);
+}
+
+vec3 lt_current_reuse_normal() {
+    return lt_resolve_reuse_normal(block_normal, normal);
+}
+
+vec3 lt_load_reuse_normal(ivec2 uv) {
+    vec3 geometryNormal = texelFetch(radiosity_normal, uv, 0).xyz;
+    vec3 mappedNormal = texelFetch(radiosity_mapped_normal, uv, 0).xyz;
+    return lt_resolve_reuse_normal(geometryNormal, mappedNormal);
+}
+
+vec3 lt_load_previous_reuse_normal(ivec2 uv) {
+    vec3 geometryNormal = texelFetch(prev_radiosity_normal, uv, 0).xyz;
+    vec3 mappedNormal = texelFetch(prev_radiosity_mapped_normal, uv, 0).xyz;
+    return lt_resolve_reuse_normal(geometryNormal, mappedNormal);
+}
 
 struct LightSample {
     int index; // Index of the light
@@ -53,12 +91,13 @@ LightSample light_sample_new(Light light, vec3 sample_pos) {
     return result;
 }
 
-void light_sample_trace_hit(inout LightSample smple, bool jitter) {
+float light_sample_trace_hit(inout LightSample smple, bool jitter) {
     if (jitter) {
         jitter_sample_position(smple.position);
         smple.dir = normalize(smple.position - smple.sample_pos);
     }
 
+    float lightDistance = length(smple.position - smple.sample_pos);
     ray.origin = smple.sample_pos;
     ray.direction = smple.dir;
 
@@ -69,10 +108,11 @@ void light_sample_trace_hit(inout LightSample smple, bool jitter) {
         smple.color = vec3(0f);
         smple.weight = 0f; // Weight needs to be non zero
 
-        return;
+        return 0.0f;
     }
 
     light_sample_compute_weight(smple); // Update weight for reuse.
+    return lightDistance;
 }
 
 float light_sample_encode(LightSample smple) {
@@ -123,7 +163,7 @@ bool reservoir_update(
 }
 
 void reservoir_init(inout Reservoir reservoir) {
-    for (int i = 0; i < PH_RESTIR_INITIAL_SAMPLES; i++) {
+    for (int i = 0; i < PH_LIGHTTREE_INITIAL_SAMPLES; i++) {
         int rand_index = rand_next_int(0, ph_light_count);
         LightSample smple = light_sample_new(load_light(rand_index), rt_pos);
 
@@ -161,7 +201,38 @@ void reservoir_decode(inout Reservoir reservoir, vec4 color, vec3 sample_pos, bo
     reservoir.samples = color.w;
 }
 
+float reservoir_target_pdf(Reservoir reservoir) {
+    return max(reservoir.light.weight, 1e-6f);
+}
+
+float reservoir_mis_weight(Reservoir reservoir) {
+    float targetPdf = reservoir_target_pdf(reservoir);
+    if (reservoir.samples <= 0.0f || targetPdf <= 0.0f) {
+        return 0.0f;
+    }
+    return reservoir.weight_sum / max(reservoir.samples * targetPdf, 1e-6f);
+}
+
+void reservoir_merge_ris(inout Reservoir reservoir, Reservoir candidate, float candidateM) {
+    if (!reservoir_is_valid(candidate)) {
+        return;
+    }
+
+    float candidateTargetPdf = reservoir_target_pdf(candidate);
+    float candidateWeight = candidateTargetPdf * reservoir_mis_weight(candidate) * max(candidateM, 1.0f);
+    reservoir_update(
+        reservoir,
+        candidate.light,
+        candidateWeight,
+        candidateM
+    );
+}
+
 bool reservoir_reuse(inout Reservoir reservoir, ivec2 uv) {
+    if (!lt_is_viewport_uv_in_bounds(uv)) {
+        return false;
+    }
+
     if (!bad_angle) {
         vec3 smple_rt_pos = texelFetch(
             radiosity_position,
@@ -173,8 +244,9 @@ bool reservoir_reuse(inout Reservoir reservoir, ivec2 uv) {
         if (dot(d, d) >= 0.3f) return false;
     }
 
-    vec3 n = ph_decode_normal(texelFetch(radiosity_normal, uv, 0).xy);
-    if (dot(n, block_normal) < 0.99f) return false;
+    vec3 reuseNormal = lt_load_reuse_normal(uv);
+    vec3 currentReuseNormal = lt_current_reuse_normal();
+    if (dot(reuseNormal, currentReuseNormal) < 0.96f) return false;
 
     reservoir_decode(
         reservoir,
@@ -197,11 +269,16 @@ bool reservoir_reproject(inout Reservoir reservoir) {
         vec2(viewWidth, viewHeight),
         get_taa_jitter()
     );
+    if (!lt_is_viewport_uv_in_bounds(uv)) {
+        return false;
+    }
+
+    ivec2 previousUv = ivec2(uv);
 
     if (!bad_angle) {
         vec3 prev_rt_pos = texelFetch(
             prev_radiosity_position,
-            ivec2(uv),
+            previousUv,
             0
         ).xyz - world_offset;
 
@@ -209,14 +286,15 @@ bool reservoir_reproject(inout Reservoir reservoir) {
         if (dot(d, d) >= 0.3f) return false;
     }
 
-    vec3 n = ph_decode_normal(texelFetch(prev_radiosity_normal, ivec2(uv), 0).xy);
-    if (dot(n, block_normal) < 0.99f) return false;
+    vec3 previousReuseNormal = lt_load_previous_reuse_normal(previousUv);
+    vec3 currentReuseNormal = lt_current_reuse_normal();
+    if (dot(previousReuseNormal, currentReuseNormal) < 0.96f) return false;
 
     reservoir_decode(
         reservoir,
         texelFetch(
             prev_radiosity_reservoirs,
-            ivec2(uv),
+            previousUv,
             0
         ),
         rt_pos,
@@ -254,18 +332,25 @@ SampleHistory sample_history_mix(SampleHistory s1, SampleHistory s2, float a) {
 }
 
 SampleHistory sample_history_reproject_single(vec2 uv) {
+    if (!lt_is_viewport_uv_in_bounds(uv)) {
+        return NULL_HISTORY;
+    }
+
+    ivec2 previousUv = ivec2(uv);
+
     if (!bad_angle) {
-        vec3 d = texelFetch(prev_radiosity_position, ivec2(uv), 0).xyz - world_pos;
+        vec3 d = texelFetch(prev_radiosity_position, previousUv, 0).xyz - world_pos;
         if (dot(d, d) >= 0.1f) return NULL_HISTORY;
     }
 
-    vec3 n = ph_decode_normal(texelFetch(prev_radiosity_normal, ivec2(uv), 0).xy);
-    if (dot(n, block_normal) < 0.99f) return NULL_HISTORY;
+    vec3 previousReuseNormal = lt_load_previous_reuse_normal(previousUv);
+    vec3 currentReuseNormal = lt_current_reuse_normal();
+    if (dot(previousReuseNormal, currentReuseNormal) < 0.99f) return NULL_HISTORY;
 
-    vec4 lighting = texelFetch(prev_radiosity_lighting, ivec2(uv), 0);
+    vec4 lighting = texelFetch(prev_radiosity_lighting, previousUv, 0);
     if (any(isnan(lighting))) return NULL_HISTORY;
 
-    vec4 variance = texelFetch(prev_radiosity_lighting_variance, ivec2(uv), 0);
+    vec4 variance = texelFetch(prev_radiosity_lighting_variance, previousUv, 0);
     if (any(isnan(variance))) return NULL_HISTORY;
 
     return SampleHistory(lighting, variance);
@@ -303,12 +388,12 @@ void sample_history_reproject(out SampleHistory smple) {
 }
 
 void sample_history_combine_lighting(inout SampleHistory history, in SampleHistory smple) {
-    #if PH_RESTIR_DENOISER_PASSES != 0
-    history.lighting.w = min(history.lighting.w, PH_RESTIR_ACCUMULATION_FRAMES);
+    #if PH_LIGHTTREE_DENOISER_PASSES != 0
+    history.lighting.w = min(history.lighting.w, PH_LIGHTTREE_ACCUMULATION_FRAMES);
     history.lighting.rgb = mix(history.lighting.rgb, smple.lighting.rgb, 1f / (++history.lighting.w));
     #else
-    if (history.lighting.a >= PH_RESTIR_ACCUMULATION_FRAMES - 1f)
-        history.lighting *= ((PH_RESTIR_ACCUMULATION_FRAMES - 1f) / history.lighting.a);
+    if (history.lighting.a >= PH_LIGHTTREE_ACCUMULATION_FRAMES - 1f)
+        history.lighting *= ((PH_LIGHTTREE_ACCUMULATION_FRAMES - 1f) / history.lighting.a);
 
     history.lighting.rgb+= smple.lighting.rgb;
     history.lighting.a++;
@@ -331,10 +416,11 @@ void sample_history_compute_variance(inout SampleHistory history, in SampleHisto
     float sample_variance = max(
         history.variance.y - (history.variance.x * history.variance.x),
 
-        // With few samples, variance estimate is unreliable — use a high floor
-        (samples < 4f) ? 10f : 0
+        // With few samples, variance estimate is unreliable — use a moderate floor
+        (samples < 4f) ? 1f : 0
     );
 
     history.variance.z = sample_variance / samples;
 }
 #endif
+

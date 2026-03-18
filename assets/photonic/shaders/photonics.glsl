@@ -21,12 +21,6 @@ layout (std430) restrict readonly buffer cb_block {
     int cb_array[];
 };
 
-#ifdef PH_ENABLE_LIGHT_BINNING
-layout (std430) restrict readonly buffer light_registry_block {
-    int light_registry_array[];
-};
-#endif
-
 
 const int light_size = 4; // 4 vec4s per light
 

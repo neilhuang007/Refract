@@ -2,7 +2,7 @@
   "required": true,
   "minVersion": "0.8",
   "package": "at.redi2go.photonic.client.mixin",
-  "compatibilityLevel": "JAVA_16",
+  "compatibilityLevel": "JAVA_21",
   "refmap": "photonics-refmap.json",
   "mixins": [
     "BlockElementFaceMixin",

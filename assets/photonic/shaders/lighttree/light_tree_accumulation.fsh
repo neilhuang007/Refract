@@ -63,6 +63,6 @@ void main() {
     normal_frag_out = stageNormal;
     mapped_normal_frag_out = stageMappedNormal;
     material_frag_out = stageMaterial;
-    direct_frag_out = vec4(rawDirect.rgb, ph_luminance(rawDirect.rgb) > 0.0f ? 1.0f : 0.0f);
+    direct_frag_out = rawDirect;
     direct_soft_frag_out = vec4(prevSoft.rgb + rawDirect.rgb, prevSoft.a + 1.0f);
 }

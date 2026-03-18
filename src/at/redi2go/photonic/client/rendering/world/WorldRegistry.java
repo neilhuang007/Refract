@@ -104,6 +104,8 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private volatile boolean chunkSyncNeeded = true;
    private int deferredLightRebuilds = 0;
    private int incrementalLightRebuildsThisFrame = 0;
+   private long lastRebuildRateLogNanos = 0;
+   private int rebuildsSinceLastLog = 0;
    private final PriorityQueue<PChunkPos> pendingChunkLoads = new PriorityQueue<>(
       Comparator.comparingDouble(this::chunkDistanceToCamera)
    );
@@ -116,8 +118,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       int maxLights,
       int maxLightsPerNode,
       float minTracedLightSelectionLuma,
-      boolean blockLightEnabled,
-      boolean lightBinningEnabled
+      boolean blockLightEnabled
    ) {
       this.renderDispatcher = renderDispatcher;
       this.blockLightEnabled = blockLightEnabled;
@@ -130,9 +131,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          maxLightsPerNode,
          minTracedLightSelectionLuma,
          8,
-         this.worldBlockSize,
-         renderDispatcher::isChunkEmpty,
-         lightBinningEnabled
+         this.worldBlockSize
       );
       this.cbMemoryManager = this.backend.getCbMemoryManager();
       this.cbMemoryManager.setUploadBatchSize(CHUNK_UPLOAD_BATCH_SIZE);
@@ -154,7 +153,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       long profilerStart = profiling ? System.nanoTime() : 0;
       this.changeBuildStage(WorldRegistry.BuildStage.UPLOAD);
       boolean uploadDone = true;
-      int lightUploadsBefore = this.lightRegistry.getRegistryMemoryManager().getPendingUploadCount();
+      int lightUploadsBefore = this.lightRegistry.getLightsMemoryManager().getPendingUploadCount();
       int cbUploadsBefore = this.cbMemoryManager.getPendingUploadCount();
       int rootUploadsBefore = this.rootMemoryManager.getPendingUploadCount();
       uploadDone &= this.lightRegistry.upload();
@@ -200,8 +199,8 @@ public class WorldRegistry implements MemoryOwner, Destructable {
                lightUploadsBefore,
                cbUploadsBefore,
                rootUploadsBefore,
-               this.lightRegistry.getRegistryMemoryManager().getLastUploadedBytes(),
-               this.lightRegistry.getRegistryMemoryManager().getLastUploadCount(),
+               this.lightRegistry.getLightsMemoryManager().getLastUploadedBytes(),
+               this.lightRegistry.getLightsMemoryManager().getLastUploadCount(),
                this.cbMemoryManager.getLastUploadedBytes(),
                this.cbMemoryManager.getLastUploadCount(),
                this.rootMemoryManager.getLastUploadedBytes(),
@@ -302,6 +301,27 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          } else if (wantsLightWork) {
             this.deferredLightRebuilds = Math.min(this.deferredLightRebuilds + 1, MAX_DEFERRED_LIGHT_REBUILD_QUEUE);
             this.wakeUpWorldBuilder();
+         }
+         if (lightCompiled && profiling) {
+            this.rebuildsSinceLastLog++;
+            long now = System.nanoTime();
+            long elapsed = now - this.lastRebuildRateLogNanos;
+            if (elapsed >= 5_000_000_000L) { // every 5 seconds
+               float rate = this.rebuildsSinceLastLog / (elapsed / 1_000_000_000.0f);
+               Photonic.info(
+                  "[Profiler] treeRebuildRate: rebuilds={} in {}s rate={}/s tracedDirty={} topology={} forceMutations={} pendingMutations={} deferred={}",
+                  this.rebuildsSinceLastLog,
+                  String.format("%.1f", elapsed / 1_000_000_000.0f),
+                  String.format("%.1f", rate),
+                  tracedLightSetDirty,
+                  chunkTopologyChanged,
+                  forceLightCompile,
+                  pendingTracedLightMutations,
+                  this.deferredLightRebuilds
+               );
+               this.rebuildsSinceLastLog = 0;
+               this.lastRebuildRateLogNanos = now;
+            }
          }
          long t4 = profiling ? System.nanoTime() : 0;
 

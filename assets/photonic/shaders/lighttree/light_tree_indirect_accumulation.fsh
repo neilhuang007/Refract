@@ -7,6 +7,7 @@ layout(location = 1) out vec4 indirect_variance_frag_out;
 layout(location = 2) out vec4 handheld_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/common/lighting.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
 uniform float ph_debug_disable_temporal_reset;
@@ -66,24 +67,50 @@ bool lt_is_valid_reprojection(vec2 reprojectionUv, vec3 currentPosition, vec3 cu
     return ph_surface_positions_compatible(currentPosition, previousPosition, lt_reproject_position_threshold_sq);
 }
 
-vec3 lt_load_current_indirect() {
-    vec4 stageIndirect = texelFetch(stage_radiosity_indirect, tex_coord, 0);
-    if (stageIndirect.a > 0.0 && !any(isnan(stageIndirect))) {
-        return stageIndirect.rgb;
+vec4 lt_build_handheld_stage() {
+    vec4 handheldLighting = vec4(0.0f);
+    if (any(notEqual(handheld_color, vec3(0.0f)))) {
+        vec4 handDirection = direction_transformation_matrix_in * vec4(left_handed ? 1.0f : -1.0f, -1.0f, 0.0f, 1.0f);
+        handDirection.w = 1.0f / handDirection.w;
+        handDirection.xyz *= handDirection.w;
+
+        ray.origin = handDirection.xyz + rt_camera_position;
+        vec3 toLight = rt_pos - ray.origin;
+        ray.direction = normalize(toLight);
+        trace_ray(ray, true);
+
+        float distanceSquared = dot(toLight, toLight);
+        float brightness = 2.1f / dot(vec2(1.0f, distanceSquared), vec2(0.9f, 0.1f));
+        brightness = max(brightness, 0.02f);
+
+        float handToBaseDistance = distance(ray.origin, rt_pos);
+        float handToResultDistance = distance(ray.origin, ray.result_position);
+        brightness *= clamp(30.0f * (handToResultDistance - handToBaseDistance + 0.05f), 0.0f, 1.0f);
+        brightness *= dot(normal, -ray.direction);
+        brightness *= 0.4f;
+
+        vec3 handheldTint = vec3(1.0f);
+        if (!ray.result_hit || floor(rt_pos) != floor(ray.result_position)) {
+            handheldTint = vec3(0.0f);
+        } else {
+            handheldTint = result_tint_color;
+        }
+
+        handheldLighting.xyz = brightness * handheld_color * handheldTint;
+    }
+    return vec4(handheldLighting.rgb, 1.0f);
+}
+
+vec4 lt_build_indirect_stage(vec3 shadingPos, vec3 shadingNormal) {
+    ivec3 inside = ivec3(lessThan(abs(fract(shadingPos) - 0.5f), vec3(0.48f)));
+    bool onEdge = inside.x + inside.y + inside.z <= 1;
+
+    vec3 indirectLighting = ph_trace_surface_radiance(shadingPos, shadingNormal, 0, 2);
+    if (!onEdge) {
+        ph_seed_indirect_cache(world_pos, block_normal, indirectLighting);
     }
 
-    vec4 resolvedIndirect = texelFetch(radiosity_indirect_resolved, tex_coord, 0);
-    if (resolvedIndirect.a > 0.0 && !any(isnan(resolvedIndirect))) {
-        return resolvedIndirect.rgb;
-    }
-
-    vec4 previousIndirect = texelFetch(radiosity_indirect, tex_coord, 0);
-    if (previousIndirect.a > 0.0 && !any(isnan(previousIndirect))) {
-        vec3 albedo = clamp(texelFetch(colortex10, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
-        return nrd_safe_remodulate(previousIndirect.rgb, nrd_compute_diffuse_demodulation(albedo));
-    }
-
-    return vec3(0.0);
+    return vec4(indirectLighting, 1.0f);
 }
 
 void main() {
@@ -94,22 +121,32 @@ void main() {
         return;
     }
 
-    vec3 currentIndirectRadiance = lt_load_current_indirect();
-    vec4 currentHandheld = texelFetch(stage_radiosity_handheld, tex_coord, 0);
+    load_fragment_variables(albedo, world_pos, block_normal, normal);
+    rt_pos = world_pos - world_offset;
+    bad_angle = is_bad_angle(world_pos, block_normal);
+
+    rng_state = uint(
+        uint(floor(world_pos.x * 7.0f)) * uint(6199) +
+        uint(floor(world_pos.y * 7.0f)) * uint(31357) +
+        uint(floor(world_pos.z * 7.0f)) * uint(53611) +
+        uint(floor(block_normal.x * 3.0f + 4.0f)) * uint(7919) +
+        uint(floor(block_normal.y * 3.0f + 4.0f)) * uint(43391)
+    ) | uint(1);
+
+    vec4 currentIndirectSample = lt_build_indirect_stage(rt_pos, block_normal);
+    vec3 currentIndirectRadiance = currentIndirectSample.rgb;
+    bool hasCurrentSample = currentIndirectSample.a > 0.0;
     vec3 currentPosition = texelFetch(stage_radiosity_position, tex_coord, 0).xyz;
     vec3 currentNormal = texelFetch(stage_radiosity_normal, tex_coord, 0).xyz;
     vec3 currentAlbedo = clamp(texelFetch(colortex10, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
 
-    handheld_frag_out = currentHandheld;
+    handheld_frag_out = lt_build_handheld_stage();
 
     if (any(isnan(currentIndirectRadiance)) || any(isinf(currentIndirectRadiance))) {
         indirect_frag_out = vec4(0.0);
         indirect_variance_frag_out = vec4(0.0);
         return;
     }
-
-    float currentRadianceLuma = lt_luminance(currentIndirectRadiance);
-    bool hasCurrentSample = currentRadianceLuma > 1e-5;
 
     vec2 reprojectionUv = ph_reprojectf(
         previous_modelview_projection,
@@ -136,7 +173,7 @@ void main() {
     vec4 previousSignal = texelFetch(prev_radiosity_indirect, previousUv, 0);
     vec4 previousVariance = texelFetch(prev_radiosity_indirect_variance, previousUv, 0);
 
-    if (previousSignal.a <= 0.0 || any(isnan(previousSignal))) {
+    if (previousSignal.a <= 0.0 || any(isnan(previousSignal)) || any(isinf(previousSignal))) {
         if (!hasCurrentSample) {
             indirect_frag_out = vec4(0.0);
             indirect_variance_frag_out = vec4(0.0);
@@ -150,8 +187,8 @@ void main() {
     }
 
     if (!hasCurrentSample) {
-        indirect_frag_out = previousSignal;
-        indirect_variance_frag_out = previousVariance;
+        indirect_frag_out = vec4(0.0);
+        indirect_variance_frag_out = vec4(0.0);
         return;
     }
 

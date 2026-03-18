@@ -103,9 +103,6 @@ public abstract class MainRenderer implements Destructable {
       memoryCollection.add(this.worldRegistry::getRootMemoryManager);
       memoryCollection.add(this.worldRegistry::getCbMemoryManager);
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getLightsMemoryManager());
-      if (this.worldRegistry.getLightRegistry().isLightBinningEnabled()) {
-         memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegistryMemoryManager());
-      }
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getLightMappingMemoryManager());
       return memoryCollection;
    }

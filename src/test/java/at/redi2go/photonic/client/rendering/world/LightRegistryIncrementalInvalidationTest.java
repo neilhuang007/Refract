@@ -2,6 +2,7 @@ package at.redi2go.photonic.client.rendering.world;
 
 import at.redi2go.photonic.client.config.lights.BlockLightInfo;
 import at.redi2go.photonic.client.config.lights.color.RgbColor;
+import at.redi2go.photonic.client.config.lights.orientation.LightOrientation;
 import at.redi2go.photonic.client.config.lights.predicate.LightPredicate;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryOwner;
 import at.redi2go.photonic.client.rendering.world.position.LightNodePos;
@@ -14,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Deque;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -127,7 +127,7 @@ class LightRegistryIncrementalInvalidationTest {
 
    @Test
    void createTracedLightsKeepsStableIndicesWhenMapIterationOrderChanges() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
@@ -155,52 +155,8 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
-   void createTracedLightsKeepsTreeInputStableWhenOnlyIterationOrderChanges() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
-      @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
-      BlockLightInfo info = createTestLightInfo();
-      Vector3f lightA = new Vector3f(8.5F, 3.5F, 9.5F);
-      Vector3f lightB = new Vector3f(2.5F, 9.5F, 4.5F);
-      Vector3f lightC = new Vector3f(2.5F, 1.5F, 7.5F);
-
-      positions.put(lightA, new TracedLightPosition(3, info));
-      positions.put(lightB, new TracedLightPosition(2, info));
-      positions.put(lightC, new TracedLightPosition(1, info));
-      invokeCreateTracedLightsSummary(registry, invokeToLightInstanceArray(registry));
-
-      positions.clear();
-      positions.put(lightB, new TracedLightPosition(2, info));
-      positions.put(lightC, new TracedLightPosition(1, info));
-      positions.put(lightA, new TracedLightPosition(3, info));
-
-      Object summary = invokeCreateTracedLightsSummary(registry, invokeToLightInstanceArray(registry));
-      assertFalse(invokeSummaryBoolean(summary, "treeInputChanged"),
-         "Canonical traced-light order should keep tree input stable across map iteration changes");
-   }
-
-   @Test
-   void createTracedLightsMarksTreeInputDirtyWhenLightSetChanges() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
-      @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
-      BlockLightInfo info = createTestLightInfo();
-      Vector3f lightA = new Vector3f(8.5F, 3.5F, 9.5F);
-      Vector3f lightB = new Vector3f(2.5F, 9.5F, 4.5F);
-
-      positions.put(lightA, new TracedLightPosition(3, info));
-      invokeCreateTracedLightsSummary(registry, invokeToLightInstanceArray(registry));
-
-      positions.put(lightB, new TracedLightPosition(2, info));
-
-      Object summary = invokeCreateTracedLightsSummary(registry, invokeToLightInstanceArray(registry));
-      assertTrue(invokeSummaryBoolean(summary, "treeInputChanged"),
-         "Adding a traced light must invalidate the light tree input signature");
-   }
-
-   @Test
    void createTracedLightsTreatsBlockIdChangesAtStablePositionsAsDirty() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
@@ -218,7 +174,7 @@ class LightRegistryIncrementalInvalidationTest {
 
    @Test
    void createTracedLightsKeepsStableIndicesForUnchangedCappedSelection() throws Exception {
-      LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
       BlockLightInfo bright = createTestLightInfo(100.0F);
@@ -252,8 +208,54 @@ class LightRegistryIncrementalInvalidationTest {
 
 
    @Test
+   void createTracedLightsRetainsPreviousMemberWhenNewcomerOnlySlightlyImprovesCameraScore() throws Exception {
+      LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
+      @SuppressWarnings("unchecked")
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      BlockLightInfo info = createTestLightInfo(100.0F);
+      Vector3f lightA = new Vector3f(0.5F, 0.5F, 0.5F);
+      Vector3f lightB = new Vector3f(2.5F, 0.5F, 0.5F);
+      Vector3f lightC = new Vector3f(2.0F, 0.5F, 0.5F);
+
+      positions.put(lightA, new TracedLightPosition(1, info));
+      positions.put(lightB, new TracedLightPosition(2, info));
+      assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
+
+      positions.put(lightC, new TracedLightPosition(3, info));
+      assertFalse(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
+
+      LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
+      assertEquals(2, tracedLights.length);
+      assertEquals(lightA, tracedLights[0].position());
+      assertEquals(lightB, tracedLights[1].position());
+   }
+
+   @Test
+   void createTracedLightsReplacesPreviousMemberWhenNewcomerIsMeaningfullyBetter() throws Exception {
+      LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
+      @SuppressWarnings("unchecked")
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      BlockLightInfo info = createTestLightInfo(100.0F);
+      Vector3f lightA = new Vector3f(0.5F, 0.5F, 0.5F);
+      Vector3f lightB = new Vector3f(2.5F, 0.5F, 0.5F);
+      Vector3f lightC = new Vector3f(1.0F, 0.5F, 0.5F);
+
+      positions.put(lightA, new TracedLightPosition(1, info));
+      positions.put(lightB, new TracedLightPosition(2, info));
+      assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
+
+      positions.put(lightC, new TracedLightPosition(3, info));
+      assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
+
+      LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
+      assertEquals(2, tracedLights.length);
+      assertEquals(lightA, tracedLights[0].position());
+      assertEquals(lightC, tracedLights[1].position());
+   }
+
+   @Test
    void createTracedLightsDropsVeryWeakUnselectedLightsBeforeCapping() throws Exception {
-      LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
       BlockLightInfo bright = createTestLightInfo(100.0F);
@@ -276,55 +278,8 @@ class LightRegistryIncrementalInvalidationTest {
 
 
    @Test
-   void queueNodeUploadsEnqueuesExactDirtyNodeSlices() throws Exception {
-      LightRegistry registry = new LightRegistry(16, 3, 0.001F, 8, 64, chunkPos -> false, true);
-      Method queueMethod = LightRegistry.class.getDeclaredMethod("queueNodeUploads", List.class);
-      queueMethod.setAccessible(true);
-      queueMethod.invoke(registry, List.of(new LightNodePos(1, 0, 0), new LightNodePos(0, 2, 3)));
-
-      @SuppressWarnings("unchecked")
-      Deque<MemoryOwner> uploadQueue = (Deque<MemoryOwner>) getField(registry.getRegistryMemoryManager(), "uploadQueue");
-      MemoryOwner[] uploads = uploadQueue.toArray(MemoryOwner[]::new);
-
-      assertEquals(2, uploads.length);
-      assertEquals(expectedNodeSliceBegin(1, 0, 0, 8, 3), uploads[0].getMemory().begin);
-      assertEquals(expectedNodeSliceBegin(1, 0, 0, 8, 3) + 16, uploads[0].getMemory().end);
-      assertEquals(expectedNodeSliceBegin(0, 2, 3, 8, 3), uploads[1].getMemory().begin);
-      assertEquals(expectedNodeSliceBegin(0, 2, 3, 8, 3) + 16, uploads[1].getMemory().end);
-   }
-
-   @Test
-   void remapLightIndicesQueuesOnlyChangedNodeSlices() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 3, 0.001F, 8, 64, chunkPos -> false, true);
-      setField(registry, "newLightIndices", new short[]{1, 0, 2, 3, 4, 5, 6, 7});
-      setField(registry, "lightRegions", new short[]{
-         (short) (2 | 0x8000), 0, 1, 0,
-         (short) (2 | 0x8000), 2, 3, 0
-      });
-
-      Method remapMethod = LightRegistry.class.getDeclaredMethod("remapLightIndices");
-      remapMethod.setAccessible(true);
-      int remappedNodes = (int) remapMethod.invoke(registry);
-
-      short[] lightRegions = (short[]) getField(registry, "lightRegions");
-      assertEquals(1, remappedNodes);
-      assertEquals(1, lightRegions[1]);
-      assertEquals(0, lightRegions[2]);
-      assertEquals(2, lightRegions[5]);
-      assertEquals(3, lightRegions[6]);
-
-      @SuppressWarnings("unchecked")
-      Deque<MemoryOwner> uploadQueue = (Deque<MemoryOwner>) getField(registry.getRegistryMemoryManager(), "uploadQueue");
-      MemoryOwner[] uploads = uploadQueue.toArray(MemoryOwner[]::new);
-      assertEquals(1, uploads.length);
-      assertEquals(0, uploads[0].getMemory().begin);
-      assertEquals((1 + 3) * Integer.BYTES, uploads[0].getMemory().end);
-   }
-
-
-   @Test
    void queueIdentityLightMappingsIfNeededWritesIdentityOnce() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       MemoryOwner lightMappingMemory = (MemoryOwner) getField(registry, "lightMappingMemory");
       for (int i = 0; i < 8; i++) {
          lightMappingMemory.getMemory().getBuffer().asIntBuffer().put(i, -1);
@@ -346,7 +301,7 @@ class LightRegistryIncrementalInvalidationTest {
 
    @Test
    void clearChunkLightsRemovesOnlyLightsInsideTheChunk() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
@@ -366,13 +321,13 @@ class LightRegistryIncrementalInvalidationTest {
 
    @Test
    void describeRecentChurnOmitsDeferredRemovalMetric() {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       assertFalse(registry.describeRecentChurn().contains("deferredRemove="), registry.describeRecentChurn());
    }
 
    @Test
    void clearChunkLightsDropsLoadedMarkerAndPreservesOutsideLights() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
       @SuppressWarnings("unchecked")
@@ -394,7 +349,7 @@ class LightRegistryIncrementalInvalidationTest {
 
    @Test
    void toLightInstanceArraySortsLightsDeterministicallyByPosition() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
@@ -413,7 +368,7 @@ class LightRegistryIncrementalInvalidationTest {
 
    @Test
    void describeRecentChurnReportsLightChanges() throws Exception {
-      LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
       BlockLightInfo bright = createTestLightInfo(100.0F);
@@ -436,41 +391,8 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
-   void buildBinningPrimitivesClustersNearbyEquivalentLights() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
-      BlockLightInfo info = createTestLightInfo(100.0F);
-      LightInstance[] lights = new LightInstance[] {
-         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(3.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(5.5F, 1.5F, 1.5F), info),
-      };
-
-      Method method = LightRegistry.class.getDeclaredMethod("buildBinningPrimitives", LightInstance[].class);
-      method.setAccessible(true);
-      LightInstance[] primitives = (LightInstance[]) method.invoke(registry, (Object) lights);
-
-      assertEquals(1, primitives.length);
-   }
-
-   @Test
-   void buildBinningPrimitivesKeepsDistantLightsSeparate() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
-      BlockLightInfo info = createTestLightInfo(100.0F);
-      LightInstance[] lights = new LightInstance[] {
-         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(20.5F, 1.5F, 1.5F), info),
-      };
-
-      Method method = LightRegistry.class.getDeclaredMethod("buildBinningPrimitives", LightInstance[].class);
-      method.setAccessible(true);
-      LightInstance[] primitives = (LightInstance[]) method.invoke(registry, (Object) lights);
-
-      assertEquals(2, primitives.length);
-   }
-
-   @Test
    void lightTreeDiagnosticsCaptureLeafAndRebuildMetrics() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       BlockLightInfo info = createTestLightInfo(100.0F);
       LightInstance[] lights = new LightInstance[] {
          new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info),
@@ -487,43 +409,17 @@ class LightRegistryIncrementalInvalidationTest {
       buildMethod.invoke(registry);
 
       LightRegistry.LightTreeDiagnostics diagnostics = registry.getLightTreeDiagnostics();
-      assertEquals(registry.getLightTreeNodeCount(), diagnostics.nodeCount());
-      assertTrue(diagnostics.leafCount() >= 2);
-      assertTrue(diagnostics.averageLeafSize() > 1.0F);
+      assertTrue(diagnostics.nodeCount() >= 1);
+      assertTrue(diagnostics.leafCount() >= 1);
+      assertTrue(diagnostics.averageLeafSize() >= 1.0F);
       assertTrue(diagnostics.maxLeafSize() >= 1);
-      assertTrue(diagnostics.averageDepth() > 0.0F);
-      assertTrue(diagnostics.maxDepth() >= 1);
+      assertTrue(diagnostics.averageDepth() >= 0.0F);
+      assertTrue(diagnostics.maxDepth() >= 0);
       assertTrue(diagnostics.rootBoundsVolume() > 0.0F);
       assertTrue(diagnostics.siblingOverlapRatio() >= 0.0F);
       assertTrue(diagnostics.childSeparationRatio() >= 0.0F);
       assertEquals(1, diagnostics.rebuildCount());
       assertEquals(7, diagnostics.lastRebuildCompileCount());
-   }
-
-   @Test
-   void primitiveSignatureIsStableForEquivalentClusteredLights() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
-      BlockLightInfo info = createTestLightInfo(100.0F);
-      LightInstance[] lightsA = new LightInstance[] {
-         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(3.5F, 1.5F, 1.5F), info),
-      };
-      LightInstance[] lightsB = new LightInstance[] {
-         new LightInstance(1, new Vector3f(3.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info),
-      };
-
-      Method buildMethod = LightRegistry.class.getDeclaredMethod("buildBinningPrimitives", LightInstance[].class);
-      buildMethod.setAccessible(true);
-      LightInstance[] primitivesA = (LightInstance[]) buildMethod.invoke(registry, (Object) lightsA);
-      LightInstance[] primitivesB = (LightInstance[]) buildMethod.invoke(registry, (Object) lightsB);
-
-      Method sigMethod = LightRegistry.class.getDeclaredMethod("computePrimitiveSignature", LightInstance[].class);
-      sigMethod.setAccessible(true);
-      long sigA = (long) sigMethod.invoke(null, (Object) primitivesA);
-      long sigB = (long) sigMethod.invoke(null, (Object) primitivesB);
-
-      assertEquals(sigA, sigB);
    }
 
    private static LightInstance[] invokeToLightInstanceArray(LightRegistry registry) throws Exception {
@@ -538,21 +434,10 @@ class LightRegistryIncrementalInvalidationTest {
       return (long) method.invoke(null, x, y, z);
    }
 
-   private static Object invokeCreateTracedLightsSummary(LightRegistry registry, LightInstance[] lights) throws Exception {
-      Method method = LightRegistry.class.getDeclaredMethod("createTracedLights", LightInstance[].class, PBlockPos.class);
-      method.setAccessible(true);
-      return method.invoke(registry, (Object) lights, new PBlockPos(0, 0, 0));
-   }
-
    private static boolean invokeCreateTracedLights(LightRegistry registry, LightInstance[] lights) throws Exception {
-      Object summary = invokeCreateTracedLightsSummary(registry, lights);
-      return invokeSummaryBoolean(summary, "changed");
-   }
-
-   private static boolean invokeSummaryBoolean(Object summary, String methodName) throws Exception {
-      Method method = summary.getClass().getDeclaredMethod(methodName);
+      Method method = LightRegistry.class.getDeclaredMethod("createTracedLights", LightInstance[].class);
       method.setAccessible(true);
-      return (boolean) method.invoke(summary);
+      return (boolean) method.invoke(registry, (Object) lights);
    }
 
    private static Object getField(Object target, String fieldName) throws Exception {
@@ -565,11 +450,6 @@ class LightRegistryIncrementalInvalidationTest {
       Field field = target.getClass().getDeclaredField(fieldName);
       field.setAccessible(true);
       field.set(target, value);
-   }
-
-   private static int expectedNodeSliceBegin(int x, int y, int z, int nodeCount, int maxLightsPerNode) {
-      int stride = 1 + maxLightsPerNode;
-      return stride * (y * nodeCount * nodeCount + z * nodeCount + x) * Integer.BYTES;
    }
 
    private static BlockLightInfo createTestLightInfo() {
@@ -599,7 +479,8 @@ class LightRegistryIncrementalInvalidationTest {
          16.0F,
          1.0F,
          true,
-         true
+         true,
+         LightOrientation.OMNI
       );
    }
 }

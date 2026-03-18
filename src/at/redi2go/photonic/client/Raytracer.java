@@ -82,33 +82,22 @@ public class Raytracer implements Destructable {
 
       PhotonicsProperties properties = getProperties().orElseThrow();
       this.renderDispatcher = new RenderDispatcher(properties.getRenderScale());
-      boolean lightBinningEnabled = resolveLightBinningEnabled(properties);
       this.worldRegistry = new WorldRegistry(
          this.renderDispatcher,
          properties.getMaxLights(),
          properties.getMaxSamples(),
          properties.getMinTracedLightLuma(),
-         properties.isBlockLightEnabled().orElse(true),
-         lightBinningEnabled
+         properties.isBlockLightEnabled().orElse(true)
       );
       Photonic.info(
-         "[Startup] photonics: lightingPipeline=LIGHT_TREE_RESTIR multithreading={} lightBinning={} blockLight={} gi={}",
+         "[Startup] photonics: lightingPipeline=LIGHT_TREE_RESTIR multithreading={} blockLight={} gi={}",
          PhotonicsStorage.DO_MULTITHREADING.value,
-         lightBinningEnabled,
          properties.isBlockLightEnabled().orElse(true),
          properties.isGiEnabled().orElse(true)
       );
       this.mainRenderer = new LightTreeRenderer(this.worldRegistry, properties.getRenderScale(), properties);
       this.worldRegistry.startWorldBuilder();
       this.voxelizedBlockObserver = PhotonicsConfig.observe(c -> c.voxelizedBlocks, unused -> MinecraftClient.getInstance().worldRenderer.reload());
-   }
-
-   public static boolean resolveLightBinningEnabled(PhotonicsProperties properties) {
-      String override = PhotonicsStorage.getEffectiveLightBinningOverride();
-      if (!override.isBlank()) {
-         return Boolean.parseBoolean(override);
-      }
-      return properties.isLightBinningEnabled().orElse(true);
    }
 
    public static Optional<PhotonicsProperties> getProperties() {

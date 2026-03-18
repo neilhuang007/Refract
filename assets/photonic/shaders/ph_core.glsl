@@ -118,14 +118,6 @@ vec2 ph_reprojectf(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jit
     return xy * viewSize * PH_RENDER_SCALE;
 }
 
-#ifdef PH_ENABLE_LIGHT_BINNING
-int load_light_offset(vec3 position) {
-    vec3 o = floor(position / 8.0f);
-
-    return (1 + PH_MAX_SAMPLES) * int(o.y * 64 * 64 + o.z * 64 + o.x);
-}
-#endif
-
 int ph_hash(ivec3 v) {
     return ph_cantor(ph_hash(v.x), ph_cantor(ph_hash(v.y), ph_hash(v.z)));
 }

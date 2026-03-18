@@ -78,11 +78,6 @@ public class ModSettingsScreen extends Screen {
          PhotonicsConfig.setMultiThreadingEnabled(!PhotonicsConfig.isMultiThreadingEnabled());
          w.setMessage(Text.of("MultiThreading: " + (PhotonicsConfig.isMultiThreadingEnabled() ? "On" : "Off")));
       }, "Turns MultiThreading on or off; MultiThreading is considerably faster, but can cause bugs.", () -> true));
-      buttons.add(new ModSettingsScreen.PButton(this.getLightBinningButtonText(), w -> {
-         this.cycleLightBinningOverride();
-         w.setMessage(Text.of(this.getLightBinningButtonText()));
-         this.reloadShaders();
-      }, "Cycles between shader-pack default, enabled,\nand disabled light binning, then reloads Iris.", () -> true));
       PhotonicsStorage.Parameter<Boolean> profilerEnabled = PhotonicsStorage.PROFILER_ENABLED;
       buttons.add(new ModSettingsScreen.PButton("Performance Profiler: " + (profilerEnabled.value ? "On" : "Off"), w -> {
          profilerEnabled.value = !profilerEnabled.value;
@@ -207,28 +202,6 @@ public class ModSettingsScreen extends Screen {
       }
    }
 
-
-   private String getLightBinningButtonText() {
-      String override = PhotonicsStorage.getEffectiveLightBinningOverride();
-      if (override == null || override.isBlank()) {
-         return "Light Binning: Shader Pack";
-      }
-      return "Light Binning: " + (Boolean.parseBoolean(override) ? "On" : "Off");
-   }
-
-
-   private void cycleLightBinningOverride() {
-      String current = PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value;
-      if (current == null || current.isBlank()) {
-         PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value = "true";
-      } else if (Boolean.parseBoolean(current)) {
-         PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value = "false";
-      } else {
-         PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value = "";
-      }
-      PhotonicsStorage.LIGHT_BINNING_OVERRIDE.modified();
-      PhotonicsStorage.applySystemPropertyOverrides();
-   }
 
    private void reloadShaders() {
       RenderSystem.recordRenderCall(() -> {

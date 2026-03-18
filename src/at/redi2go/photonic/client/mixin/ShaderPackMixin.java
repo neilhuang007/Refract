@@ -195,10 +195,6 @@ public abstract class ShaderPackMixin {
          stringDefine(newEnvDefines, "PH_ENABLE_HANDHELD_LIGHT", "");
       }
 
-      if (Raytracer.resolveLightBinningEnabled(properties)) {
-         stringDefine(newEnvDefines, "PH_ENABLE_LIGHT_BINNING", "");
-      }
-
       intDefine(newEnvDefines, "PH_LIGHTING_MODE", 2);
       intDefine(newEnvDefines, "PH_LIGHTTREE_INITIAL_SAMPLES", properties.getLightTreeInitialSamples());
       intDefine(newEnvDefines, "PH_RESTIR_INITIAL_SAMPLES", properties.getLightTreeInitialSamples());

@@ -39,8 +39,6 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Unique
    private OptionalBoolean isHandheldLightEnabled = OptionalBoolean.DEFAULT;
    @Unique
-   private OptionalBoolean isLightBinningEnabled = OptionalBoolean.DEFAULT;
-   @Unique
    private OptionalBoolean voxelizeLava = OptionalBoolean.DEFAULT;
    @Unique
    private int lightTreeInitialSamples = DEFAULT_LIGHTTREE_INITIAL_SAMPLES;
@@ -95,7 +93,6 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          case "photonics.enableGi" -> this.isGiEnabled = photonics$parseBoolean(value);
          case "photonics.enableBlockLight" -> this.isBlockLightEnabled = photonics$parseBoolean(value);
          case "photonics.enableHandheldLight" -> this.isHandheldLightEnabled = photonics$parseBoolean(value);
-         case "photonics.enableLightBinning" -> this.isLightBinningEnabled = photonics$parseBoolean(value);
          case "photonics.voxelizeLava" -> this.voxelizeLava = photonics$parseBoolean(value);
          case "photonics.lightTreeInitialSamples", "photonics.restirInitialSamples" -> photonics$parseUnsignedInt(key, value, e -> this.lightTreeInitialSamples = e);
          case "photonics.lightTreeSpatialReuseSamples", "photonics.restirSpatialReuseSamples" -> photonics$parseUnsignedInt(key, value, e -> this.lightTreeSpatialReuseSamples = e);
@@ -150,11 +147,6 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Override
    public OptionalBoolean isHandheldLightEnabled() {
       return this.isHandheldLightEnabled;
-   }
-
-   @Override
-   public OptionalBoolean isLightBinningEnabled() {
-      return this.isLightBinningEnabled;
    }
 
    @Override

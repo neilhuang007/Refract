@@ -41,7 +41,6 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_DISABLE_TAA_JITTER = boolParam("debug_disable_taa_jitter", false);
    public static final Parameter<Boolean> DEBUG_FREEZE_RNG = boolParam("debug_freeze_rng", false);
    public static final Parameter<Boolean> DEBUG_CONSTANT_ALBEDO = boolParam("debug_constant_albedo", false);
-   public static final Parameter<String> LIGHT_BINNING_OVERRIDE = stringParam("light_binning_override", "");
    public static final Parameter<Boolean> OILIFY_ENABLED = boolParam("oilify_enabled", false);
    public static final Parameter<Float> OILIFY_SIZE = floatParam("oilify_size", 7.0F);
    public static final Parameter<Float> OILIFY_SHARPNESS = floatParam("oilify_sharpness", 1.0F);
@@ -89,24 +88,7 @@ public final class PhotonicsStorage {
    }
 
    public static void applySystemPropertyOverrides() {
-      applyStringSystemPropertyOverride("photonics.enableLightBinning", LIGHT_BINNING_OVERRIDE.value);
-      applyStringSystemPropertyOverride("photonics.lightBinningEnabled", LIGHT_BINNING_OVERRIDE.value);
       applyBooleanSystemPropertyOverride("photonics.profilerEnabled", PROFILER_ENABLED);
-   }
-
-   private static void applyStringSystemPropertyOverride(String key, String value) {
-      String systemValue = System.getProperty(key);
-      if (systemValue != null && !systemValue.isBlank()) {
-         return;
-      }
-
-      if (value == null || value.isBlank()) {
-         // Blank local storage means "no local override", not "force clear any
-         // externally supplied system property" such as automation/test launch args.
-         return;
-        } else {
-         System.setProperty(key, value);
-       }
    }
 
    private static void applyBooleanSystemPropertyOverride(String key, Parameter<Boolean> parameter) {
@@ -118,24 +100,4 @@ public final class PhotonicsStorage {
       parameter.value = Boolean.parseBoolean(value);
    }
 
-   public static String getEffectiveStoredOrSystemOverride(Parameter<String> parameter, String systemPropertyKey) {
-      if (parameter.value != null && !parameter.value.isBlank()) {
-         return parameter.value;
-      }
-      String systemValue = System.getProperty(systemPropertyKey);
-      return systemValue == null ? "" : systemValue;
-   }
-
-   public static String getEffectiveLightBinningOverride() {
-      String systemValue = System.getProperty("photonics.lightBinningEnabled");
-      if (systemValue != null && !systemValue.isBlank()) {
-         return systemValue;
-      }
-
-      String override = getEffectiveStoredOrSystemOverride(LIGHT_BINNING_OVERRIDE, "photonics.lightBinningEnabled");
-      if (!override.isBlank()) {
-         return override;
-      }
-      return getEffectiveStoredOrSystemOverride(LIGHT_BINNING_OVERRIDE, "photonics.enableLightBinning");
-   }
 }
