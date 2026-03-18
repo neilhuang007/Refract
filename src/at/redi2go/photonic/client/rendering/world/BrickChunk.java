@@ -14,7 +14,7 @@ public class BrickChunk implements WorldChunk {
    static final int chunkEdge = 16;
    static final int brickIntCount = chunkEdge * chunkEdge * chunkEdge;
    static final int byteSize = brickIntCount * Integer.BYTES;
-   private static final int maxShaderBlockIndex = 0xFFF;
+   private static final int maxShaderBlockIndex = 0x1FFF;
    private static final int debugLogLimit = 16;
    private static int blockPointerOverflowLogs = 0;
    private final int[] brickData = new int[brickIntCount];
@@ -145,7 +145,7 @@ public class BrickChunk implements WorldChunk {
          if (blockPointerOverflowLogs < debugLogLimit) {
             blockPointerOverflowLogs++;
             Photonic.warn(
-               "[BrickChunkDebug] Block pointer overflow: blockId={} shaderIndex={} exceeds 12-bit budget, falling back to air",
+               "[BrickChunkDebug] Block pointer overflow: blockId={} shaderIndex={} exceeds 13-bit budget, falling back to air",
                block == null ? -1 : block.blockId,
                value
             );
@@ -153,7 +153,7 @@ public class BrickChunk implements WorldChunk {
          return 0;
       }
       if (skyBrightness != -1 && value != 0) {
-         value |= skyBrightness << 12;
+         value |= skyBrightness << 13;
       }
       return value;
    }

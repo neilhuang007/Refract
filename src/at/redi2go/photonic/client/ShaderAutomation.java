@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.imageio.ImageIO;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -27,6 +28,7 @@ import org.lwjgl.opengl.GL30;
 
 public final class ShaderAutomation {
    private static final int MAX_REPEAT_DIAGNOSTICS = 5;
+   private static final AtomicBoolean FATAL_SHADER_FAILURE_SCHEDULED = new AtomicBoolean(false);
    private static final ShaderAutomation INSTANCE = Photonic.automationEnabled() ? new ShaderAutomation() : null;
    private final String worldName;
    private final boolean autoStartWorld;
@@ -591,16 +593,15 @@ public final class ShaderAutomation {
 
       if (client.world != null) {
          this.releaseAutomationMouse(client);
+         this.applyFullscreen(client);
       }
 
       if (client.world != null && this.raytracerActive) {
-         this.applyFullscreen(client);
          this.activeTicks++;
          this.applyCameraMotion(client);
          this.applyWorldAutomation(client);
          this.updatePostMotionWindow();
       }
-
       if (this.ticksElapsed >= this.timeoutTicks) {
          String reason = this.buildSuccess()
             ? ""
@@ -1285,6 +1286,80 @@ public final class ShaderAutomation {
       this.expectedShaderPackMatched = matchesExpectedShaderPack(this.expectedShaderPack, this.shaderPackName);
       this.raytracerActive |= Raytracer.INSTANCE != null && !Raytracer.isDisabled();
       this.patchId = currentPatchId();
+      this.detectFatalShaderFailure();
+   }
+
+   private void detectFatalShaderFailure() {
+      if (this.finished) {
+         return;
+      }
+
+      MinecraftClient client = MinecraftClient.getInstance();
+      if (client == null) {
+         return;
+      }
+
+      Path latestLog = Path.of("run/logs/latest.log");
+      if (!Files.exists(latestLog)) {
+         return;
+      }
+
+      try {
+         String logContent = Files.readString(latestLog);
+         if (logContent.contains("Failed to create shader rendering pipeline")
+            || logContent.contains("The shaderpack failed to load! Please report the error to the shader developer.")) {
+            String compileReason = photonics$extractShaderCompileReason(logContent);
+            String failureMessage = compileReason == null
+               ? "Fatal shader compilation failure detected in latest.log"
+               : "Fatal shader compilation failure: " + compileReason;
+            Photonic.warn("[Automation] {}", failureMessage);
+            this.finish(failureMessage);
+            this.scheduleFatalShutdown(client);
+         }
+      } catch (IOException ignored) {
+      }
+   }
+
+   private static String photonics$extractShaderCompileReason(String logContent) {
+      String[] lines = logContent.split("\\R");
+      for (int i = lines.length - 1; i >= 0; i--) {
+         String line = lines[i].trim();
+         if (line.contains("ShaderCompileException")) {
+            return line;
+         }
+      }
+
+      for (int i = lines.length - 1; i >= 0; i--) {
+         String line = lines[i].trim();
+         if (line.contains("ERROR") && line.toLowerCase(Locale.ROOT).contains("shader")) {
+            return line;
+         }
+      }
+
+      return null;
+   }
+
+   private void scheduleFatalShutdown(MinecraftClient client) {
+      if (client == null || !FATAL_SHADER_FAILURE_SCHEDULED.compareAndSet(false, true)) {
+         return;
+      }
+
+      client.execute(client::scheduleStop);
+
+      Thread shutdownThread = new Thread(() -> {
+         try {
+            Thread.sleep(250L);
+         } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+         }
+
+         MinecraftClient liveClient = MinecraftClient.getInstance();
+         if (liveClient != null) {
+            liveClient.scheduleStop();
+         }
+      }, "Photonics-Automation-FatalShaderStop");
+      shutdownThread.setDaemon(true);
+      shutdownThread.start();
    }
 
    private void releaseAutomationMouse(MinecraftClient client) {
@@ -1476,9 +1551,8 @@ public final class ShaderAutomation {
    }
 
    private String currentPatchId() {
-      String lightingMode = Raytracer.getProperties().map(properties -> properties.getLightingMode().name()).orElse("OFF");
       String patchState = Raytracer.getAppliedPatch() == null ? "native" : "patched";
-      return lightingMode + ":" + patchState;
+      return "LIGHT_TREE_RESTIR:" + patchState;
    }
 
    private void finish(String failureReason) {
@@ -1922,6 +1996,9 @@ public final class ShaderAutomation {
    ) {
    }
 }
+
+
+
 
 
 

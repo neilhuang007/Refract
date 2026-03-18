@@ -72,3 +72,15 @@ vec3 get_sky_color(ivec2 gBufferLoc, vec3 worldPos, vec3 newNormal) {
     return mix(skyHorizon, skyTop, pow(horizonFactor, 1.25f)) + vec3(1.1f, 0.95f, 0.8f) * sunScatter + (dither - 0.5f) / 256.0f;
 }
 #endreplace
+
+#replace "vec4 load_fragment_material();"
+vec4 load_fragment_material() {
+    ivec2 texelCoord = ivec2(gl_FragCoord.xy);
+    vec4 spec = texelFetch(specular, texelCoord, 0);
+    float smoothness = clamp(spec.r, 0.0f, 1.0f);
+    float roughness = clamp(1.0f - smoothness, 0.0f, 1.0f);
+    float metallic = clamp(spec.g, 0.0f, 1.0f);
+    float emission = clamp(spec.a, 0.0f, 1.0f);
+    return vec4(roughness, metallic, emission, smoothness);
+}
+#endreplace

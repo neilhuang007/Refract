@@ -5,14 +5,13 @@ in vec4 direction_vert_out;
 layout(location = 0) out vec4 position_frag_out;
 layout(location = 1) out vec4 normal_frag_out;
 layout(location = 2) out vec4 mapped_normal_frag_out;
-layout(location = 3) out vec4 direct_frag_out;
-layout(location = 4) out vec4 direct_soft_frag_out;
+layout(location = 3) out vec4 material_frag_out;
+layout(location = 4) out vec4 direct_frag_out;
+layout(location = 5) out vec4 direct_soft_frag_out;
 
 #include "/photonics/common/header.glsl"
 
 // Samplers NOT already declared in lighttree/samplers.glsl — declare only the extras here
-uniform sampler2D stage_radiosity_position;
-uniform sampler2D stage_radiosity_normal;
 
 // Debug: when enabled, light_reload is ignored and temporal history is never wiped
 uniform float ph_debug_disable_temporal_reset;
@@ -47,6 +46,7 @@ void main() {
         position_frag_out = vec4(0.0f);
         normal_frag_out = vec4(0.0f);
         mapped_normal_frag_out = vec4(0.0f);
+        material_frag_out = vec4(0.0f);
         direct_frag_out = vec4(0.0f);
         direct_soft_frag_out = vec4(0.0f);
         return;
@@ -55,12 +55,14 @@ void main() {
     vec4 stagePosition = texelFetch(stage_radiosity_position, tex_coord, 0);
     vec4 stageNormal = texelFetch(stage_radiosity_normal, tex_coord, 0);
     vec4 stageMappedNormal = texelFetch(stage_radiosity_mapped_normal, tex_coord, 0);
+    vec4 stageMaterial = texelFetch(stage_radiosity_material, tex_coord, 0);
     vec4 rawDirect = texelFetch(stage_radiosity_direct, tex_coord, 0);
     vec4 prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
 
     position_frag_out = stagePosition;
     normal_frag_out = stageNormal;
     mapped_normal_frag_out = stageMappedNormal;
+    material_frag_out = stageMaterial;
     direct_frag_out = vec4(rawDirect.rgb, ph_luminance(rawDirect.rgb) > 0.0f ? 1.0f : 0.0f);
     direct_soft_frag_out = vec4(prevSoft.rgb + rawDirect.rgb, prevSoft.a + 1.0f);
 }

@@ -5,6 +5,7 @@
 */
 vec3 load_world_position();
 void load_fragment_variables(out vec3 albedo, out vec3 world_pos, out vec3 world_normal, out vec3 world_normal_mapped);
+vec4 load_fragment_material();
 
 vec2 get_taa_jitter() { return vec2(0f); }
 

@@ -1,6 +1,5 @@
 package at.redi2go.photonic.client;
 
-import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.rendering.world.LightBlock;
 import at.redi2go.photonic.client.rendering.world.LightType;
@@ -41,7 +40,6 @@ import net.minecraft.client.gui.widget.SliderWidget;
 import org.jetbrains.annotations.NotNull;
 
 public class ModSettingsScreen extends Screen {
-   private static final LightingMode[] LIGHTING_MODE_VALUES = LightingMode.values();
    private static final ToggleableListScreen.Model BLOCKS_3D_MODEL = new ToggleableListScreen.Model(Registries.BLOCK.stream().filter(block -> {
       Set<Block> blacklistedBlocks = Set.of(Blocks.AIR, Blocks.WATER, Blocks.LAVA);
       return !blacklistedBlocks.contains(block);
@@ -80,11 +78,6 @@ public class ModSettingsScreen extends Screen {
          PhotonicsConfig.setMultiThreadingEnabled(!PhotonicsConfig.isMultiThreadingEnabled());
          w.setMessage(Text.of("MultiThreading: " + (PhotonicsConfig.isMultiThreadingEnabled() ? "On" : "Off")));
       }, "Turns MultiThreading on or off; MultiThreading is considerably faster, but can cause bugs.", () -> true));
-      buttons.add(new ModSettingsScreen.PButton(this.getLightingModeButtonText(), w -> {
-         this.cycleLightingModeOverride();
-         w.setMessage(Text.of(this.getLightingModeButtonText()));
-         this.reloadShaders();
-      }, "Cycles between shader-pack default, OFF, BASIC,\nLIGHT_TREE, and RESTIR lighting modes, then reloads Iris.", () -> true));
       buttons.add(new ModSettingsScreen.PButton(this.getLightBinningButtonText(), w -> {
          this.cycleLightBinningOverride();
          w.setMessage(Text.of(this.getLightBinningButtonText()));
@@ -214,10 +207,6 @@ public class ModSettingsScreen extends Screen {
       }
    }
 
-   private String getLightingModeButtonText() {
-      String override = PhotonicsStorage.getEffectiveStringOverride(PhotonicsStorage.LIGHTING_MODE_OVERRIDE, "photonics.lightingMode");
-      return "Lighting Mode: " + (override == null || override.isBlank() ? "Shader Pack" : override);
-   }
 
    private String getLightBinningButtonText() {
       String override = PhotonicsStorage.getEffectiveLightBinningOverride();
@@ -227,24 +216,6 @@ public class ModSettingsScreen extends Screen {
       return "Light Binning: " + (Boolean.parseBoolean(override) ? "On" : "Off");
    }
 
-   private void cycleLightingModeOverride() {
-      String current = PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value;
-      if (current == null || current.isBlank()) {
-         PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = LIGHTING_MODE_VALUES[0].name();
-      } else {
-         for (int i = 0; i < LIGHTING_MODE_VALUES.length; i++) {
-            if (LIGHTING_MODE_VALUES[i].name().equals(current)) {
-               PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = i == LIGHTING_MODE_VALUES.length - 1 ? "" : LIGHTING_MODE_VALUES[i + 1].name();
-               PhotonicsStorage.LIGHTING_MODE_OVERRIDE.modified();
-               PhotonicsStorage.applySystemPropertyOverrides();
-               return;
-            }
-         }
-         PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = "";
-      }
-      PhotonicsStorage.LIGHTING_MODE_OVERRIDE.modified();
-      PhotonicsStorage.applySystemPropertyOverrides();
-   }
 
    private void cycleLightBinningOverride() {
       String current = PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value;
@@ -264,7 +235,7 @@ public class ModSettingsScreen extends Screen {
          try {
             Iris.reload();
          } catch (IOException e) {
-            Photonic.error("error reloading shaders after lighting mode override update", e);
+            Photonic.error("error reloading shaders after lighting pipeline update", e);
          }
       });
    }

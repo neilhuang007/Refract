@@ -2,10 +2,6 @@
 #define PH_UTIL_INCLUDE
 
 const float ph_light_jitter_radius = 1.0f / 16.0f;
-// Keep secondary-bounce radiance in the same rough HDR range that the
-// downstream temporal filter and final composite expect; this avoids bright
-// speckles dominating history in dense emissive scenes.
-const float PH_MAX_INDIRECT_RADIANCE = 5.0f;
 
 float rand_next_float() {
     return ph_RandomFloat01(rng_state);
@@ -16,6 +12,34 @@ int rand_next_int(float min, float max) {
 }
 
 const float F = 2.0f;
+
+// Thanks null!
+float ph_saturate(const in float x) { return clamp(x, 0.0, 1.0); }
+
+float ph_sum_of(vec2 vec) { return vec.x + vec.y; }
+float ph_sum_of(vec3 vec) { return vec.x + vec.y + vec.z; }
+
+vec2 ph_oct_wrap(const in vec2 v) {
+    return (1.0 - abs(v.yx)) * (step(0.0, v.xy) * 2.0 - 1.0);
+}
+
+vec2 ph_encode_normal(vec3 n) {
+    n /= ph_sum_of(abs(n));
+    n.xy = n.z >= 0.0 ? n.xy : ph_oct_wrap(n.xy);
+    n.xy = n.xy * 0.5 + 0.5;
+    return n.xy;
+}
+
+vec3 ph_decode_normal(vec2 f) {
+    f = f * 2.0 - 1.0;
+
+    // https://twitter.com/Stubbesaurus/status/937994790553227264
+    vec3 n = vec3(f.xy, 1.0 - ph_sum_of(abs(f.xy)));
+    float t = ph_saturate(-n.z);
+    n.xy += mix(vec2(t), vec2(-t), step(0.0, n.xy));
+    return normalize(n);
+}
+// end of thanks null
 
 // Pulse function
 float ph_g(float x) {
@@ -34,23 +58,6 @@ float ph_h(float x) {
 
 float ph_luminance(vec3 rgb) {
     return dot(rgb, vec3(0.2126f, 0.7152f, 0.0722f));
-}
-
-vec3 ph_clamp_luma(vec3 color, float maxLuma) {
-    float luma = ph_luminance(color);
-    if (luma > maxLuma) {
-        return color * (maxLuma / max(luma, 1e-4f));
-    }
-    return color;
-}
-
-vec3 ph_clamp_indirect_radiance(vec3 color) {
-    return ph_clamp_luma(max(color, vec3(0.0f)), PH_MAX_INDIRECT_RADIANCE);
-}
-
-bool ph_surface_positions_compatible(vec3 currentPosition, vec3 historyPosition, float thresholdSq) {
-    vec3 d = historyPosition - currentPosition;
-    return dot(d, d) < thresholdSq;
 }
 
 void jitter_sample_position(inout vec3 position) {
@@ -75,6 +82,13 @@ void jitter_sample_position(inout vec3 position) {
 
 bool is_bad_angle(vec3 world_pos, vec3 normal) {
     float dist = distance(floor(world_pos), floor(world_camera_position));
+
+    float resolution = ceil((dist / 16)) / (4 * PH_RENDER_SCALE);
+    ray_normal_scale = 0.01f + (0.04f * resolution);
+
+    vec3 offset_dir = normalize(rt_pos - rt_camera_position);
+    ray_local_offset = offset_dir * ray_normal_scale * (-1f / PH_RENDER_SCALE);
+
     return dot(normal, normalize(world_pos - world_camera_position)) > -0.2f && dist > 16.0f;
 }
 #endif

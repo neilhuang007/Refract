@@ -469,6 +469,38 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
+   void lightTreeDiagnosticsCaptureLeafAndRebuildMetrics() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
+      BlockLightInfo info = createTestLightInfo(100.0F);
+      LightInstance[] lights = new LightInstance[] {
+         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info),
+         new LightInstance(1, new Vector3f(3.5F, 1.5F, 1.5F), info),
+         new LightInstance(1, new Vector3f(40.5F, 1.5F, 1.5F), info),
+         new LightInstance(1, new Vector3f(42.5F, 1.5F, 1.5F), info),
+         new LightInstance(1, new Vector3f(80.5F, 1.5F, 1.5F), info)
+      };
+      setField(registry, "tracedLights", lights);
+      setField(registry, "compileCount", 7);
+
+      Method buildMethod = LightRegistry.class.getDeclaredMethod("buildLightTree");
+      buildMethod.setAccessible(true);
+      buildMethod.invoke(registry);
+
+      LightRegistry.LightTreeDiagnostics diagnostics = registry.getLightTreeDiagnostics();
+      assertEquals(registry.getLightTreeNodeCount(), diagnostics.nodeCount());
+      assertTrue(diagnostics.leafCount() >= 2);
+      assertTrue(diagnostics.averageLeafSize() > 1.0F);
+      assertTrue(diagnostics.maxLeafSize() >= 1);
+      assertTrue(diagnostics.averageDepth() > 0.0F);
+      assertTrue(diagnostics.maxDepth() >= 1);
+      assertTrue(diagnostics.rootBoundsVolume() > 0.0F);
+      assertTrue(diagnostics.siblingOverlapRatio() >= 0.0F);
+      assertTrue(diagnostics.childSeparationRatio() >= 0.0F);
+      assertEquals(1, diagnostics.rebuildCount());
+      assertEquals(7, diagnostics.lastRebuildCompileCount());
+   }
+
+   @Test
    void primitiveSignatureIsStableForEquivalentClusteredLights() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64, chunkPos -> false, true);
       BlockLightInfo info = createTestLightInfo(100.0F);

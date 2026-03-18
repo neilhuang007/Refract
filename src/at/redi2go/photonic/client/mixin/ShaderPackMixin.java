@@ -3,7 +3,6 @@ package at.redi2go.photonic.client.mixin;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.ShaderPackPath;
 import at.redi2go.photonic.client.UniformPatcher;
-import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import at.redi2go.photonic.client.rendering.patching.Patch;
 import com.google.common.collect.ImmutableList;
@@ -200,14 +199,20 @@ public abstract class ShaderPackMixin {
          stringDefine(newEnvDefines, "PH_ENABLE_LIGHT_BINNING", "");
       }
 
-      enumDefine(newEnvDefines, "PH_LIGHTING_MODE", properties.getLightingMode());
-      intDefine(newEnvDefines, "PH_RESTIR_INITIAL_SAMPLES", properties.getRestirInitialSamples());
-      intDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_SAMPLES", properties.getRestirSpatialReuseSamples());
-      floatDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_RADIUS", properties.getRestirSpatialReuseRadius());
-      intDefine(newEnvDefines, "PH_RESTIR_ACCUMULATION_FRAMES", properties.getRestirAccumulationFrames());
-      intDefine(newEnvDefines, "PH_RESTIR_DENOISER_PASSES", properties.getRestirDenoiserPasses());
+      intDefine(newEnvDefines, "PH_LIGHTING_MODE", 2);
+      intDefine(newEnvDefines, "PH_LIGHTTREE_INITIAL_SAMPLES", properties.getLightTreeInitialSamples());
+      intDefine(newEnvDefines, "PH_RESTIR_INITIAL_SAMPLES", properties.getLightTreeInitialSamples());
+      intDefine(newEnvDefines, "PH_LIGHTTREE_SPATIAL_REUSE_SAMPLES", properties.getLightTreeSpatialReuseSamples());
+      intDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_SAMPLES", properties.getLightTreeSpatialReuseSamples());
+      floatDefine(newEnvDefines, "PH_LIGHTTREE_SPATIAL_REUSE_RADIUS", properties.getLightTreeSpatialReuseRadius());
+      floatDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_RADIUS", properties.getLightTreeSpatialReuseRadius());
+      intDefine(newEnvDefines, "PH_LIGHTTREE_ACCUMULATION_FRAMES", properties.getLightTreeAccumulationFrames());
+      intDefine(newEnvDefines, "PH_RESTIR_ACCUMULATION_FRAMES", properties.getLightTreeAccumulationFrames());
+      intDefine(newEnvDefines, "PH_LIGHTTREE_DENOISER_PASSES", properties.getLightTreeDenoiserPasses());
+      intDefine(newEnvDefines, "PH_RESTIR_DENOISER_PASSES", properties.getLightTreeDenoiserPasses());
       intDefine(newEnvDefines, "PH_NRD_ATROUS_PASSES", properties.getNrdAtrousPasses());
-      if (properties.useRestirSoftShadows().orElse(true)) {
+      if (properties.useLightTreeSoftShadows().orElse(true)) {
+         stringDefine(newEnvDefines, "PH_LIGHTTREE_SOFT_SHADOWS", "");
          stringDefine(newEnvDefines, "PH_RESTIR_SOFT_SHADOWS", "");
       }
 

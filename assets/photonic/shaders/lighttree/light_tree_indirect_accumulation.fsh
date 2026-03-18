@@ -7,13 +7,8 @@ layout(location = 1) out vec4 indirect_variance_frag_out;
 layout(location = 2) out vec4 handheld_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/nrd_common.glsl"
 
-uniform sampler2D stage_radiosity_indirect;
-uniform sampler2D stage_radiosity_position;
-uniform sampler2D stage_radiosity_normal;
-uniform sampler2D stage_radiosity_handheld;
-
-// Debug: when enabled, light_reload is ignored and temporal history is never wiped
 uniform float ph_debug_disable_temporal_reset;
 
 const float lt_indirect_min_alpha = 0.01;
@@ -22,6 +17,11 @@ const float lt_reproject_normal_threshold = 0.975;
 const float lt_reproject_position_threshold_sq = 0.35;
 const float lt_boiling_multiplier = 10.0;
 const float lt_boiling_luma_floor = 0.01;
+
+bool ph_surface_positions_compatible(vec3 currentPosition, vec3 previousPosition, float thresholdSq) {
+    vec3 delta = previousPosition - currentPosition;
+    return dot(delta, delta) <= thresholdSq;
+}
 
 float lt_luminance(vec3 color) {
     return dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -66,6 +66,26 @@ bool lt_is_valid_reprojection(vec2 reprojectionUv, vec3 currentPosition, vec3 cu
     return ph_surface_positions_compatible(currentPosition, previousPosition, lt_reproject_position_threshold_sq);
 }
 
+vec3 lt_load_current_indirect() {
+    vec4 stageIndirect = texelFetch(stage_radiosity_indirect, tex_coord, 0);
+    if (stageIndirect.a > 0.0 && !any(isnan(stageIndirect))) {
+        return stageIndirect.rgb;
+    }
+
+    vec4 resolvedIndirect = texelFetch(radiosity_indirect_resolved, tex_coord, 0);
+    if (resolvedIndirect.a > 0.0 && !any(isnan(resolvedIndirect))) {
+        return resolvedIndirect.rgb;
+    }
+
+    vec4 previousIndirect = texelFetch(radiosity_indirect, tex_coord, 0);
+    if (previousIndirect.a > 0.0 && !any(isnan(previousIndirect))) {
+        vec3 albedo = clamp(texelFetch(colortex10, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
+        return nrd_safe_remodulate(previousIndirect.rgb, nrd_compute_diffuse_demodulation(albedo));
+    }
+
+    return vec3(0.0);
+}
+
 void main() {
     if (!is_in_world()) {
         indirect_frag_out = vec4(0.0);
@@ -74,18 +94,22 @@ void main() {
         return;
     }
 
-    vec4 currentIndirect = texelFetch(stage_radiosity_indirect, tex_coord, 0);
+    vec3 currentIndirectRadiance = lt_load_current_indirect();
     vec4 currentHandheld = texelFetch(stage_radiosity_handheld, tex_coord, 0);
     vec3 currentPosition = texelFetch(stage_radiosity_position, tex_coord, 0).xyz;
     vec3 currentNormal = texelFetch(stage_radiosity_normal, tex_coord, 0).xyz;
+    vec3 currentAlbedo = clamp(texelFetch(colortex10, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
 
     handheld_frag_out = currentHandheld;
 
-    if (any(isnan(currentIndirect))) {
+    if (any(isnan(currentIndirectRadiance)) || any(isinf(currentIndirectRadiance))) {
         indirect_frag_out = vec4(0.0);
         indirect_variance_frag_out = vec4(0.0);
         return;
     }
+
+    float currentRadianceLuma = lt_luminance(currentIndirectRadiance);
+    bool hasCurrentSample = currentRadianceLuma > 1e-5;
 
     vec2 reprojectionUv = ph_reprojectf(
         previous_modelview_projection,
@@ -96,14 +120,14 @@ void main() {
 
     bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
     if (lightReloadActive || !lt_is_valid_reprojection(reprojectionUv, currentPosition, currentNormal)) {
-        // No valid history: if we have a current sample use it, otherwise output zero
-        if (currentIndirect.a <= 0.0) {
+        if (!hasCurrentSample) {
             indirect_frag_out = vec4(0.0);
             indirect_variance_frag_out = vec4(0.0);
             return;
         }
-        float luma = lt_luminance(currentIndirect.rgb);
-        indirect_frag_out = vec4(currentIndirect.rgb, 1.0);
+        vec3 demodulatedCurrent = nrd_safe_demodulate(currentIndirectRadiance, nrd_compute_diffuse_demodulation(currentAlbedo));
+        float luma = lt_luminance(demodulatedCurrent);
+        indirect_frag_out = vec4(demodulatedCurrent, 1.0);
         indirect_variance_frag_out = vec4(luma, luma * luma, 0.0, 0.0);
         return;
     }
@@ -113,56 +137,41 @@ void main() {
     vec4 previousVariance = texelFetch(prev_radiosity_indirect_variance, previousUv, 0);
 
     if (previousSignal.a <= 0.0 || any(isnan(previousSignal))) {
-        // No valid previous: if we have a current sample use it, otherwise output zero
-        if (currentIndirect.a <= 0.0) {
+        if (!hasCurrentSample) {
             indirect_frag_out = vec4(0.0);
             indirect_variance_frag_out = vec4(0.0);
             return;
         }
-        float luma = lt_luminance(currentIndirect.rgb);
-        indirect_frag_out = vec4(currentIndirect.rgb, 1.0);
+        vec3 demodulatedCurrent = nrd_safe_demodulate(currentIndirectRadiance, nrd_compute_diffuse_demodulation(currentAlbedo));
+        float luma = lt_luminance(demodulatedCurrent);
+        indirect_frag_out = vec4(demodulatedCurrent, 1.0);
         indirect_variance_frag_out = vec4(luma, luma * luma, 0.0, 0.0);
         return;
     }
 
-    // If current frame has no indirect sample, carry forward previous value unchanged
-    if (currentIndirect.a <= 0.0) {
+    if (!hasCurrentSample) {
         indirect_frag_out = previousSignal;
         indirect_variance_frag_out = previousVariance;
         return;
     }
 
+    vec3 demodulatedCurrent = nrd_safe_demodulate(currentIndirectRadiance, nrd_compute_diffuse_demodulation(currentAlbedo));
     float history = min(previousSignal.a + 1.0, lt_indirect_max_history);
     float alpha = max(1.0 / history, lt_indirect_min_alpha);
 
     vec2 neighborhoodLuma = lt_indirect_neighborhood_avg_luma(previousUv);
-    float currentLuma = lt_luminance(currentIndirect.rgb);
-    if (neighborhoodLuma.y > 0.0) {
-        float boilingThreshold = lt_boiling_multiplier * max(neighborhoodLuma.x, lt_boiling_luma_floor);
-        if (currentLuma > boilingThreshold) {
-            currentIndirect.rgb = previousSignal.rgb;
-            currentLuma = lt_luminance(currentIndirect.rgb);
-        }
+    float currentLuma = lt_luminance(demodulatedCurrent);
+    float neighborhoodAvg = neighborhoodLuma.x;
+    float neighborhoodWeight = neighborhoodLuma.y;
+    float boilingThreshold = max(lt_boiling_luma_floor, neighborhoodAvg) * lt_boiling_multiplier;
+    if (neighborhoodWeight > 0.0 && abs(currentLuma - neighborhoodAvg) > boilingThreshold) {
+        alpha = max(alpha, 0.35);
     }
 
-    float previousLuma = lt_luminance(previousSignal.rgb);
-    float expectedStdDev = sqrt(max(previousVariance.z, 1e-6));
-    float lumaDelta = abs(currentLuma - previousLuma);
-    float localLumaScale = max(max(currentLuma, previousLuma), 0.08);
-    float normalizedDelta = lumaDelta / max(4.0 * expectedStdDev + 0.02 * localLumaScale, 1e-4);
-    float changeResponse = clamp(normalizedDelta - 0.8, 0.0, 1.0);
-    float antiLag = changeResponse * changeResponse;
-    if (history < 4.0) {
-        antiLag = 0.0;
-    }
-
-    float adaptiveAlpha = max(alpha, mix(alpha, 0.3, antiLag));
-    vec3 blendedColor = mix(previousSignal.rgb, currentIndirect.rgb, adaptiveAlpha);
-
-    vec2 blendedMoments = mix(previousVariance.xy, vec2(currentLuma, currentLuma * currentLuma), adaptiveAlpha);
-    float variance = max(blendedMoments.y - blendedMoments.x * blendedMoments.x, 0.0);
-    float confidence = clamp((history - 1.0) / max(lt_indirect_max_history - 1.0, 1.0), 0.0, 1.0);
+    vec3 blendedColor = mix(previousSignal.rgb, demodulatedCurrent, alpha);
+    float blendedLuma = lt_luminance(blendedColor);
+    float secondMoment = mix(previousVariance.y, currentLuma * currentLuma, alpha);
 
     indirect_frag_out = vec4(blendedColor, history);
-    indirect_variance_frag_out = vec4(blendedMoments.x, blendedMoments.y, variance, confidence);
+    indirect_variance_frag_out = vec4(blendedLuma, secondMoment, max(secondMoment - blendedLuma * blendedLuma, 0.0), alpha);
 }

@@ -309,7 +309,7 @@ int get_block_pointer(vec3 position) {
     index = ph_lookup_chunk_entry(chunk_base, w & 15);
     if (index >= 0) return -1;
 
-    return (-index & 0xfff) * (ph_byte_size / 4);
+    return (-index & 0x1fff) * (ph_byte_size / 4);
 }
 
 int get_block_id(vec3 pos) {

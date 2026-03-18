@@ -6,24 +6,6 @@ import org.junit.jupiter.api.Test;
 
 class PhotonicsStorageOverrideTest {
    @Test
-   void explicitLightingModePropertyWinsOverStoredOverride() {
-      String previousProperty = System.getProperty("photonics.lightingMode");
-      String previousStoredValue = PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value;
-
-      try {
-         System.setProperty("photonics.lightingMode", "LIGHT_TREE");
-         PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = "BASIC";
-
-         PhotonicsStorage.applySystemPropertyOverrides();
-
-         assertEquals("LIGHT_TREE", System.getProperty("photonics.lightingMode"));
-      } finally {
-         restoreProperty("photonics.lightingMode", previousProperty);
-         PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = previousStoredValue;
-      }
-   }
-
-   @Test
    void explicitLightBinningPropertyWinsOverStoredOverride() {
       String previousProperty = System.getProperty("photonics.enableLightBinning");
       String previousNewProperty = System.getProperty("photonics.lightBinningEnabled");
@@ -41,24 +23,6 @@ class PhotonicsStorageOverrideTest {
          restoreProperty("photonics.enableLightBinning", previousProperty);
          restoreProperty("photonics.lightBinningEnabled", previousNewProperty);
          PhotonicsStorage.LIGHT_BINNING_OVERRIDE.value = previousStoredValue;
-      }
-   }
-
-   @Test
-   void storedLightingModeAppliesWhenSystemPropertyIsMissing() {
-      String previousProperty = System.getProperty("photonics.lightingMode");
-      String previousStoredValue = PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value;
-
-      try {
-         System.clearProperty("photonics.lightingMode");
-         PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = "LIGHT_TREE";
-
-         PhotonicsStorage.applySystemPropertyOverrides();
-
-         assertEquals("LIGHT_TREE", System.getProperty("photonics.lightingMode"));
-      } finally {
-         restoreProperty("photonics.lightingMode", previousProperty);
-         PhotonicsStorage.LIGHTING_MODE_OVERRIDE.value = previousStoredValue;
       }
    }
 

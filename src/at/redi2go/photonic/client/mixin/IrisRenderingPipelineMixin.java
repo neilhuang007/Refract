@@ -67,12 +67,12 @@ public abstract class IrisRenderingPipelineMixin {
 
    @Unique
    private static String readSource(String fileName) {
-      ShaderPack shaderPack = (ShaderPack)Iris.getCurrentPack().orElse(null);
+      ShaderPack shaderPack = (ShaderPack) Iris.getCurrentPack().orElse(null);
       if (shaderPack == null) {
          return null;
       } else {
          AbsolutePackPath path = AbsolutePackPath.fromAbsolutePath("/photonics/" + fileName);
-         return ((ShaderPackAccessor)shaderPack).getSourceProvider().apply(path);
+         return ((ShaderPackAccessor) shaderPack).getSourceProvider().apply(path);
       }
    }
 
@@ -113,7 +113,7 @@ public abstract class IrisRenderingPipelineMixin {
                   }
 
                   CompositeRenderer compositeRenderer = new CompositeRenderer(
-                     (IrisRenderingPipeline)(Object)this,
+                     (IrisRenderingPipeline) (Object) this,
                      CompositePass.DEFERRED,
                      programSet.getPackDirectives(),
                      compositeSources,
@@ -132,7 +132,7 @@ public abstract class IrisRenderingPipelineMixin {
                      programSet.getPackDirectives().getExplicitFlips("photonics"),
                      this.customUniforms
                   );
-                  ((CompositeRendererExt)compositeRenderer).photonic$setPhotonicsShaders(shaders);
+                  ((CompositeRendererExt) compositeRenderer).photonic$setPhotonicsShaders(shaders);
                   return compositeRenderer;
                }
             );
@@ -161,12 +161,12 @@ public abstract class IrisRenderingPipelineMixin {
    public void beginTranslucents(CallbackInfo ci) {
       if (!Raytracer.isDisabled()) {
          Raytracer.INSTANCE.getMainRenderer().render();
-         ShaderAutomation.afterPhotonicsRender();
       }
    }
 
    @Inject(method = "finalizeLevelRendering", at = @At("TAIL"))
    public void finalizeLevelRendering(CallbackInfo ci) {
+      ShaderAutomation.afterPhotonicsRender();
       ShaderAutomation.afterFinalComposite();
    }
 }

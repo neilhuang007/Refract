@@ -1,6 +1,8 @@
 uniform sampler2D radiosity_position;
 uniform sampler2D radiosity_normal;
 uniform sampler2D radiosity_mapped_normal;
+uniform sampler2D radiosity_material;
+uniform sampler2D radiosity_reservoirs;
 uniform sampler2D radiosity_direct;
 uniform sampler2D radiosity_direct_soft;
 uniform sampler2D radiosity_handheld;
@@ -9,10 +11,14 @@ uniform sampler2D radiosity_indirect_resolved;
 uniform sampler2D radiosity_lighting;
 uniform sampler2D radiosity_lighting_variance;
 uniform sampler2D radiosity_indirect_variance;
+uniform sampler2D radiosity_motion;
+uniform sampler2D direct_confidence_input;
 
 uniform sampler2D prev_radiosity_position;
 uniform sampler2D prev_radiosity_normal;
 uniform sampler2D prev_radiosity_mapped_normal;
+uniform sampler2D prev_radiosity_material;
+uniform sampler2D prev_radiosity_reservoirs;
 uniform sampler2D prev_radiosity_direct;
 uniform sampler2D prev_radiosity_direct_soft;
 uniform sampler2D prev_radiosity_handheld;
@@ -20,11 +26,19 @@ uniform sampler2D prev_radiosity_indirect;
 uniform sampler2D prev_radiosity_indirect_variance;
 uniform sampler2D prev_radiosity_lighting;
 uniform sampler2D prev_radiosity_lighting_variance;
+uniform sampler2D prev_radiosity_motion;
+uniform sampler2D prev_direct_confidence_input;
+uniform sampler2D prev_direct_history_length_input;
 
 // Raw stage buffers are declared here because several LIGHT_TREE passes include
 // this sampler header and still read the per-frame stage direct signal.
+uniform sampler2D stage_radiosity_position;
+uniform sampler2D stage_radiosity_normal;
 uniform sampler2D stage_radiosity_direct;
 uniform sampler2D stage_radiosity_mapped_normal;
+uniform sampler2D stage_radiosity_material;
+uniform sampler2D stage_radiosity_handheld;
+uniform sampler2D stage_radiosity_indirect;
 
 uniform float ph_debug_show_direct;
 uniform float ph_debug_show_indirect;

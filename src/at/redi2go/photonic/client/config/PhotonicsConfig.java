@@ -10,6 +10,7 @@ import at.redi2go.photonic.client.config.lights.block.LightBlock;
 import at.redi2go.photonic.client.config.lights.color.LightColor;
 import at.redi2go.photonic.client.config.lights.falloff.LightFalloff;
 import at.redi2go.photonic.client.config.lights.intensity.LightIntensity;
+import at.redi2go.photonic.client.config.lights.orientation.LightOrientation;
 import at.redi2go.photonic.client.config.lights.radius.LightRadius;
 import com.google.common.collect.Sets;
 import com.google.gson.FieldNamingPolicy;
@@ -61,6 +62,7 @@ public class PhotonicsConfig {
       .registerTypeAdapter(LightColor.class, new LightColor.Adapter())
       .registerTypeAdapter(LightIntensity.class, new LightIntensity.Adapter())
       .registerTypeAdapter(LightRadius.class, new LightRadius.Adapter())
+      .registerTypeAdapter(LightOrientation.class, new LightOrientation.Adapter())
       .registerTypeAdapter(LightFalloff.class, new LightFalloff.Adapter())
       .registerTypeAdapter(LightBlock.class, new LightBlock.Adapter())
       .registerTypeAdapter(Block.class, new BlockAdapter())

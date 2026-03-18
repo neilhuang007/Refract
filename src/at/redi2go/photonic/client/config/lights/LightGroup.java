@@ -6,6 +6,7 @@ import at.redi2go.photonic.client.config.lights.block.LightBlock;
 import at.redi2go.photonic.client.config.lights.color.LightColor;
 import at.redi2go.photonic.client.config.lights.falloff.LightFalloff;
 import at.redi2go.photonic.client.config.lights.intensity.LightIntensity;
+import at.redi2go.photonic.client.config.lights.orientation.LightOrientation;
 import at.redi2go.photonic.client.config.lights.predicate.LightPredicate;
 import at.redi2go.photonic.client.config.lights.radius.LightRadius;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -27,6 +28,8 @@ public class LightGroup {
    @Nullable
    LightFalloff falloff;
    @Nullable
+   LightOrientation orientation;
+   @Nullable
    Boolean isTraced;
    @Nullable
    List<LightBlock> blocks;
@@ -34,25 +37,26 @@ public class LightGroup {
    LinkedHashMap<String, LightGroup> overrides;
 
    public void recordLights(Variable.Owner owner, LightList lights, Map<Block, Boolean> tracedLightsOverrides, int priority) {
-      this.recordLightsImpl(owner, lights, tracedLightsOverrides, null, null, null, null, null, priority);
+      this.recordLightsImpl(owner, lights, tracedLightsOverrides, null, null, null, null, null, null, priority);
    }
 
    private void recordLightsImpl(
       Variable.Owner owner, LightList lights, Map<Block, Boolean> tracedLightsOverrides,
       @Nullable LightColor color, @Nullable Float intensity, @Nullable Float radius,
-      @Nullable Float falloff, @Nullable Boolean isTraced, int priority
+      @Nullable Float falloff, @Nullable LightOrientation orientation, @Nullable Boolean isTraced, int priority
    ) {
       if (this.color != null) color = setOwner(this.color, owner);
       if (this.intensity != null) intensity = setOwner(this.intensity, owner).get();
       if (this.radius != null) radius = setOwner(this.radius, owner).get();
       if (this.falloff != null) falloff = setOwner(this.falloff, owner).get();
+      if (this.orientation != null) orientation = this.orientation;
       if (this.isTraced != null) isTraced = this.isTraced;
 
       if (this.blocks != null) {
          for (LightBlock block : this.blocks) {
             try {
                for (LightPredicate predicate : setOwner(block, owner).listPredicates()) {
-                  addBlock(lights, tracedLightsOverrides, predicate, color, intensity, radius, falloff, isTraced, priority);
+                  addBlock(lights, tracedLightsOverrides, predicate, color, intensity, radius, falloff, orientation, isTraced, priority);
                }
             } catch (CommandSyntaxException ignored) {
             }
@@ -61,7 +65,7 @@ public class LightGroup {
 
       if (this.overrides != null) {
          for (LightGroup override : this.overrides.values()) {
-            override.recordLightsImpl(owner, lights, tracedLightsOverrides, color, intensity, radius, falloff, isTraced, priority);
+            override.recordLightsImpl(owner, lights, tracedLightsOverrides, color, intensity, radius, falloff, orientation, isTraced, priority);
          }
       }
    }
@@ -76,7 +80,7 @@ public class LightGroup {
    private static void addBlock(
       LightList lights, Map<Block, Boolean> tracedLightsOverrides, LightPredicate predicate,
       @Nullable LightColor color, @Nullable Float intensity, @Nullable Float radius,
-      @Nullable Float falloff, @Nullable Boolean isTraced, int priority
+      @Nullable Float falloff, @Nullable LightOrientation orientation, @Nullable Boolean isTraced, int priority
    ) {
       Block block = predicate.block();
       String blockString = BlockAdapter.toString(block);
@@ -88,7 +92,8 @@ public class LightGroup {
       if (priority != 0) {
          predicate = new PredicateWrapper(predicate.priority() + priority, predicate);
       }
-      lights.add(new BlockLightInfo(predicate, color, intensity, radius, falloff, evaluateIsTraced(isTraced, block, tracedLightsOverrides), isTraced));
+      LightOrientation resolvedOrientation = orientation == null ? LightOrientation.OMNI : orientation;
+      lights.add(new BlockLightInfo(predicate, color, intensity, radius, falloff, evaluateIsTraced(isTraced, block, tracedLightsOverrides), isTraced, resolvedOrientation));
    }
 
    private static boolean evaluateIsTraced(boolean actual, Block block, Map<Block, Boolean> tracedLightsOverrides) {

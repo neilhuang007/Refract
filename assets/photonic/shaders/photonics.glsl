@@ -28,12 +28,13 @@ layout (std430) restrict readonly buffer light_registry_block {
 #endif
 
 
-const int light_size = 3; // 3 vec4s per light
+const int light_size = 4; // 4 vec4s per light
 
 layout (std140) restrict readonly buffer ph_light_list {
     // vec 1: position (xyz) + block_id (w)
     // vec 2: color (xyz) + intensity (w)
     // vec 3: attenutation (xy) + falloff (z) + block_radius (w)
+    // vec 4: emission axis (xyz) + orientation spread (w)
     vec4 ph_lights_array[];
 };
 
@@ -93,6 +94,8 @@ struct Light {
     vec2 attenuation;
     float falloff;
     float block_radius;
+    vec3 emissionAxis;
+    float orientationSpread;
 };
 
 /*

@@ -26,7 +26,7 @@ class BrickChunkTest {
 
       IntBuffer ints = chunk.getMemory().getBuffer().asIntBuffer();
       int shaderBlockIndex = block.getMemory().begin / PBlock.BYTE_SIZE;
-      int encodedBlock = shaderBlockIndex | (5 << 12);
+      int encodedBlock = shaderBlockIndex | (5 << 13);
       int leafIndex = Schematic.toSchematicIndex(1, 2, 3);
 
       assertEquals(4096, ints.limit());

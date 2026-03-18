@@ -12,7 +12,7 @@ import java.util.concurrent.ExecutionException;
 
 public class PChunk implements WorldChunk {
    public static final int CHUNK_SIZE = 16;
-   private static final int MAX_SHADER_BLOCK_INDEX = 0xFFF;
+   private static final int MAX_SHADER_BLOCK_INDEX = 0x1FFF;
    private static final int DEBUG_LOG_LIMIT = 16;
    private static int blockPointerOverflowLogs = 0;
    private final Schematic schematic;
@@ -48,7 +48,7 @@ public class PChunk implements WorldChunk {
          if (blockPointerOverflowLogs < DEBUG_LOG_LIMIT) {
             blockPointerOverflowLogs++;
             Photonic.warn(
-               "[PChunkDebug] Block pointer overflow: blockId={} shaderIndex={} exceeds 12-bit budget, falling back to air",
+               "[PChunkDebug] Block pointer overflow: blockId={} shaderIndex={} exceeds 13-bit budget, falling back to air",
                block == null ? -1 : block.blockId,
                value
             );
@@ -56,7 +56,7 @@ public class PChunk implements WorldChunk {
          value = 0;
       }
       if (skyBrightness != -1 && value != 0) {
-         value |= skyBrightness << 12;
+         value |= skyBrightness << 13;
       }
 
       this.schematic.setEntry(x, y, z, value);

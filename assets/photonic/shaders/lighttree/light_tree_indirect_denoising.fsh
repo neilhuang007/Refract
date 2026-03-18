@@ -5,6 +5,7 @@ in vec4 direction_vert_out;
 layout(location = 0) out vec4 indirect_denoised_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/nrd_common.glsl"
 
 const float phi_luminance = 4.0;
 const float phi_normal = 128.0;
@@ -90,5 +91,7 @@ void main() {
         }
     }
 
-    indirect_denoised_out = vec4(sumColor / sumWeight, centerHistory);
+    vec3 denoisedRadiance = sumColor / sumWeight;
+    vec3 centerAlbedo = clamp(texelFetch(colortex10, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
+    indirect_denoised_out = vec4(nrd_safe_remodulate(denoisedRadiance, nrd_compute_diffuse_demodulation(centerAlbedo)), centerHistory);
 }

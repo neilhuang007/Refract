@@ -47,9 +47,6 @@ loom {
             vmArg "-Xms2G"
             vmArg "-Xmx8G"
             vmArg "-Dfabric.classPathGroups=${mainClasspathGroup}"
-            vmArg "-Dphotonics.profilerEnabled=true"
-            vmArg "-Dphotonics.lightingMode=LIGHT_TREE"
-            vmArg "-Dphotonics.lightBinningEnabled=true"
         }
         shaderGameTestClient {
             client()
@@ -65,11 +62,8 @@ loom {
             vmArg "-Dphotonics.automation.worldName=backup"
             vmArg "-Dphotonics.automation.autoStartWorld=false"
             vmArg "-Dphotonics.automation.startDelayTicks=220"
-            vmArg "-Dphotonics.automation.timeoutTicks=7200"
+            vmArg "-Dphotonics.automation.timeoutTicks=1200"
             vmArg "-Dphotonics.automation.expectedShaderPack=Euphoria-patches"
-            vmArg "-Dphotonics.lightingMode=LIGHT_TREE"
-            vmArg "-Dphotonics.lightBinningEnabled=true"
-            vmArg "-Dphotonics.profilerEnabled=true"
             vmArg "-Dphotonics.automation.reportFile=${project.projectDir.toPath().resolve('run/automation/shader-report.properties')}"
             vmArg "-Dphotonics.automation.captureDir=${project.projectDir.toPath().resolve('run/automation/captures')}"
             vmArg "-Dphotonics.automation.captureEveryN=120"
@@ -94,7 +88,7 @@ loom {
             vmArg "-Dphotonics.automation.maxMotionRepeatIndirectDeltaAvg=0.12"
             vmArg "-Dphotonics.automation.maxMotionRepeatIndirectDeltaMax=0.20"
             vmArg "-Dphotonics.automation.releaseMouse=true"
-            vmArg "-Dphotonics.automation.fullscreen=true"
+            vmArg "-Dphotonics.automation.fullscreen=false"
             vmArg "-Dphotonics.automation.requireDirectSignal=true"
             vmArg "-Dphotonics.automation.autoStop=true"
         }

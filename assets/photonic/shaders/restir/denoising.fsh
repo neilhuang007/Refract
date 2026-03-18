@@ -107,12 +107,14 @@ void main() {
             vec3 centerMappedNormal = texelFetch(radiosity_normal, tex_coord, 0).xyz;
             float centerLuma = dot(color_frag_out, LUM_COEFF);
             float centerVariance = max(varianceData.y - varianceData.x * varianceData.x, 0.0f);
-            float phiDepth = max(centerDepth, 1e-4f) * mix(2.6f, 1.1f, ph_confidence_from_history(historyLength));
             float normalPower = ph_direct_normal_power(historyLength);
             float phiLuma = ph_direct_luma_phi(centerLuma, centerVariance, historyLength);
             float sumW = 0.0f;
             vec3 sumColor = vec3(0.0f);
             vec2 sumMoments = vec2(0.0f);
+            float depthRight = ph_linearize_depth(texelFetch(depthtex0, clamp(tex_coord + ivec2(1, 0), ivec2(0), tex_size - 1), 0).r);
+            float depthDown = ph_linearize_depth(texelFetch(depthtex0, clamp(tex_coord + ivec2(0, 1), ivec2(0), tex_size - 1), 0).r);
+            vec2 depthGradient = vec2(depthRight - centerDepth, depthDown - centerDepth);
 
             for (int yy = -3; yy <= 3; yy++) {
                 for (int xx = -3; xx <= 3; xx++) {
@@ -122,7 +124,7 @@ void main() {
                     float sampleDepth = ph_linearize_depth(texelFetch(depthtex0, p, 0).r);
                     vec3 sampleMappedNormal = texelFetch(radiosity_normal, p, 0).xyz;
                     float wN = normal_edge_stopping_weight(centerMappedNormal, sampleMappedNormal, normalPower);
-                    float wD = exp(-abs(centerDepth - sampleDepth) / max(phiDepth * length(vec2(xx, yy)), 1e-4f));
+                    float wD = depth_edge_stopping_weight(centerDepth, sampleDepth, depthGradient, ivec2(xx, yy));
                     float wL = luma_edge_stopping_weight(centerLuma, sampleLuma, phiLuma);
                     float w = wN * wD * wL;
                     vec2 sampleMoments = texelFetch(radiosity_lighting_variance, p, 0).xy;
@@ -144,7 +146,7 @@ void main() {
                         float sampleDepth = ph_linearize_depth(texelFetch(depthtex0, p, 0).r);
                         vec3 sampleMappedNormal = texelFetch(radiosity_normal, p, 0).xyz;
                         float wN = normal_edge_stopping_weight(centerMappedNormal, sampleMappedNormal, 64.0f);
-                        float wD = exp(-abs(centerDepth - sampleDepth) / max(phiDepth * length(vec2(xx, yy) * 4.0f), 1e-4f));
+                        float wD = depth_edge_stopping_weight(centerDepth, sampleDepth, depthGradient, ivec2(xx, yy) * 4);
                         float wL = luma_edge_stopping_weight(centerLuma, sampleLuma, phiLuma);
                         float w = wN * wD * wL;
                         vec2 sampleMoments = texelFetch(radiosity_lighting_variance, p, 0).xy;

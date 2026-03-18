@@ -1,6 +1,7 @@
 package at.redi2go.photonic.client.config.lights;
 
 import at.redi2go.photonic.client.config.lights.color.RgbColor;
+import at.redi2go.photonic.client.config.lights.orientation.LightOrientation;
 import at.redi2go.photonic.client.config.lights.predicate.LightPredicate;
 import net.minecraft.block.Block;
 import net.minecraft.block.pattern.CachedBlockPosition;
@@ -45,7 +46,8 @@ class BlockLightInfoTest {
          16.0F,
          1.0F,
          true,
-         true
+         true,
+         LightOrientation.OMNI
       );
    }
 }

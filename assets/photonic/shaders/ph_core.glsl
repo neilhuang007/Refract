@@ -22,6 +22,7 @@ Light load_light(int index) {
     vec4 position_full = ph_lights_array[index + 0];
     vec4 color_full = ph_lights_array[index + 1];
     vec4 attenuation_full = ph_lights_array[index + 2];
+    vec4 orientation_full = ph_lights_array[index + 3];
 
     return Light(
         real_index,
@@ -31,7 +32,9 @@ Light load_light(int index) {
         color_full.w,
         attenuation_full.xy,
         attenuation_full.z,
-        attenuation_full.w
+        attenuation_full.w,
+        normalize(orientation_full.xyz + vec3(1e-6f)),
+        orientation_full.w
     );
 }
 
@@ -219,6 +222,67 @@ vec3 ph_sample_hemisphere_blue(vec3 normal, ivec2 pixel_coord, int sample_index)
     float r = sqrt(1.0f - z * z);
     vec3 random_dir = vec3(r * cos(a), r * sin(a), z);
     return normalize(normal + random_dir);
+}
+
+vec3 ph_build_tangent(vec3 normal) {
+    vec3 axis = abs(normal.z) < 0.999f ? vec3(0.0f, 0.0f, 1.0f) : vec3(0.0f, 1.0f, 0.0f);
+    return normalize(cross(axis, normal));
+}
+
+vec3 ph_sample_cosine_hemisphere(vec3 normal, ivec2 pixel_coord, int sample_index) {
+    vec2 blue = ph_blue_noise_2d(pixel_coord, sample_index);
+    float phi = blue.x * 2.0f * 3.14159265359f;
+    float r = sqrt(blue.y);
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+    float z = sqrt(max(0.0f, 1.0f - blue.y));
+
+    vec3 tangent = ph_build_tangent(normal);
+    vec3 bitangent = cross(normal, tangent);
+    return normalize(tangent * x + bitangent * y + normal * z);
+}
+
+vec3 ph_sample_ggx_vndf(vec3 V, vec3 N, float roughness, ivec2 pixel_coord, int sample_index) {
+    vec2 blue = ph_blue_noise_2d(pixel_coord, sample_index);
+    float a = max(roughness * roughness, 0.02f);
+
+    vec3 tangent = ph_build_tangent(N);
+    vec3 bitangent = cross(N, tangent);
+    mat3 basis = mat3(tangent, bitangent, N);
+
+    vec3 Ve = transpose(basis) * normalize(V);
+    vec3 Vh = normalize(vec3(a * Ve.x, a * Ve.y, max(Ve.z, 1e-4f)));
+
+    float lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+    vec3 T1 = lensq > 1e-7f ? vec3(-Vh.y, Vh.x, 0.0f) * inversesqrt(lensq) : vec3(1.0f, 0.0f, 0.0f);
+    vec3 T2 = cross(Vh, T1);
+
+    float r = sqrt(blue.x);
+    float phi = 2.0f * 3.14159265359f * blue.y;
+    float t1 = r * cos(phi);
+    float t2 = r * sin(phi);
+    float s = 0.5f * (1.0f + Vh.z);
+    t2 = mix(sqrt(max(0.0f, 1.0f - t1 * t1)), t2, s);
+
+    vec3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0f, 1.0f - t1 * t1 - t2 * t2)) * Vh;
+    vec3 Ne = normalize(vec3(a * Nh.x, a * Nh.y, max(0.0f, Nh.z)));
+    vec3 H = normalize(basis * Ne);
+    return normalize(reflect(-V, H));
+}
+
+vec3 ph_sample_brdf_direction(vec3 normal, vec3 viewDir, vec3 albedoColor, float roughness, float metalness, ivec2 pixel_coord, int sample_index) {
+    vec3 F0 = mix(vec3(0.04f), albedoColor, clamp(metalness, 0.0f, 1.0f));
+    float F = clamp(max(F0.r, max(F0.g, F0.b)), 0.04f, 0.98f);
+    vec2 selector = ph_blue_noise_2d(pixel_coord, sample_index + 37);
+
+    if (selector.x < F) {
+        vec3 reflected = ph_sample_ggx_vndf(viewDir, normal, roughness, pixel_coord, sample_index + 73);
+        if (dot(reflected, normal) > 0.0f) {
+            return reflected;
+        }
+    }
+
+    return ph_sample_cosine_hemisphere(normal, pixel_coord, sample_index + 19);
 }
 
 #endif // PH_CORE

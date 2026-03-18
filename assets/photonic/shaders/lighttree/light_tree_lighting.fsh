@@ -10,10 +10,6 @@ layout(location = 4) out vec4 indirect_variance_frag_out;
 
 #include "/photonics/common/header.glsl"
 
-uniform sampler2D stage_radiosity_position;
-uniform sampler2D stage_radiosity_normal;
-uniform sampler2D stage_radiosity_handheld;
-uniform sampler2D stage_radiosity_indirect;
 
 // Debug: when enabled, light_reload is ignored and temporal history is never wiped
 uniform float ph_debug_disable_temporal_reset;

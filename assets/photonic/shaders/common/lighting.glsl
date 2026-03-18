@@ -91,6 +91,7 @@ vec3 ph_trace_surface_radiance(vec3 surfacePos, vec3 surfaceNormal, int sampleIn
     vec3 throughput = vec3(1.0f);
     vec3 currentPos = surfacePos;
     vec3 currentNormal = surfaceNormal;
+    vec3 viewDir = normalize(rt_camera_position - surfacePos);
 
     for (int bounce = 0; bounce < remainingBounces; bounce++) {
         if (bounce > 0) {
@@ -104,9 +105,10 @@ vec3 ph_trace_surface_radiance(vec3 surfacePos, vec3 surfaceNormal, int sampleIn
 
         lightEmittance = vec3(0.0f);
         ray.origin = currentPos + 0.1f * currentNormal;
-        // Keep the secondary-path estimator aligned with the diffuse
-        // BRDF/pdf convention used by the GI reservoir target PDF.
-        ray.direction = ph_sample_hemisphere_blue(currentNormal, tex_coord, sampleIndexBase + bounce);
+        vec4 materialData = texelFetch(radiosity_material, tex_coord, 0);
+        float roughness = clamp(materialData.x, 0.04f, 1.0f);
+        float metalness = clamp(materialData.y, 0.0f, 1.0f);
+        ray.direction = ph_sample_brdf_direction(currentNormal, viewDir, albedo, roughness, metalness, tex_coord, sampleIndexBase + bounce);
 
         breakOnEmpty = true;
         trace_ray(ray, true);
@@ -123,6 +125,7 @@ vec3 ph_trace_surface_radiance(vec3 surfacePos, vec3 surfaceNormal, int sampleIn
         throughput *= ray.result_color;
         currentPos = ray.result_position;
         currentNormal = ray.result_normal;
+        viewDir = -ray.direction;
     }
 
     return vec3(0.0f);

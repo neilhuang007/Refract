@@ -161,6 +161,9 @@ public class LightRegistry implements Destructable {
    private boolean loggedAutomationLightColors = false;
    private boolean lastCompileTopologyResetRecommended = true;
    private int pendingTracedLightMutations = 0;
+   private LightTreeDiagnostics lightTreeDiagnostics = LightTreeDiagnostics.empty();
+   private int lightTreeRebuildCount = 0;
+   private int lastLightTreeRebuildCompileCount = -1;
 
    public LightRegistry(int maxLights, int maxLightsPerNode, float minTracedLightSelectionLuma, int nodeSize, int worldSize, Predicate<PChunkPos> chunkEmptyPredicate, boolean lightBinningEnabled) {
       if (16 % nodeSize != 0) {
@@ -602,6 +605,7 @@ public class LightRegistry implements Destructable {
    private void buildLightTree() {
       this.lightTreeNodeCount = 0;
       this.lightTreeIndexCount = 0;
+      this.lightTreeDiagnostics = LightTreeDiagnostics.empty();
       if (this.tracedLights.length == 0) {
          return;
       }
@@ -615,6 +619,9 @@ public class LightRegistry implements Destructable {
 
       this.storeLightTreeNodes(builder);
       this.storeLightTreeIndices(builder);
+      this.lightTreeRebuildCount++;
+      this.lastLightTreeRebuildCompileCount = this.compileCount;
+      this.lightTreeDiagnostics = LightTreeDiagnostics.fromBuild(builder, this.lightTreeRebuildCount, this.lastLightTreeRebuildCompileCount);
    }
 
    private void storeLightTreeNodes(LightTreeBuilder builder) {
@@ -924,6 +931,10 @@ public class LightRegistry implements Destructable {
       return this.lightTreeIndexCount;
    }
 
+   public LightTreeDiagnostics getLightTreeDiagnostics() {
+      return this.lightTreeDiagnostics;
+   }
+
    private LightInstance[] toLightInstanceArray() {
       List<LightInstance> lights = new ArrayList<>(this.tracedLightPositions.size());
       for (Entry<Vector3f, TracedLightPosition> e : this.tracedLightPositions.entrySet()) {
@@ -1079,9 +1090,13 @@ public class LightRegistry implements Destructable {
    private static final class LightTreeBuilder {
       private static final int nodeFloatSize = 16;
       private static final int maxLeafLights = 4;
+      private static final int saohBinCount = 12;
       private static final float luminanceRed = 0.2126F;
       private static final float luminanceGreen = 0.7152F;
       private static final float luminanceBlue = 0.0722F;
+      private static final float twoPi = (float) (Math.PI * 2.0);
+      private static final float halfPi = (float) (Math.PI * 0.5);
+      private static final float epsilon = 1.0E-4F;
       private final LightInstance[] lights;
       private final int[] indices;
       private final float[] nodeData;
@@ -1117,12 +1132,13 @@ public class LightRegistry implements Destructable {
          int offset = nodeIndex * nodeFloatSize;
          this.storeNodeBounds(offset, bounds, depth);
          if (count <= maxLeafLights) {
-            this.storeLeaf(offset, start, count);
+            this.storeLeaf(offset, start, count, bounds.representativeLightIndex);
             return nodeIndex;
          }
 
-         int axis = selectSplitAxis(bounds);
-         float splitPos = bounds.getMidpoint(axis);
+         SplitResult split = this.findBestSplit(start, end, bounds);
+         int axis = split == null ? selectSplitAxis(bounds) : split.axis;
+         float splitPos = split == null ? bounds.getMidpoint(axis) : split.position;
          int mid = this.partition(start, end, axis, splitPos);
          if (mid == start || mid == end) {
             mid = (start + end) >>> 1;
@@ -1137,35 +1153,97 @@ public class LightRegistry implements Destructable {
          return nodeIndex;
       }
 
-      private NodeBounds calculateNodeBounds(int start, int end) {
-         float minX = Float.MAX_VALUE;
-         float minY = Float.MAX_VALUE;
-         float minZ = Float.MAX_VALUE;
-         float maxX = -Float.MAX_VALUE;
-         float maxY = -Float.MAX_VALUE;
-         float maxZ = -Float.MAX_VALUE;
-         float fluxR = 0.0F;
-         float fluxG = 0.0F;
-         float fluxB = 0.0F;
-         float totalIntensity = 0.0F;
-         for (int i = start; i < end; i++) {
-            LightInstance light = this.lights[this.indices[i]];
-            Vector3f pos = light.position();
-            float radius = light.type().radiusInBlocks();
-            minX = Math.min(minX, pos.x - radius);
-            minY = Math.min(minY, pos.y - radius);
-            minZ = Math.min(minZ, pos.z - radius);
-            maxX = Math.max(maxX, pos.x + radius);
-            maxY = Math.max(maxY, pos.y + radius);
-            maxZ = Math.max(maxZ, pos.z + radius);
-            Vector3f rawColor = light.type().getRawColorAsVector();
-            float lightIntensity = light.type().adjustedIntensity();
-            fluxR += rawColor.x * lightIntensity;
-            fluxG += rawColor.y * lightIntensity;
-            fluxB += rawColor.z * lightIntensity;
-            totalIntensity += (rawColor.x * luminanceRed + rawColor.y * luminanceGreen + rawColor.z * luminanceBlue) * lightIntensity;
+      private SplitResult findBestSplit(int start, int end, NodeBounds parentBounds) {
+         SplitResult best = null;
+         for (int axis = 0; axis < 3; axis++) {
+            SplitResult candidate = this.findBestSplitOnAxis(start, end, axis, parentBounds);
+            if (candidate == null) {
+               continue;
+            }
+            if (best == null || candidate.cost < best.cost) {
+               best = candidate;
+            }
          }
-         return new NodeBounds(minX, minY, minZ, maxX, maxY, maxZ, fluxR, fluxG, fluxB, totalIntensity);
+         return best;
+      }
+
+      private SplitResult findBestSplitOnAxis(int start, int end, int axis, NodeBounds parentBounds) {
+         int count = end - start;
+         if (count <= 1) {
+            return null;
+         }
+
+         float min = parentBounds.getMin(axis);
+         float max = parentBounds.getMax(axis);
+         float extent = max - min;
+         if (!(extent > epsilon)) {
+            return null;
+         }
+
+         float bestCost = Float.POSITIVE_INFINITY;
+         float bestPosition = Float.NaN;
+         for (int bin = 1; bin < saohBinCount; bin++) {
+            float t = (float) bin / (float) saohBinCount;
+            float position = min + extent * t;
+            int mid = this.partition(start, end, axis, position);
+            if (mid == start || mid == end) {
+               continue;
+            }
+            NodeBounds leftBounds = this.calculateNodeBounds(start, mid);
+            NodeBounds rightBounds = this.calculateNodeBounds(mid, end);
+            float splitCost = this.computeSplitCost(axis, parentBounds, leftBounds, rightBounds);
+            if (splitCost < parentBounds.totalIntensity && splitCost < bestCost) {
+               bestCost = splitCost;
+               bestPosition = position;
+            }
+         }
+         return Float.isNaN(bestPosition) ? null : new SplitResult(axis, bestPosition, bestCost);
+      }
+
+      private float computeSplitCost(int axis, NodeBounds parentBounds, NodeBounds leftBounds, NodeBounds rightBounds) {
+         float parentSpatial = Math.max(parentBounds.surfaceArea(), epsilon);
+         float parentOrientation = Math.max(parentBounds.orientationMeasure(), epsilon);
+         float axisPenalty = parentBounds.axisRegularization(axis);
+         float leftCost = leftBounds.totalIntensity * leftBounds.surfaceArea() * leftBounds.orientationMeasure();
+         float rightCost = rightBounds.totalIntensity * rightBounds.surfaceArea() * rightBounds.orientationMeasure();
+         return axisPenalty * (leftCost + rightCost) / (parentSpatial * parentOrientation);
+      }
+
+      private NodeBounds calculateNodeBounds(int start, int end) {
+         NodeBounds bounds = null;
+         for (int i = start; i < end; i++) {
+            int lightIndex = this.indices[i];
+            NodeBounds lightBounds = this.createLeafBounds(this.lights[lightIndex], lightIndex);
+            bounds = bounds == null ? lightBounds : bounds.union(lightBounds);
+         }
+         return bounds == null ? NodeBounds.empty() : bounds;
+      }
+
+      private NodeBounds createLeafBounds(LightInstance light, int representativeLightIndex) {
+         Vector3f pos = light.position();
+         float radius = light.type().radiusInBlocks();
+         Vector3f rawColor = light.type().getRawColorAsVector();
+         float lightIntensity = light.type().adjustedIntensity();
+         float fluxR = rawColor.x * lightIntensity;
+         float fluxG = rawColor.y * lightIntensity;
+         float fluxB = rawColor.z * lightIntensity;
+         float totalIntensity = (rawColor.x * luminanceRed + rawColor.y * luminanceGreen + rawColor.z * luminanceBlue) * lightIntensity;
+         return new NodeBounds(
+            pos.x - radius,
+            pos.y - radius,
+            pos.z - radius,
+            pos.x + radius,
+            pos.y + radius,
+            pos.z + radius,
+            new Vector3f(light.type().emissionAxis()),
+            clampAngle(light.type().orientationSpread()),
+            clampAngle(light.type().emissionSpread()),
+            fluxR,
+            fluxG,
+            fluxB,
+            totalIntensity,
+            representativeLightIndex
+         );
       }
 
       private void storeNodeBounds(int offset, NodeBounds bounds, int depth) {
@@ -1177,15 +1255,15 @@ public class LightRegistry implements Destructable {
          this.nodeData[offset + 5] = bounds.maxY;
          this.nodeData[offset + 6] = bounds.maxZ;
          this.nodeData[offset + 7] = Float.intBitsToFloat(-1);
-         this.nodeData[offset + 8] = bounds.fluxR;
-         this.nodeData[offset + 9] = bounds.fluxG;
-         this.nodeData[offset + 10] = bounds.fluxB;
+         this.nodeData[offset + 8] = bounds.axis.x;
+         this.nodeData[offset + 9] = bounds.axis.y;
+         this.nodeData[offset + 10] = bounds.axis.z;
          this.nodeData[offset + 11] = bounds.totalIntensity;
-         this.nodeData[offset + 14] = Float.intBitsToFloat(depth);
-         this.nodeData[offset + 15] = 0.0F;
+         this.nodeData[offset + 14] = Float.intBitsToFloat(bounds.representativeLightIndex);
+         this.nodeData[offset + 15] = Float.intBitsToFloat(packMeta(depth, bounds.geometricBound(), bounds.orientationBound()));
       }
 
-      private void storeLeaf(int offset, int start, int count) {
+      private void storeLeaf(int offset, int start, int count, int representativeLightIndex) {
          int leafStart = this.leafIndexCount;
          for (int i = 0; i < count; i++) {
             LightInstance light = this.lights[this.indices[start + i]];
@@ -1193,6 +1271,7 @@ public class LightRegistry implements Destructable {
          }
          this.nodeData[offset + 12] = Float.intBitsToFloat(leafStart);
          this.nodeData[offset + 13] = Float.intBitsToFloat(count);
+         this.nodeData[offset + 14] = Float.intBitsToFloat(representativeLightIndex);
       }
 
       private int partition(int start, int end, int axis, float splitPos) {
@@ -1229,6 +1308,17 @@ public class LightRegistry implements Destructable {
          return axis == 0 ? position.x : axis == 1 ? position.y : position.z;
       }
 
+      private static float clampAngle(float angle) {
+         return Math.max(0.0F, Math.min(angle, (float) Math.PI));
+      }
+
+      private static int packMeta(int depth, float geometricBound, float orientationBound) {
+         int packedDepth = Math.max(0, Math.min(depth, 255));
+         int packedGeometric = Math.max(0, Math.min(Math.round(geometricBound * 255.0F), 255));
+         int packedOrientation = Math.max(0, Math.min(Math.round(orientationBound * 255.0F), 255));
+         return packedDepth << 24 | packedGeometric << 16 | packedOrientation << 8;
+      }
+
       private float[] getNodeData() {
          return this.nodeData;
       }
@@ -1245,6 +1335,108 @@ public class LightRegistry implements Destructable {
          return this.leafIndexCount;
       }
 
+      private BuilderStats computeDiagnostics() {
+         BuilderStats stats = new BuilderStats();
+         if (this.nodeCount == 0) {
+            return stats;
+         }
+         this.collectDiagnostics(0, 0, stats);
+         return stats;
+      }
+
+      private NodeBounds collectDiagnostics(int nodeIndex, int depth, BuilderStats stats) {
+         int offset = nodeIndex * nodeFloatSize;
+         NodeBounds bounds = this.readNodeBounds(offset);
+         stats.nodeCount++;
+         stats.depthSum += depth;
+         stats.maxDepth = Math.max(stats.maxDepth, depth);
+         if (depth == 0) {
+            stats.rootBoundsVolume = bounds.volume();
+         }
+         int leafStart = Float.floatToRawIntBits(this.nodeData[offset + 12]);
+         if (leafStart >= 0) {
+            int leafCount = Float.floatToRawIntBits(this.nodeData[offset + 13]);
+            stats.leafCount++;
+            stats.leafSizeSum += leafCount;
+            stats.maxLeafSize = Math.max(stats.maxLeafSize, leafCount);
+            return bounds;
+         }
+
+         int leftChild = Float.floatToRawIntBits(this.nodeData[offset + 3]);
+         int rightChild = Float.floatToRawIntBits(this.nodeData[offset + 7]);
+         NodeBounds left = this.collectDiagnostics(leftChild, depth + 1, stats);
+         NodeBounds right = this.collectDiagnostics(rightChild, depth + 1, stats);
+         stats.siblingPairCount++;
+         stats.siblingOverlapRatioSum += bounds.subtreeOverlap(left, right);
+         stats.childSeparationRatioSum += bounds.normalizedChildSeparation(left, right);
+         return bounds;
+      }
+
+      private NodeBounds readNodeBounds(int offset) {
+         return new NodeBounds(
+            this.nodeData[offset],
+            this.nodeData[offset + 1],
+            this.nodeData[offset + 2],
+            this.nodeData[offset + 4],
+            this.nodeData[offset + 5],
+            this.nodeData[offset + 6],
+            new Vector3f(this.nodeData[offset + 8], this.nodeData[offset + 9], this.nodeData[offset + 10]),
+            decodeOrientationSpread(Float.floatToRawIntBits(this.nodeData[offset + 15])),
+            halfPi,
+            0.0F,
+            0.0F,
+            0.0F,
+            this.nodeData[offset + 11],
+            Float.floatToRawIntBits(this.nodeData[offset + 14])
+         );
+      }
+
+      private static float decodeOrientationSpread(int packedMeta) {
+         int packedOrientation = (packedMeta >> 8) & 255;
+         return (packedOrientation / 255.0F) * 0.25F * twoPi;
+      }
+
+      private static final class SplitResult {
+         private final int axis;
+         private final float position;
+         private final float cost;
+
+         private SplitResult(int axis, float position, float cost) {
+            this.axis = axis;
+            this.position = position;
+            this.cost = cost;
+         }
+      }
+
+      private static final class BuilderStats {
+         private int nodeCount;
+         private int leafCount;
+         private int maxLeafSize;
+         private int maxDepth;
+         private int siblingPairCount;
+         private float leafSizeSum;
+         private float depthSum;
+         private float rootBoundsVolume;
+         private float siblingOverlapRatioSum;
+         private float childSeparationRatioSum;
+
+         private float averageLeafSize() {
+            return this.leafCount == 0 ? 0.0F : this.leafSizeSum / this.leafCount;
+         }
+
+         private float averageDepth() {
+            return this.nodeCount == 0 ? 0.0F : this.depthSum / this.nodeCount;
+         }
+
+         private float averageSiblingOverlapRatio() {
+            return this.siblingPairCount == 0 ? 0.0F : this.siblingOverlapRatioSum / this.siblingPairCount;
+         }
+
+         private float averageChildSeparationRatio() {
+            return this.siblingPairCount == 0 ? 0.0F : this.childSeparationRatioSum / this.siblingPairCount;
+         }
+      }
+
       private static final class NodeBounds {
          private final float minX;
          private final float minY;
@@ -1252,22 +1444,79 @@ public class LightRegistry implements Destructable {
          private final float maxX;
          private final float maxY;
          private final float maxZ;
+         private final Vector3f axis;
+         private final float orientationSpread;
+         private final float emissionSpread;
          private final float fluxR;
          private final float fluxG;
          private final float fluxB;
          private final float totalIntensity;
+         private final int representativeLightIndex;
 
-         private NodeBounds(float minX, float minY, float minZ, float maxX, float maxY, float maxZ, float fluxR, float fluxG, float fluxB, float totalIntensity) {
+         private NodeBounds(
+            float minX,
+            float minY,
+            float minZ,
+            float maxX,
+            float maxY,
+            float maxZ,
+            Vector3f axis,
+            float orientationSpread,
+            float emissionSpread,
+            float fluxR,
+            float fluxG,
+            float fluxB,
+            float totalIntensity,
+            int representativeLightIndex
+         ) {
             this.minX = minX;
             this.minY = minY;
             this.minZ = minZ;
             this.maxX = maxX;
             this.maxY = maxY;
             this.maxZ = maxZ;
+            Vector3f normalizedAxis = axis == null ? new Vector3f(0.0F, 1.0F, 0.0F) : new Vector3f(axis);
+            if (normalizedAxis.lengthSquared() <= epsilon) {
+               normalizedAxis.set(0.0F, 1.0F, 0.0F);
+            } else {
+               normalizedAxis.normalize();
+            }
+            this.axis = normalizedAxis;
+            this.orientationSpread = clampAngle(orientationSpread);
+            this.emissionSpread = clampAngle(emissionSpread);
             this.fluxR = fluxR;
             this.fluxG = fluxG;
             this.fluxB = fluxB;
             this.totalIntensity = totalIntensity;
+            this.representativeLightIndex = representativeLightIndex;
+         }
+
+         private static NodeBounds empty() {
+            return new NodeBounds(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, new Vector3f(0.0F, 1.0F, 0.0F), (float) Math.PI, halfPi, 0.0F, 0.0F, 0.0F, 0.0F, -1);
+         }
+
+         private NodeBounds union(NodeBounds other) {
+            int representative = this.chooseRepresentative(other);
+            return new NodeBounds(
+               Math.min(this.minX, other.minX),
+               Math.min(this.minY, other.minY),
+               Math.min(this.minZ, other.minZ),
+               Math.max(this.maxX, other.maxX),
+               Math.max(this.maxY, other.maxY),
+               Math.max(this.maxZ, other.maxZ),
+               unionAxis(this.axis, this.orientationSpread, other.axis, other.orientationSpread),
+               unionOrientationSpread(this.axis, this.orientationSpread, other.axis, other.orientationSpread),
+               Math.max(this.emissionSpread, other.emissionSpread),
+               this.fluxR + other.fluxR,
+               this.fluxG + other.fluxG,
+               this.fluxB + other.fluxB,
+               this.totalIntensity + other.totalIntensity,
+               representative
+            );
+         }
+
+         private int chooseRepresentative(NodeBounds other) {
+            return this.totalIntensity >= other.totalIntensity ? this.representativeLightIndex : other.representativeLightIndex;
          }
 
          private float getMidpoint(int axis) {
@@ -1279,6 +1528,176 @@ public class LightRegistry implements Destructable {
             }
             return (this.minZ + this.maxZ) * 0.5F;
          }
+
+         private float getMin(int axis) {
+            return axis == 0 ? this.minX : axis == 1 ? this.minY : this.minZ;
+         }
+
+         private float getMax(int axis) {
+            return axis == 0 ? this.maxX : axis == 1 ? this.maxY : this.maxZ;
+         }
+
+         private float centroidX() {
+            return (this.minX + this.maxX) * 0.5F;
+         }
+
+         private float centroidY() {
+            return (this.minY + this.maxY) * 0.5F;
+         }
+
+         private float centroidZ() {
+            return (this.minZ + this.maxZ) * 0.5F;
+         }
+
+         private float diagonalLength() {
+            float dx = Math.max(this.maxX - this.minX, 0.0F);
+            float dy = Math.max(this.maxY - this.minY, 0.0F);
+            float dz = Math.max(this.maxZ - this.minZ, 0.0F);
+            return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+         }
+
+         private float volume() {
+            float dx = Math.max(this.maxX - this.minX, 0.0F);
+            float dy = Math.max(this.maxY - this.minY, 0.0F);
+            float dz = Math.max(this.maxZ - this.minZ, 0.0F);
+            return dx * dy * dz;
+         }
+
+         private float surfaceArea() {
+            float dx = Math.max(this.maxX - this.minX, 0.0F);
+            float dy = Math.max(this.maxY - this.minY, 0.0F);
+            float dz = Math.max(this.maxZ - this.minZ, 0.0F);
+            return 2.0F * (dx * dy + dy * dz + dz * dx);
+         }
+
+         private float orientationMeasure() {
+            float thetaW = Math.min(this.orientationSpread + this.emissionSpread, (float) Math.PI);
+            float baseMeasure = twoPi * (1.0F - (float) Math.cos(this.orientationSpread));
+            float extraMeasure = thetaW <= this.orientationSpread
+               ? 0.0F
+               : halfPi * (
+                  2.0F * thetaW * (float) Math.sin(this.orientationSpread)
+                     - (float) Math.cos(this.orientationSpread - 2.0F * thetaW)
+                     - 2.0F * this.orientationSpread * (float) Math.sin(this.orientationSpread)
+                     + (float) Math.cos(this.orientationSpread)
+               );
+            return Math.max(baseMeasure + extraMeasure, epsilon);
+         }
+
+         private float axisRegularization(int axis) {
+            float extent = Math.max(this.getMax(axis) - this.getMin(axis), epsilon);
+            float maxExtent = Math.max(Math.max(this.maxX - this.minX, this.maxY - this.minY), this.maxZ - this.minZ);
+            return Math.max(maxExtent, epsilon) / extent;
+         }
+
+         private float geometricBound() {
+            float radius = 0.5F * this.diagonalLength();
+            float distanceScale = radius / Math.max(radius + 1.0F, 1.0F);
+            return clampUnit(distanceScale);
+         }
+
+         private float orientationBound() {
+            return clampUnit(Math.min(this.orientationSpread + this.emissionSpread, (float) Math.PI) / (float) Math.PI);
+         }
+
+         private float intersectionVolume(NodeBounds other) {
+            float overlapX = Math.max(Math.min(this.maxX, other.maxX) - Math.max(this.minX, other.minX), 0.0F);
+            float overlapY = Math.max(Math.min(this.maxY, other.maxY) - Math.max(this.minY, other.minY), 0.0F);
+            float overlapZ = Math.max(Math.min(this.maxZ, other.maxZ) - Math.max(this.minZ, other.minZ), 0.0F);
+            return overlapX * overlapY * overlapZ;
+         }
+
+         private float subtreeOverlap(NodeBounds left, NodeBounds right) {
+            return left.intersectionVolume(right) / Math.max(this.volume(), epsilon);
+         }
+
+         private float normalizedChildSeparation(NodeBounds left, NodeBounds right) {
+            float dx = left.centroidX() - right.centroidX();
+            float dy = left.centroidY() - right.centroidY();
+            float dz = left.centroidZ() - right.centroidZ();
+            float centerDistance = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+            float size = Math.max(0.5F * (left.diagonalLength() + right.diagonalLength()), epsilon);
+            return Math.max(centerDistance / size - 1.0F, 0.0F);
+         }
+
+         private static Vector3f unionAxis(Vector3f axisA, float spreadA, Vector3f axisB, float spreadB) {
+            Vector3f weighted = new Vector3f(axisA).mul(Math.max((float) Math.PI - spreadA, 0.001F)).add(new Vector3f(axisB).mul(Math.max((float) Math.PI - spreadB, 0.001F)));
+            if (weighted.lengthSquared() <= epsilon) {
+               weighted.set(axisA);
+            }
+            return weighted.normalize();
+         }
+
+         private static float unionOrientationSpread(Vector3f axisA, float spreadA, Vector3f axisB, float spreadB) {
+            float centerAngle = (float) Math.acos(clamp(axisA.dot(axisB), -1.0F, 1.0F));
+            if (spreadA >= centerAngle + spreadB) {
+               return spreadA;
+            }
+            if (spreadB >= centerAngle + spreadA) {
+               return spreadB;
+            }
+            return clampAngle(0.5F * (spreadA + centerAngle + spreadB));
+         }
+
+         private static float clamp(float value, float min, float max) {
+            return Math.max(min, Math.min(value, max));
+         }
+
+         private static float clampUnit(float value) {
+            return clamp(value, 0.0F, 1.0F);
+         }
+      }
+   }
+
+   public static record LightTreeDiagnostics(
+      int nodeCount,
+      int leafCount,
+      float averageLeafSize,
+      int maxLeafSize,
+      float averageDepth,
+      int maxDepth,
+      float rootBoundsVolume,
+      float siblingOverlapRatio,
+      float childSeparationRatio,
+      int rebuildCount,
+      int lastRebuildCompileCount
+   ) {
+      private static LightTreeDiagnostics empty() {
+         return new LightTreeDiagnostics(0, 0, 0.0F, 0, 0.0F, 0, 0.0F, 0.0F, 0.0F, 0, -1);
+      }
+
+      private static LightTreeDiagnostics fromBuild(LightTreeBuilder builder, int rebuildCount, int lastRebuildCompileCount) {
+         LightTreeBuilder.BuilderStats stats = builder.computeDiagnostics();
+         return new LightTreeDiagnostics(
+            stats.nodeCount,
+            stats.leafCount,
+            stats.averageLeafSize(),
+            stats.maxLeafSize,
+            stats.averageDepth(),
+            stats.maxDepth,
+            stats.rootBoundsVolume,
+            stats.averageSiblingOverlapRatio(),
+            stats.averageChildSeparationRatio(),
+            rebuildCount,
+            lastRebuildCompileCount
+         );
+      }
+
+      public String describe() {
+         return String.format(
+            "nodes=%d leaves=%d leafAvg=%.2f leafMax=%d depthAvg=%.2f depthMax=%d rootVolume=%.2f overlap=%.3f separation=%.3f rebuilds=%d lastRebuildCompile=%d",
+            this.nodeCount,
+            this.leafCount,
+            this.averageLeafSize,
+            this.maxLeafSize,
+            this.averageDepth,
+            this.maxDepth,
+            this.rootBoundsVolume,
+            this.siblingOverlapRatio,
+            this.childSeparationRatio,
+            this.rebuildCount,
+            this.lastRebuildCompileCount
+         );
       }
    }
 

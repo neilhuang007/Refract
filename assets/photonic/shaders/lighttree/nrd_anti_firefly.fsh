@@ -2,21 +2,22 @@
 
 in vec4 direction_vert_out;
 
-layout(location = 0) out vec4 nrd_anti_firefly_out;
+layout(location = 0) out vec4 direct_firefly_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
-uniform sampler2D nrd_anti_firefly_input;
+uniform sampler2D direct_firefly_input;
 
 void main() {
-    vec4 center = texelFetch(nrd_anti_firefly_input, tex_coord, 0);
+    vec4 center = texelFetch(direct_firefly_input, tex_coord, 0);
     float centerLuma = nrd_luminance(center.rgb);
 
-    float maxLuma = -1.0;
-    float minLuma = 1000000.0;
-    vec3 maxColor = center.rgb;
+    float maxLuma = centerLuma;
+    float minLuma = centerLuma;
     vec3 minColor = center.rgb;
+
+    ivec2 texSize = textureSize(direct_firefly_input, 0);
 
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
@@ -24,15 +25,10 @@ void main() {
                 continue;
             }
 
-            ivec2 sampleCoord = tex_coord + ivec2(dx, dy);
-            vec3 sampleColor = texelFetch(nrd_anti_firefly_input, sampleCoord, 0).rgb;
+            ivec2 sampleCoord = clamp(tex_coord + ivec2(dx, dy), ivec2(0), texSize - 1);
+            vec3 sampleColor = texelFetch(direct_firefly_input, sampleCoord, 0).rgb;
             float sampleLuma = nrd_luminance(sampleColor);
-
-            if (sampleLuma > maxLuma) {
-                maxLuma = sampleLuma;
-                maxColor = sampleColor;
-            }
-
+            maxLuma = max(maxLuma, sampleLuma);
             if (sampleLuma < minLuma) {
                 minLuma = sampleLuma;
                 minColor = sampleColor;
@@ -40,9 +36,6 @@ void main() {
         }
     }
 
-    // Luminance-preserving clamping: scale the center color to match the
-    // clamped luminance instead of replacing with a neighbor's color (which
-    // would corrupt the hue/chroma from stochastic light tree sampling).
     vec3 result = center.rgb;
     float clampedLuma = clamp(centerLuma, minLuma, maxLuma);
     if (centerLuma > 1e-6) {
@@ -51,5 +44,5 @@ void main() {
         result = minColor;
     }
 
-    nrd_anti_firefly_out = vec4(max(result, vec3(0.0)), center.a);
+    direct_firefly_out = vec4(max(result, vec3(0.0)), center.a);
 }

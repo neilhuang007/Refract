@@ -1,6 +1,5 @@
 package at.redi2go.photonic.client;
 
-import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.PhotonicsStorage;
@@ -8,6 +7,7 @@ import at.redi2go.photonic.client.mixin.ShaderPackAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ColorFramebuffer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ShaderUtil;
+import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.LightTreeRenderer;
 import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.MainRenderer;
 import at.redi2go.photonic.client.rendering.patching.Patch;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
@@ -92,14 +92,13 @@ public class Raytracer implements Destructable {
          lightBinningEnabled
       );
       Photonic.info(
-         "[Startup] photonics: lightingMode={} multithreading={} lightBinning={} blockLight={} gi={}",
-         properties.getLightingMode(),
+         "[Startup] photonics: lightingPipeline=LIGHT_TREE_RESTIR multithreading={} lightBinning={} blockLight={} gi={}",
          PhotonicsStorage.DO_MULTITHREADING.value,
          lightBinningEnabled,
          properties.isBlockLightEnabled().orElse(true),
          properties.isGiEnabled().orElse(true)
       );
-      this.mainRenderer = properties.getLightingMode().createMainRenderer(this.worldRegistry, properties.getRenderScale(), properties);
+      this.mainRenderer = new LightTreeRenderer(this.worldRegistry, properties.getRenderScale(), properties);
       this.worldRegistry.startWorldBuilder();
       this.voxelizedBlockObserver = PhotonicsConfig.observe(c -> c.voxelizedBlocks, unused -> MinecraftClient.getInstance().worldRenderer.reload());
    }
@@ -109,8 +108,7 @@ public class Raytracer implements Destructable {
       if (!override.isBlank()) {
          return Boolean.parseBoolean(override);
       }
-      return properties.isLightBinningEnabled()
-         .orElse(properties.getLightingMode() == LightingMode.BASIC || properties.getLightingMode() == LightingMode.LIGHT_TREE);
+      return properties.isLightBinningEnabled().orElse(true);
    }
 
    public static Optional<PhotonicsProperties> getProperties() {

@@ -2,7 +2,6 @@ package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.api.AlphaMode;
-import at.redi2go.photonic.client.api.LightingMode;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import java.io.IOException;
 import java.io.StringReader;
@@ -44,19 +43,17 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Unique
    private OptionalBoolean voxelizeLava = OptionalBoolean.DEFAULT;
    @Unique
-   private LightingMode lightingMode = DEFAULT_LIGHTING_MODE;
+   private int lightTreeInitialSamples = DEFAULT_LIGHTTREE_INITIAL_SAMPLES;
    @Unique
-   private int restirInitialSamples = DEFAULT_RESTIR_INITIAL_SAMPLES;
+   private int lightTreeSpatialReuseSamples = DEFAULT_LIGHTTREE_SPATIAL_REUSE_SAMPLES;
    @Unique
-   private int restirSpatialReuseSamples = DEFAULT_RESTIR_SPATIAL_REUSE_SAMPLES;
+   private float lightTreeSpatialReuseRadius = DEFAULT_LIGHTTREE_SPATIAL_REUSE_RADIUS;
    @Unique
-   private float restirSpatialReuseRadius = DEFAULT_RESTIR_SPATIAL_REUSE_RADIUS;
+   private int lightTreeAccumulationFrames = DEFAULT_LIGHTTREE_ACCUMULATION_FRAMES;
    @Unique
-   private int restirAccumulationFrames = DEFAULT_RESTIR_ACCUMULATION_FRAMES;
+   private OptionalBoolean lightTreeSoftShadows = OptionalBoolean.DEFAULT;
    @Unique
-   private OptionalBoolean restirSoftShadows = OptionalBoolean.DEFAULT;
-   @Unique
-   private int denoiserPasses = DEFAULT_RESTIR_DENOISER_PASSES;
+   private int denoiserPasses = DEFAULT_LIGHTTREE_DENOISER_PASSES;
    @Unique
    private int nrdAtrousPasses = DEFAULT_NRD_ATROUS_PASSES;
 
@@ -100,13 +97,12 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          case "photonics.enableHandheldLight" -> this.isHandheldLightEnabled = photonics$parseBoolean(value);
          case "photonics.enableLightBinning" -> this.isLightBinningEnabled = photonics$parseBoolean(value);
          case "photonics.voxelizeLava" -> this.voxelizeLava = photonics$parseBoolean(value);
-         case "photonics.lightingMode" -> photonics$parseLightingMode(key, value, e -> this.lightingMode = e);
-         case "photonics.restirInitialSamples" -> photonics$parseUnsignedInt(key, value, e -> this.restirInitialSamples = e);
-         case "photonics.restirSpatialReuseSamples" -> photonics$parseUnsignedInt(key, value, e -> this.restirSpatialReuseSamples = e);
-         case "photonics.restirSpatialReuseRadius" -> photonics$parseFloat(key, value, e -> this.restirSpatialReuseRadius = e);
-         case "photonics.restirAccumulationFrames" -> photonics$parseUnsignedInt(key, value, e -> this.restirAccumulationFrames = e);
-         case "photonics.restirSoftShadows" -> this.restirSoftShadows = photonics$parseBoolean(value);
-         case "photonics.restirDenoiserPasses" -> photonics$parseNonNegativeInt(key, value, e -> this.denoiserPasses = e);
+         case "photonics.lightTreeInitialSamples", "photonics.restirInitialSamples" -> photonics$parseUnsignedInt(key, value, e -> this.lightTreeInitialSamples = e);
+         case "photonics.lightTreeSpatialReuseSamples", "photonics.restirSpatialReuseSamples" -> photonics$parseUnsignedInt(key, value, e -> this.lightTreeSpatialReuseSamples = e);
+         case "photonics.lightTreeSpatialReuseRadius", "photonics.restirSpatialReuseRadius" -> photonics$parseFloat(key, value, e -> this.lightTreeSpatialReuseRadius = e);
+         case "photonics.lightTreeAccumulationFrames", "photonics.restirAccumulationFrames" -> photonics$parseUnsignedInt(key, value, e -> this.lightTreeAccumulationFrames = e);
+         case "photonics.lightTreeSoftShadows", "photonics.restirSoftShadows" -> this.lightTreeSoftShadows = photonics$parseBoolean(value);
+         case "photonics.lightTreeDenoiserPasses", "photonics.restirDenoiserPasses" -> photonics$parseNonNegativeInt(key, value, e -> this.denoiserPasses = e);
          case "photonics.nrdAtrousPasses" -> photonics$parseUnsignedInt(key, value, e -> this.nrdAtrousPasses = e);
       }
    }
@@ -166,38 +162,34 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
       return this.voxelizeLava;
    }
 
+
    @Override
-   public LightingMode getLightingMode() {
-      return this.lightingMode;
+   public int getLightTreeInitialSamples() {
+      return this.lightTreeInitialSamples;
    }
 
    @Override
-   public int getRestirInitialSamples() {
-      return this.restirInitialSamples;
+   public int getLightTreeSpatialReuseSamples() {
+      return this.lightTreeSpatialReuseSamples;
    }
 
    @Override
-   public int getRestirSpatialReuseSamples() {
-      return this.restirSpatialReuseSamples;
+   public float getLightTreeSpatialReuseRadius() {
+      return this.lightTreeSpatialReuseRadius;
    }
 
    @Override
-   public float getRestirSpatialReuseRadius() {
-      return this.restirSpatialReuseRadius;
+   public int getLightTreeAccumulationFrames() {
+      return this.lightTreeAccumulationFrames;
    }
 
    @Override
-   public int getRestirAccumulationFrames() {
-      return this.restirAccumulationFrames;
+   public OptionalBoolean useLightTreeSoftShadows() {
+      return this.lightTreeSoftShadows;
    }
 
    @Override
-   public OptionalBoolean useRestirSoftShadows() {
-      return this.restirSoftShadows;
-   }
-
-   @Override
-   public int getRestirDenoiserPasses() {
+   public int getLightTreeDenoiserPasses() {
       return this.denoiserPasses;
    }
 
@@ -212,14 +204,13 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          return;
       }
 
-      String lightingMode = photonics$resolveLightingMode(shaderPackOptions);
-      if (lightingMode != null) {
-         props.setProperty("photonics.lightingMode", lightingMode);
+      String lightTreeSoftShadows = photonics$resolveOptionValue(shaderPackOptions, "PHOTONICS_LIGHTTREE_SOFT_SHADOWS");
+      if (lightTreeSoftShadows == null) {
+         lightTreeSoftShadows = photonics$resolveOptionValue(shaderPackOptions, "PHOTONICS_RESTIR_SOFT_SHADOWS");
       }
-
-      String restirSoftShadows = photonics$resolveOptionValue(shaderPackOptions, "PHOTONICS_RESTIR_SOFT_SHADOWS");
-      if (restirSoftShadows != null) {
-         props.setProperty("photonics.restirSoftShadows", restirSoftShadows);
+      if (lightTreeSoftShadows != null) {
+         props.setProperty("photonics.lightTreeSoftShadows", lightTreeSoftShadows);
+         props.setProperty("photonics.restirSoftShadows", lightTreeSoftShadows);
       }
 
       for (String key : new HashSet<>(props.stringPropertyNames())) {
@@ -257,21 +248,6 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
       return null;
    }
 
-   @Unique
-   private static String photonics$resolveLightingMode(ShaderPackOptions shaderPackOptions) {
-      String value = photonics$resolveOptionValue(shaderPackOptions, "PHOTONICS_LIGHTING_MODE");
-      if (value == null) {
-         return null;
-      }
-
-      return switch (value) {
-         case "0" -> LightingMode.OFF.name();
-         case "1" -> LightingMode.BASIC.name();
-         case "2" -> LightingMode.LIGHT_TREE.name();
-         case "3" -> LightingMode.RESTIR.name();
-         default -> value;
-      };
-   }
 
    @Unique
    private static void photonics$applySystemPropertyOverrides(Properties props) {
@@ -338,12 +314,4 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
       }
    }
 
-   @Unique
-   private static void photonics$parseLightingMode(String key, String value, Consumer<LightingMode> handler) {
-      try {
-         handler.accept(LightingMode.valueOf(value.toUpperCase()));
-      } catch (IllegalArgumentException e) {
-         Iris.logger.warn("Unexpected value for lighting mode key " + key + " in shaders.properties: got " + value + ", but expected lighting mode");
-      }
-   }
 }

@@ -145,3 +145,15 @@ vec3 get_sky_color(ivec2 gBufferLoc, vec3 worldPos, vec3 newNormal) {
     return skyReflection;
 }
 #endreplace
+
+#replace "vec4 load_fragment_material();"
+vec4 load_fragment_material() {
+    vec2 texCoord = gl_FragCoord.xy / vec2(viewWidth, viewHeight);
+    vec4 spec = texture(specular, texCoord);
+    float smoothness = clamp(spec.r, 0.0f, 1.0f);
+    float roughness = clamp(1.0f - smoothness, 0.0f, 1.0f);
+    float metallic = clamp(spec.g, 0.0f, 1.0f);
+    float emission = clamp(spec.a, 0.0f, 1.0f);
+    return vec4(roughness, metallic, emission, smoothness);
+}
+#endreplace

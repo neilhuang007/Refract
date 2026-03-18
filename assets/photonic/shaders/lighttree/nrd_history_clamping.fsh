@@ -7,6 +7,7 @@ layout(location = 1) out vec4 nrd_clamped_fast_out;
 layout(location = 2) out vec4 nrd_history_length_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/nrd_common.glsl"
 
 uniform sampler2D nrd_diff_slow_input;
 uniform sampler2D nrd_diff_fast_input;
@@ -19,53 +20,13 @@ const float nrd_history_fix_frame_num = 3.0;
 const float nrd_history_reset_amount = 0.5;
 const float nrd_history_reset_temporal_sigma_scale = 0.5;
 const float nrd_history_reset_spatial_sigma_scale = 0.5;
-const float nrd_min_variance = 1e-6;
 const float nrd_history_acceleration_scale = 10.0;
-
-vec3 nrd_rgb_to_ycocg(vec3 color) {
-    float y = dot(color, vec3(0.25, 0.5, 0.25));
-    float co = color.r - color.b;
-    float cg = color.g - 0.5 * (color.r + color.b);
-    return vec3(y, co, cg);
-}
-
-vec3 nrd_ycocg_to_rgb(vec3 ycocg) {
-    float y = ycocg.x;
-    float co = ycocg.y;
-    float cg = ycocg.z;
-    float t = y - 0.5 * cg;
-    float g = cg + t;
-    float b = t - 0.5 * co;
-    float r = b + co;
-    return vec3(r, g, b);
-}
-
-float nrd_luminance(vec3 color) {
-    return dot(color, vec3(0.2126, 0.7152, 0.0722));
-}
 
 ivec2 nrd_clamp_texel(ivec2 sampleCoord, ivec2 texSize) {
     return clamp(sampleCoord, ivec2(0), texSize - 1);
 }
 
-float nrd_safe_history_length(vec4 encodedHistory) {
-    return clamp(encodedHistory.r * 255.0, 0.0, 255.0);
-}
-
-vec3 nrd_clamp_ycocg(vec3 value, vec3 minValue, vec3 maxValue) {
-    return clamp(value, minValue, maxValue);
-}
-
-float nrd_compute_variance(float secondMoment, float mean) {
-    return max(secondMoment - mean * mean, nrd_min_variance);
-}
-
-void nrd_accumulate_fast_history_stats(
-    ivec2 centerCoord,
-    out vec3 meanValue,
-    out vec3 sigmaValue,
-    out float spatialLumaSigma
-) {
+void nrd_accumulate_fast_history_stats(ivec2 centerCoord, out vec3 meanValue, out vec3 sigmaValue, out float spatialLumaSigma) {
     ivec2 texSize = textureSize(nrd_diff_fast_input, 0);
     vec3 sumValue = vec3(0.0);
     vec3 sumSquares = vec3(0.0);
@@ -96,22 +57,12 @@ void nrd_accumulate_fast_history_stats(
     spatialLumaSigma = sqrt(lumaVariance);
 }
 
-vec3 nrd_apply_history_acceleration(
-    vec3 historyColor,
-    vec3 noisyColor,
-    float accelerationAmount,
-    float clampFactor
-) {
+vec3 nrd_apply_history_acceleration(vec3 historyColor, vec3 noisyColor, float accelerationAmount, float clampFactor) {
     float blendAmount = clamp(accelerationAmount * clampFactor, 0.0, 1.0);
     return mix(historyColor, noisyColor, blendAmount);
 }
 
-float nrd_compute_reset_amount(
-    vec3 slowYcocg,
-    vec3 noisyYcocg,
-    float temporalSigma,
-    float spatialSigma
-) {
+float nrd_compute_reset_amount(vec3 slowYcocg, vec3 noisyYcocg, float temporalSigma, float spatialSigma) {
     float divergence = abs(slowYcocg.x - noisyYcocg.x);
     float resetThreshold = temporalSigma * nrd_history_reset_temporal_sigma_scale
         + spatialSigma * nrd_history_reset_spatial_sigma_scale;
@@ -136,11 +87,15 @@ void main() {
     vec4 fastInput = texelFetch(nrd_diff_fast_input, tex_coord, 0);
     vec4 noisyInput = texelFetch(nrd_diff_noisy_input, tex_coord, 0);
     vec4 historyLengthEncoded = texelFetch(nrd_history_length_tex, tex_coord, 0);
-    float historyLength = nrd_safe_history_length(historyLengthEncoded);
+    float historyLength = nrd_decoded_history(historyLengthEncoded);
+    vec3 centerAlbedo = clamp(texelFetch(colortex10, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
+    vec3 slowRadiance = nrd_safe_demodulate(slowInput.rgb, nrd_compute_diffuse_demodulation(centerAlbedo));
+    vec3 fastRadiance = nrd_safe_demodulate(fastInput.rgb, nrd_compute_diffuse_demodulation(centerAlbedo));
+    vec3 noisyRadiance = nrd_safe_demodulate(noisyInput.rgb, nrd_compute_diffuse_demodulation(centerAlbedo));
 
-    vec3 slowYcocg = nrd_rgb_to_ycocg(slowInput.rgb);
-    vec3 fastYcocg = nrd_rgb_to_ycocg(fastInput.rgb);
-    vec3 noisyYcocg = nrd_rgb_to_ycocg(noisyInput.rgb);
+    vec3 slowYcocg = nrd_rgb_to_ycocg(slowRadiance);
+    vec3 fastYcocg = nrd_rgb_to_ycocg(fastRadiance);
+    vec3 noisyYcocg = nrd_rgb_to_ycocg(noisyRadiance);
 
     vec3 meanValue;
     vec3 sigmaValue;
@@ -152,52 +107,33 @@ void main() {
     minBox = min(minBox, fastYcocg);
     maxBox = max(maxBox, fastYcocg);
 
-    vec3 clampedSlowYcocg = nrd_clamp_ycocg(slowYcocg, minBox, maxBox);
+    vec3 clampedSlowYcocg = clamp(slowYcocg, minBox, maxBox);
     float clampDistance = length(slowYcocg - clampedSlowYcocg);
     float unclampedDistance = max(length(slowYcocg - fastYcocg), 1e-4);
     float clampFactor = clamp(clampDistance / unclampedDistance, 0.0, 1.0);
 
     float accelerationAmount = nrd_history_acceleration_scale
         * nrd_history_acceleration_amount
-        * nrd_luminance(abs(fastInput.rgb - slowInput.rgb));
-    vec3 acceleratedSlowRgb = nrd_apply_history_acceleration(
-        nrd_ycocg_to_rgb(clampedSlowYcocg),
-        noisyInput.rgb,
-        accelerationAmount,
-        clampFactor
-    );
-    vec3 acceleratedFastRgb = nrd_apply_history_acceleration(
-        fastInput.rgb,
-        noisyInput.rgb,
-        accelerationAmount,
-        clampFactor
-    );
+        * nrd_luminance(abs(fastRadiance - slowRadiance));
+    vec3 acceleratedSlowRgb = nrd_apply_history_acceleration(nrd_ycocg_to_rgb(clampedSlowYcocg), noisyRadiance, accelerationAmount, clampFactor);
+    vec3 acceleratedFastRgb = nrd_apply_history_acceleration(fastRadiance, noisyRadiance, accelerationAmount, clampFactor);
 
     vec3 acceleratedSlowYcocg = nrd_rgb_to_ycocg(acceleratedSlowRgb);
     float temporalSigma = sqrt(nrd_compute_variance(slowInput.a, slowYcocg.x));
-    float resetAmount = nrd_compute_reset_amount(
-        acceleratedSlowYcocg,
-        noisyYcocg,
-        temporalSigma,
-        spatialLumaSigma
-    );
+    float resetAmount = nrd_compute_reset_amount(acceleratedSlowYcocg, noisyYcocg, temporalSigma, spatialLumaSigma);
 
-    vec3 resolvedSlowRgb = mix(acceleratedSlowRgb, noisyInput.rgb, resetAmount);
-    vec3 resolvedFastRgb = mix(acceleratedFastRgb, noisyInput.rgb, resetAmount);
+    vec3 resolvedSlowRgb = mix(acceleratedSlowRgb, noisyRadiance, resetAmount);
+    vec3 resolvedFastRgb = mix(acceleratedFastRgb, noisyRadiance, resetAmount);
     if (historyLength <= nrd_history_fix_frame_num) {
-        resolvedSlowRgb = fastInput.rgb;
+        resolvedSlowRgb = fastRadiance;
     }
 
-    float noisyLuma = nrd_luminance(noisyInput.rgb);
+    float noisyLuma = nrd_luminance(noisyRadiance);
     float resolvedSlowLuma = nrd_luminance(resolvedSlowRgb);
-    float updatedSecondMoment = mix(
-        slowInput.a,
-        noisyLuma * noisyLuma,
-        max(resetAmount, clampFactor)
-    );
+    float updatedSecondMoment = mix(slowInput.a, noisyLuma * noisyLuma, max(resetAmount, clampFactor));
     updatedSecondMoment = max(updatedSecondMoment, resolvedSlowLuma * resolvedSlowLuma);
 
-    nrd_clamped_slow_out = vec4(resolvedSlowRgb, updatedSecondMoment);
-    nrd_clamped_fast_out = vec4(resolvedFastRgb, fastInput.a);
+    nrd_clamped_slow_out = vec4(nrd_safe_remodulate(resolvedSlowRgb, nrd_compute_diffuse_demodulation(centerAlbedo)), updatedSecondMoment);
+    nrd_clamped_fast_out = vec4(nrd_safe_remodulate(resolvedFastRgb, nrd_compute_diffuse_demodulation(centerAlbedo)), fastInput.a);
     nrd_history_length_out = historyLengthEncoded;
 }
