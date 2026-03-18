@@ -31,50 +31,26 @@ vec4 lt_build_direct_proposal(vec3 shadingPos, vec3 shadingNormal, vec3 mappedNo
         return reservoir_encode(reservoir_new());
     }
 
-    int sampleCount = int(round(float(lt_sample_count) * ph_direct_sample_budget_scale));
-    sampleCount = clamp(sampleCount, lt_min_sample_count, lt_sample_count);
+    // Diagnostic mode: use one stochastic tree traversal per pixel so we can
+    // measure the cost of traversal count directly before redesigning the pipeline.
+    float xi = float(ph_rand_pcg(rng)) / 4294967295.0f;
+    int lightIndex = -1;
+    float lightPdf = 0.0f;
 
-    // Adaptive splitting seeds the ReSTIR DI proposal reservoir with multiple
-    // candidates from high-variance subtrees before we spend the remaining
-    // budget on additional stochastic picks from the same tree.
-    float splitThreshold = 0.75f;
-    int lightIndices[8];
-    float lightPdfs[8];
-    for (int i = 0; i < 8; i++) { lightIndices[i] = -1; lightPdfs[i] = 0.0f; }
+    if (!lt_pick_light(shadingPos, shadingNormal, mappedNormal, albedoColor, xi, lightIndex, lightPdf)) {
+        return reservoir_encode(reservoir_new());
+    }
+    if (lightIndex < 0 || lightPdf <= 0.0f) {
+        return reservoir_encode(reservoir_new());
+    }
 
-    int splitLightCount = lt_get_lights_split(
-        shadingPos, shadingNormal, mappedNormal, albedoColor,
-        splitThreshold, rng, lightIndices, lightPdfs, min(sampleCount, 8)
-    );
+    LightSample smple = light_sample_decode(float(lightIndex), shadingPos, false);
+    if (smple.index < 0 || smple.weight <= 0.0f) {
+        return reservoir_encode(reservoir_new());
+    }
 
     Reservoir reservoir = reservoir_new();
-
-    // Process lights from adaptive splitting
-    for (int i = 0; i < splitLightCount; i++) {
-        if (lightIndices[i] < 0 || lightPdfs[i] <= 0.0f) continue;
-
-        LightSample smple = light_sample_decode(float(lightIndices[i]), shadingPos, false);
-        if (smple.index < 0 || smple.weight <= 0.0f) continue;
-
-        reservoir_update(reservoir, smple, smple.weight / lightPdfs[i], 1.0f);
-    }
-
-    // Additional pure PickLight samples for remaining budget
-    for (int s = splitLightCount; s < sampleCount; s++) {
-        float xi = float(ph_rand_pcg(rng)) / 4294967295.0f;
-        int lightIndex = -1;
-        float lightPdf = 0.0f;
-
-        if (!lt_pick_light(shadingPos, shadingNormal, mappedNormal, albedoColor, xi, lightIndex, lightPdf)) {
-            continue;
-        }
-        if (lightIndex < 0 || lightPdf <= 0.0f) continue;
-
-        LightSample smple = light_sample_decode(float(lightIndex), shadingPos, false);
-        if (smple.index < 0 || smple.weight <= 0.0f) continue;
-
-        reservoir_update(reservoir, smple, smple.weight / lightPdf, 1.0f);
-    }
+    reservoir_update(reservoir, smple, smple.weight / lightPdf, 1.0f);
 
     return lt_encode_direct_proposal(reservoir);
 }

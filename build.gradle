@@ -60,6 +60,7 @@ loom {
             programArg "quickPlay/log.json"
             vmArg "-Dphotonics.automation.enabled=true"
             vmArg "-Dphotonics.profilerEnabled=true"
+            vmArg "-Dphotonics.debugDisableDenoiser=false"
             vmArg "-Dphotonics.automation.worldName=backup"
             vmArg "-Dphotonics.automation.autoStartWorld=false"
             vmArg "-Dphotonics.automation.startDelayTicks=220"

@@ -18,6 +18,7 @@ import java.util.function.Supplier;
 import net.irisshaders.iris.gl.sampler.SamplerHolder;
 import net.irisshaders.iris.gl.uniform.DynamicUniformHolder;
 import net.irisshaders.iris.pipeline.CompositeRenderer;
+import net.minecraft.client.MinecraftClient;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Vector4f;
 
@@ -149,7 +150,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.reuseResolveFramebuffer = this.createReuseResolveFramebuffer();
       this.directFeatureFramebuffer = this.createDirectFeatureFramebuffer();
       this.directTemporalFramebuffer = this.createDirectTemporalFramebuffer();
-      this.directAntiFireflyFramebuffer = this.createRoutingFramebuffer(() -> this.directAntiFireflyBuffer.getWriteAttachment("data"));
+      this.directAntiFireflyFramebuffer = this.createDirectAntiFireflyFramebuffer();
       this.directHistoryFixFramebuffer = this.createDirectHistoryFixFramebuffer();
       this.directHistoryClampingFramebuffer = this.createDirectHistoryClampingFramebuffer();
       this.directAtrousFramebuffer = this.createDirectAtrousFramebuffer();
@@ -248,14 +249,14 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "direct_history_length_input", () -> this.directHistoryLengthBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "prev_direct_noisy_input", () -> this.directNoisyBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_direct_responsive_input", () -> this.directResponsiveBuffer.getReadAttachment("data"));
-      // Critical: feedback must come from post-clamping buffers, not pre-clamping.
-      // Reference NRD: history clamping writes back to the same buffer that temporal accumulation reads next frame.
-      this.addTextureSampler(samplers, "prev_direct_slow_input", () -> this.directClampedSlowBuffer.getReadAttachment("data"));
+      // RELAX keeps the fast feedback after history clamping, but the permanent slow
+      // history is post-anti-firefly and is what temporal accumulation must read next frame.
+      this.addTextureSampler(samplers, "prev_direct_slow_input", () -> this.directSlowBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_direct_fast_input", () -> this.directClampedFastBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_direct_history_length_input", () -> this.directHistoryLengthBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "direct_firefly_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_historyfix_input", () -> this.directAntiFireflyBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_historyfix_output", () -> this.directSlowBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "direct_firefly_input", () -> this.directClampedSlowBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "direct_historyfix_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "direct_historyfix_output", () -> this.directAntiFireflyBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "nrd_diff_slow_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "nrd_diff_fast_input", () -> this.directFastBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "nrd_diff_noisy_input", () -> this.directNoisyBuffer.getWriteAttachment("data"));
@@ -331,11 +332,11 @@ public class LightTreeRenderer extends MainRenderer {
       long t3 = System.nanoTime();
       this.renderProfiled(directTemporalRegionIndex, this.directTemporalRenderer);
       long t4 = System.nanoTime();
-      this.renderProfiled(directAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
-      long t5 = System.nanoTime();
       this.renderProfiled(directHistoryFixRegionIndex, this.directHistoryFixRenderer);
-      long t6 = System.nanoTime();
+      long t5 = System.nanoTime();
       this.renderProfiled(directHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
+      long t6 = System.nanoTime();
+      this.renderProfiled(directAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
       long t7 = System.nanoTime();
       this.renderDirectAtrousProfiled();
       long t8 = System.nanoTime();
@@ -470,8 +471,12 @@ public class LightTreeRenderer extends MainRenderer {
       );
    }
 
-   private RoutingFramebuffer createDirectHistoryFixFramebuffer() {
+   private RoutingFramebuffer createDirectAntiFireflyFramebuffer() {
       return this.createRoutingFramebuffer(() -> this.directSlowBuffer.getWriteAttachment("data"));
+   }
+
+   private RoutingFramebuffer createDirectHistoryFixFramebuffer() {
+      return this.createRoutingFramebuffer(() -> this.directAntiFireflyBuffer.getWriteAttachment("data"));
    }
 
    private RoutingFramebuffer createDirectHistoryClampingFramebuffer() {
@@ -598,7 +603,7 @@ public class LightTreeRenderer extends MainRenderer {
 
    private TextureObject getCurrentDirectAtrousInputTexture() {
       if (this.directAtrousIteration == 0) {
-         return this.directClampedSlowBuffer.getWriteAttachment("data");
+         return this.directSlowBuffer.getWriteAttachment("data");
       }
       if ((this.directAtrousIteration & 1) == 1) {
          return this.directAtrousPingBuffer.getWriteAttachment("data");
@@ -761,9 +766,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.lastCpuReuseResolveNanos = t2 - t1;
       this.lastCpuDirectFeatureNanos = t3 - t2;
       this.lastCpuDirectTemporalNanos = t4 - t3;
-      this.lastCpuDirectAntiFireflyNanos = t5 - t4;
-      this.lastCpuDirectHistoryFixNanos = t6 - t5;
-      this.lastCpuDirectHistoryClampingNanos = t7 - t6;
+      this.lastCpuDirectHistoryFixNanos = t5 - t4;
+      this.lastCpuDirectHistoryClampingNanos = t6 - t5;
+      this.lastCpuDirectAntiFireflyNanos = t7 - t6;
       this.lastCpuDirectAtrousNanos = t8 - t7;
       this.lastCpuIndirectAccumNanos = t9 - t8;
       this.lastCpuIndirectDenoiseNanos = t10 - t9;
@@ -785,8 +790,13 @@ public class LightTreeRenderer extends MainRenderer {
       LightRegistry lightRegistry = worldRegistry.getLightRegistry();
       LightRegistry.LightTreeDiagnostics diagnostics = lightRegistry.getLightTreeDiagnostics();
       long totalGpuNanos = this.sumNanos(gpuPassNanos);
+      int fbWidth = MinecraftClient.getInstance().getWindow().getFramebufferWidth();
+      int fbHeight = MinecraftClient.getInstance().getWindow().getFramebufferHeight();
+      int renderWidth = Math.round(fbWidth * this.renderScale);
+      int renderHeight = Math.round(fbHeight * this.renderScale);
+      long renderPixels = (long) renderWidth * renderHeight;
       Photonic.info(
-         "[Profiler] LightTree summary: cpuTotal={}us gpuTotal={}us worstCpu={}={}us worstGpu={}={}us reloadActive={} blendFactor={} blendRegions={} tracedLights={}/{} treeNodes={} lastTreeBuildUs={} diagnostics={} stageGeometry={}",
+         "[Profiler] LightTree summary: cpuTotal={}us gpuTotal={}us worstCpu={}={}us worstGpu={}={}us reloadActive={} blendFactor={} blendRegions={} tracedLights={}/{} treeNodes={} lastTreeBuildUs={} viewport={}x{} renderRes={}x{} pixels={} proposalNsPerPixel={} diagnostics={} stageGeometry={}",
          this.toMicros(totalCpuNanos),
          this.toMicros(totalGpuNanos),
          profilerPassNames[worstCpuIndex],
@@ -800,6 +810,10 @@ public class LightTreeRenderer extends MainRenderer {
          lightRegistry.totalLights(),
          lightRegistry.getLightTreeNodeCount(),
          lightRegistry.getLastTreeBuildNanos() / 1000L,
+         fbWidth, fbHeight,
+         renderWidth, renderHeight,
+         renderPixels,
+         renderPixels > 0 ? (gpuPassNanos[proposalSamplingRegionIndex] / renderPixels) : 0,
          diagnostics.describe(),
          this.describeStageGeometryUsage()
       );
@@ -832,6 +846,12 @@ public class LightTreeRenderer extends MainRenderer {
       long indirectTotal = gpuPassNanos[indirectAccumRegionIndex]
          + gpuPassNanos[indirectDenoiseRegionIndex]
          + gpuPassNanos[indirectRegionIndex];
+      LightRegistry lightRegistry = this.worldRegistry.getLightRegistry();
+      int fbWidth = MinecraftClient.getInstance().getWindow().getFramebufferWidth();
+      int fbHeight = MinecraftClient.getInstance().getWindow().getFramebufferHeight();
+      int renderWidth = Math.round(fbWidth * this.renderScale);
+      int renderHeight = Math.round(fbHeight * this.renderScale);
+      long renderPixels = (long) renderWidth * renderHeight;
       Photonic.info(
          "[Profiler] LightTree GPU passes: proposalSampling={}us reuseResolve={}us directFeatureExtract={}us directTemporal={}us directAntiFirefly={}us directHistoryFix={}us directHistoryClamping={}us directAtrous={}us indirectAccum={}us indirectDenoise={}us accumulation={}us indirect={}us",
          this.toMicros(gpuPassNanos[proposalSamplingRegionIndex]),
@@ -855,6 +875,23 @@ public class LightTreeRenderer extends MainRenderer {
          this.formatShare(directTotal, gpuPassNanos),
          this.formatShare(denoiseTotal, gpuPassNanos),
          this.formatShare(indirectTotal, gpuPassNanos)
+      );
+      // Per-pixel and per-traversal derived metrics for bottleneck analysis
+      int treeNodes = lightRegistry.getLightTreeNodeCount();
+      int treeDepth = treeNodes > 1 ? (int) Math.ceil(Math.log(treeNodes) / Math.log(2)) : 1;
+      long proposalNs = gpuPassNanos[proposalSamplingRegionIndex];
+      long reuseNs = gpuPassNanos[reuseResolveRegionIndex];
+      long denoiseNs = denoiseTotal;
+      long indirectNs = indirectTotal;
+      Photonic.info(
+         "[Profiler] LightTree per-pixel: proposalNspp={}ns reuseNspp={}ns denoiseNspp={}ns indirectNspp={}ns treeDepth={} estTraversalNs={}ns estNodeVisitNs={}ns",
+         renderPixels > 0 ? proposalNs / renderPixels : 0,
+         renderPixels > 0 ? reuseNs / renderPixels : 0,
+         renderPixels > 0 ? denoiseNs / renderPixels : 0,
+         renderPixels > 0 ? indirectNs / renderPixels : 0,
+         treeDepth,
+         renderPixels > 0 && treeDepth > 0 ? proposalNs / renderPixels / 4 : 0,
+         renderPixels > 0 && treeDepth > 0 ? proposalNs / renderPixels / 4 / treeDepth : 0
       );
       this.logDirectAtrousBreakdown();
    }

@@ -10,7 +10,7 @@ layout(location = 0) out vec4 direct_historyfix_out;
 uniform sampler2D direct_historyfix_input;
 uniform sampler2D nrd_history_length_tex;
 
-const float direct_history_fix_frame_num = 3.0;
+const float direct_history_fix_frame_num = 4.0;
 const float direct_history_fix_base_stride = 14.0;
 const float direct_history_fix_normal_power = 8.0;
 const float direct_depth_threshold = 0.003;

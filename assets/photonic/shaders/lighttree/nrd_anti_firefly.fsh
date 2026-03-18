@@ -13,7 +13,7 @@ void main() {
     vec4 center = texelFetch(direct_firefly_input, tex_coord, 0);
     float centerLuma = nrd_luminance(center.rgb);
 
-    vec4 centerMaterial = texelFetch(radiosity_material, tex_coord, 0);
+    vec4 centerMaterial = texelFetch(stage_radiosity_material, tex_coord, 0);
 
     float maxLuma = -1.0;
     float minLuma = 1.0e6;
@@ -28,7 +28,7 @@ void main() {
 
             ivec2 sampleCoord = tex_coord + ivec2(dx, dy);
             if (any(lessThan(sampleCoord, ivec2(0))) || any(greaterThanEqual(sampleCoord, texSize))) continue;
-            vec4 sampleMaterial = texelFetch(radiosity_material, sampleCoord, 0);
+            vec4 sampleMaterial = texelFetch(stage_radiosity_material, sampleCoord, 0);
             if (nrd_material_weight(centerMaterial, sampleMaterial) <= 0.5) continue;
             float sampleLuma = nrd_luminance(texelFetch(direct_firefly_input, sampleCoord, 0).rgb);
 

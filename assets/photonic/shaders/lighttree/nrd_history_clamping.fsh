@@ -16,7 +16,7 @@ uniform sampler2D nrd_history_length_tex;
 
 const float nrd_fast_history_clamping_sigma_scale = 2.0;
 const float nrd_history_acceleration_amount = 0.3;
-const float nrd_history_fix_frame_num = 3.0;
+const float nrd_history_fix_frame_num = 4.0;
 const float nrd_history_reset_amount = 0.5;
 const float nrd_history_reset_temporal_sigma_scale = 0.5;
 const float nrd_history_reset_spatial_sigma_scale = 4.5;

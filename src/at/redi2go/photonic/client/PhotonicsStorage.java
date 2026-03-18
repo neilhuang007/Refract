@@ -89,6 +89,7 @@ public final class PhotonicsStorage {
 
    public static void applySystemPropertyOverrides() {
       applyBooleanSystemPropertyOverride("photonics.profilerEnabled", PROFILER_ENABLED);
+      applyBooleanSystemPropertyOverride("photonics.debugDisableDenoiser", DEBUG_DISABLE_DENOISER);
    }
 
    private static void applyBooleanSystemPropertyOverride(String key, Parameter<Boolean> parameter) {

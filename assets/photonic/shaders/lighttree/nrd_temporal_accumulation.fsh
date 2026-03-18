@@ -17,9 +17,9 @@ uniform sampler2D prev_direct_responsive_input;
 uniform sampler2D prev_direct_slow_input;
 uniform sampler2D prev_direct_fast_input;
 
-const float direct_max_history = 30.0;
-const float direct_max_fast_history = 6.0;
-const float direct_min_history = 1.0;
+const float direct_max_accumulated_frame_num = 30.0;
+const float direct_max_fast_accumulated_frame_num = 6.0;
+const float direct_max_history_length = direct_max_accumulated_frame_num + 1.0;
 const float direct_depth_threshold = 0.01;
 const float direct_normal_threshold = 0.9;
 
@@ -66,30 +66,6 @@ float direct_check_tap(ivec2 tapCoord, ivec2 texSize,
     return 1.0;
 }
 
-// ReBLUR-inspired history limit: uses parallax (angular viewing direction change)
-// instead of ad-hoc screen-space motion length.
-// - Pure camera rotation: parallax ≈ 0 → full history (diffuse is view-independent)
-// - Camera translation near surfaces: high parallax → short history (fast response)
-// - Camera translation far from surfaces: low parallax → long history (stable)
-float direct_compute_history_limit(vec4 materialData, float parallax) {
-    float roughness = clamp(materialData.x, 0.0, 1.0);
-    float metallic = clamp(materialData.y, 0.0, 1.0);
-    float emission = clamp(materialData.z, 0.0, 1.0);
-
-    // ReBLUR Listing 49-4 adapted for diffuse: parallax directly scales max frames.
-    // Sensitivity = 3.0 means parallax of ~0.33 (≈ 19° viewing angle change) halves the limit.
-    float parallaxScale = 1.0 / (1.0 + parallax * 3.0);
-
-    float specularSensitivity = mix(1.0, 0.45, metallic);
-    float roughnessScale = mix(0.35, 1.0, roughness * roughness);
-    float emissiveScale = mix(1.0, 0.7, emission);
-    return clamp(direct_max_history * specularSensitivity * roughnessScale * emissiveScale * parallaxScale, 2.0, direct_max_history);
-}
-
-float direct_compute_fast_history_limit(float historyLimit) {
-    return min(historyLimit, direct_max_fast_history);
-}
-
 void direct_reset_outputs() {
     direct_noisy_out = vec4(0.0);
     direct_responsive_out = vec4(0.0);
@@ -106,7 +82,7 @@ void main() {
 
     // --- Setup: fetch current frame data ---
     NrdDirectSignal currentDirect = nrd_unpack_direct_signal(texelFetch(stage_radiosity_direct, tex_coord, 0));
-    vec4 currentMaterial = texelFetch(radiosity_material, tex_coord, 0);
+    vec4 currentMaterial = texelFetch(stage_radiosity_material, tex_coord, 0);
     vec3 currentPosition = texelFetch(stage_radiosity_position, tex_coord, 0).xyz;
     vec3 currentGeometryNormal = texelFetch(stage_radiosity_normal, tex_coord, 0).xyz;
     vec3 currentNormal = nrd_select_surface_normal(
@@ -237,7 +213,6 @@ void main() {
     vec4 slowSignal = noisySignal;
     vec4 fastSignal = noisySignal;
 
-    float historyLimit = direct_compute_history_limit(currentMaterial, parallax);
     float historyLength = 1.0;
 
     if (!temporalReset && canReproject) {
@@ -268,7 +243,7 @@ void main() {
         }
 
         float decodedPrevHistory = nrd_decoded_history(prevHistoryVec);
-        historyLength = min(decodedPrevHistory + 1.0, direct_max_history);
+        historyLength = min(decodedPrevHistory + 1.0, direct_max_history_length);
 
         // NRD RELAX footprint quality shortening (lines 567-572):
         // Partial footprints accumulate less history to prevent ghosting.
@@ -277,13 +252,8 @@ void main() {
             historyLength = max(historyLength, 1.0);
         }
 
-        // Cap by material/parallax-based limit
-        historyLength = min(historyLength, historyLimit);
-
-        float fastHistoryLimit = direct_compute_fast_history_limit(historyLimit);
-        float slowAlpha = max(1.0 / (historyLimit + 1.0), 1.0 / historyLength);
-        float fastHistory = min(decodedPrevHistory + 1.0, fastHistoryLimit);
-        float fastAlpha = max(1.0 / (fastHistoryLimit + 1.0), 1.0 / fastHistory);
+        float slowAlpha = max(1.0 / (direct_max_accumulated_frame_num + 1.0), 1.0 / historyLength);
+        float fastAlpha = max(1.0 / (direct_max_fast_accumulated_frame_num + 1.0), 1.0 / historyLength);
 
         slowSignal = nrd_mix_direct_history(prevSlow, currentHistory, slowAlpha);
         fastSignal = nrd_mix_direct_history(prevFast, currentHistory, fastAlpha);
