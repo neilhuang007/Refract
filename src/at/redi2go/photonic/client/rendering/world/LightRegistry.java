@@ -53,8 +53,11 @@ import org.joml.Vector3f;
 
 public class LightRegistry implements Destructable {
    private static final int LIGHT_BYTE_SIZE = 64;
-   private static final float MIN_NODE_LUMINANCE = 0.001F;
    private static final int GRID_CELL_SIZE = 32;
+   private static final float REGIR_CELL_RADIUS = (float)(Math.sqrt(3.0) * GRID_CELL_SIZE);
+   private static final int REGIR_MAX_LIGHTS_PER_CELL_FALLBACK = 16;
+   // RTXDI default from ReGIR.h:141 = 8 build samples per cell slot
+   private static final int REGIR_BUILD_SAMPLES = 8;
    private static final int INCREMENTAL_PARALLEL_THRESHOLD = 32;
    private static final float MIN_TRACED_LIGHT_SELECTION_LUMA = 0.0025F;
    private static final Comparator<LightInstance> STABLE_LIGHT_ORDER = (a, b) -> {
@@ -155,22 +158,27 @@ public class LightRegistry implements Destructable {
 
    private final GlMemoryManager lightsMemoryManager;
    private final MemoryOwner lightsMemory;
+   private final GlMemoryManager previousLightsMemoryManager;
+   private final SimpleMemoryOwner previousLightsMemory;
    private final GlMemoryManager lightMappingMemoryManager;
    private final MemoryOwner lightMappingMemory;
-   private final GlMemoryManager lightTreeMemoryManager;
-   private final MemoryOwner lightTreeMemory;
-   private final GlMemoryManager lightTreeIndicesMemoryManager;
-   private final MemoryOwner lightTreeIndicesMemory;
+   private final GlMemoryManager lightReverseMappingMemoryManager;
+   private final MemoryOwner lightReverseMappingMemory;
+   private final GlMemoryManager globalLightCdfMemoryManager;
+   private final MemoryOwner globalLightCdfMemory;
+   private final GlMemoryManager regirCellCountMemoryManager;
+   private final MemoryOwner regirCellCountMemory;
+   private final GlMemoryManager regirLightIndexMemoryManager;
+   private final MemoryOwner regirLightIndexMemory;
+   private final GlMemoryManager regirLightPdfMemoryManager;
+   private final MemoryOwner regirLightPdfMemory;
    private final int maxLights;
-   private final int maxLightsPerNode;
-   private final int nodeSize;
-   private final int worldSize;
-   private final int nodeCount;
+   private final int regirGridResolution;
+   private final int regirCellCount;
+   private final int regirLightsPerCell;
    private short[] newLightIndices;
    private PBlockPos offset = new PBlockPos(0, 0, 0);
    private int lightCount = 0;
-   private int lightTreeNodeCount = 0;
-   private int lightTreeIndexCount = 0;
    private LightInstance[] tracedLights = new LightInstance[0];
    private final Map<Vector3f, TracedLightPosition> tracedLightPositions = new ConcurrentHashMap<>();
    private final Set<Long> loadedLightChunks = ConcurrentHashMap.newKeySet();
@@ -185,35 +193,58 @@ public class LightRegistry implements Destructable {
    private int lightGridAssignments = 0;
    private final LightChurnStats churnStats = new LightChurnStats();
    private boolean identityLightMappingPending = false;
+   private int regirActiveCellCount = 0;
+   private int regirActiveLightSlotCount = 0;
+   // RTXDI: stores the center of the grid (= camera position, snapped to cell boundaries).
+   // The origin is derived in the shader as: origin = center - vec3(gridRes) * cellSize * 0.5
+   private final Vector3f regirGridCenter = new Vector3f();
    private boolean loggedAutomationLightColors = false;
    private boolean lastCompileTopologyResetRecommended = true;
    private int pendingTracedLightMutations = 0;
-   private LightTreeDiagnostics lightTreeDiagnostics = LightTreeDiagnostics.empty();
-   private int lightTreeRebuildCount = 0;
-   private int lastLightTreeRebuildCompileCount = -1;
-   private long lastTreeBuildNanos = 0;
+   private volatile boolean gpuRegirBuildEnabled = false;
+   private float[] lightPowers = new float[0];
 
    public LightRegistry(int maxLights, int maxLightsPerNode, float minTracedLightSelectionLuma, int nodeSize, int worldSize) {
       if (16 % nodeSize != 0) {
          throw new IllegalArgumentException();
       }
       this.maxLights = maxLights;
-      this.maxLightsPerNode = maxLightsPerNode;
-      this.nodeSize = nodeSize;
-      this.worldSize = worldSize;
-      this.nodeCount = worldSize / nodeSize;
+      this.regirLightsPerCell = Math.max(1, maxLightsPerNode > 0 ? maxLightsPerNode : REGIR_MAX_LIGHTS_PER_CELL_FALLBACK);
+      this.regirGridResolution = Math.max(1, worldSize / GRID_CELL_SIZE);
+      this.regirCellCount = this.regirGridResolution * this.regirGridResolution * this.regirGridResolution;
       this.newLightIndices = new short[maxLights];
       this.lightsMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list", maxLights * LIGHT_BYTE_SIZE + 4, true);
       this.lightsMemory = new SimpleMemoryOwner(this.lightsMemoryManager, this.lightsMemoryManager.getCapacity());
+      this.previousLightsMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list_previous", maxLights * LIGHT_BYTE_SIZE + 4, true);
+      this.previousLightsMemory = new SimpleMemoryOwner(this.previousLightsMemoryManager, this.previousLightsMemoryManager.getCapacity());
       this.lightMappingMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list_mapping", maxLights * 4, false);
       this.lightMappingMemory = new SimpleMemoryOwner(this.lightMappingMemoryManager, this.lightMappingMemoryManager.getCapacity());
-      int maxTreeNodes = Math.max(2 * maxLights, 1);
-      int treeByteSize = maxTreeNodes * 16 * Float.BYTES;
-      this.lightTreeMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_tree", treeByteSize, false);
-      this.lightTreeMemory = new SimpleMemoryOwner(this.lightTreeMemoryManager, this.lightTreeMemoryManager.getCapacity());
-      int indexByteSize = Math.max(maxLights, 1) * Integer.BYTES;
-      this.lightTreeIndicesMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_tree_indices", indexByteSize, false);
-      this.lightTreeIndicesMemory = new SimpleMemoryOwner(this.lightTreeIndicesMemoryManager, this.lightTreeIndicesMemoryManager.getCapacity());
+      this.lightReverseMappingMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_reverse_mapping", maxLights * 4, false);
+      this.lightReverseMappingMemory = new SimpleMemoryOwner(this.lightReverseMappingMemoryManager, this.lightReverseMappingMemoryManager.getCapacity());
+      this.globalLightCdfMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_global_light_cdf", maxLights * Float.BYTES, false);
+      this.globalLightCdfMemory = new SimpleMemoryOwner(this.globalLightCdfMemoryManager, this.globalLightCdfMemoryManager.getCapacity());
+      this.regirCellCountMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_regir_cell_counts", this.regirCellCount * Integer.BYTES, false);
+      this.regirCellCountMemory = new SimpleMemoryOwner(this.regirCellCountMemoryManager, this.regirCellCountMemoryManager.getCapacity());
+      // GPU build path writes uvec2 (8 bytes/slot) to the output buffer.
+      // Allocate 8 bytes per slot so both the CPU path (int index + float pdf) and the
+      // GPU path (uvec2) fit.  The CPU path only writes the first 4 bytes of each pair,
+      // but the GPU path writes both; the per-pixel shader reads uvec2.
+      this.regirLightIndexMemoryManager = new GlMemoryManager(
+         GlTarget.SSBO,
+         "ph_regir_light_indices",
+         this.regirCellCount * this.regirLightsPerCell * 8, // 8 bytes per slot (uvec2)
+         false
+      );
+      this.regirLightIndexMemory = new SimpleMemoryOwner(this.regirLightIndexMemoryManager, this.regirLightIndexMemoryManager.getCapacity());
+      // PDF buffer is retained for the CPU-side (non-GPU) build path only.
+      // When GPU build is active it is unused; kept to avoid breaking existing CPU code paths.
+      this.regirLightPdfMemoryManager = new GlMemoryManager(
+         GlTarget.SSBO,
+         "ph_regir_light_pdfs",
+         this.regirCellCount * this.regirLightsPerCell * Float.BYTES,
+         false
+      );
+      this.regirLightPdfMemory = new SimpleMemoryOwner(this.regirLightPdfMemoryManager, this.regirLightPdfMemoryManager.getCapacity());
       this.lightListObserver = PhotonicsConfig.observe(c -> PhotonicsConfig.getLightList(), c -> {
          this.lightList = c;
          this.registerLightBlocks(this.lightList);
@@ -272,7 +303,6 @@ public class LightRegistry implements Destructable {
       long tGather = t0;
       long tDiff = t0;
       long tGrid = t0;
-      long tNodes = t0;
       long tStore = t0;
       int previousLightCount = this.tracedLights.length;
       boolean offsetChanged = !blockOffset.equals(previousOffset);
@@ -299,26 +329,41 @@ public class LightRegistry implements Destructable {
          if (profiling) {
             tDiff = System.nanoTime();
          }
-         if (lightsChanged || this.lightGrid == null) {
+         boolean rebuildSpatialGrid = lightsChanged || this.lightGrid == null;
+         if (rebuildSpatialGrid) {
             this.buildSpatialGrid(this.tracedLights);
          }
          if (profiling) {
             tGrid = System.nanoTime();
-            tNodes = tGrid;
+         }
+
+         boolean regirDirty = rebuildSpatialGrid || offsetChanged;
+         if (regirDirty && !this.gpuRegirBuildEnabled) {
+            this.buildRegirGrid();
+         } else if (regirDirty) {
+            this.updateRegirGridOriginOnly();
          }
 
          boolean identityQueued = false;
          if (lightsChanged) {
+            this.copyCurrentLightsToPrevious();
             this.storeLights();
             this.storeLightMappings();
-            this.buildLightTree();
+            this.storeLightReverseMappings();
+            this.storeGlobalLightCdf();
             this.lightsMemoryManager.queueUpload(this.lightsMemory);
+            this.previousLightsMemoryManager.queueUpload(this.previousLightsMemory);
             this.lightMappingMemoryManager.queueUpload(this.lightMappingMemory);
-            this.lightTreeMemoryManager.queueUpload(this.lightTreeMemory);
-            this.lightTreeIndicesMemoryManager.queueUpload(this.lightTreeIndicesMemory);
+            this.lightReverseMappingMemoryManager.queueUpload(this.lightReverseMappingMemory);
+            this.globalLightCdfMemoryManager.queueUpload(this.globalLightCdfMemory);
             this.identityLightMappingPending = true;
          } else {
             identityQueued = this.queueIdentityLightMappingsIfNeeded();
+         }
+         if (regirDirty && !this.gpuRegirBuildEnabled) {
+            this.regirCellCountMemoryManager.queueUpload(this.regirCellCountMemory);
+            this.regirLightIndexMemoryManager.queueUpload(this.regirLightIndexMemory);
+            this.regirLightPdfMemoryManager.queueUpload(this.regirLightPdfMemory);
          }
          if (profiling) {
             tStore = System.nanoTime();
@@ -336,10 +381,9 @@ public class LightRegistry implements Destructable {
             long gatherMs = (tGather - t0) / 1_000_000L;
             long diffMs = (tDiff - tGather) / 1_000_000L;
             long gridMs = (tGrid - tDiff) / 1_000_000L;
-            long nodesMs = (tNodes - tGrid) / 1_000_000L;
-            long storeMs = (tStore - tNodes) / 1_000_000L;
+            long storeMs = (tStore - tGrid) / 1_000_000L;
             Photonic.info(
-               "[Profiler] lightRegistry: reason={} prevLights={} gatheredLights={} tracedLights={} changed={} offsetChanged={} gridCells={} gridAssignments={} churn={} uploads(lights={},mapping={},identity={}) timings: gather={}ms diff={}ms grid={}ms nodes={}ms store={}ms total={}ms",
+               "[Profiler] lightRegistry: reason={} prevLights={} gatheredLights={} tracedLights={} changed={} offsetChanged={} gridCells={} gridAssignments={} churn={} uploads(lights={},mapping={},regir={},identity={}) timings: gather={}ms diff={}ms grid={}ms store={}ms total={}ms",
                rebuildReason,
                previousLightCount,
                lights.length,
@@ -351,22 +395,24 @@ public class LightRegistry implements Destructable {
                this.describeRecentChurn(),
                lightsChanged,
                lightsChanged,
+               regirDirty,
                identityQueued,
                gatherMs,
                diffMs,
                gridMs,
-               nodesMs,
                storeMs,
                totalMs
             );
             if (lightsChanged) {
                Photonic.info(
-                  "[Profiler] treeRebuild: lights={} nodes={} indices={} buildTimeUs={} rebuilds={} compileCount={} churn={}",
+                  "[Profiler] regirBuild: lights={} activeCells={} lightSlots={} gridResolution={}x{}x{} cellSize={} compileCount={} churn={}",
                   this.tracedLights.length,
-                  this.lightTreeNodeCount,
-                  this.lightTreeIndexCount,
-                  this.lastTreeBuildNanos / 1000L,
-                  this.lightTreeRebuildCount,
+                  this.regirActiveCellCount,
+                  this.regirActiveLightSlotCount,
+                  this.regirGridResolution,
+                  this.regirGridResolution,
+                  this.regirGridResolution,
+                  GRID_CELL_SIZE,
                   this.compileCount,
                   this.describeRecentChurn()
                );
@@ -375,6 +421,19 @@ public class LightRegistry implements Destructable {
       } finally {
          this.building = false;
       }
+   }
+
+   private void copyCurrentLightsToPrevious() {
+      java.nio.ByteBuffer src = this.lightsMemory.getMemory().getBuffer();
+      java.nio.ByteBuffer dst = this.previousLightsMemory.getMemory().getBuffer();
+      int copyLength = Math.min(src.capacity(), dst.capacity());
+      src.rewind();
+      dst.rewind();
+      for (int i = 0; i < copyLength; i++) {
+         dst.put(src.get());
+      }
+      src.rewind();
+      dst.rewind();
    }
 
    private void storeLights() {
@@ -429,8 +488,7 @@ public class LightRegistry implements Destructable {
                dli.getAttenuationAsVector().x, dli.getAttenuationAsVector().y, dli.falloff(), dli.radiusInBlocks()
             ));
          }
-         Photonic.info("[LightDebug] tracedLights={} treeNodes={} treeIndices={} lights:{}",
-            this.tracedLights.length, this.lightTreeNodeCount, this.lightTreeIndexCount, debugLights);
+         Photonic.info("[LightDebug] tracedLights={} lights:{}", this.tracedLights.length, debugLights);
       }
       if (colorSum != null && this.tracedLights.length > 0) {
          colorSum.div((float) this.tracedLights.length);
@@ -451,6 +509,55 @@ public class LightRegistry implements Destructable {
       }
    }
 
+   private void storeLightReverseMappings() {
+      // Build reverse mapping: reverseMapping[currentIndex] = previousIndex.
+      // newLightIndices[previousIndex] = currentIndex (the forward mapping).
+      // Initialize all entries to -1 (no mapping).
+      IntBuffer buffer = this.lightReverseMappingMemory.getMemory().getBuffer().asIntBuffer();
+      for (int i = 0; i < this.maxLights; i++) {
+         buffer.put(i, -1);
+      }
+      for (int previousIndex = 0; previousIndex < this.maxLights; previousIndex++) {
+         int currentIndex = this.newLightIndices[previousIndex];
+         if (currentIndex >= 0 && currentIndex < this.maxLights) {
+            buffer.put(currentIndex, previousIndex);
+         }
+      }
+   }
+
+   private void storeGlobalLightCdf() {
+      FloatBuffer buffer = this.globalLightCdfMemory.getMemory().getBuffer().asFloatBuffer();
+      int tracedCount = this.tracedLights.length;
+      this.lightPowers = new float[tracedCount];
+      float cumulativeWeight = 0.0F;
+      boolean hasPositiveWeight = false;
+      for (int i = 0; i < this.maxLights; i++) {
+         if (i < tracedCount) {
+            float weight = Math.max(selectionSourceScore(this.tracedLights[i]), 0.0F);
+            if (weight > 1.0e-6F) {
+               cumulativeWeight += weight;
+               hasPositiveWeight = true;
+            }
+            this.lightPowers[i] = weight;
+         }
+         buffer.put(i, cumulativeWeight);
+      }
+
+      if (hasPositiveWeight || tracedCount <= 0) {
+         return;
+      }
+
+      // Fallback: uniform weights when all source scores are zero
+      cumulativeWeight = 0.0F;
+      for (int i = 0; i < this.maxLights; i++) {
+         if (i < tracedCount) {
+            cumulativeWeight += 1.0F;
+            this.lightPowers[i] = 1.0F;
+         }
+         buffer.put(i, cumulativeWeight);
+      }
+   }
+
    private void storeIdentityLightMappings() {
       IntBuffer buffer = this.lightMappingMemory.getMemory().getBuffer().asIntBuffer();
       for (int i = 0; i < this.maxLights; i++) {
@@ -458,57 +565,193 @@ public class LightRegistry implements Destructable {
       }
    }
 
-   private void buildLightTree() {
-      this.lightTreeNodeCount = 0;
-      this.lightTreeIndexCount = 0;
-      this.lightTreeDiagnostics = LightTreeDiagnostics.empty();
-      this.lastTreeBuildNanos = 0;
-      if (this.tracedLights.length == 0) {
+   private void updateRegirGridOriginOnly() {
+      // Camera position (offset) is the center of the grid.
+      // Snap to cell-boundary multiples so the grid is stable across small camera movements.
+      int centerCellX = (int) Math.round((double) this.offset.x / GRID_CELL_SIZE) * GRID_CELL_SIZE;
+      int centerCellY = (int) Math.round((double) this.offset.y / GRID_CELL_SIZE) * GRID_CELL_SIZE;
+      int centerCellZ = (int) Math.round((double) this.offset.z / GRID_CELL_SIZE) * GRID_CELL_SIZE;
+      this.regirGridCenter.set(centerCellX, centerCellY, centerCellZ);
+   }
+
+   private void buildRegirGrid() {
+      IntBuffer cellCountBuffer = this.regirCellCountMemory.getMemory().getBuffer().asIntBuffer();
+      IntBuffer lightIndexBuffer = this.regirLightIndexMemory.getMemory().getBuffer().asIntBuffer();
+      FloatBuffer lightPdfBuffer = this.regirLightPdfMemory.getMemory().getBuffer().asFloatBuffer();
+      for (int i = 0; i < this.regirCellCount; i++) {
+         cellCountBuffer.put(i, 0);
+      }
+      int totalSlots = this.regirCellCount * this.regirLightsPerCell;
+      for (int i = 0; i < totalSlots; i++) {
+         lightIndexBuffer.put(i, -1);
+         lightPdfBuffer.put(i, 0.0F);
+      }
+
+      // RTXDI: gridCenter = camera position (snapped to cell boundary).
+      // Origin is derived in the shader; here we compute it for the CPU-side spatial grid lookup.
+      int centerCellX = (int) Math.round((double) this.offset.x / GRID_CELL_SIZE) * GRID_CELL_SIZE;
+      int centerCellY = (int) Math.round((double) this.offset.y / GRID_CELL_SIZE) * GRID_CELL_SIZE;
+      int centerCellZ = (int) Math.round((double) this.offset.z / GRID_CELL_SIZE) * GRID_CELL_SIZE;
+      this.regirGridCenter.set(centerCellX, centerCellY, centerCellZ);
+      // Derive origin for CPU-side cell iteration (mirrors shader derivation)
+      float halfExtent = this.regirGridResolution * GRID_CELL_SIZE * 0.5f;
+      int originCellX = Math.round((centerCellX - halfExtent) / GRID_CELL_SIZE);
+      int originCellY = Math.round((centerCellY - halfExtent) / GRID_CELL_SIZE);
+      int originCellZ = Math.round((centerCellZ - halfExtent) / GRID_CELL_SIZE);
+      this.regirActiveCellCount = 0;
+      this.regirActiveLightSlotCount = 0;
+
+      if (this.lightGrid == null || this.lightGrid.isEmpty() || this.tracedLights.length == 0) {
          return;
       }
 
-      long t0 = System.nanoTime();
-      LightTreeBuilder builder = new LightTreeBuilder(this.tracedLights);
-      this.lightTreeNodeCount = builder.build();
-      this.lightTreeIndexCount = builder.getLeafIndexCount();
-      if (this.lightTreeNodeCount == 0) {
-         this.lastTreeBuildNanos = System.nanoTime() - t0;
-         return;
-      }
+      Vector3f cellCenter = new Vector3f();
+      for (int z = 0; z < this.regirGridResolution; z++) {
+         for (int y = 0; y < this.regirGridResolution; y++) {
+            for (int x = 0; x < this.regirGridResolution; x++) {
+               List<Integer> cellLights = this.lightGrid.get(gridKey(originCellX + x, originCellY + y, originCellZ + z));
+               if (cellLights == null || cellLights.isEmpty()) {
+                  continue;
+               }
 
-      this.storeLightTreeNodes(builder);
-      this.storeLightTreeIndices(builder);
-      this.lightTreeRebuildCount++;
-      this.lastLightTreeRebuildCompileCount = this.compileCount;
-      this.lastTreeBuildNanos = System.nanoTime() - t0;
-      this.lightTreeDiagnostics = LightTreeDiagnostics.fromBuild(builder, this.lightTreeRebuildCount, this.lastLightTreeRebuildCompileCount, this.lastTreeBuildNanos);
+               cellCenter.set(
+                  (float)(originCellX * GRID_CELL_SIZE) + (x + 0.5F) * GRID_CELL_SIZE,
+                  (float)(originCellY * GRID_CELL_SIZE) + (y + 0.5F) * GRID_CELL_SIZE,
+                  (float)(originCellZ * GRID_CELL_SIZE) + (z + 0.5F) * GRID_CELL_SIZE
+               );
+
+               int cellIndex = x + this.regirGridResolution * (y + this.regirGridResolution * z);
+               int bufferOffset = cellIndex * this.regirLightsPerCell;
+               int count = 0;
+               for (int slot = 0; slot < this.regirLightsPerCell; slot++) {
+                  // Keep the ReGIR cell contents stable while the traced-light set and
+                  // camera-relative grid cell stay the same. compileCount-driven slot
+                  // churn destabilizes DI history because the same camera pose ends up
+                  // seeing a different presampled cell every rebuild.
+                  long seed = (((long) cellIndex) << 32)
+                     ^ (((long) slot + 1L) * 0x9E3779B97F4A7C15L);
+                  WeightedLightSelection selection = sampleRegirCellLight(cellLights, this.tracedLights, cellCenter, REGIR_CELL_RADIUS, seed);
+                  if (selection.lightIndex() < 0 || selection.invSourcePdf() <= 0.0F) {
+                     continue;
+                  }
+
+                  lightIndexBuffer.put(bufferOffset + count, selection.lightIndex());
+                  lightPdfBuffer.put(bufferOffset + count, selection.invSourcePdf());
+                  count++;
+               }
+
+               if (count <= 0) {
+                  continue;
+               }
+
+               cellCountBuffer.put(cellIndex, count);
+
+               this.regirActiveCellCount++;
+               this.regirActiveLightSlotCount += count;
+            }
+         }
+      }
    }
 
-   private void storeLightTreeNodes(LightTreeBuilder builder) {
-      this.validateLightTreeCapacity(builder.getNodeDataLength() * Float.BYTES, this.lightTreeMemoryManager.getCapacity(), "node");
-      FloatBuffer buffer = this.lightTreeMemory.getMemory().getBuffer().asFloatBuffer();
-      int floatCount = builder.getNodeDataLength();
-      for (int i = 0; i < floatCount; i++) {
-         buffer.put(i, builder.getNodeData()[i]);
+   private static WeightedLightSelection sampleRegirCellLight(
+      List<Integer> cellLights,
+      LightInstance[] tracedLights,
+      Vector3f cellCenter,
+      float cellRadius,
+      long seed
+   ) {
+      if (cellLights.isEmpty()) {
+         return new WeightedLightSelection(-1, 0.0F);
       }
+
+      int proposalCount = Math.max(1, REGIR_BUILD_SAMPLES);
+      int cellLightCount = Math.max(cellLights.size(), 1);
+      float invNumSamples = 1.0F / proposalCount;
+      float invSourcePdf = cellLightCount * invNumSamples;
+      float weightSum = 0.0F;
+      int selectedLightIndex = -1;
+      float selectedTargetPdf = 0.0F;
+
+      for (int sampleIndex = 0; sampleIndex < proposalCount; sampleIndex++) {
+         long sampleSeed = seed ^ (((long) sampleIndex + 1L) * 0xD1B54A32D192ED03L);
+         int cellSlot = Math.min(cellLights.size() - 1, (int) (regirHashUnitFloat(sampleSeed) * cellLights.size()));
+         int lightIndex = cellLights.get(cellSlot);
+         if (lightIndex < 0 || lightIndex >= tracedLights.length) {
+            continue;
+         }
+
+         float targetPdf = regirCellImportance(tracedLights[lightIndex], cellCenter, cellRadius);
+         if (targetPdf <= 0.0F) {
+            continue;
+         }
+
+         float risWeight = targetPdf * invSourcePdf;
+         weightSum += risWeight;
+         float risRandom = regirHashUnitFloat(sampleSeed ^ 0x9E3779B97F4A7C15L);
+         if (risRandom * weightSum <= risWeight) {
+            selectedLightIndex = lightIndex;
+            selectedTargetPdf = targetPdf;
+         }
+      }
+
+      if (selectedLightIndex < 0 || selectedTargetPdf <= 1.0e-6F || weightSum <= 1.0e-6F) {
+         return new WeightedLightSelection(-1, 0.0F);
+      }
+
+      return new WeightedLightSelection(selectedLightIndex, Math.max(weightSum / selectedTargetPdf, 1.0e-6F));
    }
 
-   private void storeLightTreeIndices(LightTreeBuilder builder) {
-      this.validateLightTreeCapacity(builder.getLeafIndexCount() * Integer.BYTES, this.lightTreeIndicesMemoryManager.getCapacity(), "index");
-      IntBuffer buffer = this.lightTreeIndicesMemory.getMemory().getBuffer().asIntBuffer();
-      int indexCount = builder.getLeafIndexCount();
-      for (int i = 0; i < indexCount; i++) {
-         buffer.put(i, builder.getLeafIndices()[i]);
+   private static float regirCellImportance(LightInstance light, Vector3f cellCenter, float cellRadius) {
+      BlockLightInfo lightInfo = light.type();
+      Vector3f lightPosition = light.position();
+      float dx = cellCenter.x - lightPosition.x;
+      float dy = cellCenter.y - lightPosition.y;
+      float dz = cellCenter.z - lightPosition.z;
+      float distance = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+      float averageDistance = regirAverageDistanceToVolume(distance, cellRadius);
+      float dirX = distance > 1.0e-4F ? dx / distance : 0.0F;
+      float dirY = distance > 1.0e-4F ? dy / distance : 0.0F;
+      float dirZ = distance > 1.0e-4F ? dz / distance : 1.0F;
+
+      float shaping = 1.0F;
+      float spread = lightInfo.orientationSpread() + lightInfo.emissionSpread();
+      if (spread < Math.PI) {
+         Vector3f axis = lightInfo.emissionAxis();
+         float axisDot = Math.max(-1.0F, Math.min(1.0F, axis.dot(dirX, dirY, dirZ)));
+         float axisAngle = (float) Math.acos(axisDot);
+         shaping = Math.max((float) Math.cos(Math.max(axisAngle - spread, 0.0F)), 0.0F);
       }
+
+      if (shaping <= 0.0F) {
+         return 0.0F;
+      }
+
+      return lightInfo.luminanceFrom(lightPosition, new Vector3f(
+         lightPosition.x + dirX * averageDistance,
+         lightPosition.y + dirY * averageDistance,
+         lightPosition.z + dirZ * averageDistance
+      )) * shaping;
    }
 
-   private void validateLightTreeCapacity(int requiredBytes, int availableBytes, String bufferName) {
-      if (requiredBytes <= availableBytes) {
-         return;
-      }
-      throw new IllegalStateException(
-         "Preallocated light tree " + bufferName + " buffer is too small: required=" + requiredBytes + ", available=" + availableBytes
-      );
+   private static float regirAverageDistanceToVolume(float distanceToCenter, float volumeRadius) {
+      final float nonlinearFactor = 1.1547F;
+      float radiusSq = volumeRadius * volumeRadius;
+      float denom = distanceToCenter + volumeRadius * nonlinearFactor;
+      return distanceToCenter + volumeRadius * radiusSq / Math.max(denom * denom, 1.0e-4F);
+   }
+
+   private static float regirHashUnitFloat(long seed) {
+      long hashed = regirHash64(seed);
+      return (float) (((hashed >>> 40) & 0xFFFFFFL) / (double) 0x1000000L);
+   }
+
+   private static long regirHash64(long value) {
+      value ^= (value >>> 30);
+      value *= 0xBF58476D1CE4E5B9L;
+      value ^= (value >>> 27);
+      value *= 0x94D049BB133111EBL;
+      value ^= (value >>> 31);
+      return value;
    }
 
    boolean queueIdentityLightMappingsIfNeeded() {
@@ -528,9 +771,8 @@ public class LightRegistry implements Destructable {
       Vector3f cameraPosition = getLightSelectionCameraPosition();
       Set<LightInstance> previouslySelected = new HashSet<>(Arrays.asList(prevLights));
       if (lights.length > 0) {
-         // Include ALL lights in the tree per Conty & Kulla 2018.
-         // The tree's importance-weighted traversal handles distant/dim lights efficiently
-         // without needing camera-based pre-filtering that causes temporal instability.
+         // Keep the capped traced-light set deterministic and sticky so ReGIR cell contents
+         // do not churn when near-tied lights trade places between frames.
          if (lights.length > this.maxLights) {
             List<LightSelectionCandidate> candidates = new ArrayList<>(lights.length);
             for (LightInstance light : lights) {
@@ -593,9 +835,12 @@ public class LightRegistry implements Destructable {
    public boolean upload() {
       boolean uploadDone = true;
       uploadDone &= this.lightsMemoryManager.upload();
+      uploadDone &= this.previousLightsMemoryManager.upload();
       uploadDone &= this.lightMappingMemoryManager.upload();
-      uploadDone &= this.lightTreeMemoryManager.upload();
-      uploadDone &= this.lightTreeIndicesMemoryManager.upload();
+      uploadDone &= this.lightReverseMappingMemoryManager.upload();
+      uploadDone &= this.regirCellCountMemoryManager.upload();
+      uploadDone &= this.regirLightIndexMemoryManager.upload();
+      uploadDone &= this.regirLightPdfMemoryManager.upload();
       this.lightCount = this.tracedLights.length;
       return uploadDone;
    }
@@ -711,28 +956,77 @@ public class LightRegistry implements Destructable {
       return this.lightsMemoryManager;
    }
 
+   public GlMemoryManager getPreviousLightsMemoryManager() {
+      return this.previousLightsMemoryManager;
+   }
+
    public GlMemoryManager getLightMappingMemoryManager() {
       return this.lightMappingMemoryManager;
    }
 
-   public GlMemoryManager getLightTreeMemoryManager() {
-      return this.lightTreeMemoryManager;
+   public GlMemoryManager getLightReverseMappingMemoryManager() {
+      return this.lightReverseMappingMemoryManager;
    }
 
-   public GlMemoryManager getLightTreeIndicesMemoryManager() {
-      return this.lightTreeIndicesMemoryManager;
+   public GlMemoryManager getRegirCellCountMemoryManager() {
+      return this.regirCellCountMemoryManager;
    }
 
-   public int getLightTreeNodeCount() {
-      return this.lightTreeNodeCount;
+   public GlMemoryManager getGlobalLightCdfMemoryManager() {
+      return this.globalLightCdfMemoryManager;
    }
 
-   public LightTreeDiagnostics getLightTreeDiagnostics() {
-      return this.lightTreeDiagnostics;
+   public GlMemoryManager getRegirLightIndexMemoryManager() {
+      return this.regirLightIndexMemoryManager;
    }
 
-   public long getLastTreeBuildNanos() {
-      return this.lastTreeBuildNanos;
+   public GlMemoryManager getRegirLightPdfMemoryManager() {
+      return this.regirLightPdfMemoryManager;
+   }
+
+   /** Returns the world-space center of the ReGIR grid (RTXDI: gridCenter = camera position). */
+   public Vector3f getRegirGridCenter() {
+      return new Vector3f(this.regirGridCenter);
+   }
+
+   /** @deprecated Use {@link #getRegirGridCenter()} — kept for backward compatibility. */
+   @Deprecated
+   public Vector3f getRegirGridOrigin() {
+      // Derive origin from center for callers that still need it.
+      float halfExtent = this.regirGridResolution * GRID_CELL_SIZE * 0.5f;
+      return new Vector3f(
+         this.regirGridCenter.x - halfExtent,
+         this.regirGridCenter.y - halfExtent,
+         this.regirGridCenter.z - halfExtent
+      );
+   }
+
+   public int getRegirGridResolution() {
+      return this.regirGridResolution;
+   }
+
+   public int getRegirLightsPerCell() {
+      return this.regirLightsPerCell;
+   }
+
+   public int getRegirActiveCellCount() {
+      return this.regirActiveCellCount;
+   }
+
+   public int getRegirActiveLightSlotCount() {
+      return this.regirActiveLightSlotCount;
+   }
+
+   public void setGpuRegirBuildEnabled(boolean enabled) {
+      this.gpuRegirBuildEnabled = enabled;
+   }
+
+   public boolean isGpuRegirBuildEnabled() {
+      return this.gpuRegirBuildEnabled;
+   }
+
+   public float[] getLightPowers() {
+      return this.lightPowers;
    }
 
    private LightInstance[] toLightInstanceArray() {
@@ -766,9 +1060,13 @@ public class LightRegistry implements Destructable {
    @Override
    public void free() {
       this.lightsMemoryManager.free();
+      this.previousLightsMemoryManager.free();
       this.lightMappingMemoryManager.free();
-      this.lightTreeMemoryManager.free();
-      this.lightTreeIndicesMemoryManager.free();
+      this.lightReverseMappingMemoryManager.free();
+      this.globalLightCdfMemoryManager.free();
+      this.regirCellCountMemoryManager.free();
+      this.regirLightIndexMemoryManager.free();
+      this.regirLightPdfMemoryManager.free();
       this.lightListObserver.unregister();
       if (this.lightsProvider != null) {
          PhotonicsConfig.removeLightProvider(this.lightsProvider);
@@ -882,681 +1180,6 @@ public class LightRegistry implements Destructable {
       }
    }
 
-   private static final class LightTreeBuilder {
-      private static final int nodeFloatSize = 16;
-      private static final int maxLeafLights = 4;
-      private static final int saohBinCount = 12;
-      private static final float luminanceRed = 0.2126F;
-      private static final float luminanceGreen = 0.7152F;
-      private static final float luminanceBlue = 0.0722F;
-      private static final float twoPi = (float) (Math.PI * 2.0);
-      private static final float halfPi = (float) (Math.PI * 0.5);
-      private static final float epsilon = 1.0E-4F;
-      private final LightInstance[] lights;
-      private final int[] indices;
-      private final float[] nodeData;
-      private final int[] leafIndices;
-      private int nodeCount;
-      private int leafIndexCount;
-
-      private LightTreeBuilder(LightInstance[] lights) {
-         this.lights = lights;
-         this.indices = new int[lights.length];
-         for (int i = 0; i < lights.length; i++) {
-            this.indices[i] = i;
-         }
-         int maxNodeCount = Math.max(2 * lights.length, 1);
-         this.nodeData = new float[maxNodeCount * nodeFloatSize];
-         this.leafIndices = new int[lights.length];
-      }
-
-      private int build() {
-         this.nodeCount = 0;
-         this.leafIndexCount = 0;
-         if (this.lights.length == 0) {
-            return 0;
-         }
-         this.buildRecursive(0, this.lights.length, 0);
-         return this.nodeCount;
-      }
-
-      private int buildRecursive(int start, int end, int depth) {
-         int nodeIndex = this.nodeCount++;
-         int count = end - start;
-         int subtreeStart = this.leafIndexCount;
-         NodeBounds bounds = this.calculateNodeBounds(start, end);
-         int offset = nodeIndex * nodeFloatSize;
-         this.storeNodeBounds(offset, bounds, depth, subtreeStart, count);
-         if (count <= maxLeafLights) {
-            this.storeLeaf(offset, start, count, bounds.representativeLightIndex);
-            return nodeIndex;
-         }
-
-         SplitResult split = this.findBestSplit(start, end, bounds);
-         int axis = split == null ? selectSplitAxis(bounds) : split.axis;
-         float splitPos = split == null ? bounds.getMidpoint(axis) : split.position;
-         int mid = this.partition(start, end, axis, splitPos);
-         if (mid == start || mid == end) {
-            mid = (start + end) >>> 1;
-         }
-
-         int leftChild = this.buildRecursive(start, mid, depth + 1);
-         int rightChild = this.buildRecursive(mid, end, depth + 1);
-         this.nodeData[offset + 3] = Float.intBitsToFloat(leftChild);
-         this.nodeData[offset + 7] = Float.intBitsToFloat(rightChild);
-         return nodeIndex;
-      }
-
-      private SplitResult findBestSplit(int start, int end, NodeBounds parentBounds) {
-         SplitResult best = null;
-         for (int axis = 0; axis < 3; axis++) {
-            SplitResult candidate = this.findBestSplitOnAxis(start, end, axis, parentBounds);
-            if (candidate == null) {
-               continue;
-            }
-            if (best == null || candidate.cost < best.cost) {
-               best = candidate;
-            }
-         }
-         return best;
-      }
-
-      private SplitResult findBestSplitOnAxis(int start, int end, int axis, NodeBounds parentBounds) {
-         int count = end - start;
-         if (count <= 1) {
-            return null;
-         }
-
-         float min = parentBounds.getMin(axis);
-         float max = parentBounds.getMax(axis);
-         float extent = max - min;
-         if (!(extent > epsilon)) {
-            return null;
-         }
-
-         float bestCost = Float.POSITIVE_INFINITY;
-         float bestPosition = Float.NaN;
-         for (int bin = 1; bin < saohBinCount; bin++) {
-            float t = (float) bin / (float) saohBinCount;
-            float position = min + extent * t;
-            int mid = this.partition(start, end, axis, position);
-            if (mid == start || mid == end) {
-               continue;
-            }
-            NodeBounds leftBounds = this.calculateNodeBounds(start, mid);
-            NodeBounds rightBounds = this.calculateNodeBounds(mid, end);
-            float splitCost = this.computeSplitCost(axis, parentBounds, leftBounds, rightBounds);
-            if (splitCost < parentBounds.totalIntensity && splitCost < bestCost) {
-               bestCost = splitCost;
-               bestPosition = position;
-            }
-         }
-         return Float.isNaN(bestPosition) ? null : new SplitResult(axis, bestPosition, bestCost);
-      }
-
-      private float computeSplitCost(int axis, NodeBounds parentBounds, NodeBounds leftBounds, NodeBounds rightBounds) {
-         float parentSpatial = Math.max(parentBounds.surfaceArea(), epsilon);
-         float parentOrientation = Math.max(parentBounds.orientationMeasure(), epsilon);
-         float axisPenalty = parentBounds.axisRegularization(axis);
-         float leftCost = leftBounds.totalIntensity * leftBounds.surfaceArea() * leftBounds.orientationMeasure();
-         float rightCost = rightBounds.totalIntensity * rightBounds.surfaceArea() * rightBounds.orientationMeasure();
-         return axisPenalty * (leftCost + rightCost) / (parentSpatial * parentOrientation);
-      }
-
-      private NodeBounds calculateNodeBounds(int start, int end) {
-         NodeBounds bounds = null;
-         for (int i = start; i < end; i++) {
-            int lightIndex = this.indices[i];
-            NodeBounds lightBounds = this.createLeafBounds(this.lights[lightIndex], lightIndex);
-            bounds = bounds == null ? lightBounds : bounds.union(lightBounds);
-         }
-         return bounds == null ? NodeBounds.empty() : bounds;
-      }
-
-      private NodeBounds createLeafBounds(LightInstance light, int representativeLightIndex) {
-         Vector3f pos = light.position();
-         // Paper Section 4.1: bounding volume contains the emitter GEOMETRY,
-         // not its illumination range.  A block light occupies ~1 block;
-         // use a tight half-extent so the tree can spatially partition lights.
-         float halfExtent = 0.5F;
-         Vector3f rawColor = light.type().getRawColorAsVector();
-         float lightIntensity = light.type().adjustedIntensity();
-         float fluxR = rawColor.x * lightIntensity;
-         float fluxG = rawColor.y * lightIntensity;
-         float fluxB = rawColor.z * lightIntensity;
-         float totalIntensity = (rawColor.x * luminanceRed + rawColor.y * luminanceGreen + rawColor.z * luminanceBlue) * lightIntensity;
-         return new NodeBounds(
-            pos.x - halfExtent,
-            pos.y - halfExtent,
-            pos.z - halfExtent,
-            pos.x + halfExtent,
-            pos.y + halfExtent,
-            pos.z + halfExtent,
-            new Vector3f(light.type().emissionAxis()),
-            clampAngle(light.type().orientationSpread()),
-            clampAngle(light.type().emissionSpread()),
-            fluxR,
-            fluxG,
-            fluxB,
-            totalIntensity,
-            representativeLightIndex,
-            1,
-            totalIntensity * totalIntensity
-         );
-      }
-
-      private void storeNodeBounds(int offset, NodeBounds bounds, int depth, int subtreeStart, int subtreeCount) {
-         this.nodeData[offset] = bounds.minX;
-         this.nodeData[offset + 1] = bounds.minY;
-         this.nodeData[offset + 2] = bounds.minZ;
-         this.nodeData[offset + 3] = Float.intBitsToFloat(-1);
-         this.nodeData[offset + 4] = bounds.maxX;
-         this.nodeData[offset + 5] = bounds.maxY;
-         this.nodeData[offset + 6] = bounds.maxZ;
-         this.nodeData[offset + 7] = Float.intBitsToFloat(-1);
-         this.nodeData[offset + 8] = bounds.axis.x;
-         this.nodeData[offset + 9] = bounds.axis.y;
-         this.nodeData[offset + 10] = bounds.axis.z;
-         this.nodeData[offset + 11] = bounds.totalIntensity;
-         this.nodeData[offset + 12] = Float.intBitsToFloat(subtreeStart);
-         this.nodeData[offset + 13] = Float.intBitsToFloat(subtreeCount);
-         this.nodeData[offset + 14] = Float.intBitsToFloat(bounds.representativeLightIndex);
-         this.nodeData[offset + 15] = Float.intBitsToFloat(packMeta(depth, bounds.orientationSpread, bounds.emissionSpread, bounds.energyVarianceCV()));
-      }
-
-      private void storeLeaf(int offset, int start, int count, int representativeLightIndex) {
-         int leafStart = this.leafIndexCount;
-         for (int i = 0; i < count; i++) {
-            LightInstance light = this.lights[this.indices[start + i]];
-            this.leafIndices[this.leafIndexCount++] = light.index();
-         }
-         this.nodeData[offset + 12] = Float.intBitsToFloat(leafStart);
-         this.nodeData[offset + 13] = Float.intBitsToFloat(count);
-         this.nodeData[offset + 14] = Float.intBitsToFloat(representativeLightIndex);
-      }
-
-      private int partition(int start, int end, int axis, float splitPos) {
-         int i = start;
-         int j = end - 1;
-         while (i <= j) {
-            float axisValue = getAxisValue(this.lights[this.indices[i]].position(), axis);
-            if (axisValue < splitPos) {
-               i++;
-               continue;
-            }
-            int tmp = this.indices[i];
-            this.indices[i] = this.indices[j];
-            this.indices[j] = tmp;
-            j--;
-         }
-         return i;
-      }
-
-      private static int selectSplitAxis(NodeBounds bounds) {
-         float extentX = bounds.maxX - bounds.minX;
-         float extentY = bounds.maxY - bounds.minY;
-         float extentZ = bounds.maxZ - bounds.minZ;
-         if (extentX >= extentY && extentX >= extentZ) {
-            return 0;
-         }
-         if (extentY >= extentZ) {
-            return 1;
-         }
-         return 2;
-      }
-
-      private static float getAxisValue(Vector3f position, int axis) {
-         return axis == 0 ? position.x : axis == 1 ? position.y : position.z;
-      }
-
-      private static float clampAngle(float angle) {
-         return Math.max(0.0F, Math.min(angle, (float) Math.PI));
-      }
-
-      private static int packMeta(int depth, float thetaO, float thetaE, float energyVarianceCV) {
-         int packedDepth = Math.max(0, Math.min(depth, 255));
-         int packedThetaO = Math.max(0, Math.min(Math.round(thetaO / (float) Math.PI * 255.0F), 255));
-         int packedThetaE = Math.max(0, Math.min(Math.round(thetaE / (float) Math.PI * 255.0F), 255));
-         int packedEnergyCV = Math.max(0, Math.min(Math.round(energyVarianceCV * 255.0F), 255));
-         return packedDepth << 24 | packedThetaO << 16 | packedThetaE << 8 | packedEnergyCV;
-      }
-
-      private float[] getNodeData() {
-         return this.nodeData;
-      }
-
-      private int getNodeDataLength() {
-         return this.nodeCount * nodeFloatSize;
-      }
-
-      private int[] getLeafIndices() {
-         return this.leafIndices;
-      }
-
-      private int getLeafIndexCount() {
-         return this.leafIndexCount;
-      }
-
-      private BuilderStats computeDiagnostics() {
-         BuilderStats stats = new BuilderStats();
-         if (this.nodeCount == 0) {
-            return stats;
-         }
-         this.collectDiagnostics(0, 0, stats);
-         return stats;
-      }
-
-      private NodeBounds collectDiagnostics(int nodeIndex, int depth, BuilderStats stats) {
-         int offset = nodeIndex * nodeFloatSize;
-         NodeBounds bounds = this.readNodeBounds(offset);
-         stats.nodeCount++;
-         stats.depthSum += depth;
-         stats.maxDepth = Math.max(stats.maxDepth, depth);
-         if (depth == 0) {
-            stats.rootBoundsVolume = bounds.volume();
-         }
-         int leftChild = Float.floatToRawIntBits(this.nodeData[offset + 3]);
-         int rightChild = Float.floatToRawIntBits(this.nodeData[offset + 7]);
-         if (leftChild < 0 && rightChild < 0) {
-            int leafCount = Float.floatToRawIntBits(this.nodeData[offset + 13]);
-            stats.leafCount++;
-            stats.leafSizeSum += leafCount;
-            stats.maxLeafSize = Math.max(stats.maxLeafSize, leafCount);
-            return bounds;
-         }
-         NodeBounds left = this.collectDiagnostics(leftChild, depth + 1, stats);
-         NodeBounds right = this.collectDiagnostics(rightChild, depth + 1, stats);
-         stats.siblingPairCount++;
-         stats.siblingOverlapRatioSum += bounds.subtreeOverlap(left, right);
-         stats.childSeparationRatioSum += bounds.normalizedChildSeparation(left, right);
-         return bounds;
-      }
-
-      private NodeBounds readNodeBounds(int offset) {
-         return new NodeBounds(
-            this.nodeData[offset],
-            this.nodeData[offset + 1],
-            this.nodeData[offset + 2],
-            this.nodeData[offset + 4],
-            this.nodeData[offset + 5],
-            this.nodeData[offset + 6],
-            new Vector3f(this.nodeData[offset + 8], this.nodeData[offset + 9], this.nodeData[offset + 10]),
-            decodeOrientationSpread(Float.floatToRawIntBits(this.nodeData[offset + 15])),
-            halfPi,
-            0.0F,
-            0.0F,
-            0.0F,
-            this.nodeData[offset + 11],
-            Float.floatToRawIntBits(this.nodeData[offset + 14]),
-            1,
-            0.0F
-         );
-      }
-
-      private static float decodeOrientationSpread(int packedMeta) {
-         int packedThetaO = (packedMeta >> 16) & 255;
-         return (packedThetaO / 255.0F) * (float) Math.PI;
-      }
-
-      private static final class SplitResult {
-         private final int axis;
-         private final float position;
-         private final float cost;
-
-         private SplitResult(int axis, float position, float cost) {
-            this.axis = axis;
-            this.position = position;
-            this.cost = cost;
-         }
-      }
-
-      private static final class BuilderStats {
-         private int nodeCount;
-         private int leafCount;
-         private int maxLeafSize;
-         private int maxDepth;
-         private int siblingPairCount;
-         private float leafSizeSum;
-         private float depthSum;
-         private float rootBoundsVolume;
-         private float siblingOverlapRatioSum;
-         private float childSeparationRatioSum;
-
-         private float averageLeafSize() {
-            return this.leafCount == 0 ? 0.0F : this.leafSizeSum / this.leafCount;
-         }
-
-         private float averageDepth() {
-            return this.nodeCount == 0 ? 0.0F : this.depthSum / this.nodeCount;
-         }
-
-         private float averageSiblingOverlapRatio() {
-            return this.siblingPairCount == 0 ? 0.0F : this.siblingOverlapRatioSum / this.siblingPairCount;
-         }
-
-         private float averageChildSeparationRatio() {
-            return this.siblingPairCount == 0 ? 0.0F : this.childSeparationRatioSum / this.siblingPairCount;
-         }
-      }
-
-      private static final class NodeBounds {
-         private final float minX;
-         private final float minY;
-         private final float minZ;
-         private final float maxX;
-         private final float maxY;
-         private final float maxZ;
-         private final Vector3f axis;
-         private final float orientationSpread;
-         private final float emissionSpread;
-         private final float fluxR;
-         private final float fluxG;
-         private final float fluxB;
-         private final float totalIntensity;
-         private final int representativeLightIndex;
-         private final int lightCount;
-         private final float intensitySumSq;
-
-         private NodeBounds(
-            float minX,
-            float minY,
-            float minZ,
-            float maxX,
-            float maxY,
-            float maxZ,
-            Vector3f axis,
-            float orientationSpread,
-            float emissionSpread,
-            float fluxR,
-            float fluxG,
-            float fluxB,
-            float totalIntensity,
-            int representativeLightIndex,
-            int lightCount,
-            float intensitySumSq
-         ) {
-            this.minX = minX;
-            this.minY = minY;
-            this.minZ = minZ;
-            this.maxX = maxX;
-            this.maxY = maxY;
-            this.maxZ = maxZ;
-            Vector3f normalizedAxis = axis == null ? new Vector3f(0.0F, 1.0F, 0.0F) : new Vector3f(axis);
-            if (normalizedAxis.lengthSquared() <= epsilon) {
-               normalizedAxis.set(0.0F, 1.0F, 0.0F);
-            } else {
-               normalizedAxis.normalize();
-            }
-            this.axis = normalizedAxis;
-            this.orientationSpread = clampAngle(orientationSpread);
-            this.emissionSpread = clampAngle(emissionSpread);
-            this.fluxR = fluxR;
-            this.fluxG = fluxG;
-            this.fluxB = fluxB;
-            this.totalIntensity = totalIntensity;
-            this.representativeLightIndex = representativeLightIndex;
-            this.lightCount = lightCount;
-            this.intensitySumSq = intensitySumSq;
-         }
-
-         private static NodeBounds empty() {
-            return new NodeBounds(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, new Vector3f(0.0F, 1.0F, 0.0F), (float) Math.PI, halfPi, 0.0F, 0.0F, 0.0F, 0.0F, -1, 0, 0.0F);
-         }
-
-         private NodeBounds union(NodeBounds other) {
-            int representative = this.chooseRepresentative(other);
-            return new NodeBounds(
-               Math.min(this.minX, other.minX),
-               Math.min(this.minY, other.minY),
-               Math.min(this.minZ, other.minZ),
-               Math.max(this.maxX, other.maxX),
-               Math.max(this.maxY, other.maxY),
-               Math.max(this.maxZ, other.maxZ),
-               unionAxis(this.axis, this.orientationSpread, other.axis, other.orientationSpread),
-               unionOrientationSpread(this.axis, this.orientationSpread, other.axis, other.orientationSpread),
-               Math.max(this.emissionSpread, other.emissionSpread),
-               this.fluxR + other.fluxR,
-               this.fluxG + other.fluxG,
-               this.fluxB + other.fluxB,
-               this.totalIntensity + other.totalIntensity,
-               representative,
-               this.lightCount + other.lightCount,
-               this.intensitySumSq + other.intensitySumSq
-            );
-         }
-
-         private int chooseRepresentative(NodeBounds other) {
-            return this.totalIntensity >= other.totalIntensity ? this.representativeLightIndex : other.representativeLightIndex;
-         }
-
-         private float getMidpoint(int axis) {
-            if (axis == 0) {
-               return (this.minX + this.maxX) * 0.5F;
-            }
-            if (axis == 1) {
-               return (this.minY + this.maxY) * 0.5F;
-            }
-            return (this.minZ + this.maxZ) * 0.5F;
-         }
-
-         private float getMin(int axis) {
-            return axis == 0 ? this.minX : axis == 1 ? this.minY : this.minZ;
-         }
-
-         private float getMax(int axis) {
-            return axis == 0 ? this.maxX : axis == 1 ? this.maxY : this.maxZ;
-         }
-
-         private float centroidX() {
-            return (this.minX + this.maxX) * 0.5F;
-         }
-
-         private float centroidY() {
-            return (this.minY + this.maxY) * 0.5F;
-         }
-
-         private float centroidZ() {
-            return (this.minZ + this.maxZ) * 0.5F;
-         }
-
-         private float diagonalLength() {
-            float dx = Math.max(this.maxX - this.minX, 0.0F);
-            float dy = Math.max(this.maxY - this.minY, 0.0F);
-            float dz = Math.max(this.maxZ - this.minZ, 0.0F);
-            return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
-         }
-
-         private float volume() {
-            float dx = Math.max(this.maxX - this.minX, 0.0F);
-            float dy = Math.max(this.maxY - this.minY, 0.0F);
-            float dz = Math.max(this.maxZ - this.minZ, 0.0F);
-            return dx * dy * dz;
-         }
-
-         private float surfaceArea() {
-            float dx = Math.max(this.maxX - this.minX, 0.0F);
-            float dy = Math.max(this.maxY - this.minY, 0.0F);
-            float dz = Math.max(this.maxZ - this.minZ, 0.0F);
-            return 2.0F * (dx * dy + dy * dz + dz * dx);
-         }
-
-         private float orientationMeasure() {
-            float thetaW = Math.min(this.orientationSpread + this.emissionSpread, (float) Math.PI);
-            float baseMeasure = twoPi * (1.0F - (float) Math.cos(this.orientationSpread));
-            float extraMeasure = thetaW <= this.orientationSpread
-               ? 0.0F
-               : halfPi * (
-                  2.0F * thetaW * (float) Math.sin(this.orientationSpread)
-                     - (float) Math.cos(this.orientationSpread - 2.0F * thetaW)
-                     - 2.0F * this.orientationSpread * (float) Math.sin(this.orientationSpread)
-                     + (float) Math.cos(this.orientationSpread)
-               );
-            return Math.max(baseMeasure + extraMeasure, epsilon);
-         }
-
-         private float axisRegularization(int axis) {
-            float extent = Math.max(this.getMax(axis) - this.getMin(axis), epsilon);
-            float maxExtent = Math.max(Math.max(this.maxX - this.minX, this.maxY - this.minY), this.maxZ - this.minZ);
-            return Math.max(maxExtent, epsilon) / extent;
-         }
-
-         private float energyVarianceCV() {
-            if (this.lightCount <= 1 || this.totalIntensity <= epsilon) {
-               return 0.0F;
-            }
-            float meanIntensity = this.totalIntensity / this.lightCount;
-            float variance = Math.max(this.intensitySumSq / this.lightCount - meanIntensity * meanIntensity, 0.0F);
-            float stddev = (float) Math.sqrt(variance);
-            return clampUnit(stddev / Math.max(meanIntensity, epsilon));
-         }
-
-         private float intersectionVolume(NodeBounds other) {
-            float overlapX = Math.max(Math.min(this.maxX, other.maxX) - Math.max(this.minX, other.minX), 0.0F);
-            float overlapY = Math.max(Math.min(this.maxY, other.maxY) - Math.max(this.minY, other.minY), 0.0F);
-            float overlapZ = Math.max(Math.min(this.maxZ, other.maxZ) - Math.max(this.minZ, other.minZ), 0.0F);
-            return overlapX * overlapY * overlapZ;
-         }
-
-         private float subtreeOverlap(NodeBounds left, NodeBounds right) {
-            return left.intersectionVolume(right) / Math.max(this.volume(), epsilon);
-         }
-
-         private float normalizedChildSeparation(NodeBounds left, NodeBounds right) {
-            float dx = left.centroidX() - right.centroidX();
-            float dy = left.centroidY() - right.centroidY();
-            float dz = left.centroidZ() - right.centroidZ();
-            float centerDistance = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
-            float size = Math.max(0.5F * (left.diagonalLength() + right.diagonalLength()), epsilon);
-            return Math.max(centerDistance / size - 1.0F, 0.0F);
-         }
-
-         private static Vector3f unionAxis(Vector3f axisA, float spreadA, Vector3f axisB, float spreadB) {
-            // Paper Algorithm 1: ensure a has the larger cone
-            Vector3f a_axis = axisA;
-            float a_spread = spreadA;
-            Vector3f b_axis = axisB;
-            float b_spread = spreadB;
-            if (b_spread > a_spread) {
-               a_axis = axisB;
-               a_spread = spreadB;
-               b_axis = axisA;
-               b_spread = spreadA;
-            }
-            float thetaD = (float) Math.acos(clamp(a_axis.dot(b_axis), -1.0F, 1.0F));
-            // Check if a already covers b
-            if (Math.min(thetaD + b_spread, (float) Math.PI) <= a_spread) {
-               return new Vector3f(a_axis).normalize();
-            }
-            // New cone covering both
-            float newSpread = (a_spread + thetaD + b_spread) * 0.5F;
-            if (newSpread >= (float) Math.PI) {
-               return new Vector3f(a_axis).normalize();
-            }
-            // Rotate a's axis towards b's axis
-            float thetaR = newSpread - a_spread;
-            Vector3f cross = new Vector3f(a_axis).cross(b_axis);
-            float crossLen = cross.length();
-            if (crossLen <= epsilon) {
-               return new Vector3f(a_axis).normalize();
-            }
-            cross.normalize();
-            // Rodrigues rotation: rotate a_axis by thetaR around cross axis
-            float cosR = (float) Math.cos(thetaR);
-            float sinR = (float) Math.sin(thetaR);
-            Vector3f result = new Vector3f(a_axis).mul(cosR)
-               .add(new Vector3f(cross).cross(a_axis).mul(sinR))
-               .add(new Vector3f(cross).mul(cross.dot(a_axis) * (1.0F - cosR)));
-            float resultLen = result.length();
-            if (resultLen <= epsilon) {
-               return new Vector3f(a_axis).normalize();
-            }
-            return result.normalize();
-         }
-
-         private static float unionOrientationSpread(Vector3f axisA, float spreadA, Vector3f axisB, float spreadB) {
-            // Paper Algorithm 1: ensure a has the larger cone
-            float a_spread = spreadA;
-            float b_spread = spreadB;
-            if (b_spread > a_spread) {
-               float tmp = a_spread;
-               a_spread = b_spread;
-               b_spread = tmp;
-            }
-            float thetaD = (float) Math.acos(clamp(axisA.dot(axisB), -1.0F, 1.0F));
-            // Check if a already covers b
-            if (Math.min(thetaD + b_spread, (float) Math.PI) <= a_spread) {
-               return a_spread;
-            }
-            // New covering cone
-            float newSpread = (a_spread + thetaD + b_spread) * 0.5F;
-            return clampAngle(Math.min(newSpread, (float) Math.PI));
-         }
-
-         private static float clamp(float value, float min, float max) {
-            return Math.max(min, Math.min(value, max));
-         }
-
-         private static float clampUnit(float value) {
-            return clamp(value, 0.0F, 1.0F);
-         }
-      }
-   }
-
-   public static record LightTreeDiagnostics(
-      int nodeCount,
-      int leafCount,
-      float averageLeafSize,
-      int maxLeafSize,
-      float averageDepth,
-      int maxDepth,
-      float rootBoundsVolume,
-      float siblingOverlapRatio,
-      float childSeparationRatio,
-      int rebuildCount,
-      int lastRebuildCompileCount,
-      long lastBuildNanos
-   ) {
-      private static LightTreeDiagnostics empty() {
-         return new LightTreeDiagnostics(0, 0, 0.0F, 0, 0.0F, 0, 0.0F, 0.0F, 0.0F, 0, -1, 0L);
-      }
-
-      private static LightTreeDiagnostics fromBuild(LightTreeBuilder builder, int rebuildCount, int lastRebuildCompileCount, long lastBuildNanos) {
-         LightTreeBuilder.BuilderStats stats = builder.computeDiagnostics();
-         return new LightTreeDiagnostics(
-            stats.nodeCount,
-            stats.leafCount,
-            stats.averageLeafSize(),
-            stats.maxLeafSize,
-            stats.averageDepth(),
-            stats.maxDepth,
-            stats.rootBoundsVolume,
-            stats.averageSiblingOverlapRatio(),
-            stats.averageChildSeparationRatio(),
-            rebuildCount,
-            lastRebuildCompileCount,
-            lastBuildNanos
-         );
-      }
-
-      public String describe() {
-         return String.format(
-            "nodes=%d leaves=%d leafAvg=%.2f leafMax=%d depthAvg=%.2f depthMax=%d rootVolume=%.2f overlap=%.3f separation=%.3f rebuilds=%d lastRebuildCompile=%d buildUs=%d",
-            this.nodeCount,
-            this.leafCount,
-            this.averageLeafSize,
-            this.maxLeafSize,
-            this.averageDepth,
-            this.maxDepth,
-            this.rootBoundsVolume,
-            this.siblingOverlapRatio,
-            this.childSeparationRatio,
-            this.rebuildCount,
-            this.lastRebuildCompileCount,
-            this.lastBuildNanos / 1000L
-         );
-      }
-   }
-
    private static boolean shouldCull(ClientWorld level, BlockPos blockPos) {
       for (BlockPos offset : NEIGHBORS) {
          BlockPos neighborPos = blockPos.add(offset);
@@ -1664,6 +1287,9 @@ public class LightRegistry implements Destructable {
             this.gatheredCount = gatheredCount;
          }
       }
+   }
+
+   private record WeightedLightSelection(int lightIndex, float invSourcePdf) {
    }
 }
 

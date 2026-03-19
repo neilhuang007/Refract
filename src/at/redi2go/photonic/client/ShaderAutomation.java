@@ -1552,7 +1552,7 @@ public final class ShaderAutomation {
 
    private String currentPatchId() {
       String patchState = Raytracer.getAppliedPatch() == null ? "native" : "patched";
-      return "LIGHT_TREE_RESTIR:" + patchState;
+      return "REGIR_RESTIR:" + patchState;
    }
 
    private void finish(String failureReason) {
@@ -1996,7 +1996,6 @@ public final class ShaderAutomation {
    ) {
    }
 }
-
 
 
 

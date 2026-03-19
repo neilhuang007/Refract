@@ -156,6 +156,11 @@ public class GlMemoryManager implements MemoryManager {
       this.uploadBatchSize = uploadBatchSize;
    }
 
+   public int getId() {
+      this.ensureAllocated();
+      return this.id;
+   }
+
    public int getCapacity() {
       return this.buffer.capacity();
    }

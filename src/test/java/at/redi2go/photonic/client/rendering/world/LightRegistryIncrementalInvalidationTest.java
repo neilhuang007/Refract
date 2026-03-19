@@ -12,6 +12,7 @@ import net.minecraft.block.pattern.CachedBlockPosition;
 import org.joml.Vector3f;
 import org.junit.jupiter.api.Test;
 
+import java.nio.IntBuffer;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Deque;
@@ -391,41 +392,54 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
-   void lightTreeDiagnosticsCaptureLeafAndRebuildMetrics() throws Exception {
-      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
+   void regirGridBuildCapturesActiveCellsAndLightSlots() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
       BlockLightInfo info = createTestLightInfo(100.0F);
       LightInstance[] lights = new LightInstance[] {
          new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(3.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(40.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(42.5F, 1.5F, 1.5F), info),
-         new LightInstance(1, new Vector3f(80.5F, 1.5F, 1.5F), info)
+         new LightInstance(1, new Vector3f(36.5F, 1.5F, 1.5F), info),
+         new LightInstance(1, new Vector3f(68.5F, 33.5F, 1.5F), info),
+         new LightInstance(1, new Vector3f(100.5F, 65.5F, 1.5F), info)
       };
       setField(registry, "tracedLights", lights);
-      setField(registry, "compileCount", 7);
+      setField(registry, "offset", new PBlockPos(0, 0, 0));
 
-      Method buildMethod = LightRegistry.class.getDeclaredMethod("buildLightTree");
-      buildMethod.setAccessible(true);
-      buildMethod.invoke(registry);
+      invokeBuildSpatialGrid(registry, lights);
+      invokeBuildRegirGrid(registry);
 
-      LightRegistry.LightTreeDiagnostics diagnostics = registry.getLightTreeDiagnostics();
-      assertTrue(diagnostics.nodeCount() >= 1);
-      assertTrue(diagnostics.leafCount() >= 1);
-      assertTrue(diagnostics.averageLeafSize() >= 1.0F);
-      assertTrue(diagnostics.maxLeafSize() >= 1);
-      assertTrue(diagnostics.averageDepth() >= 0.0F);
-      assertTrue(diagnostics.maxDepth() >= 0);
-      assertTrue(diagnostics.rootBoundsVolume() > 0.0F);
-      assertTrue(diagnostics.siblingOverlapRatio() >= 0.0F);
-      assertTrue(diagnostics.childSeparationRatio() >= 0.0F);
-      assertEquals(1, diagnostics.rebuildCount());
-      assertEquals(7, diagnostics.lastRebuildCompileCount());
+      Vector3f gridOrigin = registry.getRegirGridOrigin();
+      assertEquals(0.0F, gridOrigin.x);
+      assertEquals(0.0F, gridOrigin.y);
+      assertEquals(0.0F, gridOrigin.z);
+      assertEquals(4, registry.getRegirGridResolution());
+      assertTrue(registry.getRegirActiveCellCount() >= 3);
+      assertTrue(registry.getRegirActiveLightSlotCount() >= lights.length);
+
+      MemoryOwner cellCountMemory = (MemoryOwner) getField(registry, "regirCellCountMemory");
+      IntBuffer cellCountBuffer = cellCountMemory.getMemory().getBuffer().asIntBuffer();
+      assertTrue(cellCountBuffer.get(0) > 0, "First ReGIR cell should contain at least one candidate light");
+
+      MemoryOwner lightIndexMemory = (MemoryOwner) getField(registry, "regirLightIndexMemory");
+      IntBuffer lightIndexBuffer = lightIndexMemory.getMemory().getBuffer().asIntBuffer();
+      assertTrue(lightIndexBuffer.get(0) >= 0, "First populated ReGIR slot should point at a traced light index");
    }
 
    private static LightInstance[] invokeToLightInstanceArray(LightRegistry registry) throws Exception {
       Method method = LightRegistry.class.getDeclaredMethod("toLightInstanceArray");
       method.setAccessible(true);
       return (LightInstance[]) method.invoke(registry);
+   }
+
+   private static void invokeBuildSpatialGrid(LightRegistry registry, LightInstance[] lights) throws Exception {
+      Method method = LightRegistry.class.getDeclaredMethod("buildSpatialGrid", LightInstance[].class);
+      method.setAccessible(true);
+      method.invoke(registry, (Object) lights);
+   }
+
+   private static void invokeBuildRegirGrid(LightRegistry registry) throws Exception {
+      Method method = LightRegistry.class.getDeclaredMethod("buildRegirGrid");
+      method.setAccessible(true);
+      method.invoke(registry);
    }
 
    private static long invokeChunkKey(int x, int y, int z) throws Exception {

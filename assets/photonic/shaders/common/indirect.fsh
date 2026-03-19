@@ -92,7 +92,7 @@ void main() {
         emission = unpackUnorm4x8(cb_array[pointer + 1]).xyz;
     }
 
-    // LightTree owns the visible indirect signal via radiosity_indirect_resolved.
+    // ReGIR/ReSTIR owns the visible indirect signal via radiosity_indirect_resolved.
     // Use the resolved screen-space indirect as the primary writeback source and
     // fall back to interpolated voxel GI only when no current resolved signal exists.
     vec3 indirect_rough = vec3(0.0f);

@@ -54,6 +54,28 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    private int denoiserPasses = DEFAULT_LIGHTTREE_DENOISER_PASSES;
    @Unique
    private int nrdAtrousPasses = DEFAULT_NRD_ATROUS_PASSES;
+   @Unique
+   private float restirDepthThreshold = DEFAULT_RESTIR_DEPTH_THRESHOLD;
+   @Unique
+   private float restirNormalThreshold = DEFAULT_RESTIR_NORMAL_THRESHOLD;
+   @Unique
+   private int restirTemporalMaxHistory = DEFAULT_RESTIR_TEMPORAL_MAX_HISTORY;
+   @Unique
+   private float restirTemporalDepthThreshold = DEFAULT_RESTIR_TEMPORAL_DEPTH_THRESHOLD;
+   @Unique
+   private float restirTemporalNormalThreshold = DEFAULT_RESTIR_TEMPORAL_NORMAL_THRESHOLD;
+   @Unique
+   private int restirSpatialSampleCount = DEFAULT_RESTIR_SPATIAL_SAMPLE_COUNT;
+   @Unique
+   private float restirSpatialRadius = DEFAULT_RESTIR_SPATIAL_RADIUS;
+   @Unique
+   private float restirSpatialDepthThreshold = DEFAULT_RESTIR_SPATIAL_DEPTH_THRESHOLD;
+   @Unique
+   private float restirSpatialNormalThreshold = DEFAULT_RESTIR_SPATIAL_NORMAL_THRESHOLD;
+   @Unique
+   private int restirVisibilityMaxAge = DEFAULT_RESTIR_VISIBILITY_MAX_AGE;
+   @Unique
+   private float restirVisibilityMaxDistance = DEFAULT_RESTIR_VISIBILITY_MAX_DISTANCE;
 
    @Inject(
       method = "<init>(Ljava/lang/String;Lnet/irisshaders/iris/shaderpack/option/ShaderPackOptions;Ljava/lang/Iterable;)V",
@@ -101,6 +123,17 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          case "photonics.lightTreeSoftShadows", "photonics.restirSoftShadows" -> this.lightTreeSoftShadows = photonics$parseBoolean(value);
          case "photonics.lightTreeDenoiserPasses", "photonics.restirDenoiserPasses" -> photonics$parseNonNegativeInt(key, value, e -> this.denoiserPasses = e);
          case "photonics.nrdAtrousPasses" -> photonics$parseUnsignedInt(key, value, e -> this.nrdAtrousPasses = e);
+         case "photonics.restirDepthThreshold" -> photonics$parseFloat(key, value, e -> this.restirDepthThreshold = e);
+         case "photonics.restirNormalThreshold" -> photonics$parseFloat(key, value, e -> this.restirNormalThreshold = e);
+         case "photonics.restirTemporalMaxHistory" -> photonics$parseUnsignedInt(key, value, e -> this.restirTemporalMaxHistory = e);
+         case "photonics.restirTemporalDepthThreshold" -> photonics$parseFloat(key, value, e -> this.restirTemporalDepthThreshold = e);
+         case "photonics.restirTemporalNormalThreshold" -> photonics$parseFloat(key, value, e -> this.restirTemporalNormalThreshold = e);
+         case "photonics.restirSpatialSampleCount" -> photonics$parseUnsignedInt(key, value, e -> this.restirSpatialSampleCount = e);
+         case "photonics.restirSpatialRadius" -> photonics$parseFloat(key, value, e -> this.restirSpatialRadius = e);
+         case "photonics.restirSpatialDepthThreshold" -> photonics$parseFloat(key, value, e -> this.restirSpatialDepthThreshold = e);
+         case "photonics.restirSpatialNormalThreshold" -> photonics$parseFloat(key, value, e -> this.restirSpatialNormalThreshold = e);
+         case "photonics.restirVisibilityMaxAge" -> photonics$parseUnsignedInt(key, value, e -> this.restirVisibilityMaxAge = e);
+         case "photonics.restirVisibilityMaxDistance" -> photonics$parseFloat(key, value, e -> this.restirVisibilityMaxDistance = e);
       }
    }
 
@@ -188,6 +221,61 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Override
    public int getNrdAtrousPasses() {
       return this.nrdAtrousPasses;
+   }
+
+   @Override
+   public float getRestirDepthThreshold() {
+      return this.restirDepthThreshold;
+   }
+
+   @Override
+   public float getRestirNormalThreshold() {
+      return this.restirNormalThreshold;
+   }
+
+   @Override
+   public int getRestirTemporalMaxHistory() {
+      return this.restirTemporalMaxHistory;
+   }
+
+   @Override
+   public float getRestirTemporalDepthThreshold() {
+      return this.restirTemporalDepthThreshold;
+   }
+
+   @Override
+   public float getRestirTemporalNormalThreshold() {
+      return this.restirTemporalNormalThreshold;
+   }
+
+   @Override
+   public int getRestirSpatialSampleCount() {
+      return this.restirSpatialSampleCount;
+   }
+
+   @Override
+   public float getRestirSpatialRadius() {
+      return this.restirSpatialRadius;
+   }
+
+   @Override
+   public float getRestirSpatialDepthThreshold() {
+      return this.restirSpatialDepthThreshold;
+   }
+
+   @Override
+   public float getRestirSpatialNormalThreshold() {
+      return this.restirSpatialNormalThreshold;
+   }
+
+   @Override
+   public int getRestirVisibilityMaxAge() {
+      return this.restirVisibilityMaxAge;
+   }
+
+   @Override
+   public float getRestirVisibilityMaxDistance() {
+      return this.restirVisibilityMaxDistance;
    }
 
    @Unique

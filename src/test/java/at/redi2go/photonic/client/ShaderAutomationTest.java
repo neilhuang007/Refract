@@ -35,14 +35,14 @@ class ShaderAutomationTest {
 
    @Test
    void blankExpectedPatchIdPrefixMatchesAnything() {
-      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix("", "LIGHT_TREE:stable"));
-      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix(null, "LIGHT_TREE:patched"));
+      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix("", "REGIR_RESTIR:stable"));
+      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix(null, "REGIR_RESTIR:patched"));
    }
 
    @Test
    void expectedPatchIdPrefixRequiresMatchingPatchIdPrefix() {
-      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix("LIGHT_TREE:", "LIGHT_TREE:native"));
-      assertFalse(ShaderAutomation.matchesExpectedPatchIdPrefix("LIGHT_TREE:", "BASIC:native"));
+      assertTrue(ShaderAutomation.matchesExpectedPatchIdPrefix("REGIR_RESTIR:", "REGIR_RESTIR:native"));
+      assertFalse(ShaderAutomation.matchesExpectedPatchIdPrefix("REGIR_RESTIR:", "BASIC:native"));
    }
 
    @Test

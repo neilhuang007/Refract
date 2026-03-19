@@ -15,7 +15,7 @@ vec3 ph_compute_attenuation(
     float distance_squared = dot(to_light_dir, to_light_dir) * light.falloff;
     vec3 result_color = light.color * light.intensity / dot(vec2(1, distance_squared), light.attenuation);
 
-    // Orientation: emission cone falloff matching light tree importance
+    // Orientation: emission cone falloff matching the ReGIR proposal weight
     if (light.orientationSpread < 3.14159265359) {
         float axisAngle = acos(clamp(dot(light.emissionAxis, -normal_dir), -1.0, 1.0));
         result_color *= max(cos(max(axisAngle - light.orientationSpread, 0.0)), 0.0);

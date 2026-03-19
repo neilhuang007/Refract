@@ -4,7 +4,6 @@ in vec4 direction_vert_out;
 
 layout(location = 0) out vec4 nrd_clamped_slow_out;
 layout(location = 1) out vec4 nrd_clamped_fast_out;
-layout(location = 2) out vec4 nrd_history_length_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
@@ -13,6 +12,8 @@ uniform sampler2D direct_historyfix_output;
 uniform sampler2D nrd_diff_fast_input;
 uniform sampler2D nrd_diff_noisy_input;
 uniform sampler2D nrd_history_length_tex;
+uniform float ph_nrd_max_accumulated_frame_num;
+uniform float ph_nrd_max_fast_accumulated_frame_num;
 
 const float nrd_fast_history_clamping_sigma_scale = 2.0;
 const float nrd_history_acceleration_amount = 0.3;
@@ -21,9 +22,6 @@ const float nrd_history_reset_amount = 0.5;
 const float nrd_history_reset_temporal_sigma_scale = 0.5;
 const float nrd_history_reset_spatial_sigma_scale = 4.5;
 const float RELAX_ANTILAG_ACCELERATION_AMOUNT_SCALE = 10.0;
-// Must match temporal accumulation constants for conditional clamping guard
-const float nrd_max_slow_history = 30.0;
-const float nrd_max_fast_history = 6.0;
 
 ivec2 nrd_clamp_texel(ivec2 sampleCoord, ivec2 texSize) {
     return clamp(sampleCoord, ivec2(0), texSize - 1);
@@ -40,6 +38,7 @@ void nrd_accumulate_fast_history_stats(ivec2 centerCoord, out vec3 meanYcocg, ou
     for (int dy = -2; dy <= 2; dy++) {
         for (int dx = -2; dx <= 2; dx++) {
             ivec2 sampleCoord = nrd_clamp_texel(centerCoord + ivec2(dx, dy), texSize);
+            // NRD uses viewZ < gDenoisingRange for validity; we approximate with normal length
             // Reference validity gate: skip sky/invalid pixels (equivalent to viewZ < denoisingRange)
             vec3 sampleNorm = texelFetch(radiosity_normal, sampleCoord, 0).xyz;
             if (dot(sampleNorm, sampleNorm) < 0.01) continue;
@@ -69,6 +68,7 @@ void nrd_accumulate_noisy_stats(ivec2 centerCoord, out vec3 noisyMean, out float
     for (int dy = -2; dy <= 2; dy++) {
         for (int dx = -2; dx <= 2; dx++) {
             ivec2 sampleCoord = nrd_clamp_texel(centerCoord + ivec2(dx, dy), texSize);
+            // NRD uses viewZ < gDenoisingRange for validity; we approximate with normal length
             // Reference validity gate: skip sky/invalid pixels
             vec3 sampleNorm = texelFetch(radiosity_normal, sampleCoord, 0).xyz;
             if (dot(sampleNorm, sampleNorm) < 0.01) continue;
@@ -89,7 +89,6 @@ void main() {
     if (!is_in_world()) {
         nrd_clamped_slow_out = vec4(0.0);
         nrd_clamped_fast_out = vec4(0.0);
-        nrd_history_length_out = vec4(0.0);
         return;
     }
 
@@ -120,7 +119,7 @@ void main() {
     // --- Clamp slow history into the box ---
     // Reference: only clamp when fast max frames < slow max frames (otherwise fast == slow, no clamping needed)
     vec3 clampedSlowYcocg = slowYcocg;
-    if (nrd_max_fast_history < nrd_max_slow_history)
+    if (ph_nrd_max_fast_accumulated_frame_num < ph_nrd_max_accumulated_frame_num)
         clampedSlowYcocg = clamp(slowYcocg, minBox, maxBox);
     vec3 clampedSlowRgb = nrd_ycocg_to_rgb(clampedSlowYcocg);
 
@@ -193,8 +192,8 @@ void main() {
     float momentCorrection = outSlowL * outSlowL - slowL * slowL;
     outSlowSecondMoment = max(0.0, outSlowSecondMoment + momentCorrection);
 
-    // History length is written back unchanged (ref line 353).
+    // History length is not written here; the temporal pass value persists (eliminates read/write feedback hazard).
     nrd_clamped_slow_out = nrd_pack_direct_history(outSlowRgb, outSlowSecondMoment);
-    nrd_clamped_fast_out = nrd_pack_direct_history(outFastRgb, 0.0);
-    nrd_history_length_out = vec4(nrd_encoded_history(historyLength), 0.0, 0.0, 1.0);
+    // Write raw RGB + explicit zero alpha to guarantee NRD parity (ref line 341: diffuse-fast alpha = 0).
+    nrd_clamped_fast_out = vec4(max(outFastRgb, vec3(0.0)), 0.0);
 }

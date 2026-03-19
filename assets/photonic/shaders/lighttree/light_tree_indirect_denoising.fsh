@@ -37,7 +37,10 @@ void main() {
 
     vec3 centerPosition = texelFetch(radiosity_position, tex_coord, 0).xyz;
     vec3 centerGeometryNormal = texelFetch(radiosity_normal, tex_coord, 0).xyz;
-    vec3 centerMappedNormal = texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz;
+    vec3 centerMappedNormal = nrd_select_surface_normal(
+        centerGeometryNormal,
+        texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz
+    );
     float centerLuma = denoiser_luminance(centerColor);
 
     vec4 varianceData = texelFetch(radiosity_indirect_variance, tex_coord, 0);
@@ -67,7 +70,10 @@ void main() {
             }
 
             vec3 samplePosition = texelFetch(radiosity_position, sampleCoord, 0).xyz;
-            vec3 sampleMappedNormal = texelFetch(radiosity_mapped_normal, sampleCoord, 0).xyz;
+            vec3 sampleMappedNormal = nrd_select_surface_normal(
+                texelFetch(radiosity_normal, sampleCoord, 0).xyz,
+                texelFetch(radiosity_mapped_normal, sampleCoord, 0).xyz
+            );
             float normalDot = max(dot(centerMappedNormal, sampleMappedNormal), 0.0);
             float normalWeight = pow(normalDot, phi_normal);
             if (normalWeight < 0.01) {
@@ -92,6 +98,6 @@ void main() {
     }
 
     vec3 denoisedRadiance = sumColor / sumWeight;
-    vec3 centerAlbedo = clamp(texelFetch(colortex10, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
+    vec3 centerAlbedo = clamp(texelFetch(radiosity_albedo, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
     indirect_denoised_out = vec4(nrd_safe_remodulate(denoisedRadiance, nrd_compute_diffuse_demodulation(centerAlbedo)), centerHistory);
 }

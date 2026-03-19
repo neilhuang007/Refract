@@ -1,459 +1,111 @@
-#ifndef PH_LIGHTTREE_LIGHT_TREE_INCLUDE
-#define PH_LIGHTTREE_LIGHT_TREE_INCLUDE
+#ifndef PH_RESTIR_REGIR_INCLUDE
+#define PH_RESTIR_REGIR_INCLUDE
 
-layout(std430) restrict readonly buffer ph_light_tree {
-    float light_tree_data[];
+// RTXDI: ReGIR output buffer — each cell has lightsPerCell fixed-position slots.
+// Stored as uvec2 matching the RIS tile buffer format:
+//   .x = lightIndex & RTXDI_LIGHT_INDEX_MASK  (bit 31 = compact bit, always 0)
+//   .y = floatBitsToUint(invSourcePdf / weight)
+// Invalid entries: .x = RTXDI_LIGHT_INDEX_MASK (all lower bits set), .y = 0.
+// Per-pixel code reads this exactly like a tile entry (same unpack path).
+
+// RTXDI COMPACT_BIT / INDEX_MASK
+const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
+const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
+
+layout(std430) restrict readonly buffer ph_regir_output_buffer {
+    uvec2 ph_regir_output_data[];
 };
 
-layout(std430) restrict readonly buffer ph_light_tree_indices {
-    int light_tree_indices[];
-};
+// ph_regir_grid_center: world-space center of the ReGIR grid (= camera position).
+// gridOrigin derived as: origin = center - vec3(gridRes) * cellSize * 0.5
+uniform vec3  ph_regir_grid_center;
+uniform int   ph_regir_grid_resolution;
+uniform int   ph_regir_lights_per_cell;
+uniform float ph_regir_cell_size;
+uniform float ph_regir_sampling_jitter;
 
-uniform int ph_light_tree_node_count;
-
-const float lt_min_distance_sq = 0.01f;
-const float lt_min_node_error = 1e-6f;
-const float lt_two_pi = 6.28318530718f;
-const float lt_pi = 3.14159265359f;
-
-struct LightTreeNode {
-    vec3 aabbMin;
-    int leftChild;
-    vec3 aabbMax;
-    int rightChild;
-    vec3 orientationAxis;
-    float totalIntensity;
-    int subtreeStart;
-    int subtreeCount;
-    int representativeLightIndex;
-    float thetaO;
-    float thetaE;
-    float energyVarianceCV;
-    float level;
-    float clusterRadius;
-};
-
-float lt_light_orientation_term(Light light, vec3 lightDirection);
-void lt_select_light_from_leaf(LightTreeNode leaf, vec3 shadingPos, vec3 shadingNormal, vec3 mappedNormal, vec3 albedoColor, inout uint rng, out int lightIndex, out float pdf);
-
-LightTreeNode lt_get_node(int index) {
-    int baseIndex = index * 16;
-    int packedMeta = floatBitsToInt(light_tree_data[baseIndex + 15]);
-    int packedDepth = (packedMeta >> 24) & 255;
-    int packedThetaO = (packedMeta >> 16) & 255;
-    int packedThetaE = (packedMeta >> 8) & 255;
-    int packedEnergyCV = packedMeta & 255;
-    // Tree nodes are stored in world space by Java, but shading positions and
-    // light positions (from load_light) are in camera-relative space (world - world_offset).
-    // Convert node AABB to camera-relative to match.  clusterRadius is unaffected
-    // because (max - offset) - (min - offset) = max - min.
-    vec3 aabbMin = vec3(light_tree_data[baseIndex + 0], light_tree_data[baseIndex + 1], light_tree_data[baseIndex + 2]) - world_offset;
-    vec3 aabbMax = vec3(light_tree_data[baseIndex + 4], light_tree_data[baseIndex + 5], light_tree_data[baseIndex + 6]) - world_offset;
-    float clusterRadius = 0.5f * length(max(aabbMax - aabbMin, vec3(0.0f)));
-    return LightTreeNode(
-        aabbMin,
-        floatBitsToInt(light_tree_data[baseIndex + 3]),
-        aabbMax,
-        floatBitsToInt(light_tree_data[baseIndex + 7]),
-        normalize(vec3(light_tree_data[baseIndex + 8], light_tree_data[baseIndex + 9], light_tree_data[baseIndex + 10]) + vec3(1e-6f)),
-        light_tree_data[baseIndex + 11],
-        floatBitsToInt(light_tree_data[baseIndex + 12]),
-        floatBitsToInt(light_tree_data[baseIndex + 13]),
-        floatBitsToInt(light_tree_data[baseIndex + 14]),
-        float(packedThetaO) / 255.0f * lt_pi,
-        float(packedThetaE) / 255.0f * lt_pi,
-        float(packedEnergyCV) / 255.0f,
-        float(packedDepth),
-        clusterRadius
-    );
+// RTXDI: RTXDI_ReGIR_WorldPosToCellIndex — center-based origin derivation
+bool regir_world_to_cell(vec3 shadingWorldPos, out ivec3 cellCoord) {
+    vec3 gridOrigin = ph_regir_grid_center - vec3(float(ph_regir_grid_resolution)) * (ph_regir_cell_size * 0.5);
+    vec3 relative   = shadingWorldPos - gridOrigin;
+    cellCoord       = ivec3(floor(relative / ph_regir_cell_size));
+    return all(greaterThanEqual(cellCoord, ivec3(0)))
+        && all(lessThan(cellCoord, ivec3(ph_regir_grid_resolution)));
 }
 
-bool lt_is_leaf(LightTreeNode node) {
-    return node.leftChild < 0 && node.rightChild < 0;
+int regir_flatten_cell(ivec3 cellCoord) {
+    return cellCoord.x + ph_regir_grid_resolution * (cellCoord.y + ph_regir_grid_resolution * cellCoord.z);
 }
 
-vec3 lt_node_centroid(LightTreeNode node) {
-    return 0.5f * (node.aabbMin + node.aabbMax);
-}
-
-float lt_luminance_coeff(vec3 color) {
-    return dot(color, vec3(0.2126f, 0.7152f, 0.0722f));
-}
-
-float lt_safe_acos(float value) {
-    return acos(clamp(value, -1.0f, 1.0f));
-}
-
-
-// Paper Eq. 1: min/max distance importance pair for a node AABB.
-// Returns vec2(importance_at_dMin, importance_at_dMax).
-// Direction/angle bounds still use the centroid as a conservative reference.
-vec2 lt_node_importance_minmax(LightTreeNode node, vec3 shadingPos, vec3 shadingNormal, vec3 mappedNormal, vec3 albedoColor) {
-    vec3 center = lt_node_centroid(node);
-    vec3 toCenter = center - shadingPos;
-    float distanceToCenter = max(length(toCenter), 1e-4f);
-    vec3 dirToNode = toCenter / distanceToCenter;
-
-    // Uncertainty angle sin/cos: replaces asin(r/d)
-    float sinU = clamp(node.clusterRadius / distanceToCenter, 0.0f, 0.9999f);
-    float cosU = sqrt(1.0f - sinU * sinU);
-
-    // Paper Eq. 3: incident term cos(max(θ_i - θ_u, 0))
-    // Algebraic: cos(acos(cosI) - asin(sinU)) = cosI*cosU + sinI*sinU
-    float cosI = dot(normalize(mappedNormal), dirToNode);
-    float incident;
-    if (cosI >= cosU) {
-        // θ_i ≤ θ_u → clamped to 0 → cos(0) = 1
-        incident = 1.0f;
-    } else {
-        float sinI = sqrt(max(1.0f - cosI * cosI, 0.0f));
-        incident = cosI * cosU + sinI * sinU;
+// Unpack a ReGIR output slot — same format as a RIS tile entry.
+// Returns false if the slot is invalid (lightIndex = sentinel or invSourcePdf = 0).
+bool regir_unpack_slot(int flatCellIndex, int cellSlot, out int lightIndex, out float invSourcePdf) {
+    int bufferIndex = flatCellIndex * ph_regir_lights_per_cell + cellSlot;
+    uvec2 slotData  = ph_regir_output_data[bufferIndex];
+    bool hasCompact = (slotData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u;
+    lightIndex      = int(slotData.x & RTXDI_LIGHT_INDEX_MASK);
+    invSourcePdf    = uintBitsToFloat(slotData.y);
+    // Sentinel for invalid: all INDEX_MASK bits set (== 0x7FFFFFFF)
+    bool isSentinel = (slotData.x == RTXDI_LIGHT_INDEX_MASK);
+    if (hasCompact || isSentinel || invSourcePdf <= 0.0) {
+        lightIndex   = -1;
+        invSourcePdf = 0.0;
+        return false;
     }
-    if (incident <= 0.0f) {
-        return vec2(0.0f);
+    return true;
+}
+
+// RTXDI: RTXDI_CalculateReGIRCellIndex — determines which cell this pixel falls in.
+// Returns true if inside the grid, with flatCellIndex set.
+// Applies query-time jitter matching RTXDI_ReGIR_GetJitterScale (samplingJitter * cellSize).
+bool regir_resolve_cell(vec3 shadingWorldPos, inout uint rng, out int flatCellIndex) {
+    flatCellIndex = -1;
+
+    // RTXDI: cellJitter = (rand3 - 0.5) * jitterScale
+    // jitterScale = samplingJitter * cellSize (grid mode), samplingJitter = 1.0 default
+    // Uses the passed coherentRng (not global rng_state) so neighboring pixels sharing the
+    // same 8x8 block draw the same jitter, matching RTXDI_CalculateReGIRCellIndex(coherentRng).
+    vec3 jitteredWorldPos = shadingWorldPos + (vec3(ph_RandomFloat01(rng), ph_RandomFloat01(rng), ph_RandomFloat01(rng)) - 0.5f) * ph_regir_sampling_jitter * ph_regir_cell_size;
+
+    ivec3 cellCoord;
+    if (!regir_world_to_cell(jitteredWorldPos, cellCoord)) {
+        return false;
     }
 
-    // Conty & Kulla Eq. 3: orientation term cos(max(θ - θ_o - θ_u, 0))
-    // Compute cos/sin of θ_o locally to avoid struct bloat / register pressure
-    float cosO = cos(node.thetaO);
-    float sinO = sin(node.thetaO);
-    float cosE = cos(node.thetaE);
-
-    // Combined offset: cos/sin(θ_o + θ_u) via angle addition formula
-    float cosA = dot(node.orientationAxis, -dirToNode);
-    float cosOU = cosO * cosU - sinO * sinU;
-    float sinOU = sinO * cosU + cosO * sinU;
-
-    float orientation;
-    // Guard: when θ_o + θ_u ≥ π the orientation cone covers all directions.
-    // sinOU ≤ 0 detects this (sin is negative in (π, 2π)).
-    // Without this guard, the cosine comparison wraps incorrectly past π,
-    // causing systematic underestimation for point/sphere lights (θ_o = π).
-    if (sinOU <= 0.0f || cosA >= cosOU) {
-        orientation = 1.0f;
-    } else {
-        float sinA = sqrt(max(1.0f - cosA * cosA, 0.0f));
-        orientation = cosA * cosOU + sinA * sinOU;
-    }
-
-    // Cutoff: θ' ≥ θ_e ↔ cos(θ') ≤ cos(θ_e)
-    if (orientation <= cosE) {
-        return vec2(0.0f);
-    }
-    if (orientation <= 0.0f) {
-        return vec2(0.0f);
-    }
-
-    float albedoWeight = clamp(lt_luminance_coeff(albedoColor), 0.05f, 1.0f);
-    float numerator = max(node.totalIntensity, 0.0f) * albedoWeight * incident * orientation;
-
-    // Closest point on AABB to shadingPos (squared distance)
-    vec3 closest = clamp(shadingPos, node.aabbMin, node.aabbMax);
-    vec3 closestDelta = closest - shadingPos;
-    float dMinSq = max(dot(closestDelta, closestDelta), lt_min_distance_sq);
-
-    // Farthest point on AABB from shadingPos (squared distance)
-    vec3 farthestDelta = max(abs(node.aabbMin - shadingPos), abs(node.aabbMax - shadingPos));
-    float dMaxSq = max(dot(farthestDelta, farthestDelta), lt_min_distance_sq);
-
-    return vec2(numerator / dMinSq, numerator / dMaxSq);
+    flatCellIndex = regir_flatten_cell(cellCoord);
+    return true;
 }
 
-// Paper Eq. 2: averaged branch probability from min/max importance pairs
-float lt_compute_branch_probability(vec2 wJ, vec2 wK) {
-    float sumMin = wJ.x + wK.x;
-    float sumMax = wJ.y + wK.y;
-    float pMin = sumMin > 0.0f ? wJ.x / sumMin : 0.5f;
-    float pMax = sumMax > 0.0f ? wJ.y / sumMax : 0.5f;
-    return (pMin + pMax) * 0.5f;
-}
-
-float lt_light_orientation_term(Light light, vec3 lightDirection) {
-    if (light.orientationSpread >= lt_pi) {
-        return 1.0f;
-    }
-    float axisAngle = lt_safe_acos(dot(light.emissionAxis, -lightDirection));
-    return max(cos(max(axisAngle - light.orientationSpread, 0.0f)), 0.0f);
-}
-
-// Paper Eq. 3 specialized for a single emitter (no cluster uncertainty).
-// Uses the light's actual attenuation model instead of 1/d² so the proposal
-// PDF closely tracks the target PDF, reducing ReSTIR weight variance.
-float lt_leaf_light_importance(Light light, vec3 shadingPos, vec3 shadingNormal, vec3 mappedNormal, vec3 albedoColor) {
-    vec3 toLight = light.position - shadingPos;
-    float distSq = max(dot(toLight, toLight), lt_min_distance_sq);
-    vec3 lightDir = normalize(toLight);
-
-    // Paper Eq. 3: |cos θ_i| — no cluster uncertainty for single emitters
-    float incident = max(dot(normalize(mappedNormal), lightDir), 0.0f);
-    if (incident <= 0.0f) {
-        return 0.0f;
-    }
-
-    // Orientation: match evaluation's emission cone falloff
-    float orientation = 1.0f;
-    if (light.orientationSpread < lt_pi) {
-        float axisAngle = lt_safe_acos(dot(light.emissionAxis, -lightDir));
-        orientation = max(cos(max(axisAngle - light.orientationSpread, 0.0f)), 0.0f);
-    }
-    if (orientation <= 0.0f) {
-        return 0.0f;
-    }
-
-    // Match evaluation's attenuation: 1/(atten.x + d²·falloff·atten.y)
-    // instead of paper's 1/d² — eliminates importance/evaluation mismatch for nearby lights
-    float attenuation = max(light.attenuation.x + distSq * light.falloff * light.attenuation.y, 1e-4f);
-    float albedoWeight = clamp(lt_luminance_coeff(albedoColor), 0.05f, 1.0f);
-    return max(light.intensity * albedoWeight * incident * orientation / attenuation, lt_min_node_error);
-}
-
-// Paper Equations 8-10: Split measure based on variance of (energy x geometric term)
-// E[g] = 1/(a*b), V[g] = E[g²] - E[g]², where g = 1/x² over [a,b]
-// E[g²] = (b²+ab+a²) / (3*a³*b³)  - paper Eq. 9
-// σ² = (V[e]*V[g] + V[e]*E[g]² + E[e]²*V[g]) * N²  - paper Eq. 10
-// Remapped to [0,1] via (1 / (1 + σ))^(1/4) as described in paper Sec. 5.4.
-float lt_leaf_variance_measure(LightTreeNode leaf, vec3 shadingPos) {
-    vec3 center = lt_node_centroid(leaf);
-    float distanceToCenter = max(length(center - shadingPos), 1e-4f);
-    float minDistance = max(distanceToCenter - leaf.clusterRadius, 1e-3f);
-    float maxDistance = max(distanceToCenter + leaf.clusterRadius, minDistance + 1e-3f);
-
-    // Paper Eq 8: E[g] = 1/(a*b) for g = 1/x^2
-    float geomMean = 1.0f / max(minDistance * maxDistance, 1e-4f);
-
-    // Paper Eq 9: V[g] = (b^2 + ab + a^2) / (3 * a^3 * b^3) - 1/(a^2 * b^2)
-    float a2 = minDistance * minDistance;
-    float b2 = maxDistance * maxDistance;
-    float a3 = a2 * minDistance;
-    float b3 = b2 * maxDistance;
-    float geomVariance = max((b2 + minDistance * maxDistance + a2)
-        / (3.0f * max(a3 * b3, 1e-6f)) - geomMean * geomMean, 0.0f);
-
-    // Paper Eq 10: sigma^2 = (V[e]*V[g] + V[e]*E[g]^2 + E[e]^2*V[g]) * N^2
-    // Using CV encoding: V[e] = CV^2 * (E/N)^2, so sigma^2 = E^2 * (CV^2*V[g] + CV^2*E[g]^2 + V[g])
-    float cv2 = leaf.energyVarianceCV * leaf.energyVarianceCV;
-    float totalE2 = max(leaf.totalIntensity * leaf.totalIntensity, 1e-8f);
-    float sigmaSq = totalE2 * (cv2 * geomVariance + cv2 * geomMean * geomMean + geomVariance);
-
-    float sigma = sqrt(max(sigmaSq, 0.0f));
-    return pow(1.0f / (1.0f + sigma), 0.25f);
-}
-
-bool lt_sample_light_from_node(LightTreeNode node, vec3 shadingPos, vec3 shadingNormal, vec3 mappedNormal, vec3 albedoColor, inout uint rng, out int lightIndex, out float lightPdf) {
+// RTXDI: RTXDI_SelectLocalLightReGIRRISTile — creates a RISTileInfo from the cell and
+// uses RTXDI_RandomlySelectLightDataFromRISTile, exactly matching the tile path.
+// The ReGIR output buffer uses the same uvec2 format as the tile buffer so the
+// unpack logic is identical.  Per-pixel code treats the cell's slots as a mini-tile.
+// rnd: stratified random in [0,1) for slot selection (InitialSampling.hlsli:280 RTXDI_STRATIFY_LOCAL_SAMPLING).
+// Caller computes: rnd = (rand_next_float() + float(i)) / float(numLocalSamples)
+bool regir_pick_light(int flatCellIndex, float rnd, out int lightIndex, out float lightPdf) {
     lightIndex = -1;
-    lightPdf = 0.0f;
-    if (lt_is_leaf(node)) {
-        lt_select_light_from_leaf(node, shadingPos, shadingNormal, mappedNormal, albedoColor, rng, lightIndex, lightPdf);
-        return lightIndex >= 0 && lightPdf > 0.0f;
+    lightPdf   = 0.0f;
+
+    // RTXDI: RTXDI_RandomlySelectLightDataFromRISTile(rnd, tileInfo, tileData, risBufferPtr)
+    // Pick uniformly from [0, lightsPerCell) using the caller-supplied stratified random.
+    int cellSlot = clamp(int(floor(rnd * float(ph_regir_lights_per_cell))), 0, ph_regir_lights_per_cell - 1);
+
+    float slotInvSourcePdf;
+    if (!regir_unpack_slot(flatCellIndex, cellSlot, lightIndex, slotInvSourcePdf)) {
+        lightIndex = -1;
+        lightPdf   = 0.0f;
+        return false;
     }
 
-    LightTreeNode current = node;
-    float pathPdf = 1.0f;
-    for (int depth = 0; depth < 32; depth++) {
-        if (lt_is_leaf(current)) {
-            float leafPdf = 0.0f;
-            lt_select_light_from_leaf(current, shadingPos, shadingNormal, mappedNormal, albedoColor, rng, lightIndex, leafPdf);
-            lightPdf = pathPdf * leafPdf;
-            return lightIndex >= 0 && leafPdf > 0.0f;
-        }
-        if (current.leftChild < 0 || current.rightChild < 0) {
-            return false;
-        }
-
-        LightTreeNode leftNode = lt_get_node(current.leftChild);
-        LightTreeNode rightNode = lt_get_node(current.rightChild);
-        // Paper Eq. 1-2: min/max distance dual-probability importance weighting
-        vec2 leftW = lt_node_importance_minmax(leftNode, shadingPos, shadingNormal, mappedNormal, albedoColor);
-        vec2 rightW = lt_node_importance_minmax(rightNode, shadingPos, shadingNormal, mappedNormal, albedoColor);
-        // Paper Algorithm 2: never bail out — fall back to uniform when both are zero
-        float leftBranchPdf = lt_compute_branch_probability(leftW, rightW);
-        float xi = float(ph_rand_pcg(rng)) / 4294967295.0f;
-        bool chooseLeft = xi < leftBranchPdf;
-        float chosenBranchPdf = max(chooseLeft ? leftBranchPdf : (1.0f - leftBranchPdf), 1e-6f);
-
-        pathPdf *= chosenBranchPdf;
-        current = chooseLeft ? leftNode : rightNode;
-    }
-    return false;
-}
-
-void lt_select_light_from_leaf(LightTreeNode leaf, vec3 shadingPos, vec3 shadingNormal, vec3 mappedNormal, vec3 albedoColor, inout uint rng, out int lightIndex, out float pdf) {
-    lightIndex = -1;
-    pdf = 0.0f;
-    if (!lt_is_leaf(leaf) || leaf.subtreeCount <= 0) {
-        return;
+    if (lightIndex < 0 || lightIndex >= ph_light_count) {
+        lightIndex = -1;
+        lightPdf   = 0.0f;
+        return false;
     }
 
-    // Single-pass reservoir sampling: select proportional to importance
-    // without needing to know the total in advance
-    float totalImportance = 0.0f;
-    float selectedImportance = 0.0f;
-    for (int i = 0; i < leaf.subtreeCount; i++) {
-        int idx = light_tree_indices[leaf.subtreeStart + i];
-        Light light = load_light(idx);
-        float importance = lt_leaf_light_importance(light, shadingPos, shadingNormal, mappedNormal, albedoColor);
-        totalImportance += importance;
-        // With probability importance/totalImportance, replace current selection
-        if (totalImportance > 0.0f && float(ph_rand_pcg(rng)) / 4294967295.0f < importance / totalImportance) {
-            lightIndex = idx;
-            selectedImportance = importance;
-        }
-    }
-
-    if (lightIndex < 0 || totalImportance <= 0.0f) {
-        // Fallback: uniform selection
-        lightIndex = light_tree_indices[leaf.subtreeStart];
-        pdf = 1.0f / float(max(leaf.subtreeCount, 1));
-        return;
-    }
-
-    pdf = max(selectedImportance / totalImportance, 1e-6f);
-}
-
-// Paper Algorithm 2: PickLight - direct stochastic tree traversal
-// Returns true if a light was successfully picked
-// Uses hierarchical sample warping: single xi drives entire traversal
-bool lt_pick_light(vec3 shadingPos, vec3 shadingNormal, vec3 mappedNormal, vec3 albedoColor, inout float xi, out int lightIndex, out float pdf) {
-    lightIndex = -1;
-    pdf = 0.0f;
-    if (ph_light_tree_node_count <= 0) return false;
-
-    LightTreeNode current = lt_get_node(0); // start at root
-    float pathPdf = 1.0f;
-
-    // Traverse from root to leaf using importance-weighted binary decisions
-    for (int depth = 0; depth < 32; depth++) {
-        if (lt_is_leaf(current)) {
-            // At leaf: select light from emitters using importance-weighted CDF
-            if (current.subtreeCount <= 0) return false;
-            if (current.subtreeCount == 1) {
-                lightIndex = light_tree_indices[current.subtreeStart];
-                pdf = pathPdf;
-                return true;
-            }
-
-            // Build CDF over leaf emitters
-            float totalImportance = 0.0f;
-            for (int i = 0; i < current.subtreeCount; i++) {
-                int idx = light_tree_indices[current.subtreeStart + i];
-                Light light = load_light(idx);
-                totalImportance += lt_leaf_light_importance(light, shadingPos, shadingNormal, mappedNormal, albedoColor);
-            }
-
-            if (totalImportance <= 0.0f) {
-                // Fallback: uniform selection
-                int selected = clamp(int(xi * float(current.subtreeCount)), 0, current.subtreeCount - 1);
-                lightIndex = light_tree_indices[current.subtreeStart + selected];
-                pdf = pathPdf / float(current.subtreeCount);
-                return true;
-            }
-
-            // Sample CDF using xi
-            float target = xi * totalImportance;
-            float cumulative = 0.0f;
-            for (int i = 0; i < current.subtreeCount; i++) {
-                int idx = light_tree_indices[current.subtreeStart + i];
-                Light light = load_light(idx);
-                float importance = lt_leaf_light_importance(light, shadingPos, shadingNormal, mappedNormal, albedoColor);
-                cumulative += importance;
-                if (cumulative >= target || i == current.subtreeCount - 1) {
-                    lightIndex = idx;
-                    pdf = pathPdf * max(importance / totalImportance, 1e-6f);
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        // Interior node: binary decision based on child importance
-        if (current.leftChild < 0 || current.rightChild < 0) return false;
-
-        LightTreeNode leftNode = lt_get_node(current.leftChild);
-        LightTreeNode rightNode = lt_get_node(current.rightChild);
-        // Paper Eq. 1-2: min/max distance dual-probability importance weighting
-        vec2 leftW = lt_node_importance_minmax(leftNode, shadingPos, shadingNormal, mappedNormal, albedoColor);
-        vec2 rightW = lt_node_importance_minmax(rightNode, shadingPos, shadingNormal, mappedNormal, albedoColor);
-        // Paper Algorithm 2: never bail out — uniform fallback when both are zero
-        float leftProb = lt_compute_branch_probability(leftW, rightW);
-        if (xi < leftProb) {
-            // Go left, rescale xi to [0, 1) within left branch
-            xi = xi / max(leftProb, 1e-6f);
-            pathPdf *= leftProb;
-            current = leftNode;
-        } else {
-            // Go right, rescale xi to [0, 1) within right branch
-            xi = (xi - leftProb) / max(1.0f - leftProb, 1e-6f);
-            pathPdf *= (1.0f - leftProb);
-            current = rightNode;
-        }
-    }
-    return false;
-}
-
-// Paper Algorithm 3: GetLights - adaptive splitting
-// When a node has high internal variance, explore BOTH children (iterative stack version)
-// Returns count of lights picked (stored in lightIndices/lightPdfs arrays)
-// GLSL does not support recursion — use an explicit stack
-const int lt_split_stack_size = 16;
-
-int lt_get_lights_split(
-    vec3 shadingPos, vec3 shadingNormal, vec3 mappedNormal, vec3 albedoColor,
-    float splitThreshold, inout uint rng,
-    inout int lightIndices[8], inout float lightPdfs[8], int maxLights
-) {
-    int count = 0;
-    int stackNodes[lt_split_stack_size];
-    float stackPdfs[lt_split_stack_size];
-    int stackTop = 0;
-
-    stackNodes[0] = 0; // root
-    stackPdfs[0] = 1.0f;
-    stackTop = 1;
-
-    while (stackTop > 0 && count < maxLights) {
-        stackTop--;
-        int nodeIndex = stackNodes[stackTop];
-        float parentPdf = stackPdfs[stackTop];
-
-        LightTreeNode node = lt_get_node(nodeIndex);
-
-        // Check if we should split (explore both children)
-        bool shouldSplit = false;
-        if (!lt_is_leaf(node) && node.leftChild >= 0 && node.rightChild >= 0) {
-            float variance = lt_leaf_variance_measure(node, shadingPos);
-            shouldSplit = variance < splitThreshold && count + 2 <= maxLights && stackTop + 2 <= lt_split_stack_size;
-        }
-
-        if (shouldSplit) {
-            // Paper Section 6: "splitting does not alter [the PDF] since it is
-            // a deterministic process."  Both children inherit parentPdf unchanged;
-            // only the stochastic decisions inside lt_sample_light_from_node
-            // contribute to the final PDF.
-            stackNodes[stackTop] = node.rightChild;
-            stackPdfs[stackTop] = parentPdf;
-            stackTop++;
-            stackNodes[stackTop] = node.leftChild;
-            stackPdfs[stackTop] = parentPdf;
-            stackTop++;
-        } else {
-            // No split: pick one light from this subtree
-            int lightIndex = -1;
-            float lightPdf = 0.0f;
-
-            if (lt_sample_light_from_node(node, shadingPos, shadingNormal, mappedNormal, albedoColor, rng, lightIndex, lightPdf)) {
-                if (lightIndex >= 0 && lightPdf > 0.0f && count < maxLights) {
-                    lightIndices[count] = lightIndex;
-                    lightPdfs[count] = parentPdf * lightPdf;
-                    count++;
-                }
-            }
-        }
-    }
-
-    return count;
+    // RTXDI carries invSourcePdf as-is without clamping; the reciprocal is taken later.
+    lightPdf = 1.0f / slotInvSourcePdf;
+    return true;
 }
 
 #endif
-
-
-

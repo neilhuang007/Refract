@@ -109,6 +109,16 @@ public class CommonUniformsMixin {
             Raytracer rt = Raytracer.INSTANCE;
             return rt == null ? 0 : rt.getWorldRegistry().getLightRegistry().lightCount();
          });
+         // RTXDI: center-based grid anchoring — origin derived in shader as center - gridRes * cellSize * 0.5
+         uniforms.uniform3f(UniformUpdateFrequency.PER_FRAME, "ph_regir_grid_center", () -> worldRegistry.get().getLightRegistry().getRegirGridCenter());
+         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_grid_resolution", () -> worldRegistry.get().getLightRegistry().getRegirGridResolution());
+         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_lights_per_cell", () -> worldRegistry.get().getLightRegistry().getRegirLightsPerCell());
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_cell_size", () -> 32.0F);
+         // ph_regir_build_samples is compute-only (set by RegirComputeProgram.dispatch()).
+         // ph_regir_sampling_jitter is needed by BOTH compute and fragment shaders:
+         // compute build uses it for cell radius expansion, per-pixel light_tree.glsl
+         // uses it for jitterScale = samplingJitter * cellSize (RTXDI_ReGIR_GetJitterScale).
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_sampling_jitter", () -> 1.0F);
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "light_blend_region_count", () -> worldRegistry.get().getLightBlendRegionCount());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "light_blend_factor", () -> worldRegistry.get().fetchLightBlendFactor());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_min", () -> worldRegistry.get().getLightBlendMin());

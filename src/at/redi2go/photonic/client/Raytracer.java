@@ -90,7 +90,7 @@ public class Raytracer implements Destructable {
          properties.isBlockLightEnabled().orElse(true)
       );
       Photonic.info(
-         "[Startup] photonics: lightingPipeline=LIGHT_TREE_RESTIR multithreading={} blockLight={} gi={}",
+         "[Startup] photonics: lightingPipeline=REGIR_RESTIR multithreading={} blockLight={} gi={}",
          PhotonicsStorage.DO_MULTITHREADING.value,
          properties.isBlockLightEnabled().orElse(true),
          properties.isGiEnabled().orElse(true)

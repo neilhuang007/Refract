@@ -10,10 +10,21 @@ public interface PhotonicsProperties {
    AlphaMode DEFAULT_ALPHA_MODE = AlphaMode.NONE;
    int DEFAULT_LIGHTTREE_INITIAL_SAMPLES = 12;
    int DEFAULT_LIGHTTREE_SPATIAL_REUSE_SAMPLES = 5;
-   float DEFAULT_LIGHTTREE_SPATIAL_REUSE_RADIUS = 10.0F;
+   float DEFAULT_LIGHTTREE_SPATIAL_REUSE_RADIUS = 30.0F;
    int DEFAULT_LIGHTTREE_ACCUMULATION_FRAMES = 15;
    int DEFAULT_LIGHTTREE_DENOISER_PASSES = 5;
    int DEFAULT_NRD_ATROUS_PASSES = 5;
+   float DEFAULT_RESTIR_DEPTH_THRESHOLD = 0.1f;
+   float DEFAULT_RESTIR_NORMAL_THRESHOLD = 0.5f;
+   int DEFAULT_RESTIR_TEMPORAL_MAX_HISTORY = 20;
+   float DEFAULT_RESTIR_TEMPORAL_DEPTH_THRESHOLD = 0.1f;
+   float DEFAULT_RESTIR_TEMPORAL_NORMAL_THRESHOLD = 0.5f;
+   int DEFAULT_RESTIR_SPATIAL_SAMPLE_COUNT = 1;
+   float DEFAULT_RESTIR_SPATIAL_RADIUS = 32.0f;
+   float DEFAULT_RESTIR_SPATIAL_DEPTH_THRESHOLD = 0.1f;
+   float DEFAULT_RESTIR_SPATIAL_NORMAL_THRESHOLD = 0.5f;
+   int DEFAULT_RESTIR_VISIBILITY_MAX_AGE = 4;
+   float DEFAULT_RESTIR_VISIBILITY_MAX_DISTANCE = 16.0f;
 
    OptionalBoolean isPhotonicsEnabled();
    float getRenderScale();
@@ -32,4 +43,15 @@ public interface PhotonicsProperties {
    OptionalBoolean useLightTreeSoftShadows();
    int getLightTreeDenoiserPasses();
    int getNrdAtrousPasses();
+   float getRestirDepthThreshold();
+   float getRestirNormalThreshold();
+   int getRestirTemporalMaxHistory();
+   float getRestirTemporalDepthThreshold();
+   float getRestirTemporalNormalThreshold();
+   int getRestirSpatialSampleCount();
+   float getRestirSpatialRadius();
+   float getRestirSpatialDepthThreshold();
+   float getRestirSpatialNormalThreshold();
+   int getRestirVisibilityMaxAge();
+   float getRestirVisibilityMaxDistance();
 }

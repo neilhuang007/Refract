@@ -5,66 +5,23 @@ in vec4 direction_vert_out;
 layout(location = 0) out vec4 position_frag_out;
 layout(location = 1) out vec4 normal_frag_out;
 layout(location = 2) out vec4 mapped_normal_frag_out;
-layout(location = 3) out vec4 reservoir_frag_out;
+layout(location = 3) out vec4 albedo_frag_out;
+layout(location = 4) out vec4 material_frag_out;
+layout(location = 5) out vec4 reservoir_frag_out;
+layout(location = 6) out vec4 reservoir_sample_frag_out;
+layout(location = 7) out vec4 reservoir_meta_frag_out;
+layout(location = 8) out vec4 motion_frag_out;  // screen-space motion vector
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
-#include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/common/lighting.glsl"
 
-uniform float ph_direct_sample_budget_scale;
-
-const int lt_sample_count = PH_LIGHTTREE_INITIAL_SAMPLES;
-const int lt_min_sample_count = 2;
-
-vec4 lt_encode_direct_proposal(Reservoir reservoir) {
-    if (!reservoir_is_valid(reservoir) || reservoir.weight_sum <= 0.0f || reservoir.samples <= 0.0f) {
-        return reservoir_encode(reservoir_new());
-    }
-
-    reservoir_compute_weight(reservoir);
-    return reservoir_encode(reservoir);
-}
-
-vec4 lt_build_direct_proposal(vec3 shadingPos, vec3 shadingNormal, vec3 mappedNormal, vec3 albedoColor, inout uint rng) {
-    if (ph_light_count <= 0 || ph_light_tree_node_count <= 0) {
-        return reservoir_encode(reservoir_new());
-    }
-
-    // Diagnostic mode: use one stochastic tree traversal per pixel so we can
-    // measure the cost of traversal count directly before redesigning the pipeline.
-    float xi = float(ph_rand_pcg(rng)) / 4294967295.0f;
-    int lightIndex = -1;
-    float lightPdf = 0.0f;
-
-    if (!lt_pick_light(shadingPos, shadingNormal, mappedNormal, albedoColor, xi, lightIndex, lightPdf)) {
-        return reservoir_encode(reservoir_new());
-    }
-    if (lightIndex < 0 || lightPdf <= 0.0f) {
-        return reservoir_encode(reservoir_new());
-    }
-
-    LightSample smple = light_sample_decode(float(lightIndex), shadingPos, false);
-    if (smple.index < 0 || smple.weight <= 0.0f) {
-        return reservoir_encode(reservoir_new());
-    }
-
-    Reservoir reservoir = reservoir_new();
-    reservoir_update(reservoir, smple, smple.weight / lightPdf, 1.0f);
-
-    return lt_encode_direct_proposal(reservoir);
-}
-
-vec4 lt_build_indirect_stage(vec3 shadingPos, vec3 shadingNormal) {
-    ivec3 inside = ivec3(lessThan(abs(fract(shadingPos) - 0.5f), vec3(0.48f)));
-    bool onEdge = inside.x + inside.y + inside.z <= 1;
-
-    vec3 indirectLighting = ph_trace_surface_radiance(shadingPos, shadingNormal, 0, 2);
-    if (!onEdge) {
-        ph_seed_indirect_cache(world_pos, block_normal, indirectLighting);
-    }
-
-    return vec4(indirectLighting, 1.0f);
+vec4 ph_extract_material(vec2 uv) {
+    vec4 spec = texture(specular, uv);
+    float smoothness = clamp(spec.r, 0.0f, 1.0f);
+    float roughness = clamp(1.0f - smoothness, 0.0f, 1.0f);
+    float metallic = clamp(spec.g, 0.0f, 1.0f);
+    float emission = clamp(spec.a, 0.0f, 1.0f);
+    return vec4(roughness, metallic, emission, smoothness);
 }
 
 void main() {
@@ -72,7 +29,13 @@ void main() {
         position_frag_out = vec4(0.0f);
         normal_frag_out = vec4(0.0f);
         mapped_normal_frag_out = vec4(0.0f);
-        reservoir_frag_out = vec4(0.0f);
+        albedo_frag_out = vec4(0.0f);
+        material_frag_out = vec4(0.0f);
+        Reservoir emptyReservoir = rtxdi_empty_reservoir();
+        reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
+        reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
+        reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(emptyReservoir);
+        motion_frag_out = vec4(0.0);
         return;
     }
 
@@ -80,18 +43,54 @@ void main() {
     rt_pos = world_pos - world_offset;
     bad_angle = is_bad_angle(world_pos, block_normal);
 
-    if (ph_debug_freeze_rng > 0.5f) {
-        rng_state = uint(uint(gl_FragCoord.x) * uint(1973) + uint(gl_FragCoord.y) * uint(9277)) | uint(1);
-    }
-
     position_frag_out = vec4(world_pos, 1.0f);
     normal_frag_out = vec4(normalize(block_normal), 1.0f);
     mapped_normal_frag_out = vec4(normalize(normal), 1.0f);
+    albedo_frag_out = vec4(clamp(albedo, vec3(0.0f), vec3(1.0f)), 1.0f);
+    material_frag_out = ph_extract_material((vec2(tex_coord) + vec2(0.5f)) / vec2(viewWidth, viewHeight));
 
-    uint lt_rng = rng_state;
-    if (ph_debug_lock_traversal_rng > 0.5f) {
-        rng_state = lt_rng;
+    DirectSurface currentSurface = lt_current_surface();
+
+    // RTXDI_SampleLightsForSurface: initial sampling (local lights + stubs for infinite/env/BRDF).
+    // ph_restir_initial_enable_visibility controls whether an initial visibility ray is traced
+    // to validate the selected sample (RTXDI_DIInitialSamplingParameters::enableInitialVisibility).
+    // SDK default (ReSTIRDI.cpp line 43): enableInitialVisibility = true.
+    // Sentinel pattern: < -0.5 → explicitly disabled, 0.0 (unbound) → SDK default enabled, >= 0.5 → enabled.
+    // RTXDI: initial visibility is applied INSIDE RTXDI_SampleLightsForSurface (InitialSampling.hlsli:661-668).
+    // Always call RTXDI_SampleLightsForSurface; apply visibility as a post-pass matching RTXDI structure.
+    Reservoir reservoir = RTXDI_SampleLightsForSurface(currentSurface);
+
+    // Initial visibility (RTXDI InitialSampling.hlsli lines 661-668)
+    bool enableInitialVisibility = ph_restir_initial_enable_visibility > -0.5;
+    if (enableInitialVisibility && RTXDI_IsValidDIReservoir(reservoir)) {
+        LightSample selectedLight = light_sample_new_at_position(
+            load_light(reservoir.lightIndex), reservoir.storedPosition, currentSurface);
+        float hitDist = light_sample_trace_hit_surface(selectedLight, false, currentSurface);
+        bool isVisible = hitDist > 0.0 && selectedLight.index >= 0;
+        if (!isVisible) {
+            RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0.0), true);
+        }
     }
 
-    reservoir_frag_out = lt_build_direct_proposal(rt_pos, block_normal, normal, albedo, lt_rng);
+    reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
+    reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
+    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+
+    // Compute screen-space motion vector matching RTXDI's screenSpaceMotion convention:
+    //   motion.xy = previousPixel - currentPixel  (RTXDI: prevPos = pixelPosition + motion.xy)
+    //   motion.z  = expectedPrevLinearDepth - currentLinearDepth  (depth delta)
+    // RTXDI convention: motion.xy = previousPixel - pixelPosition (integer pixel coords).
+    // prevPos = pixelPosition + motion.xy = previousPixel.
+    vec2 pixelPosition = vec2(tex_coord);  // integer pixel coordinate (matches RTXDI uint2 pixelPosition)
+    vec2 previousPixel = ph_reprojectf(
+        previous_modelview_projection,
+        world_pos,
+        vec2(viewWidth, viewHeight),
+        get_taa_jitter()
+    );
+    vec2 motionXY = previousPixel - pixelPosition;
+    float currentLinearDepth = length(world_pos - world_camera_position);
+    float expectedPrevLinearDepth = length(world_pos - previous_world_camera_position);
+    float motionZ = expectedPrevLinearDepth - currentLinearDepth;
+    motion_frag_out = vec4(motionXY, motionZ, 1.0);
 }

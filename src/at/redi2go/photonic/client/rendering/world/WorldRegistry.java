@@ -47,9 +47,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private static final int MAX_INCREMENTAL_LIGHT_REBUILDS_PER_FRAME = 1;
    private static final int MAX_DEFERRED_LIGHT_REBUILD_QUEUE = 3;
    private static final int MAX_PENDING_TRACED_LIGHT_MUTATIONS_BEFORE_FORCE_REBUILD = 128;
-   private static final int RT_VISIBILITY_KEEP_ALIVE_FRAMES = 6;
-   private static final float RT_FORWARD_CULL_DOT = 0.6F;
-   private static final float RT_PRELOAD_SIDE_DOT = 0.35F;
+   private static final int RT_VISIBILITY_KEEP_ALIVE_FRAMES = 24;
    private static final float RT_ALWAYS_KEEP_DISTANCE_BLOCKS = 48.0F;
    private static final float RT_MAX_RESIDENT_DISTANCE_BLOCKS = 64.0F;
    private static final int RT_MAX_RESIDENT_CHUNKS = 96;
@@ -309,7 +307,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             if (elapsed >= 5_000_000_000L) { // every 5 seconds
                float rate = this.rebuildsSinceLastLog / (elapsed / 1_000_000_000.0f);
                Photonic.info(
-                  "[Profiler] treeRebuildRate: rebuilds={} in {}s rate={}/s tracedDirty={} topology={} forceMutations={} pendingMutations={} deferred={}",
+                  "[Profiler] lightRebuildRate: rebuilds={} in {}s rate={}/s tracedDirty={} topology={} forceMutations={} pendingMutations={} deferred={}",
                   this.rebuildsSinceLastLog,
                   String.format("%.1f", elapsed / 1_000_000_000.0f),
                   String.format("%.1f", rate),
@@ -475,44 +473,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return false;
       }
 
-      if (this.recentlyVisibleRtChunks.containsKey(chunkPos)) {
-         return true;
-      }
-
-      if (distanceSquared <= 1.0e-4F) {
-         return true;
-      }
-
-      toChunk.normalize();
-      Vector3f forward = new Vector3f(0.0F, 0.0F, 1.0F);
-      net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
-      if (client.gameRenderer != null && client.gameRenderer.getCamera() != null) {
-         Vector3f horizontalPlane = client.gameRenderer.getCamera().getHorizontalPlane();
-         forward.set(horizontalPlane.x, horizontalPlane.y, horizontalPlane.z);
-         if (forward.lengthSquared() > 1.0e-4F) {
-            forward.normalize();
-         } else {
-            forward.set(0.0F, 0.0F, 1.0F);
-         }
-      }
-
-      float forwardDot = forward.dot(toChunk);
-      if (forwardDot >= RT_FORWARD_CULL_DOT) {
-         return true;
-      }
-
-      Vector3f up = new Vector3f(0.0F, 1.0F, 0.0F);
-      Vector3f right = new Vector3f(forward).cross(up);
-      if (right.lengthSquared() <= 1.0e-4F) {
-         right.set(1.0F, 0.0F, 0.0F);
-      } else {
-         right.normalize();
-      }
-
-      // Preload approximately 20 degrees to each side of the camera-forward cone
-      // so fast turns do not cause abrupt RT residency churn.
-      float sideDot = Math.abs(right.dot(toChunk));
-      return forwardDot >= RT_PRELOAD_SIDE_DOT && sideDot <= 0.9396926F;
+      // Keep all nearby chunks resident regardless of the current view direction.
+      // Directional culling makes the traced-light set rotate in and out during
+      // camera sweeps, which destabilizes both ReGIR cell contents and ReSTIR
+      // temporal history even when the camera returns to the same pose.
+      return true;
    }
 
    private void trimResidentChunksToCameraBudget(Set<PChunkPos> inboundNonEmptyChunks) {
@@ -547,20 +512,8 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       }
 
       float inverseDistance = 1.0F / distanceSquared;
-      Vector3f forward = new Vector3f(0.0F, 0.0F, 1.0F);
-      net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
-      if (client.gameRenderer != null && client.gameRenderer.getCamera() != null) {
-         Vector3f horizontalPlane = client.gameRenderer.getCamera().getHorizontalPlane();
-         forward.set(horizontalPlane.x, horizontalPlane.y, horizontalPlane.z);
-         if (forward.lengthSquared() > 1.0e-4F) {
-            forward.normalize();
-         }
-      }
-
-      toChunk.normalize();
-      float forwardBias = Math.max(0.0F, forward.dot(toChunk));
       boolean recentlyVisible = this.recentlyVisibleRtChunks.containsKey(chunkPos);
-      return inverseDistance + forwardBias + (recentlyVisible ? 0.5 : 0.0);
+      return inverseDistance + (recentlyVisible ? 0.5 : 0.0);
    }
    private double chunkDistanceToCamera(PChunkPos chunkPos) {
       Vector3f cameraPosition = new Vector3f(MinecraftAccessor.getCameraPosition());
@@ -798,7 +751,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       }
       this.lastLoggedChunkChurn = churn;
       Photonic.info(
-         "[Profiler] chunkChurn: loaded={} unloaded={} pendingLoads={} resident={} chunkSyncNeeded={} loadBudget={} loadTime={}ms residency(forwardDot>={},sidePreload>={},near={}m,ttl={})",
+         "[Profiler] chunkChurn: loaded={} unloaded={} pendingLoads={} resident={} chunkSyncNeeded={} loadBudget={} loadTime={}ms residency(mode={},near={}m,ttl={})",
          this.profLoadedChunkCount,
          this.profUnloadedChunkCount,
          this.pendingChunkLoads.size(),
@@ -806,8 +759,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          this.chunkSyncNeeded,
          this.chunks.isEmpty() ? INITIAL_CHUNK_LOAD_BUDGET : CHUNK_LOAD_BUDGET,
          this.profLoadChunkNanos / 1_000_000L,
-         RT_FORWARD_CULL_DOT,
-         RT_PRELOAD_SIDE_DOT,
+         "omnidirectional",
          RT_ALWAYS_KEEP_DISTANCE_BLOCKS / 16.0F,
          RT_VISIBILITY_KEEP_ALIVE_FRAMES
       );

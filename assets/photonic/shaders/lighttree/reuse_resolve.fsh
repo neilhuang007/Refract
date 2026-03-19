@@ -3,40 +3,72 @@
 in vec4 direction_vert_out;
 
 layout(location = 0) out vec4 reservoir_frag_out;
-layout(location = 1) out vec4 direct_frag_out;
+layout(location = 1) out vec4 reservoir_sample_frag_out;
+layout(location = 2) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
-#include "/photonics/lighttree/nrd_common.glsl"
 
+// Spatial bias correction mode — matches RTXDI_DISpatialResamplingParameters::biasCorrectionMode.
+// Corresponds to ReSTIRDI_SpatialBiasCorrectionMode and RTXDI_BIAS_CORRECTION_* defines
+// (RtxdiParameters.h lines 35-41):
+//   0 (OFF)        — 1/M normalization after combining (RTXDI_BIAS_CORRECTION_OFF)
+//   1 (BASIC)      — Two-pass MIS normalization without visibility rays (RTXDI_BIAS_CORRECTION_BASIC)
+//   2 (PAIRWISE)   — Pairwise MIS normalization assuming every sample visible (RTXDI_BIAS_CORRECTION_PAIRWISE)
+//   3 (RAY_TRACED) — Two-pass MIS with visibility ray per neighbor, unbiased (RTXDI_BIAS_CORRECTION_RAY_TRACED)
+// SDK default (ReSTIRDI.cpp line 79): BASIC (1). When unbound (0.0), use BASIC.
+// Use sentinel: -1.0 to explicitly request OFF; 0.0 (unbound) falls back to SDK default BASIC.
+uniform float ph_restir_spatial_bias_mode;
 
-const float lt_spatial_reuse_radius = 2.5f * PH_RENDER_SCALE;
-const float lt_direct_max_history = 48.0f;
+// SDK defaults from GetDefaultReSTIRDISpatialResamplingParams() (ReSTIRDI.cpp lines 74-87):
+//   discountNaiveSamples        = true   (SDK default; prevents over-weighting fresh samples)
+//   enableMaterialSimilarityTest = true  (SDK default; prevents cross-material light bleeding)
+//   numDisocclusionBoostSamples  = 8     (SDK default; boosted sample count on disocclusion)
+//   targetHistoryLength          = 0     (SDK default; 0 means: condition M < 0 never fires, NO boost)
+const float rtxdi_naive_sampling_m_threshold = 2.0f;
 
-vec4 lt_encode_direct_output(vec3 lighting, float hitDistance, vec3 albedoColor) {
-    return nrd_pack_direct_signal(max(lighting, vec3(0.0f)), hitDistance);
-}
+// Runtime uniforms wired to RTXDI_DISpatialResamplingParameters fields.
+// When unbound (0.0) each falls back to the SDK default documented above.
+// Use -1.0 as a sentinel to explicitly disable features whose SDK default is enabled.
+uniform float ph_restir_spatial_discount_naive;    // SDK default: true  (1.0); unbound 0.0 → SDK default true
+uniform float ph_restir_spatial_material_test;     // SDK default: true  (1.0); unbound 0.0 → SDK default true
+uniform float ph_restir_spatial_boost_samples;     // SDK default: 8
+uniform float ph_restir_spatial_target_history;    // SDK default: 0 (always boost)
 
-bool lt_is_valid_reservoir(Reservoir reservoir) {
-    return reservoir_is_valid(reservoir);
-}
+// RTXDI bias correction constants — matches RtxdiParameters.h lines 35-41 exactly.
+const int RTXDI_BIAS_CORRECTION_OFF = 0;
+const int RTXDI_BIAS_CORRECTION_BASIC = 1;
+const int RTXDI_BIAS_CORRECTION_PAIRWISE = 2;
+const int RTXDI_BIAS_CORRECTION_RAY_TRACED = 3;
 
-void lt_merge_reservoir(inout Reservoir dst, Reservoir src) {
-    if (!lt_is_valid_reservoir(src)) {
-        return;
+// Fix #9: rtxdi_unpack_reservoir_at_surface resets to empty on NaN/Inf (fix #2 in reuse_bridge.glsl).
+// When the reservoir has corrupt weightSum or targetPdf the unpack returns RTXDI_EmptyDIReservoir(),
+// causing this function to return false and the reservoir to remain at its empty initial state.
+bool lt_load_direct_temporal_reservoir(ivec2 uv, DirectSurface surface, out Reservoir reservoir) {
+    reservoir = rtxdi_empty_reservoir();
+    if (!lt_is_viewport_uv_in_bounds(uv)) {
+        return false;
     }
-    reservoir_update(
-        dst,
-        src.light,
-        src.light.weight * src.weight * src.samples,
-        src.samples
+
+    rtxdi_unpack_reservoir_at_surface(
+        reservoir,
+        texelFetch(radiosity_temporal_reservoirs, uv, 0),
+        texelFetch(radiosity_temporal_reservoir_samples, uv, 0),
+        texelFetch(radiosity_temporal_reservoir_meta, uv, 0),
+        surface,
+        false
     );
+    // RTXDI_UnpackDIReservoir (ReservoirStorage.hlsli lines 88-91) only sanitizes weightSum, not targetPdf.
+    // Match RTXDI exactly: do NOT check targetPdf for NaN here.
+    return rtxdi_is_valid_reservoir(reservoir) && !isnan(reservoir.weightSum);
 }
 
 void main() {
     if (!is_in_world()) {
-        reservoir_frag_out = vec4(0.0f);
-        direct_frag_out = vec4(0.0f);
+        Reservoir emptyReservoir = rtxdi_empty_reservoir();
+        reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
+        reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
+        reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(emptyReservoir);
         return;
     }
 
@@ -44,43 +76,278 @@ void main() {
     rt_pos = world_pos - world_offset;
     bad_angle = is_bad_angle(world_pos, block_normal);
 
-    Reservoir reservoir = reservoir_new();
-    reservoir_decode(reservoir, texelFetch(radiosity_reservoirs, tex_coord, 0), rt_pos, false);
+    // Variable names match RTXDI_DISpatialResamplingWithPairwiseMIS (SpatialResampling.hlsli line 36).
+    DirectSurface centerSurface = lt_current_surface();
+    // Don't abort on empty center sample — RTXDI proceeds unconditionally
+    // (SpatialResampling.hlsli line 52: centerSample.M is read without any prior
+    // validity guard). When centerSample is empty, neighbors via pairwise MIS
+    // or the non-pairwise path can still produce a valid merged result.
+    Reservoir centerSample = rtxdi_empty_reservoir();
+    lt_load_direct_temporal_reservoir(tex_coord, centerSurface, centerSample);
 
-    Reservoir mergedReservoir = reservoir_new();
-    lt_merge_reservoir(mergedReservoir, reservoir);
-
-    Reservoir previousReservoir = reservoir_new();
-    if (reservoir_reproject(previousReservoir)) {
-        previousReservoir.samples = min(20.0f * max(reservoir.samples, 1.0f), previousReservoir.samples);
-        lt_merge_reservoir(mergedReservoir, previousReservoir);
+    // Spatial bias correction mode from runtime uniform.
+    // SDK default (ReSTIRDI.cpp line 79): BASIC (1).
+    // When unbound (0.0) fall back to SDK default BASIC.
+    // Explicit mode values (RtxdiParameters.h lines 35-41):
+    //   0 = OFF        — 1/M normalization
+    //   1 = BASIC      — Two-pass non-pairwise MIS (SpatialResampling.hlsli lines 132-306)
+    //   2 = PAIRWISE   — Pairwise MIS
+    //   3 = RAY_TRACED — Two-pass with visibility ray per neighbor, unbiased
+    // Use -1.0 as a sentinel to explicitly request OFF (since 0 collides with unbound detection).
+    int biasCorrectionMode;
+    if (ph_restir_spatial_bias_mode < -0.5) {
+        // Sentinel -1.0: explicit OFF
+        biasCorrectionMode = RTXDI_BIAS_CORRECTION_OFF;
+    } else if (ph_restir_spatial_bias_mode < 0.5) {
+        // Unbound (0.0) or very small: use SDK default BASIC
+        biasCorrectionMode = RTXDI_BIAS_CORRECTION_BASIC;
+    } else {
+        biasCorrectionMode = int(round(ph_restir_spatial_bias_mode));
     }
 
-    Reservoir spatialReservoir = reservoir_new();
-    for (int i = 0; i < PH_LIGHTTREE_SPATIAL_REUSE_SAMPLES; i++) {
-        vec2 offset = 2.0 * vec2(rand_next_float(), rand_next_float()) - 1.0f;
-        ivec2 uv = ivec2(vec2(tex_coord) + offset * lt_spatial_reuse_radius);
-        if (!reservoir_reuse(spatialReservoir, uv)) {
-            continue;
+    // Runtime-controllable spatial parameters wired from ph_restir_spatial_* uniforms.
+    // SDK defaults (ReSTIRDI.cpp lines 83-84): discountNaiveSamples=true, enableMaterialSimilarityTest=true.
+    // Sentinel pattern for SDK-default-true booleans:
+    //   -1.0 → SDK default (true), 0.0 (unbound) → SDK default (true), >= 0.5 → true.
+    //   Explicit disable: pass -2.0 (< -1.5) to force false.
+    bool lt_discount_naive_samples = (ph_restir_spatial_discount_naive < -1.5) ? false : true;
+    bool lt_enable_material_similarity_test = (ph_restir_spatial_material_test < -1.5) ? false : true;
+
+    // Use ph_restir_spatial_sample_count runtime uniform; fall back to compile-time macro when unbound (0).
+    int lt_spatial_sample_count = ph_restir_spatial_sample_count > 0.0
+        ? max(int(ph_restir_spatial_sample_count), 1)
+        : max(PH_LIGHTTREE_SPATIAL_REUSE_SAMPLES, 1);
+
+    // numDisocclusionBoostSamples: SDK default exactly 8 (ReSTIRDI.cpp line 85).
+    // When unbound (0.0): use exactly 8 (not max with sampleCount — SDK default is 8 unconditionally).
+    // When explicitly set: use the provided value, clamped to at least the normal sample count.
+    int lt_disocclusion_boost_samples = (ph_restir_spatial_boost_samples > 0.0)
+        ? max(int(ph_restir_spatial_boost_samples), lt_spatial_sample_count)
+        : 8;
+
+    // targetHistoryLength: SDK default 0 (ReSTIRDI.cpp line 85).
+    // Semantics from SpatialResampling.hlsli: boost fires when M < targetHistoryLength.
+    // When targetHistoryLength == 0: M < 0 is never true, so NO boost by default.
+    // Boost only activates when targetHistoryLength > 0 and M < targetHistoryLength.
+    float lt_target_history_length = (ph_restir_spatial_target_history > 0.0)
+        ? ph_restir_spatial_target_history
+        : 0.0f;
+
+    // RTXDI SpatialResampling.hlsli lines 52-54: numSpatialSamples based on centerSample.M.
+    int numSpatialSamples = (lt_target_history_length > 0.0 && centerSample.M < lt_target_history_length)
+        ? max(lt_disocclusion_boost_samples, lt_spatial_sample_count)
+        : lt_spatial_sample_count;
+    // RTXDI_DISpatialResamplingWithPairwiseMIS does NOT clamp numSpatialSamples.
+    // The non-pairwise RTXDI_DISpatialResampling (line 174) clamps to 32, but that is
+    // a different function. No cap here to match the pairwise reference exactly.
+
+    // Use ph_restir_spatial_radius runtime uniform; fall back to compile-time macro when unbound (0).
+    float spatialRadius = ph_restir_spatial_radius > 0.0
+        ? max(ph_restir_spatial_radius * PH_RENDER_SCALE, 1.0f)
+        : max(PH_LIGHTTREE_SPATIAL_REUSE_RADIUS * PH_RENDER_SCALE, 1.0f);
+
+    // Use ph_restir_spatial_depth/normal_threshold runtime uniforms; fall back to constants when unbound (0).
+    float spatialDepthThreshold = ph_restir_spatial_depth_threshold > 0.0
+        ? ph_restir_spatial_depth_threshold
+        : lt_depth_threshold;
+    float spatialNormalThreshold = ph_restir_spatial_normal_threshold > 0.0
+        ? ph_restir_spatial_normal_threshold
+        : lt_surface_normal_threshold;
+
+    // RTXDI line 57: uint startIdx = uint(RTXDI_GetNextRandom(rng) * params.neighborOffsetMask);
+    // neighborOffsetMask = lt_neighbor_offset_count - 1 (power-of-2 bitmask).
+    int neighborOffsetMask = lt_neighbor_offset_count - 1;
+    int startIdx = int(rand_next_float() * float(neighborOffsetMask));
+
+    // State reservoir — matches RTXDI_DISpatialResamplingWithPairwiseMIS variable name "state".
+    Reservoir state = rtxdi_empty_reservoir();
+
+    if (biasCorrectionMode == RTXDI_BIAS_CORRECTION_PAIRWISE) {
+        // ============================================================
+        // PAIRWISE MIS path — RTXDI_DISpatialResamplingWithPairwiseMIS
+        // (SpatialResampling.hlsli lines 36-122)
+        // ============================================================
+        state.canonicalWeight = 0.0f;
+        // RTXDI SpatialResampling.hlsli line 58: uint validSpatialSamples = 0
+        int validSpatialSamples = 0;
+
+        for (int i = 0; i < numSpatialSamples; i++) {
+            ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(startIdx + i, spatialRadius);
+            // RTXDI SpatialResampling.hlsli line 65: int2 idx = int2(pixelPosition) + spatialOffset
+            ivec2 idx = tex_coord + spatialOffset;
+            // RTXDI SpatialResampling.hlsli line 66: RAB_ClampSamplePositionIntoView
+            idx = clamp(idx, ivec2(0), ivec2(viewWidth - 1, viewHeight - 1));
+            // RTXDI SpatialResampling.hlsli line 68: RTXDI_ActivateCheckerboardPixel
+            RTXDI_ActivateCheckerboardPixel(idx, false, int(ph_restir_active_checkerboard_field));
+
+            DirectSurface neighborSurface = lt_load_surface(idx);
+            if (!lt_is_valid_surface(neighborSurface)) continue;
+
+            if (!lt_surface_matches(centerSurface, neighborSurface, spatialDepthThreshold, spatialNormalThreshold)) continue;
+
+            if (lt_enable_material_similarity_test && !lt_materials_similar(centerSurface, neighborSurface)) continue;
+
+            // Always load the neighbor sample.
+            // RTXDI SpatialResampling.hlsli line 85: RTXDI_DIReservoir neighborSample = RTXDI_LoadDIReservoir(...)
+            Reservoir neighborSample = rtxdi_empty_reservoir();
+            lt_load_direct_temporal_reservoir(idx, neighborSurface, neighborSample);
+            rtxdi_prepare_spatial_reuse(neighborSample, spatialOffset);
+
+            // RTXDI SpatialResampling.hlsli lines 89-93: discountNaiveSamples check.
+            if (RTXDI_IsValidDIReservoir(neighborSample)) {
+                if (lt_discount_naive_samples && neighborSample.M <= rtxdi_naive_sampling_m_threshold) continue;
+            }
+
+            // RTXDI SpatialResampling.hlsli line 95: validSpatialSamples++
+            validSpatialSamples++;
+
+            // RTXDI SpatialResampling.hlsli line 98: if (neighborSample.M <= 0) continue;
+            if (neighborSample.M <= 0.0f) continue;
+
+            // RTXDI SpatialResampling.hlsli lines 101-104: RTXDI_StreamNeighborWithPairwiseMIS
+            RTXDI_StreamNeighborWithPairwiseMIS(
+                state,
+                rand_next_float(),
+                neighborSample,
+                neighborSurface,
+                centerSample,
+                centerSurface,
+                float(numSpatialSamples)
+            );
         }
-        lt_merge_reservoir(mergedReservoir, spatialReservoir);
+
+        // RTXDI SpatialResampling.hlsli line 108: canonicalWeight fallback when no valid neighbors.
+        if (validSpatialSamples <= 0) {
+            state.canonicalWeight = 1.0f;
+        }
+        // RTXDI SpatialResampling.hlsli line 111: RTXDI_StreamCanonicalWithPairwiseStep
+        RTXDI_StreamCanonicalWithPairwiseStep(state, rand_next_float(), centerSample, centerSurface);
+        // RTXDI SpatialResampling.hlsli line 113: RTXDI_FinalizeResampling(state, 1.0, float(max(1, validSpatialSamples)))
+        RTXDI_FinalizeResampling(state, 1.0, float(max(1, validSpatialSamples)));
+
+    } else {
+        // ============================================================
+        // Non-pairwise path — RTXDI_DISpatialResampling
+        // (SpatialResampling.hlsli lines 132-306).
+        // NOTE: This is a DIFFERENT RTXDI function from RTXDI_DISpatialResamplingWithPairwiseMIS.
+        // Supports OFF (1/M), BASIC (two-pass MIS), and RAY_TRACED modes.
+        // ============================================================
+
+        // First pass: combine center + neighbors into state (lines 149-237).
+        // normalizationWeight and selected track the BASIC/RAY_TRACED two-pass state.
+        int selected = -1;
+        int selectedLightIdx = -1;
+        vec3 selectedLightStoredPos = vec3(0.0f);
+        uint cachedResult = 0u;  // bitmask: bit i set iff neighbor i passed all surface tests
+
+        // Seed with center sample (SpatialResampling.hlsli line 164).
+        RTXDI_CombineDIReservoirs(state, centerSample, 0.5f, centerSample.targetPdf);
+        if (RTXDI_IsValidDIReservoir(centerSample)) {
+            selectedLightIdx = centerSample.lightIndex;
+            selectedLightStoredPos = centerSample.storedPosition;
+        }
+
+        for (int i = 0; i < numSpatialSamples; i++) {
+            ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(startIdx + i, spatialRadius);
+            ivec2 idx = tex_coord + spatialOffset;
+            idx = clamp(idx, ivec2(0), ivec2(viewWidth - 1, viewHeight - 1));
+            // RTXDI SpatialResampling.hlsli line 68: RTXDI_ActivateCheckerboardPixel
+            RTXDI_ActivateCheckerboardPixel(idx, false, int(ph_restir_active_checkerboard_field));
+
+            DirectSurface neighborSurface = lt_load_surface(idx);
+            if (!lt_is_valid_surface(neighborSurface)) continue;
+
+            if (!lt_surface_matches(centerSurface, neighborSurface, spatialDepthThreshold, spatialNormalThreshold)) continue;
+
+            if (lt_enable_material_similarity_test && !lt_materials_similar(centerSurface, neighborSurface)) continue;
+
+            Reservoir neighborSample = rtxdi_empty_reservoir();
+            lt_load_direct_temporal_reservoir(idx, neighborSurface, neighborSample);
+            rtxdi_prepare_spatial_reuse(neighborSample, spatialOffset);
+
+            // Cache this neighbor as valid (SpatialResampling.hlsli line 211).
+            cachedResult |= (1u << uint(i));
+
+            float neighborWeight = 0.0f;
+            if (RTXDI_IsValidDIReservoir(neighborSample)) {
+                if (lt_discount_naive_samples && neighborSample.M <= rtxdi_naive_sampling_m_threshold) continue;
+
+                // Evaluate neighbor's light at the center surface (SpatialResampling.hlsli lines 224-228).
+                LightSample candidateSample = light_sample_new_at_position(
+                    load_light(neighborSample.lightIndex),
+                    neighborSample.storedPosition,
+                    centerSurface
+                );
+                neighborWeight = lt_surface_target_pdf(centerSurface, candidateSample);
+            }
+
+            bool neighborSelected = RTXDI_CombineDIReservoirs(state, neighborSample, rand_next_float(), neighborWeight);
+            if (neighborSelected) {
+                selected = i;
+                selectedLightIdx = neighborSample.lightIndex;
+                selectedLightStoredPos = neighborSample.storedPosition;
+            }
+        }
+
+        // Second pass and finalization.
+        if (RTXDI_IsValidDIReservoir(state)) {
+            if (biasCorrectionMode >= RTXDI_BIAS_CORRECTION_BASIC) {
+                // Two-pass MIS normalization (SpatialResampling.hlsli lines 241-296).
+                float pi = state.targetPdf;
+                float piSum = state.targetPdf * centerSample.M;
+
+                for (int i = 0; i < numSpatialSamples; i++) {
+                    if ((cachedResult & (1u << uint(i))) == 0u) continue;
+
+                    ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(startIdx + i, spatialRadius);
+                    ivec2 idx = tex_coord + spatialOffset;
+                    idx = clamp(idx, ivec2(0), ivec2(viewWidth - 1, viewHeight - 1));
+
+                    DirectSurface neighborSurface = lt_load_surface(idx);
+
+                    // Evaluate selected sample at this neighbor's surface (line 267-270).
+                    float ps = 0.0f;
+                    if (selectedLightIdx >= 0 && selectedLightIdx < ph_light_count) {
+                        LightSample selectedAtNeighbor = light_sample_new_at_position(
+                            load_light(selectedLightIdx),
+                            selectedLightStoredPos,
+                            neighborSurface
+                        );
+                        ps = lt_surface_target_pdf(neighborSurface, selectedAtNeighbor);
+
+                        // RAY_TRACED: conservative visibility check on the neighbor surface
+                        // (SpatialResampling.hlsli lines 272-279: RAB_GetConservativeVisibility).
+                        // Reuses selectedAtNeighbor already computed above — no duplicate eval.
+                        // Traces a shadow ray; when the ray misses ps is zeroed.
+                        if (biasCorrectionMode == RTXDI_BIAS_CORRECTION_RAY_TRACED && ps > 0.0f) {
+                            if (selectedAtNeighbor.index >= 0) {
+                                LightSample traceSample = selectedAtNeighbor;
+                                float hitDist = light_sample_trace_hit_surface(traceSample, false, neighborSurface);
+                                if (hitDist <= 0.0f || traceSample.index < 0) {
+                                    ps = 0.0f;
+                                }
+                            } else {
+                                ps = 0.0f;
+                            }
+                        }
+                    }
+
+                    Reservoir neighborSample = rtxdi_empty_reservoir();
+                    lt_load_direct_temporal_reservoir(idx, neighborSurface, neighborSample);
+
+                    pi = (selected == i) ? ps : pi;
+                    piSum += ps * neighborSample.M;
+                }
+
+                RTXDI_FinalizeResampling(state, pi, piSum);
+            } else {
+                // OFF mode: 1/M normalization (SpatialResampling.hlsli line 301).
+                RTXDI_FinalizeResampling(state, 1.0f, state.M);
+            }
+        }
     }
 
-    if (!lt_is_valid_reservoir(mergedReservoir)) {
-        reservoir_frag_out = reservoir_encode(reservoir_new());
-        direct_frag_out = vec4(0.0f);
-        return;
-    }
-
-    float directHitDistance = 0.0f;
-    #ifdef PH_LIGHTTREE_SOFT_SHADOWS
-    directHitDistance = light_sample_trace_hit(mergedReservoir.light, true);
-    #else
-    directHitDistance = light_sample_trace_hit(mergedReservoir.light, false);
-    #endif
-    reservoir_compute_weight(mergedReservoir);
-    vec3 shadedDirect = mergedReservoir.light.color * mergedReservoir.weight * result_tint_color;
-    reservoir_frag_out = reservoir_encode(mergedReservoir);
-
-    direct_frag_out = lt_encode_direct_output(shadedDirect, directHitDistance, albedo);
+    reservoir_frag_out = rtxdi_pack_reservoir(state);
+    reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(state);
+    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(state);
 }
