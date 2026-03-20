@@ -30,7 +30,6 @@ const int RTXDI_BIAS_CORRECTION_RAY_TRACED = 3;
 
 // Runtime uniforms for temporal parameters — wired from LightTreeRenderer.
 // When unbound (0.0) each falls back to the RTXDI SDK default documented below.
-uniform float ph_restir_temporal_search_radius;          // SDK default: 4 (radius used in 9-tap search)
 uniform float ph_restir_temporal_permutation_sampling;   // SDK default: 1 (enabled) (ReSTIRDI.cpp line 61)
 uniform float ph_restir_temporal_visibility_shortcut;    // SDK default: 0 (disabled) (ReSTIRDI.cpp line 60)
 uniform uint  ph_restir_temporal_uniform_random;         // SDK: uniformRandomNumber (per-frame Jenkins hash)
@@ -97,7 +96,7 @@ void main() {
     // ph_light_reverse_mapping provides the exact reverse: currentIndex → previousIndex.
     int selectedLightPrevID = -1;
     if (RTXDI_IsValidDIReservoir(curSample)) {
-        int currentIdx = curSample.lightIndex;
+        int currentIdx = RTXDI_GetDIReservoirLightIndex(curSample);
         if (currentIdx >= 0 && currentIdx < ph_light_count) {
             selectedLightPrevID = ph_light_reverse_mapping[currentIdx];
         }
@@ -111,8 +110,10 @@ void main() {
     float previousM = 0.0;
     DirectSurface temporalSurface = lt_empty_surface();
 
-    bool allowHistory = !(light_reload && (ph_debug_disable_temporal_reset < 0.5));
-    if (allowHistory) {
+    // RTXDI: temporal resampling always executes — no engine-specific history gate.
+    // When the light list changes, RAB_TranslateLightIndex returns -1 for invalid lights,
+    // which kills stale reservoirs through the standard remap path (lines 216-234).
+    {
         // Step 4: Backproject using per-pixel motion vectors (RTXDI lines 57-67).
         // RTXDI line 57: float3 motion = screenSpaceMotion;
         vec3 motion = texelFetch(radiosity_motion, tex_coord, 0).xyz;
@@ -151,17 +152,11 @@ void main() {
         ivec2 spatialOffset = ivec2(0, 0);
 
         // Step 5: 9-tap search (RTXDI lines 75-109)
-        // RTXDI line 71: radius = (activeCheckerboardField == 0) ? 4 : 8
-        // SDK default: activeCheckerboardField = 0 (off). ph_restir_active_checkerboard_field
-        // mirrors this; when unbound (0) it defaults to disabled.
-        // ph_restir_temporal_search_radius: falls back to SDK default 4 when unbound.
-        int resolvedSearchRadius = (ph_restir_temporal_search_radius > 0.0)
-            ? max(int(ph_restir_temporal_search_radius), 1)
-            : 4;
-        // RTXDI: when checkerboard active, radius doubles (4 → 8).
-        float searchRadius = (ph_restir_active_checkerboard_field == 0u)
-            ? float(resolvedSearchRadius)
-            : float(resolvedSearchRadius * 2);
+        // RTXDI TemporalResampling.hlsli line 71: radius = (activeCheckerboardField == 0) ? 4 : 8
+        // This is a fixed SDK constant — not a runtime parameter. When checkerboard is off
+        // (field == 0, the Minecraft/Photonics default) the radius is 4. When checkerboard
+        // is active the radius doubles to 8 to cover both checkerboard fields.
+        float searchRadius = (int(ph_restir_active_checkerboard_field) == 0) ? 4.0 : 8.0;
         for (int i = 0; i < 9; i++) {
             ivec2 offset = ivec2(0, 0);
             if (i > 0) {
@@ -231,16 +226,16 @@ void main() {
 
         // Step 6: Load and combine previous sample (RTXDI lines 114-171)
         if (foundNeighbor) {
-            // RTXDI lines 119-120: Load previous reservoir.
-            // Fix #9: rtxdi_unpack_reservoir_at_surface now sanitizes NaN/Inf (fix #2);
-            // any reservoir with corrupt weightSum or targetPdf is reset to RTXDI_EmptyDIReservoir()
-            // before this call returns, ensuring prevSample is always in a valid state.
+            // RTXDI lines 118-120: convert prevPos through RTXDI_PixelPosToReservoirPos
+            // and load from sourceBufferIndex. Our "sourceBufferIndex" is always the
+            // previous frame's reservoir textures (prev_radiosity_*).
+            ivec2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(prevPos, int(ph_restir_active_checkerboard_field));
             Reservoir prevSample = RTXDI_EmptyDIReservoir();
             rtxdi_unpack_reservoir_at_surface(
                 prevSample,
-                texelFetch(prev_radiosity_reservoirs, prevPos, 0),
-                texelFetch(prev_radiosity_reservoir_samples, prevPos, 0),
-                texelFetch(prev_radiosity_reservoir_meta, prevPos, 0),
+                texelFetch(prev_radiosity_reservoirs, prevReservoirPos, 0),
+                texelFetch(prev_radiosity_reservoir_samples, prevReservoirPos, 0),
+                texelFetch(prev_radiosity_reservoir_meta, prevReservoirPos, 0),
                 temporalSurface,
                 false  // remap handled manually below to track originalPrevLightID
             );
@@ -253,16 +248,17 @@ void main() {
             prevSample.age += 1.0;
 
             // RTXDI line 125: save original light ID before remap
-            int originalPrevLightID = prevSample.lightIndex;
+            int originalPrevLightID = RTXDI_GetDIReservoirLightIndex(prevSample);
 
             // RTXDI lines 128-148: light index remapping.
             // RTXDI: mappedLightID = RAB_TranslateLightIndex(prevLightIndex, false)
             // The mapping SSBO is sized to maxLights; previous-frame indices can exceed
             // ph_light_count (current count) but still be valid in the mapping buffer.
             if (RTXDI_IsValidDIReservoir(prevSample)) {
+                int previousFrameLightIndex = RTXDI_GetDIReservoirLightIndex(prevSample);
                 int mappedLightID = -1;
-                if (prevSample.lightIndex >= 0 && prevSample.lightIndex < ph_lights_array_mapping.length()) {
-                    mappedLightID = ph_lights_array_mapping[prevSample.lightIndex];
+                if (previousFrameLightIndex >= 0 && previousFrameLightIndex < ph_lights_array_mapping.length()) {
+                    mappedLightID = ph_lights_array_mapping[previousFrameLightIndex];
                 }
 
                 // RTXDI line 137: if (mappedLightID < 0) — only kill on negative (light disappeared).
@@ -270,15 +266,14 @@ void main() {
                 if (mappedLightID < 0) {
                     // RTXDI lines 140-141: kill the reservoir
                     prevSample.weightSum = 0.0;
-                    prevSample.lightIndex = -1;
-                    // RTXDI: only clears weightSum and lightData. storedPosition (uvData) is left as-is.
+                    prevSample.lightData = 0u;
+                    // RTXDI: only clears weightSum and lightData. sampleUv (uvData) is left as-is.
                 } else {
                     // RTXDI lines 145-146: only update the light ID.
-                    // RTXDI does NOT update storedPosition on a successful remap — the sample point
+                    // RTXDI does NOT update sampleUv on a successful remap — the stored sample point
                     // is immutable (it was importance-sampled on the original light surface).
-                    // Equivalent to: prevSample.lightData = mappedLightID | RTXDI_DIReservoir_LightValidBit;
-                    prevSample.lightIndex = mappedLightID;
-                    // storedPosition stays unchanged — it is the immutable stored sample point.
+                    prevSample.lightData = rtxdi_make_light_data(mappedLightID);
+                    // sampleUv stays unchanged — it is the immutable stored sample point.
                 }
             }
 
@@ -330,13 +325,12 @@ void main() {
             float temporalP = 0.0;
 
             // RTXDI lines 184-190: RAB_LoadLightInfo(selectedLightPrevID, true).
-            // Load the previous-frame light and evaluate its target PDF at temporalSurface
-            // using state.storedPosition (the stored sample point). prevLight is hoisted here
-            // so it can be reused for the RAY_TRACED visibility trace below (Fix #6).
-            Light prevLight = load_previous_light(selectedLightPrevID);
-            LightSample prevLightSample = light_sample_new_at_position(
-                prevLight,
-                state.storedPosition,
+            // Reconstruct the selected previous-frame sample from stored reservoir replay data,
+            // keeping the original previous-frame light ID and immutable stored UV semantics.
+            Reservoir selectedPrevReplay = state;
+            selectedPrevReplay.lightData = rtxdi_make_light_data(selectedLightPrevID);
+            LightSample prevLightSample = light_sample_decode_previous(
+                selectedPrevReplay,
                 temporalSurface
             );
             temporalP = max(lt_surface_target_pdf(temporalSurface, prevLightSample), 0.0);

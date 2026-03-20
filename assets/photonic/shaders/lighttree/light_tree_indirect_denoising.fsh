@@ -98,6 +98,5 @@ void main() {
     }
 
     vec3 denoisedRadiance = sumColor / sumWeight;
-    vec3 centerAlbedo = clamp(texelFetch(radiosity_albedo, tex_coord, 0).rgb, vec3(0.04), vec3(1.0));
-    indirect_denoised_out = vec4(nrd_safe_remodulate(denoisedRadiance, nrd_compute_diffuse_demodulation(centerAlbedo)), centerHistory);
+    indirect_denoised_out = vec4(denoisedRadiance, centerHistory);
 }

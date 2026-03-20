@@ -11,8 +11,26 @@ layout(local_size_x = 256, local_size_y = 1) in;
 // ---------------------------------------------------------------------------
 // SSBOs
 // ---------------------------------------------------------------------------
-layout(std430, binding = 5) restrict writeonly buffer ph_ris_tile_buffer {
-    uvec2 ph_ris_tile_data[];
+layout(std430, binding = 5) restrict buffer ph_ris_buffer {
+    uvec2 ph_ris_data[];
+};
+
+// RTXDI companion buffer: packed light data stored alongside each RIS entry.
+// Each entry occupies 4 uvec4 (64 bytes), matching the shared Photonics compact-light contract.
+// Indexing: risBufferPtr * ph_compact_light_stride + [0..3].
+layout(std430, binding = 6) restrict buffer ph_ris_compact_light_data {
+    uvec4 ph_compact_light_data[];
+};
+
+const uint ph_compact_light_stride = 4u;
+
+// Light list — needed to read light data for compact storage.
+// vec4[0]: position.xyz, blockId(w)
+// vec4[1]: color.xyz, intensity(w)
+// vec4[2]: attenuation.xy, falloff(z), block_radius(w)
+// vec4[3]: emissionAxis.xyz, orientationSpread(w)
+layout(std140, binding = 0) restrict readonly buffer ph_light_list_presample {
+    vec4 ph_lights_array_presample[];
 };
 
 // ---------------------------------------------------------------------------
@@ -22,6 +40,7 @@ uniform int   ph_light_count;
 uniform int   ph_ris_tile_size;
 uniform int   ph_ris_tile_count;
 uniform uint  ph_ris_frame_index;    // RTXDI: g_Const.runtimeParams.frameIndex (raw frame count)
+uniform uint  ph_ris_tile_buffer_offset;
 
 // PDF mipmap texture (2D R32F, mip 0 = per-light flux at Z-curve positions)
 uniform sampler2D u_LocalLightPdfTexture;
@@ -166,11 +185,26 @@ void RTXDI_SamplePdfMipmap(
 }
 
 // RTXDI COMPACT_BIT / INDEX_MASK — stored on lightIndex in RIS tile entries.
-// bit 31 = 1 when compact light data is available in u_RisLightDataBuffer.
-// We never write compact data (RAB_StoreCompactLightInfo always returns false),
-// so bit 31 is always 0.  The mask is applied on read to stay structurally correct.
+// bit 31 = 1 when compact light data is available in ph_compact_light_data.
 const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
 const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
+
+// ---------------------------------------------------------------------------
+// RAB_StoreCompactLightInfo — Photonics compact-light packer.
+// Stores the full 4xvec4 light record in 4xuvec4 companion payload so the
+// compact entry reloads one coherent light object instead of a truncated subset.
+// Returns true on success (compact bit should be set on the RIS entry).
+// ---------------------------------------------------------------------------
+bool RAB_StoreCompactLightInfo(uint risBufferPtr, int lightIndex) {
+    if (lightIndex < 0) return false;
+    int base = lightIndex * 4; // light_size = 4
+    uint dst = risBufferPtr * ph_compact_light_stride;
+    ph_compact_light_data[dst + 0u] = floatBitsToUint(ph_lights_array_presample[base + 0]);
+    ph_compact_light_data[dst + 1u] = floatBitsToUint(ph_lights_array_presample[base + 1]);
+    ph_compact_light_data[dst + 2u] = floatBitsToUint(ph_lights_array_presample[base + 2]);
+    ph_compact_light_data[dst + 3u] = floatBitsToUint(ph_lights_array_presample[base + 3]);
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Main — RTXDI_PresampleLocalLights
@@ -207,8 +241,12 @@ void main() {
     float invSourcePdf = (pdf > 0.0) ? (1.0 / pdf) : 0.0;
 
     // RTXDI: RIS_BUFFER[risBufferPtr] = uint2(lightIndex, asuint(invSourcePdf))
-    // lightIndex stored with bit 31 = 0 (no compact data — RAB_StoreCompactLightInfo always false).
-    // INDEX_MASK applied to ensure bit 31 is never set by accident.
-    uint risBufferPtr = sampleInTile + tileIndex * tileSize;
-    ph_ris_tile_data[risBufferPtr] = uvec2(lightIndex & RTXDI_LIGHT_INDEX_MASK, floatBitsToUint(invSourcePdf));
+    // Attempt compact storage; if successful, set COMPACT_BIT on the stored index.
+    uint risBufferPtr = ph_ris_tile_buffer_offset + sampleInTile + tileIndex * tileSize;
+    int signedLightIndex = int(lightIndex);
+    uint packedIndex = lightIndex & RTXDI_LIGHT_INDEX_MASK;
+    if (RAB_StoreCompactLightInfo(risBufferPtr, signedLightIndex)) {
+        packedIndex |= RTXDI_LIGHT_COMPACT_BIT;
+    }
+    ph_ris_data[risBufferPtr] = uvec2(packedIndex, floatBitsToUint(invSourcePdf));
 }

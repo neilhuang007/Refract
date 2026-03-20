@@ -1,9 +1,12 @@
 #ifndef PHOTONICS_NRD_COMMON_GLSL
 #define PHOTONICS_NRD_COMMON_GLSL
 
+#include "/photonics/lighttree/nrd_material_id.glsl"
+
 const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;
+const float PH_NRD_CONFIDENCE_DISABLED = 0.0;
 
 float nrd_luminance(vec3 value) {
     return dot(value, PH_NRD_LUMA_COEFF);
@@ -34,10 +37,10 @@ vec3 nrd_saturate(vec3 value) {
     return clamp(value, vec3(0.0), vec3(1.0));
 }
 
-// NRD epsilon-normalize: no fallback direction, matches NRD's Math::SafeNormalize
+// NRD _NRD_SafeNormalize: rsqrt(lenSq + 1e-9) — additive epsilon, not max
 vec3 nrd_safe_normal(vec3 normalValue) {
     float lenSq = dot(normalValue, normalValue);
-    return normalValue * inversesqrt(max(lenSq, 1e-6));
+    return normalValue * inversesqrt(lenSq + 1e-9);
 }
 
 vec3 nrd_select_surface_normal(vec3 geometryNormal, vec3 mappedNormal) {
@@ -49,18 +52,28 @@ vec3 nrd_select_surface_normal(vec3 geometryNormal, vec3 mappedNormal) {
     return mappedNormal * inversesqrt(mappedLenSq);
 }
 
+// NRD: historyLength / 255.0 — no saturate, purely linear
 float nrd_encoded_history(float historyLength) {
-    return nrd_saturate(historyLength / PH_NRD_HISTORY_SCALE);
+    return historyLength / PH_NRD_HISTORY_SCALE;
 }
 
+// NRD: 255.0 * historyTex — no extra clamp
 float nrd_decoded_history(vec4 encodedHistory) {
-    return clamp(encodedHistory.r * PH_NRD_HISTORY_SCALE, 0.0, PH_NRD_HISTORY_SCALE);
+    return encodedHistory.r * PH_NRD_HISTORY_SCALE;
 }
 
-// Plane distance uses view-Z semantics; threshold is pre-scaled by caller using viewZ
+// NRD RELAX_Common.hlsli:105 GetPlaneDistanceWeight_Atrous — binary A-trous variant
+// threshold is pre-scaled by caller using viewZ
 float nrd_plane_distance_weight(vec3 centerPos, vec3 centerNormal, vec3 samplePos, float threshold) {
     float planeDistance = abs(dot(samplePos - centerPos, centerNormal));
     return planeDistance < threshold ? 1.0 : 0.0;
+}
+
+// NRD RELAX_Common.hlsli:98 GetPlaneDistanceWeight — normalized form for temporal/history passes
+// Uses abs(dot(dp, n)) / centerViewZ <= threshold
+float nrd_plane_distance_weight_normalized(vec3 centerPos, vec3 centerNormal, vec3 samplePos, float centerViewZ, float threshold) {
+    float planeDistance = abs(dot(samplePos - centerPos, centerNormal));
+    return (planeDistance / max(centerViewZ, 1e-3)) < threshold ? 1.0 : 0.0;
 }
 
 // Normal weight floor matches NRD RELAX_HistoryFix.cs.hlsl:21
@@ -97,11 +110,15 @@ float nrd_normal_weight_atrous(vec3 centerNormal, vec3 sampleNormal, float norma
     return nrd_compute_weight(angle, normalWeightParam, 0.0);
 }
 
-// NRD Common.hlsli:239 CompareMaterials: binary material ID comparison.
-// Roughness channel used as material discriminator (proxy for NRD's materialID from normal/roughness pack).
+// Area-ReSTIR / PathTracer reference writes materialID = 0.f in NRD-facing guide buffers.
+const float NRD_DEFAULT_MIN_MATERIAL = 0.0;
+
+float nrd_material_weight_with_min(vec4 currentMaterial, vec4 previousMaterial, float minMaterial) {
+    return 1.0;
+}
+
 float nrd_material_weight(vec4 currentMaterial, vec4 previousMaterial) {
-    float roughnessDelta = abs(currentMaterial.x - previousMaterial.x);
-    return roughnessDelta < 0.02 ? 1.0 : 0.0;
+    return 1.0;
 }
 
 float nrd_luminance_weight(float centerLuma, float sampleLuma, float sigma) {
@@ -114,14 +131,57 @@ float nrd_compute_variance(float secondMoment, float mean) {
     return max(secondMoment - mean * mean, 0.0);
 }
 
-// TODO: exact NRD demodulation is view-dependent (uses BRDF/FG tables); this is a simplified approximation.
-vec3 nrd_compute_diffuse_demodulation(vec3 albedoColor) {
-    return max(albedoColor, vec3(0.04));
+// NRD.hlsli:516 _NRD_EnvironmentTerm_Rtg — Ray Tracing Gems Chapter 32 Eq 4
+// GGX VNDF + Schlick approximation for environment BRDF integral
+vec3 nrd_environment_term_rtg(vec3 Rf0, float NoV, float roughness) {
+    float m = clamp(roughness * roughness, 0.0, 1.0);
+
+    vec4 X = vec4(1.0, NoV, NoV * NoV, NoV * NoV * NoV);
+    vec4 Y = vec4(1.0, m, m * m, m * m * m);
+
+    // M1 (2x2), M2 (3x3) for bias
+    float bias = (0.99044 * X.x + -1.28514 * X.y) * Y.x + (1.29678 * X.x + -0.755907 * X.y) * Y.y;
+    float biasDenom = (1.0 * X.x + 2.92338 * X.y + 59.4188 * X.w) * Y.x
+                    + (20.3225 * X.x + -27.0302 * X.y + 222.592 * X.w) * Y.y
+                    + (121.563 * X.x + 626.13 * X.y + 316.627 * X.w) * Y.z;
+    bias /= max(biasDenom, 1e-6); // NRD_EPS = 1e-6
+
+    // M3 (2x2), M4 (3x3) for scale
+    float scale = (0.0365463 * X.x + 3.32707 * X.y) * Y.x + (9.0632 * X.x + -9.04756 * X.y) * Y.y;
+    float scaleDenom = (1.0 * X.x + 3.59685 * X.z + -1.36772 * X.w) * Y.x
+                     + (9.04401 * X.x + -16.3174 * X.z + 9.22949 * X.w) * Y.y
+                     + (5.56589 * X.x + 19.7886 * X.z + -20.2123 * X.w) * Y.z;
+    scale /= max(scaleDenom, 1e-6); // NRD_EPS = 1e-6
+
+    return clamp(Rf0 * scale + bias, vec3(0.0), vec3(1.0));
 }
 
-// TODO: exact NRD specular demodulation is view-dependent (uses BRDF/FG tables); this is a simplified approximation.
+// NRD.hlsli:733 NRD_MaterialFactors — view-dependent demodulation/remodulation
+// NRD.hlsli:101,105 — NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02, NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1
+const float NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02;
+const float NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1;
+
+void nrd_material_factors(vec3 N, vec3 V, vec3 albedo, vec3 Rf0, float roughness, out vec3 diffFactor, out vec3 specFactor) {
+    float NoV = abs(dot(N, V));
+    vec3 Fenv = nrd_environment_term_rtg(Rf0, NoV, roughness);
+
+    diffFactor = (vec3(1.0) - Fenv) * albedo;
+    diffFactor = mix(vec3(NRD_MATERIAL_FACTOR_MIN_SCALE), vec3(1.0), diffFactor);
+
+    specFactor = Fenv;
+    specFactor *= mix(vec3(NRD_ROUGHNESS_FACTOR_MIN_SCALE), vec3(1.0), roughness);
+    specFactor = mix(vec3(NRD_MATERIAL_FACTOR_MIN_SCALE), vec3(1.0), specFactor);
+}
+
+// Convenience wrappers for diffuse-only and specular-only demodulation
+vec3 nrd_compute_diffuse_demodulation(vec3 albedoColor) {
+    // Simplified fallback when N/V not available (e.g., GI accumulation)
+    return max(albedoColor, vec3(NRD_MATERIAL_FACTOR_MIN_SCALE));
+}
+
 vec3 nrd_compute_specular_demodulation(vec3 albedoColor, float metallic) {
-    return max(mix(vec3(0.04), albedoColor, clamp(metallic, 0.0, 1.0)), vec3(0.04));
+    // Simplified fallback when N/V not available
+    return max(mix(vec3(0.04), albedoColor, clamp(metallic, 0.0, 1.0)), vec3(NRD_MATERIAL_FACTOR_MIN_SCALE));
 }
 
 vec3 nrd_safe_demodulate(vec3 irradiance, vec3 factor) {
@@ -133,25 +193,15 @@ vec3 nrd_safe_remodulate(vec3 radiance, vec3 factor) {
 }
 
 float nrd_confidence_from_history(float historyLength, float maxHistoryLength) {
-    return clamp(historyLength / max(maxHistoryLength, 1.0), 0.0, 1.0);
+    return PH_NRD_CONFIDENCE_DISABLED;
 }
 
 float nrd_gradient_to_confidence(vec3 previousRadiance, vec3 currentRadiance, float historyLength, float maxHistoryLength) {
-    float prevLuma = max(nrd_luminance(previousRadiance), 0.02);
-    float currLuma = max(nrd_luminance(currentRadiance), 0.02);
-    float gradient = abs(currLuma - prevLuma) / max(max(prevLuma, currLuma), 1e-3);
-    float gradientConfidence = 1.0 - clamp(gradient * 1.5, 0.0, 1.0);
-    float historyConfidence = nrd_confidence_from_history(historyLength, maxHistoryLength);
-    return min(historyConfidence, gradientConfidence);
+    return PH_NRD_CONFIDENCE_DISABLED;
 }
 
-// Project-specific: no NRD counterpart. Kept for internal use only.
 float nrd_hit_distance_confidence(float hitDistance, float viewDistance) {
-    if (hitDistance <= 0.0) {
-        return 0.0;
-    }
-    float normalized = hitDistance / max(viewDistance, 1.0);
-    return 1.0 / (1.0 + normalized);
+    return PH_NRD_CONFIDENCE_DISABLED;
 }
 
 struct NrdDirectSignal {
@@ -165,17 +215,19 @@ struct NrdDirectHistorySample {
 };
 
 
-// NRD.hlsli RELAX_FrontEnd_PackRadianceAndHitDist: sanitize NaN/Inf, clamp to FP16 range
+// NRD.hlsli RELAX_FrontEnd_PackRadianceAndHitDist: check invalid FIRST, then clamp to FP16 range
 vec4 nrd_pack_direct_signal(vec3 radiance, float hitDistance) {
-    radiance = clamp(radiance, vec3(0.0), vec3(NRD_FP16_MAX));
+    // NRD order: zero invalid values first, then clamp to [0, FP16_MAX]
     radiance = mix(radiance, vec3(0.0), vec3(any(isnan(radiance)) || any(isinf(radiance)) ? 1.0 : 0.0));
-    hitDistance = clamp(hitDistance, 0.0, NRD_FP16_MAX);
+    radiance = clamp(radiance, vec3(0.0), vec3(NRD_FP16_MAX));
     hitDistance = isnan(hitDistance) || isinf(hitDistance) ? 0.0 : hitDistance;
+    hitDistance = clamp(hitDistance, 0.0, NRD_FP16_MAX);
     return vec4(radiance, hitDistance);
 }
 
+// NRD RELAX unpack is passthrough — no clamping
 NrdDirectSignal nrd_unpack_direct_signal(vec4 encodedSignal) {
-    return NrdDirectSignal(max(encodedSignal.rgb, vec3(0.0)), max(encodedSignal.a, 0.0));
+    return NrdDirectSignal(encodedSignal.rgb, encodedSignal.a);
 }
 
 float nrd_direct_second_moment(vec3 radiance) {

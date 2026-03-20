@@ -3,6 +3,7 @@ package at.redi2go.photonic.client.rendering.opengl.rendering;
 import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
 import org.joml.Vector3f;
+import org.joml.Vector3i;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
@@ -20,7 +21,7 @@ public class RegirComputeProgram {
     private boolean compiled = false;
 
     private int locGridCenter = -1;
-    private int locGridResolution = -1;
+    private int locGridCells = -1;
     private int locLightsPerCell = -1;
     private int locCellSize = -1;
     private int locLightCount = -1;
@@ -29,6 +30,8 @@ public class RegirComputeProgram {
     private int locTileCount = -1;
     private int locBuildSamples = -1;
     private int locSamplingJitter = -1;
+    private int locRegirRisBufferOffset = -1;
+    private int locRisTileBufferOffset = -1;
 
     // -----------------------------------------------------------------------
     // Presample tiles program (regir_presample_tiles.glsl)
@@ -41,6 +44,7 @@ public class RegirComputeProgram {
     private int presampleLocTileCount = -1;
     private int presampleLocFrameSeed = -1;
     private int presampleLocPdfTextureSize = -1;
+    private int presampleLocRisTileBufferOffset = -1;
 
     // -----------------------------------------------------------------------
     // PDF mipmap texture (RTXDI 2D R32F texture for light flux)
@@ -53,23 +57,22 @@ public class RegirComputeProgram {
     // -----------------------------------------------------------------------
     // SSBO binding points
     // -----------------------------------------------------------------------
-    private static final int bindLightList     = 0;
-    private static final int bindLightCdf      = 1;
+    private static final int bindLightList          = 0;
+    private static final int bindLightCdf           = 1;
     // binding 2 unused — no cell counts SSBO (RTXDI uses fixed-position writes)
-    private static final int bindRegirOutput   = 3;  // uvec2 ReGIR output buffer (replaces indices+pdfs)
-    // binding 4 unused — merged into bindRegirOutput
-    private static final int bindRisTileBuffer = 5;
+    // binding 3 removed — merged into unified ph_ris_buffer at binding 5
+    // binding 4 unused
+    private static final int bindRisBuffer          = 5;  // RTXDI_RIS_BUFFER: tiles at [0], ReGIR at [tileCount*tileSize]
+    private static final int bindCompactLightData   = 6;  // RTXDI companion buffer: packed light data alongside RIS entries
 
     // -----------------------------------------------------------------------
     // RIS tile buffer parameters
     // RTXDI defaults: tileSize = 1024, tileCount = 128.
     // We use tileSize = 256 to keep dispatch count at 128*256/256 = 128 groups.
     // -----------------------------------------------------------------------
-    private static final int tileSize  = 256;
-    private static final int tileCount = 128;
+    public static final int tileSize  = 256;
+    public static final int tileCount = 128;
 
-    // GPU-side RIS tile buffer SSBO
-    private int tileBufferId = 0;
 
     // -----------------------------------------------------------------------
     // Build program compilation
@@ -109,16 +112,18 @@ public class RegirComputeProgram {
     }
 
     private void cacheUniformLocations() {
-        this.locGridCenter     = GL20.glGetUniformLocation(this.programId, "ph_regir_grid_center");
-        this.locGridResolution = GL20.glGetUniformLocation(this.programId, "ph_regir_grid_resolution");
-        this.locLightsPerCell  = GL20.glGetUniformLocation(this.programId, "ph_regir_lights_per_cell");
-        this.locCellSize       = GL20.glGetUniformLocation(this.programId, "ph_regir_cell_size");
-        this.locLightCount     = GL20.glGetUniformLocation(this.programId, "ph_light_count");
-        this.locFrameSeed      = GL20.glGetUniformLocation(this.programId, "ph_ris_frame_index");
-        this.locTileSize       = GL20.glGetUniformLocation(this.programId, "ph_ris_tile_size");
-        this.locTileCount      = GL20.glGetUniformLocation(this.programId, "ph_ris_tile_count");
-        this.locBuildSamples   = GL20.glGetUniformLocation(this.programId, "ph_regir_build_samples");
-        this.locSamplingJitter = GL20.glGetUniformLocation(this.programId, "ph_regir_sampling_jitter");
+        this.locGridCenter            = GL20.glGetUniformLocation(this.programId, "ph_regir_grid_center");
+        this.locGridCells             = GL20.glGetUniformLocation(this.programId, "ph_regir_grid_cells");
+        this.locLightsPerCell         = GL20.glGetUniformLocation(this.programId, "ph_regir_lights_per_cell");
+        this.locCellSize              = GL20.glGetUniformLocation(this.programId, "ph_regir_cell_size");
+        this.locLightCount            = GL20.glGetUniformLocation(this.programId, "ph_light_count");
+        this.locFrameSeed             = GL20.glGetUniformLocation(this.programId, "ph_ris_frame_index");
+        this.locTileSize              = GL20.glGetUniformLocation(this.programId, "ph_ris_tile_size");
+        this.locTileCount             = GL20.glGetUniformLocation(this.programId, "ph_ris_tile_count");
+        this.locBuildSamples          = GL20.glGetUniformLocation(this.programId, "ph_regir_build_samples");
+        this.locSamplingJitter        = GL20.glGetUniformLocation(this.programId, "ph_regir_sampling_jitter");
+        this.locRisTileBufferOffset   = GL20.glGetUniformLocation(this.programId, "ph_ris_tile_buffer_offset");
+        this.locRegirRisBufferOffset  = GL20.glGetUniformLocation(this.programId, "ph_regir_ris_buffer_offset");
     }
 
     // -----------------------------------------------------------------------
@@ -154,7 +159,6 @@ public class RegirComputeProgram {
         this.presampleProgramId = program;
         this.cachePresampleUniformLocations();
         this.presampleCompiled = true;
-        this.createTileBuffer();
 
         Photonic.info("[RegirCompute] Presample shader compiled (programId={})", program);
     }
@@ -165,20 +169,7 @@ public class RegirComputeProgram {
         this.presampleLocTileCount       = GL20.glGetUniformLocation(this.presampleProgramId, "ph_ris_tile_count");
         this.presampleLocFrameSeed       = GL20.glGetUniformLocation(this.presampleProgramId, "ph_ris_frame_index");
         this.presampleLocPdfTextureSize  = GL20.glGetUniformLocation(this.presampleProgramId, "ph_pdf_texture_size");
-    }
-
-    // -----------------------------------------------------------------------
-    // RIS tile buffer creation
-    // -----------------------------------------------------------------------
-    private void createTileBuffer() {
-        if (this.tileBufferId != 0) return;
-        this.tileBufferId = GL15.glGenBuffers();
-        int bufferSize = tileCount * tileSize * 8; // 8 bytes per uvec2
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, this.tileBufferId);
-        GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, bufferSize, GL15.GL_DYNAMIC_DRAW);
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
-        Photonic.info("[RegirCompute] RIS tile buffer created ({}×{} entries, {} bytes)",
-                tileCount, tileSize, bufferSize);
+        this.presampleLocRisTileBufferOffset = GL20.glGetUniformLocation(this.presampleProgramId, "ph_ris_tile_buffer_offset");
     }
 
     // -----------------------------------------------------------------------
@@ -258,7 +249,8 @@ public class RegirComputeProgram {
     /**
      * Dispatches the presample-tiles pass followed by the ReGIR build pass.
      *
-     * @param regirOutput   uvec2 SSBO — merged ReGIR output buffer (replaces separate index+pdf SSBOs)
+     * @param risBuffer     uvec2 SSBO — unified RIS buffer (tiles at [0..tileCount*tileSize), ReGIR after).
+     *                      Must be sized: (tileCount*tileSize + gridRes^3*lightsPerCell) * 8 bytes.
      * @param gridCenter    world-space center of the ReGIR grid (= camera position)
      * @param numBuildSamples RTXDI default = 8 (ReGIR.h:141)
      * @param samplingJitter  RTXDI default = 1.0
@@ -266,9 +258,10 @@ public class RegirComputeProgram {
     public void dispatch(
             GlMemoryManager lightList,
             GlMemoryManager lightCdf,
-            GlMemoryManager regirOutput,
+            GlMemoryManager risBuffer,
+            GlMemoryManager compactLightData,
             Vector3f gridCenter,
-            int gridResolution,
+            Vector3i gridCells,
             int lightsPerCell,
             float cellSize,
             int lightCount,
@@ -281,16 +274,29 @@ public class RegirComputeProgram {
         // RTXDI: both passes receive the raw frame index as frameIndex
         // (no LCG hashing — Jenkins hash inside the shader handles decorrelation)
 
+        // Tile buffer offset is always 0 (tiles start at the beginning of the buffer).
+        // ReGIR output follows the tiles: offset = tileCount * tileSize.
+        int risTileBufferOffset   = 0;
+        int regirRisBufferOffset  = tileCount * tileSize;
+
+        // Clear the compact light data buffer before any dispatch so stale data cannot
+        // be read when a slot was not written this frame (e.g. build-samples == 0).
+        this.clearCompactLightDataBuffer(compactLightData);
+        GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+
         // Pass 1: presample tiles (RTXDI_PresampleLocalLights)
-        if (this.presampleCompiled && this.tileBufferId != 0) {
+        if (this.presampleCompiled) {
             GL20.glUseProgram(this.presampleProgramId);
 
             GL20.glUniform1i(this.presampleLocLightCount, lightCount);
             GL20.glUniform1i(this.presampleLocTileSize,   tileSize);
             GL20.glUniform1i(this.presampleLocTileCount,  tileCount);
             GL30.glUniform1ui(this.presampleLocFrameSeed, frameCounter);
+            GL30.glUniform1ui(this.presampleLocRisTileBufferOffset, risTileBufferOffset);
 
-            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindRisTileBuffer, this.tileBufferId);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindLightList,        lightList.getId());
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindRisBuffer,        risBuffer.getId());
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindCompactLightData, compactLightData.getId());
 
             // Bind PDF mipmap texture and set its uniforms
             if (this.pdfTextureId != 0) {
@@ -320,13 +326,14 @@ public class RegirComputeProgram {
         // Pass 2: ReGIR build (RTXDI_PresampleLocalLightsForReGIR)
         GL20.glUseProgram(this.programId);
 
-        this.setUniforms(gridCenter, gridResolution, lightsPerCell, cellSize, lightCount, frameCounter, numBuildSamples, samplingJitter);
-        this.bindBuildSsbos(lightList, lightCdf, regirOutput);
-        this.clearRegirOutputBuffer(regirOutput);
+        this.setUniforms(gridCenter, gridCells, lightsPerCell, cellSize, lightCount, frameCounter,
+                numBuildSamples, samplingJitter, risTileBufferOffset, regirRisBufferOffset);
+        this.bindBuildSsbos(lightList, lightCdf, risBuffer, compactLightData);
+        this.clearRegirRegion(risBuffer, regirRisBufferOffset, gridCells.x * gridCells.y * gridCells.z, lightsPerCell);
 
         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
 
-        int totalSlots    = gridResolution * gridResolution * gridResolution * lightsPerCell;
+        int totalSlots    = gridCells.x * gridCells.y * gridCells.z * lightsPerCell;
         int workGroupSize = 256; // matches layout(local_size_x = 256) in regir_build.glsl
         int numGroups     = (totalSlots + workGroupSize - 1) / workGroupSize;
         GL43.glDispatchCompute(numGroups, 1, 1);
@@ -336,44 +343,57 @@ public class RegirComputeProgram {
         GL20.glUseProgram(0);
     }
 
-    private void setUniforms(Vector3f gridCenter, int gridResolution, int lightsPerCell,
+    private void setUniforms(Vector3f gridCenter, Vector3i gridCells, int lightsPerCell,
                               float cellSize, int lightCount, int frameSeed,
-                              int numBuildSamples, float samplingJitter) {
-        GL20.glUniform3f(this.locGridCenter,     gridCenter.x, gridCenter.y, gridCenter.z);
-        GL20.glUniform1i(this.locGridResolution, gridResolution);
-        GL20.glUniform1i(this.locLightsPerCell,  lightsPerCell);
-        GL20.glUniform1f(this.locCellSize,        cellSize);
-        GL20.glUniform1i(this.locLightCount,      lightCount);
-        GL30.glUniform1ui(this.locFrameSeed,      frameSeed);
-        GL20.glUniform1i(this.locTileSize,        tileSize);
-        GL20.glUniform1i(this.locTileCount,       tileCount);
-        GL30.glUniform1ui(this.locBuildSamples,   numBuildSamples);
-        GL20.glUniform1f(this.locSamplingJitter,  samplingJitter);
+                              int numBuildSamples, float samplingJitter,
+                              int risTileBufferOffset, int regirRisBufferOffset) {
+        GL20.glUniform3f(this.locGridCenter,              gridCenter.x, gridCenter.y, gridCenter.z);
+        GL20.glUniform3i(this.locGridCells,               gridCells.x, gridCells.y, gridCells.z);
+        GL20.glUniform1i(this.locLightsPerCell,           lightsPerCell);
+        GL20.glUniform1f(this.locCellSize,                cellSize);
+        GL20.glUniform1i(this.locLightCount,              lightCount);
+        GL30.glUniform1ui(this.locFrameSeed,              frameSeed);
+        GL20.glUniform1i(this.locTileSize,                tileSize);
+        GL20.glUniform1i(this.locTileCount,               tileCount);
+        GL30.glUniform1ui(this.locBuildSamples,           numBuildSamples);
+        GL20.glUniform1f(this.locSamplingJitter,          samplingJitter);
+        GL30.glUniform1ui(this.locRisTileBufferOffset,    risTileBufferOffset);
+        GL30.glUniform1ui(this.locRegirRisBufferOffset,   regirRisBufferOffset);
     }
 
     private void bindBuildSsbos(
             GlMemoryManager lightList,
             GlMemoryManager lightCdf,
-            GlMemoryManager regirOutput) {
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindLightList,   lightList.getId());
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindLightCdf,    lightCdf.getId());
-        // Unified uvec2 ReGIR output buffer (replaces separate indices + pdfs)
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindRegirOutput, regirOutput.getId());
-        if (this.presampleCompiled && this.tileBufferId != 0) {
-            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindRisTileBuffer, this.tileBufferId);
-        }
+            GlMemoryManager risBuffer,
+            GlMemoryManager compactLightData) {
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindLightList,        lightList.getId());
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindLightCdf,         lightCdf.getId());
+        // Single unified RIS buffer at binding 5 — tiles in [0, tileCount*tileSize), ReGIR after.
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindRisBuffer,        risBuffer.getId());
+        // Compact light data companion buffer at binding 6 — parallels the RIS buffer.
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindCompactLightData, compactLightData.getId());
     }
 
-    // RTXDI: each thread writes to its fixed slot.
-    // Clear the unified uvec2 output buffer to zeros before dispatch.
-    // A zero-clear is sufficient: the build shader writes every slot it owns (RTXDI
-    // fixed-position model), and any slot NOT written stays as uvec2(0,0) which the
-    // per-pixel reader treats as invalid because invSourcePdf (y) == 0.
-    // glClearBufferData with GL_R32UI fills every 32-bit word with 0, covering both
-    // components of each uvec2 entry.
-    private void clearRegirOutputBuffer(GlMemoryManager regirOutput) {
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, regirOutput.getId());
-        GL43.glClearBufferData(GL43.GL_SHADER_STORAGE_BUFFER, GL30.GL_R32UI, GL11.GL_RED, GL11.GL_UNSIGNED_INT, new int[]{0});
+    // RTXDI: each build thread writes to its fixed slot.
+    // Clear only the ReGIR region before dispatch — the presample pass already
+    // filled the tile region.  A zero-clear is sufficient: build threads write
+    // every owned slot, and any unwritten slot stays uvec2(0,0) (invalid).
+    // glClearBufferSubData clears only the ReGIR sub-range.
+    private void clearRegirRegion(GlMemoryManager risBuffer, int regirEntryOffset, int totalCells, int lightsPerCell) {
+        long regirByteOffset = (long) regirEntryOffset * 8L; // 8 bytes per uvec2
+        long regirByteSize   = (long) totalCells * lightsPerCell * 8L;
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, risBuffer.getId());
+        GL43.glClearBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, GL30.GL_R32UI,
+                regirByteOffset, regirByteSize, GL11.GL_RED, GL11.GL_UNSIGNED_INT, new int[]{0});
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
+    // Clear the entire compact light data buffer to zero before each frame's presample pass.
+    // This ensures the compact-bit load path never reads leftover data from a previous frame.
+    private void clearCompactLightDataBuffer(GlMemoryManager compactLightData) {
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, compactLightData.getId());
+        GL43.glClearBufferData(GL43.GL_SHADER_STORAGE_BUFFER, GL30.GL_R32UI,
+                GL11.GL_RED, GL11.GL_UNSIGNED_INT, new int[]{0});
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
     }
 
@@ -398,9 +418,6 @@ public class RegirComputeProgram {
         if (this.presampleProgramId != 0) {
             GL20.glDeleteProgram(this.presampleProgramId);
         }
-        if (this.tileBufferId != 0) {
-            GL15.glDeleteBuffers(this.tileBufferId);
-        }
         if (this.pdfTextureId != 0) {
             GL11.glDeleteTextures(this.pdfTextureId);
         }
@@ -409,26 +426,28 @@ public class RegirComputeProgram {
         this.compiled           = false;
         this.presampleProgramId = 0;
         this.presampleCompiled  = false;
-        this.tileBufferId       = 0;
         this.pdfTextureId       = 0;
         this.pdfTextureSize     = 0;
         this.pdfTextureMipLevels = 0;
 
-        this.locGridCenter      = -1;
-        this.locGridResolution  = -1;
-        this.locLightsPerCell   = -1;
-        this.locCellSize        = -1;
-        this.locLightCount      = -1;
-        this.locFrameSeed       = -1;
-        this.locTileSize        = -1;
-        this.locTileCount       = -1;
-        this.locBuildSamples    = -1;
-        this.locSamplingJitter  = -1;
+        this.locGridCenter             = -1;
+        this.locGridCells              = -1;
+        this.locLightsPerCell          = -1;
+        this.locCellSize               = -1;
+        this.locLightCount             = -1;
+        this.locFrameSeed              = -1;
+        this.locTileSize               = -1;
+        this.locTileCount              = -1;
+        this.locBuildSamples           = -1;
+        this.locSamplingJitter         = -1;
+        this.locRisTileBufferOffset    = -1;
+        this.locRegirRisBufferOffset   = -1;
 
         this.presampleLocLightCount     = -1;
         this.presampleLocTileSize       = -1;
         this.presampleLocTileCount      = -1;
         this.presampleLocFrameSeed      = -1;
         this.presampleLocPdfTextureSize = -1;
+        this.presampleLocRisTileBufferOffset = -1;
     }
 }

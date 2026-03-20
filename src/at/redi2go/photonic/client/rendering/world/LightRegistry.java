@@ -12,6 +12,7 @@ import at.redi2go.photonic.client.mixin.ShaderPackAccessor;
 import at.redi2go.photonic.client.rendering.MinecraftAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.opengl.objects.GlTarget;
+import at.redi2go.photonic.client.rendering.opengl.rendering.RegirComputeProgram;
 import at.redi2go.photonic.client.rendering.util.IrisUtil;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryOwner;
@@ -172,6 +173,10 @@ public class LightRegistry implements Destructable {
    private final MemoryOwner regirLightIndexMemory;
    private final GlMemoryManager regirLightPdfMemoryManager;
    private final MemoryOwner regirLightPdfMemory;
+   private final GlMemoryManager regirCompactLightDataMemoryManager;
+   private static final int NEIGHBOR_OFFSET_COUNT = 8192;
+   private final GlMemoryManager neighborOffsetMemoryManager;
+   private final SimpleMemoryOwner neighborOffsetMemory;
    private final int maxLights;
    private final int regirGridResolution;
    private final int regirCellCount;
@@ -225,14 +230,14 @@ public class LightRegistry implements Destructable {
       this.globalLightCdfMemory = new SimpleMemoryOwner(this.globalLightCdfMemoryManager, this.globalLightCdfMemoryManager.getCapacity());
       this.regirCellCountMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_regir_cell_counts", this.regirCellCount * Integer.BYTES, false);
       this.regirCellCountMemory = new SimpleMemoryOwner(this.regirCellCountMemoryManager, this.regirCellCountMemoryManager.getCapacity());
-      // GPU build path writes uvec2 (8 bytes/slot) to the output buffer.
-      // Allocate 8 bytes per slot so both the CPU path (int index + float pdf) and the
-      // GPU path (uvec2) fit.  The CPU path only writes the first 4 bytes of each pair,
-      // but the GPU path writes both; the per-pixel shader reads uvec2.
+      // Unified RIS buffer (RTXDI_RIS_BUFFER): presample tiles + ReGIR output in one SSBO.
+      // Layout: [0, tileCount*tileSize) = presample tiles; [tileCount*tileSize, ...) = ReGIR output.
+      // Fragment shaders bind this as ph_ris_buffer and read the ReGIR region via ph_regir_ris_buffer_offset.
+      int risBufferTileEntries = RegirComputeProgram.tileCount * RegirComputeProgram.tileSize;
       this.regirLightIndexMemoryManager = new GlMemoryManager(
          GlTarget.SSBO,
-         "ph_regir_light_indices",
-         this.regirCellCount * this.regirLightsPerCell * 8, // 8 bytes per slot (uvec2)
+         "ph_ris_buffer",
+         (risBufferTileEntries + this.regirCellCount * this.regirLightsPerCell) * 8, // 8 bytes per uvec2
          false
       );
       this.regirLightIndexMemory = new SimpleMemoryOwner(this.regirLightIndexMemoryManager, this.regirLightIndexMemoryManager.getCapacity());
@@ -245,6 +250,17 @@ public class LightRegistry implements Destructable {
          false
       );
       this.regirLightPdfMemory = new SimpleMemoryOwner(this.regirLightPdfMemoryManager, this.regirLightPdfMemoryManager.getCapacity());
+      // Compact light data buffer uses the full 4*uvec4 companion layout per RIS slot.
+      int compactTotalEntries = risBufferTileEntries + this.regirCellCount * this.regirLightsPerCell;
+      this.regirCompactLightDataMemoryManager = new GlMemoryManager(
+         GlTarget.SSBO,
+         "ph_ris_compact_light_data",
+         compactTotalEntries * 4 * 16,
+         false
+      );
+      this.neighborOffsetMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_neighbor_offsets", NEIGHBOR_OFFSET_COUNT * Integer.BYTES * 2, false);
+      this.neighborOffsetMemory = new SimpleMemoryOwner(this.neighborOffsetMemoryManager, this.neighborOffsetMemoryManager.getCapacity());
+      this.fillNeighborOffsets();
       this.lightListObserver = PhotonicsConfig.observe(c -> PhotonicsConfig.getLightList(), c -> {
          this.lightList = c;
          this.registerLightBlocks(this.lightList);
@@ -832,6 +848,37 @@ public class LightRegistry implements Destructable {
       return anyDirty;
    }
 
+   /**
+    * Port of RTXDI's FillNeighborOffsetBuffer (RtxdiUtils.cpp lines 48-69).
+    * Generates 8192 R2 low-discrepancy samples within a unit-radius disk, quantized
+    * exactly like the SDK into two uint8 entries per neighbor. The GPU side then
+    * sign-extends those bytes when reading them as integer offsets.
+    * Called once at construction — never per-frame.
+    */
+   private void fillNeighborOffsets() {
+      float phi2 = 1.0f / 1.3247179572447f;
+      float u = 0.5f;
+      float v = 0.5f;
+      int num = 0;
+      java.nio.ByteBuffer buf = this.neighborOffsetMemory.getMemory().getBuffer();
+      buf.order(java.nio.ByteOrder.nativeOrder());
+      while (num < NEIGHBOR_OFFSET_COUNT * 2) {
+         u += phi2;
+         v += phi2 * phi2;
+         if (u >= 1.0f) u -= 1.0f;
+         if (v >= 1.0f) v -= 1.0f;
+         float rSq = (u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f);
+         if (rSq > 0.25f) continue;
+         buf.put(num++, (byte)((u - 0.5f) * 250.0f));
+         buf.put(num++, (byte)((v - 0.5f) * 250.0f));
+      }
+      this.neighborOffsetMemoryManager.queueUpload(this.neighborOffsetMemory);
+   }
+
+   public GlMemoryManager getNeighborOffsetMemoryManager() {
+      return this.neighborOffsetMemoryManager;
+   }
+
    public boolean upload() {
       boolean uploadDone = true;
       uploadDone &= this.lightsMemoryManager.upload();
@@ -841,6 +888,8 @@ public class LightRegistry implements Destructable {
       uploadDone &= this.regirCellCountMemoryManager.upload();
       uploadDone &= this.regirLightIndexMemoryManager.upload();
       uploadDone &= this.regirLightPdfMemoryManager.upload();
+      uploadDone &= this.regirCompactLightDataMemoryManager.upload();
+      uploadDone &= this.neighborOffsetMemoryManager.upload();
       this.lightCount = this.tracedLights.length;
       return uploadDone;
    }
@@ -984,6 +1033,10 @@ public class LightRegistry implements Destructable {
       return this.regirLightPdfMemoryManager;
    }
 
+   public GlMemoryManager getRegirCompactLightDataMemoryManager() {
+      return this.regirCompactLightDataMemoryManager;
+   }
+
    /** Returns the world-space center of the ReGIR grid (RTXDI: gridCenter = camera position). */
    public Vector3f getRegirGridCenter() {
       return new Vector3f(this.regirGridCenter);
@@ -1067,6 +1120,8 @@ public class LightRegistry implements Destructable {
       this.regirCellCountMemoryManager.free();
       this.regirLightIndexMemoryManager.free();
       this.regirLightPdfMemoryManager.free();
+      this.regirCompactLightDataMemoryManager.free();
+      this.neighborOffsetMemoryManager.free();
       this.lightListObserver.unregister();
       if (this.lightsProvider != null) {
          PhotonicsConfig.removeLightProvider(this.lightsProvider);

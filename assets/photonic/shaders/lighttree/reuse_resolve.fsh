@@ -114,16 +114,18 @@ void main() {
     bool lt_enable_material_similarity_test = (ph_restir_spatial_material_test < -1.5) ? false : true;
 
     // Use ph_restir_spatial_sample_count runtime uniform; fall back to compile-time macro when unbound (0).
-    int lt_spatial_sample_count = ph_restir_spatial_sample_count > 0.0
-        ? max(int(ph_restir_spatial_sample_count), 1)
-        : max(PH_LIGHTTREE_SPATIAL_REUSE_SAMPLES, 1);
+    int lt_spatial_sample_count = max(PH_LIGHTTREE_SPATIAL_REUSE_SAMPLES, 1);
+    if (ph_restir_spatial_sample_count > 0.0) {
+        lt_spatial_sample_count = max(int(floor(ph_restir_spatial_sample_count)), 1);
+    }
 
     // numDisocclusionBoostSamples: SDK default exactly 8 (ReSTIRDI.cpp line 85).
     // When unbound (0.0): use exactly 8 (not max with sampleCount — SDK default is 8 unconditionally).
     // When explicitly set: use the provided value, clamped to at least the normal sample count.
-    int lt_disocclusion_boost_samples = (ph_restir_spatial_boost_samples > 0.0)
-        ? max(int(ph_restir_spatial_boost_samples), lt_spatial_sample_count)
-        : 8;
+    int lt_disocclusion_boost_samples = 8;
+    if (ph_restir_spatial_boost_samples > 0.0) {
+        lt_disocclusion_boost_samples = max(int(floor(ph_restir_spatial_boost_samples)), lt_spatial_sample_count);
+    }
 
     // targetHistoryLength: SDK default 0 (ReSTIRDI.cpp line 85).
     // Semantics from SpatialResampling.hlsli: boost fires when M < targetHistoryLength.
@@ -134,9 +136,10 @@ void main() {
         : 0.0f;
 
     // RTXDI SpatialResampling.hlsli lines 52-54: numSpatialSamples based on centerSample.M.
-    int numSpatialSamples = (lt_target_history_length > 0.0 && centerSample.M < lt_target_history_length)
-        ? max(lt_disocclusion_boost_samples, lt_spatial_sample_count)
-        : lt_spatial_sample_count;
+    int numSpatialSamples = lt_spatial_sample_count;
+    if (lt_target_history_length > 0.0 && centerSample.M < lt_target_history_length) {
+        numSpatialSamples = max(lt_disocclusion_boost_samples, lt_spatial_sample_count);
+    }
     // RTXDI_DISpatialResamplingWithPairwiseMIS does NOT clamp numSpatialSamples.
     // The non-pairwise RTXDI_DISpatialResampling (line 174) clamps to 32, but that is
     // a different function. No cap here to match the pairwise reference exactly.
@@ -176,7 +179,8 @@ void main() {
             // RTXDI SpatialResampling.hlsli line 65: int2 idx = int2(pixelPosition) + spatialOffset
             ivec2 idx = tex_coord + spatialOffset;
             // RTXDI SpatialResampling.hlsli line 66: RAB_ClampSamplePositionIntoView
-            idx = clamp(idx, ivec2(0), ivec2(viewWidth - 1, viewHeight - 1));
+            // Reflects at screen edges (not clamps) — ports RAB_SpatialHelpers.hlsli lines 20-33.
+            idx = RAB_ClampSamplePositionIntoView(idx, false);
             // RTXDI SpatialResampling.hlsli line 68: RTXDI_ActivateCheckerboardPixel
             RTXDI_ActivateCheckerboardPixel(idx, false, int(ph_restir_active_checkerboard_field));
 
@@ -234,23 +238,25 @@ void main() {
         // ============================================================
 
         // First pass: combine center + neighbors into state (lines 149-237).
-        // normalizationWeight and selected track the BASIC/RAY_TRACED two-pass state.
+        // selected tracks the first-pass neighbor index exactly like RTXDI; the selected sample's
+        // replay identity comes from state.lightIndex/sampleUv after combination, not from cached placeholders.
         int selected = -1;
-        int selectedLightIdx = -1;
-        vec3 selectedLightStoredPos = vec3(0.0f);
-        uint cachedResult = 0u;  // bitmask: bit i set iff neighbor i passed all surface tests
+        uint cachedResult = 0u;  // bitmask: bit i set iff neighbor passed the first-loop cache point exactly like RTXDI
+
+        // RTXDI SpatialResampling.hlsli line 169: clamp numSpatialSamples to 32.
+        // Required because cachedResult is a single uint (32-bit bitmask) and cannot track
+        // more than 32 neighbors. The pairwise path does NOT have this cap.
+        numSpatialSamples = min(numSpatialSamples, 32);
 
         // Seed with center sample (SpatialResampling.hlsli line 164).
         RTXDI_CombineDIReservoirs(state, centerSample, 0.5f, centerSample.targetPdf);
-        if (RTXDI_IsValidDIReservoir(centerSample)) {
-            selectedLightIdx = centerSample.lightIndex;
-            selectedLightStoredPos = centerSample.storedPosition;
-        }
 
         for (int i = 0; i < numSpatialSamples; i++) {
             ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(startIdx + i, spatialRadius);
             ivec2 idx = tex_coord + spatialOffset;
-            idx = clamp(idx, ivec2(0), ivec2(viewWidth - 1, viewHeight - 1));
+            // RTXDI SpatialResampling.hlsli line 66: RAB_ClampSamplePositionIntoView
+            // Reflects at screen edges (not clamps) — ports RAB_SpatialHelpers.hlsli lines 20-33.
+            idx = RAB_ClampSamplePositionIntoView(idx, false);
             // RTXDI SpatialResampling.hlsli line 68: RTXDI_ActivateCheckerboardPixel
             RTXDI_ActivateCheckerboardPixel(idx, false, int(ph_restir_active_checkerboard_field));
 
@@ -265,18 +271,21 @@ void main() {
             lt_load_direct_temporal_reservoir(idx, neighborSurface, neighborSample);
             rtxdi_prepare_spatial_reuse(neighborSample, spatialOffset);
 
-            // Cache this neighbor as valid (SpatialResampling.hlsli line 211).
+            // Cache this neighbor at the same point as RTXDI SpatialResampling.hlsli line 211:
+            // after load/prep and before naive-sample discount / weight evaluation.
             cachedResult |= (1u << uint(i));
 
             float neighborWeight = 0.0f;
             if (RTXDI_IsValidDIReservoir(neighborSample)) {
-                if (lt_discount_naive_samples && neighborSample.M <= rtxdi_naive_sampling_m_threshold) continue;
+                if (lt_discount_naive_samples && neighborSample.M <= rtxdi_naive_sampling_m_threshold) {
+                    continue;
+                }
 
-                // Evaluate neighbor's light at the center surface (SpatialResampling.hlsli lines 224-228).
-                LightSample candidateSample = light_sample_new_at_position(
-                    load_light(neighborSample.lightIndex),
-                    neighborSample.storedPosition,
-                    centerSurface
+                // Evaluate neighbor's light at the center surface (SpatialResampling.hlsli lines 223-228).
+                LightSample candidateSample = light_sample_decode(
+                    neighborSample,
+                    centerSurface,
+                    false
                 );
                 neighborWeight = lt_surface_target_pdf(centerSurface, candidateSample);
             }
@@ -284,8 +293,6 @@ void main() {
             bool neighborSelected = RTXDI_CombineDIReservoirs(state, neighborSample, rand_next_float(), neighborWeight);
             if (neighborSelected) {
                 selected = i;
-                selectedLightIdx = neighborSample.lightIndex;
-                selectedLightStoredPos = neighborSample.storedPosition;
             }
         }
 
@@ -299,31 +306,32 @@ void main() {
                 for (int i = 0; i < numSpatialSamples; i++) {
                     if ((cachedResult & (1u << uint(i))) == 0u) continue;
 
-                    ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(startIdx + i, spatialRadius);
+                    uint sampleIdx = uint(startIdx + i) & uint(neighborOffsetMask);
+                    ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(int(sampleIdx), spatialRadius);
                     ivec2 idx = tex_coord + spatialOffset;
-                    idx = clamp(idx, ivec2(0), ivec2(viewWidth - 1, viewHeight - 1));
+                    // RTXDI SpatialResampling.hlsli line 66: RAB_ClampSamplePositionIntoView
+                    // Reflects at screen edges (not clamps) — ports RAB_SpatialHelpers.hlsli lines 20-33.
+                    idx = RAB_ClampSamplePositionIntoView(idx, false);
+                    RTXDI_ActivateCheckerboardPixel(idx, false, int(ph_restir_active_checkerboard_field));
 
                     DirectSurface neighborSurface = lt_load_surface(idx);
 
                     // Evaluate selected sample at this neighbor's surface (line 267-270).
                     float ps = 0.0f;
-                    if (selectedLightIdx >= 0 && selectedLightIdx < ph_light_count) {
-                        LightSample selectedAtNeighbor = light_sample_new_at_position(
-                            load_light(selectedLightIdx),
-                            selectedLightStoredPos,
-                            neighborSurface
+                    if (RTXDI_IsValidDIReservoir(state)) {
+                        LightSample selectedSampleAtNeighbor = light_sample_decode(
+                            state,
+                            neighborSurface,
+                            false
                         );
-                        ps = lt_surface_target_pdf(neighborSurface, selectedAtNeighbor);
+                        ps = lt_surface_target_pdf(neighborSurface, selectedSampleAtNeighbor);
 
                         // RAY_TRACED: conservative visibility check on the neighbor surface
                         // (SpatialResampling.hlsli lines 272-279: RAB_GetConservativeVisibility).
-                        // Reuses selectedAtNeighbor already computed above — no duplicate eval.
-                        // Traces a shadow ray; when the ray misses ps is zeroed.
                         if (biasCorrectionMode == RTXDI_BIAS_CORRECTION_RAY_TRACED && ps > 0.0f) {
-                            if (selectedAtNeighbor.index >= 0) {
-                                LightSample traceSample = selectedAtNeighbor;
-                                float hitDist = light_sample_trace_hit_surface(traceSample, false, neighborSurface);
-                                if (hitDist <= 0.0f || traceSample.index < 0) {
+                            if (selectedSampleAtNeighbor.index >= 0) {
+                                float hitDist = light_sample_trace_hit_surface(selectedSampleAtNeighbor, false, neighborSurface);
+                                if (hitDist <= 0.0f || selectedSampleAtNeighbor.index < 0) {
                                     ps = 0.0f;
                                 }
                             } else {

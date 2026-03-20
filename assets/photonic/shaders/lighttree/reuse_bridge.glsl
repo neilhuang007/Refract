@@ -2,20 +2,19 @@
 #define PH_LIGHTTREE_REUSE_INCLUDE
 
 #include "/photonics/lighttree/light_tree.glsl"
+#include "/photonics/lighttree/nrd_material_id.glsl"
 
 layout(std430) restrict readonly buffer ph_global_light_cdf {
     float ph_global_light_cdf_data[];
 };
 
-// RTXDI: RTXDI_RIS_BUFFER — presampled power-importance tiles written by regir_presample_tiles.glsl.
+// RTXDI: RTXDI_RIS_BUFFER — declared in light_tree.glsl (included above).
+// Unified buffer containing presample tiles and ReGIR output.
 // Used as outside-grid fallback in RTXDI_SampleLocalLights, matching RTXDI InitialSampling.hlsli
-// POWER_RIS fallback: pick ONE tile via coherentRng, then draw from it each iteration.
-layout(std430, binding = 5) restrict readonly buffer ph_ris_tile_buffer {
-    uvec2 ph_ris_tile_data[];
-};
 
-uniform int ph_ris_tile_size;   // RTXDI: risBufferSegmentParams.tileSize
-uniform int ph_ris_tile_count;  // RTXDI: risBufferSegmentParams.tileCount
+uniform int  ph_ris_tile_size;            // RTXDI: risBufferSegmentParams.tileSize
+uniform int  ph_ris_tile_count;           // RTXDI: risBufferSegmentParams.tileCount
+uniform int  ph_ris_tile_buffer_offset;   // RTXDI: risBufferSegmentParams.bufferOffset (typically 0)
 
 // Reverse light mapping: current-frame index → previous-frame index.
 // Inverse of ph_light_list_mapping (previous→current). Built in LightRegistry.java.
@@ -31,6 +30,21 @@ layout(std140) restrict readonly buffer ph_light_list_previous {
     vec4 ph_lights_array_previous[];
 };
 
+Light lt_invalid_light() {
+    return Light(
+        -1,
+        0,
+        vec3(0.0),
+        vec3(0.0),
+        0.0,
+        vec2(0.0),
+        0.0,
+        0.0,
+        vec3(0.0, 1.0, 0.0),
+        0.0
+    );
+}
+
 // Load a light from the previous-frame buffer.
 // Uses the exact same decoding as load_light() in ph_core.glsl but reads from
 // ph_lights_array_previous instead of ph_lights_array.
@@ -39,18 +53,7 @@ Light load_previous_light(int index) {
     // RTXDI: RAB_LoadLightInfo(selectedLightPrevID, true) loads unconditionally.
     // Validate against the previous-frame buffer capacity (maxLights), NOT ph_light_count.
     if (index < 0 || index * light_size + 3 >= ph_lights_array_previous.length()) {
-        return Light(
-            -1,
-            0,
-            vec3(0.0),
-            vec3(0.0),
-            0.0,
-            vec2(0.0),
-            0.0,
-            0.0,
-            vec3(0.0, 1.0, 0.0),
-            0.0
-        );
+        return lt_invalid_light();
     }
 
     int base = index * light_size;
@@ -94,7 +97,7 @@ uniform float ph_restir_spatial_radius;            // RTXDI: samplingRadius (def
 // RTXDI: params.activeCheckerboardField (0 = off, 1/2 = alternating fields).
 // SDK default (ReSTIRDI.cpp UpdateCheckerboardField): 0 (off) for CheckerboardMode::Off.
 // Shared across temporal and spatial passes — declared here so reuse_resolve.fsh can read it.
-uniform uint ph_restir_active_checkerboard_field;
+uniform int ph_restir_active_checkerboard_field;
 uniform float ph_restir_spatial_depth_threshold;   // RTXDI: spatial depthThreshold (default 0.1)
 uniform float ph_restir_spatial_normal_threshold;  // RTXDI: spatial normalThreshold (default 0.5)
 
@@ -102,7 +105,7 @@ uniform float ph_restir_spatial_normal_threshold;  // RTXDI: spatial normalThres
 // When 0.0 (unbound), fall back to compile-time macro values.
 uniform float ph_restir_initial_num_local_samples;       // RTXDI: numLocalLightSamples
 uniform float ph_restir_initial_num_environment_samples; // RTXDI: numEnvironmentSamples (SDK default 1, ReSTIRDI.cpp line 41)
-uniform float ph_restir_initial_num_brdf_samples;        // RTXDI: numBrdfSamples (stub; BRDF sampling not yet integrated)
+uniform float ph_restir_initial_num_brdf_samples;        // RTXDI: numBrdfSamples; SDK default=1. -1.0=disable, 0.0(unbound)=SDK default(1), >0=explicit count
 uniform float ph_restir_initial_enable_visibility;  // RTXDI: enableInitialVisibility; SDK default true. Sentinel: -1.0=disabled, 0.0(unbound)=enabled, 1.0=enabled
 uniform float ph_restir_initial_brdf_cutoff;        // RTXDI: brdfCutoff (MIS cutoff for BRDF-length shortening)
 
@@ -117,53 +120,37 @@ uniform float ph_restir_initial_brdf_cutoff;        // RTXDI: brdfCutoff (MIS cu
 uniform float ph_restir_local_light_sampling_mode;
 
 bool lt_is_viewport_uv_in_bounds(ivec2 uv) {
-    return all(greaterThanEqual(uv, ivec2(0))) && all(lessThan(uv, ivec2(viewWidth, viewHeight)));
+    return all(greaterThanEqual(uv, ivec2(0))) && all(lessThan(uv, ivec2(int(viewWidth), int(viewHeight))));
 }
 
 bool lt_is_viewport_uv_in_bounds(vec2 uv) {
     return all(greaterThanEqual(uv, vec2(0.0f))) && all(lessThan(uv, vec2(viewWidth, viewHeight)));
 }
 
-const int lt_neighbor_offset_count = 32;
-const vec2 lt_neighbor_offsets[lt_neighbor_offset_count] = vec2[](
-    vec2(-0.490245f, -0.860319f),
-    vec2(0.529266f, -0.580958f),
-    vec2(0.039021f, 0.558722f),
-    vec2(-0.451223f, -0.301597f),
-    vec2(0.568287f, -0.022236f),
-    vec2(0.078043f, -0.882555f),
-    vec2(-0.412202f, 0.257125f),
-    vec2(0.607309f, 0.536486f),
-    vec2(0.117064f, -0.323833f),
-    vec2(-0.373181f, 0.815848f),
-    vec2(-0.863425f, -0.044472f),
-    vec2(0.156085f, 0.234889f),
-    vec2(-0.334159f, -0.625430f),
-    vec2(-0.824404f, 0.514250f),
-    vec2(0.685351f, -0.346069f),
-    vec2(0.195107f, 0.793612f),
-    vec2(-0.295138f, -0.066708f),
-    vec2(0.724373f, 0.212653f),
-    vec2(0.234128f, -0.647666f),
-    vec2(-0.256117f, 0.492015f),
-    vec2(-0.746361f, -0.368305f),
-    vec2(0.273149f, -0.088944f),
-    vec2(-0.217095f, -0.949263f),
-    vec2(-0.707340f, 0.190417f),
-    vec2(0.312171f, 0.469779f),
-    vec2(-0.178074f, -0.390541f),
-    vec2(0.841437f, -0.111180f),
-    vec2(-0.139053f, 0.168182f),
-    vec2(-0.629297f, -0.692138f),
-    vec2(0.880458f, 0.447543f),
-    vec2(0.390213f, -0.412777f),
-    vec2(-0.100031f, 0.726904f)
-);
+// RTXDI neighbor offset buffer — 8192 entries generated by FillNeighborOffsetBuffer (RtxdiUtils.cpp).
+// The SDK stores two signed 8-bit values per neighbor. Mirror that storage exactly here
+// and reconstruct signed offsets before multiplying by the sampling radius.
+// Populated once at init by LightRegistry.fillNeighborOffsets(); never written per-frame.
+// neighborOffsetMask = lt_neighbor_offset_count - 1 = 8191.
+// SDK default: NeighborOffsetCount = 8192 (ReSTIRDI.h line 45).
+layout(std430) restrict readonly buffer ph_neighbor_offsets {
+    int ph_neighbor_offsets_data[];
+};
+
+const int lt_neighbor_offset_count = 8192;
+
+ivec2 lt_load_neighbor_offset(int sampleIdx) {
+    int packedIndex = (sampleIdx & (lt_neighbor_offset_count - 1)) * 2;
+    return ivec2(
+        ph_neighbor_offsets_data[packedIndex + 0],
+        ph_neighbor_offsets_data[packedIndex + 1]
+    );
+}
 
 ivec2 lt_random_temporal_resampling_offset(float radius) {
     return ivec2(
-        int((rand_next_float() - 0.5f) * radius),
-        int((rand_next_float() - 0.5f) * radius)
+        int((rand_next_float() - 0.5f) * float(radius)),
+        int((rand_next_float() - 0.5f) * float(radius))
     );
 }
 
@@ -186,25 +173,69 @@ ivec2 lt_calculate_temporal_resampling_offset(int sampleIdx, int radius) {
 
 ivec2 lt_calculate_spatial_resampling_offset(int sampleIdx, float radius) {
     // RTXDI SpatialResampling.hlsli line 63: (startIdx + i) & params.neighborOffsetMask
-    // Use bitmask wrap to match RTXDI's pattern. lt_neighbor_offset_count must be a power of 2 (32).
-    int wrappedIndex = sampleIdx & (lt_neighbor_offset_count - 1);
-
-    return ivec2(lt_neighbor_offsets[wrappedIndex] * radius);
+    // Bitmask wrap requires lt_neighbor_offset_count to be a power of 2 (8192 = 2^13).
+    sampleIdx &= (lt_neighbor_offset_count - 1);
+    vec2 offset = vec2(
+        ph_neighbor_offsets_data[sampleIdx * 2 + 0],
+        ph_neighbor_offsets_data[sampleIdx * 2 + 1]
+    ) * radius;
+    return ivec2(floor(offset));
 }
 
-// RTXDI: RTXDI_ActivateCheckerboardPixel (TemporalResampling.hlsli line 90, SpatialResampling.hlsli line 68).
-// Shifts the pixel position to match a checkerboard sampling pattern when active.
-// activeCheckerboardField: 0 = off (Minecraft default), 1/2 = alternating fields.
-// When activeCheckerboardField == 0 this is a no-op; the pixel position is unchanged.
-// When active: odd-row pixels are shifted by +1 or -1 depending on the field to interleave
-// current and previous frame pixels in a checkerboard layout.
+// RTXDI: RTXDI_IsActiveCheckerboardPixel (Checkerboard.hlsli lines 16-25).
+// Returns true when the pixel is an active checkerboard pixel for this frame/field.
+bool RTXDI_IsActiveCheckerboardPixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField) {
+    if (activeCheckerboardField == 0)
+        return true;
+    return ((pixelPosition.x + pixelPosition.y + int(previousFrame)) & 1) == (activeCheckerboardField & 1);
+}
+
+// RTXDI: RTXDI_ActivateCheckerboardPixel (Checkerboard.hlsli lines 27-43).
+// Shifts the pixel position to the nearest active checkerboard pixel when not already active.
+// Ports the exact SDK logic for both previousFrame and current-frame cases:
+//   previousFrame=true:  shift by (activeCheckerboardField * 2 - 3), i.e. -1 for field=1, +1 for field=2.
+//   previousFrame=false: shift by +1 or -1 depending on row parity to interleave the checkerboard.
+// When activeCheckerboardField == 0 this is a no-op (off).
 void RTXDI_ActivateCheckerboardPixel(inout ivec2 pixelPos, bool previousFrame, int activeCheckerboardField) {
-    // Checkerboard rendering not active — no-op when activeCheckerboardField == 0
-    if (activeCheckerboardField == 0) return;
-    // When active: shift odd-row pixels by 1 to match checkerboard pattern
-    if ((pixelPos.y & 1) != 0) {
-        pixelPos.x += (activeCheckerboardField == 1) ? 1 : -1;
-    }
+    if (RTXDI_IsActiveCheckerboardPixel(pixelPos, previousFrame, activeCheckerboardField))
+        return;
+
+    if (previousFrame)
+        pixelPos.x += activeCheckerboardField * 2 - 3;
+    else
+        pixelPos.x += ((pixelPos.y & 1) != 0) ? 1 : -1;
+}
+
+// RTXDI: RAB_ClampSamplePositionIntoView (RAB_SpatialHelpers.hlsli lines 20-33).
+// Reflects the pixel position across screen edges instead of clamping.
+// Compared to simple clamping, this prevents the spread of colorful blobs from screen edges.
+// previousFrame parameter is present to match the SDK signature but not used in the reflection
+// logic (the reflection is symmetric for both current and previous frames).
+ivec2 RAB_ClampSamplePositionIntoView(ivec2 pixelPosition, bool previousFrame) {
+    int width = viewWidth;
+    int height = viewHeight;
+
+    if (pixelPosition.x < 0) pixelPosition.x = -pixelPosition.x;
+    if (pixelPosition.y < 0) pixelPosition.y = -pixelPosition.y;
+    if (pixelPosition.x >= width)  pixelPosition.x = 2 * width  - pixelPosition.x - 1;
+    if (pixelPosition.y >= height) pixelPosition.y = 2 * height - pixelPosition.y - 1;
+
+    return pixelPosition;
+}
+
+// RTXDI_PixelPosToReservoirPos (ReservoirAddressing.hlsli lines 16-22).
+// Identity when checkerboard is off; halves x when active.
+ivec2 RTXDI_PixelPosToReservoirPos(ivec2 pixelPosition, int activeCheckerboardField) {
+    if (activeCheckerboardField == 0) return pixelPosition;
+    return ivec2(pixelPosition.x >> 1, pixelPosition.y);
+}
+
+// RTXDI_ReservoirPosToPixelPos (ReservoirAddressing.hlsli lines 24-30).
+ivec2 RTXDI_ReservoirPosToPixelPos(ivec2 reservoirIndex, int activeCheckerboardField) {
+    if (activeCheckerboardField == 0) return reservoirIndex;
+    ivec2 pixelPosition = ivec2(reservoirIndex.x << 1, reservoirIndex.y);
+    pixelPosition.x += ((pixelPosition.y + activeCheckerboardField) & 1);
+    return pixelPosition;
 }
 
 vec3 lt_resolve_reuse_normal(vec3 geometryNormal, vec3 mappedNormal) {
@@ -236,7 +267,7 @@ vec4 lt_extract_material_at_uv(vec2 uv) {
     float roughness = clamp(1.0f - smoothness, 0.0f, 1.0f);
     float metallic = clamp(spec.g, 0.0f, 1.0f);
     float emission = clamp(spec.a, 0.0f, 1.0f);
-    return vec4(roughness, metallic, emission, smoothness);
+    return vec4(roughness, metallic, emission, nrd_encode_material_id(NRD_MATERIAL_ID_DISABLED));
 }
 
 DirectSurface lt_make_surface(vec3 worldPosValue, vec3 geometryNormalValue, vec3 shadingNormalValue, vec3 albedoValue, vec4 materialValue) {
@@ -281,7 +312,7 @@ DirectSurface lt_load_surface(ivec2 uv) {
         texelFetch(stage_radiosity_normal, uv, 0).xyz,
         texelFetch(stage_radiosity_mapped_normal, uv, 0).xyz,
         clamp(texelFetch(stage_radiosity_albedo, uv, 0).rgb, vec3(0.04f), vec3(1.0f)),
-        texelFetch(stage_radiosity_material, uv, 0)
+        lt_extract_material_at_uv((vec2(uv) + vec2(0.5)) / vec2(viewWidth, viewHeight))
     );
 }
 
@@ -513,7 +544,7 @@ struct LtSplitRadiance {
     vec3 specular;      // Demodulated specular (F0 divided out)
 };
 
-// NRD-compatible split shading: returns demodulated diffuse and specular separately
+// NRD-compatible split shading: returns diffuse-demodulated radiance and raw split specular radiance.
 LtSplitRadiance lt_shade_surface_split(DirectSurface surface, LightSample smple) {
     LtSplitRadiance result = LtSplitRadiance(vec3(0.0f), vec3(0.0f));
 
@@ -525,15 +556,8 @@ LtSplitRadiance lt_shade_surface_split(DirectSurface surface, LightSample smple)
     vec3 viewDir = rt_camera_position - surface.rtPos;
     LightBrdf brdf = lt_evaluate_surface_brdf_with_view(surface, smple.dir, viewDir);
 
-    // Diffuse: demodulatedDiffuse is already albedo-independent (Lambert/PI)
-    // NRD expects diffuse demodulated by albedo, so we multiply by incident and leave it demodulated
     result.diffuse = max(incidentRadiance * brdf.demodulatedDiffuse, vec3(0.0f));
-
-    // Specular: brdf.specular already includes Fresnel, GGX distribution, and geometry
-    // NRD expects specular demodulated by F0
-    vec3 specularF0 = lt_surface_f0(surface);
-    vec3 rawSpecular = max(incidentRadiance * brdf.specular, vec3(0.0f));
-    result.specular = rawSpecular / max(specularF0, vec3(0.01f));
+    result.specular = max(incidentRadiance * brdf.specular, vec3(0.0f));
 
     return result;
 }
@@ -580,13 +604,41 @@ LightSample light_sample_new_at(Light light, DirectSurface surface) {
     return light_sample_new_at_position(light, light.position, surface);
 }
 
-vec3 lt_sample_light_position(Light light, vec3 shadowRayOrigin) {
-    vec3 selectedPosition = light.position;
+vec3 lt_sample_light_position_from_uv(Light light, vec2 sampleUv, vec3 shadowRayOrigin) {
 #ifdef PH_LIGHTTREE_SOFT_SHADOWS
-    ray.origin = shadowRayOrigin;
-    jitter_sample_position(selectedPosition);
+    float radius = max(ph_light_jitter_radius, 0.0f);
+    if (radius <= 1e-6f) {
+        return light.position;
+    }
+
+    float angle = sampleUv.x * (2.0f * lt_pi);
+    float radial = sqrt(clamp(sampleUv.y, 0.0f, 1.0f)) * radius;
+    vec2 disk = vec2(cos(angle), sin(angle)) * radial;
+    return light.position + vec3(disk.x, 0.0f, disk.y);
+#else
+    return light.position;
 #endif
-    return selectedPosition;
+}
+
+vec2 lt_encode_light_sample_uv(Light light, vec3 lightPosition) {
+#ifdef PH_LIGHTTREE_SOFT_SHADOWS
+    float radius = max(ph_light_jitter_radius, 0.0f);
+    if (radius <= 1e-6f) {
+        return vec2(0.0f);
+    }
+
+    vec2 disk = (lightPosition - light.position).xz;
+    float normalizedRadius = clamp(length(disk) / radius, 0.0f, 1.0f);
+    float angle = atan(disk.y, disk.x);
+    float normalizedAngle = fract((angle / (2.0f * lt_pi)) + 1.0f);
+    return vec2(normalizedAngle, normalizedRadius * normalizedRadius);
+#else
+    return vec2(0.0f);
+#endif
+}
+
+vec3 lt_sample_light_position(Light light, vec3 shadowRayOrigin) {
+    return lt_sample_light_position_from_uv(light, vec2(rand_next_float(), rand_next_float()), shadowRayOrigin);
 }
 
 float lt_light_sample_source_pdf() {
@@ -599,7 +651,8 @@ float lt_light_sample_source_pdf() {
 
 LightSample light_sample_random_at(Light light, DirectSurface surface) {
     vec3 origin = lt_surface_ray_origin(surface.rtPos, surface.geometryNormal);
-    vec3 selectedPosition = lt_sample_light_position(light, origin);
+    vec2 sampleUv = vec2(rand_next_float(), rand_next_float());
+    vec3 selectedPosition = lt_sample_light_position_from_uv(light, sampleUv, origin);
     return light_sample_new_at_position(light, selectedPosition, surface);
 }
 
@@ -708,54 +761,143 @@ float light_sample_encode(LightSample smple) {
     return float(smple.index);
 }
 
-LightSample light_sample_decode_at(float value, vec3 sampleWorldPosition, DirectSurface surface, bool remap) {
-    int index = int(round(value));
-    if (index < 0 || index >= ph_light_count) {
-        return lt_null_sample();
+struct Reservoir {
+    uint lightData;
+    uint uvData;
+    bool hasCompactLightData;
+    uint compactLightBufferPtr;
+
+    float weightSum;
+    float targetPdf;
+    float M;
+
+    vec3 visibility;
+
+    float age;
+    vec2 spatialDistance;
+
+    float canonicalWeight;
+};
+
+const uint RTXDI_DIReservoir_LightValidBit = 0x80000000u;
+const uint RTXDI_DIReservoir_LightIndexMask = 0x7fffffffu;
+
+uint rtxdi_make_light_data(int lightIndex) {
+    return (lightIndex < 0)
+        ? 0u
+        : (uint(lightIndex) & RTXDI_DIReservoir_LightIndexMask) | RTXDI_DIReservoir_LightValidBit;
+}
+
+int rtxdi_decode_light_index(uint lightData) {
+    return ((lightData & RTXDI_DIReservoir_LightValidBit) == 0u)
+        ? -1
+        : int(lightData & RTXDI_DIReservoir_LightIndexMask);
+}
+
+uint rtxdi_pack_sample_uv(vec2 sampleUv) {
+    uint packedX = uint(clamp(sampleUv.x, 0.0f, 1.0f) * 65535.0f + 0.5f);
+    uint packedY = uint(clamp(sampleUv.y, 0.0f, 1.0f) * 65535.0f + 0.5f);
+    return packedX | (packedY << 16u);
+}
+
+vec2 rtxdi_unpack_sample_uv(uint packedUv) {
+    return vec2(float(packedUv & 0xffffu), float((packedUv >> 16u) & 0xffffu)) / 65535.0f;
+}
+
+int rtxdi_get_light_index(Reservoir reservoir) {
+    return rtxdi_decode_light_index(reservoir.lightData);
+}
+
+void rtxdi_set_light_index(inout Reservoir reservoir, int lightIndex) {
+    reservoir.lightData = rtxdi_make_light_data(lightIndex);
+}
+
+vec2 rtxdi_get_sample_uv(Reservoir reservoir) {
+    return rtxdi_unpack_sample_uv(reservoir.uvData);
+}
+
+void rtxdi_set_sample_uv(inout Reservoir reservoir, vec2 sampleUv) {
+    reservoir.uvData = rtxdi_pack_sample_uv(sampleUv);
+}
+
+Light lt_decode_reservoir_light(Reservoir reservoir, bool remap) {
+    int index = rtxdi_get_light_index(reservoir);
+    if (index < 0) {
+        return lt_invalid_light();
     }
 
     if (remap) {
-        index = ph_lights_array_mapping[index];
+        if (index < 0 || index >= ph_lights_array_mapping.length()) {
+            index = -1;
+        } else {
+            index = ph_lights_array_mapping[index];
+        }
         if (index < 0 || index >= ph_light_count) {
-            return lt_null_sample();
+            return lt_invalid_light();
         }
     }
 
-    Light light = load_light(index);
-    if (dot(sampleWorldPosition, sampleWorldPosition) <= 1e-8f) {
-        return light_sample_new_at(light, surface);
+    if (reservoir.hasCompactLightData) {
+        return load_compact_light(reservoir.compactLightBufferPtr, index);
     }
 
-    return light_sample_new_at_position(light, sampleWorldPosition - world_offset, surface);
+    if (index < 0 || index >= ph_light_count) {
+        return lt_invalid_light();
+    }
+
+    return load_light(index);
+}
+
+Light lt_decode_previous_reservoir_light(Reservoir reservoir) {
+    int lightIndex = rtxdi_get_light_index(reservoir);
+    if (lightIndex < 0) {
+        return lt_invalid_light();
+    }
+
+    return load_previous_light(lightIndex);
+}
+
+LightSample light_sample_decode(Reservoir reservoir, DirectSurface surface, bool remap) {
+    Light light = lt_decode_reservoir_light(reservoir, remap);
+    if (light.index < 0) {
+        return lt_null_sample();
+    }
+
+    vec3 lightPosition = lt_sample_light_position_from_uv(light, rtxdi_get_sample_uv(reservoir), lt_surface_ray_origin(surface.rtPos, surface.geometryNormal));
+    return light_sample_new_at_position(light, lightPosition, surface);
+}
+
+LightSample light_sample_decode_previous(Reservoir reservoir, DirectSurface surface) {
+    Light light = lt_decode_previous_reservoir_light(reservoir);
+    if (light.index < 0) {
+        return lt_null_sample();
+    }
+
+    vec3 lightPosition = lt_sample_light_position_from_uv(light, rtxdi_get_sample_uv(reservoir), lt_surface_ray_origin(surface.rtPos, surface.geometryNormal));
+    return light_sample_new_at_position(light, lightPosition, surface);
+}
+
+LightSample light_sample_decode_at(float value, vec2 sampleUv, DirectSurface surface, bool remap) {
+    Reservoir replayReservoir;
+    replayReservoir.lightData = 0u;
+    replayReservoir.uvData = 0u;
+    replayReservoir.hasCompactLightData = false;
+    replayReservoir.compactLightBufferPtr = 0u;
+    replayReservoir.weightSum = 0.0;
+    replayReservoir.targetPdf = 0.0;
+    replayReservoir.M = 0.0;
+    replayReservoir.visibility = vec3(-1.0);
+    replayReservoir.age = 0.0;
+    replayReservoir.spatialDistance = vec2(0.0);
+    replayReservoir.canonicalWeight = 0.0;
+    rtxdi_set_light_index(replayReservoir, int(round(value)));
+    rtxdi_set_sample_uv(replayReservoir, sampleUv);
+    return light_sample_decode(replayReservoir, surface, remap);
 }
 
 LightSample light_sample_decode_at(float value, DirectSurface surface, bool remap) {
-    return light_sample_decode_at(value, vec3(0.0f), surface, remap);
+    return light_sample_decode_at(value, vec2(0.0f), surface, remap);
 }
-
-struct Reservoir {
-    // Light reference — matches RTXDI's lightData + uvData concept.
-    // For Minecraft point lights, storedPosition is our equivalent of UV
-    // (there is no sub-light-surface parameterization for point sources).
-    int lightIndex;          // RTXDI: lightData (index + validity bit)
-    vec3 storedPosition;     // RTXDI: uvData (stored sample point, RT-space)
-
-    // RIS state
-    float weightSum;         // RTXDI: weightSum (RIS weight sum / inverse PDF after finalize)
-    float targetPdf;         // RTXDI: targetPdf (target PDF of selected sample)
-    float M;                 // RTXDI: M (number of candidates considered)
-
-    // Visibility reuse — RTXDI stores 3-channel packed RGB visibility.
-    // We use vec3 to match the per-channel representation.
-    vec3 visibility;         // RTXDI: packedVisibility (per-channel, -1 = uninitialized)
-
-    // Tracking
-    float age;               // RTXDI: age (frames since visibility was generated)
-    vec2 spatialDistance;     // RTXDI: spatialDistance (screen-space offset from visibility origin)
-
-    // Pairwise MIS
-    float canonicalWeight;   // RTXDI: canonicalWeight (accumulated during pairwise MIS)
-};
 
 bool lt_pick_uniform_light(out int lightIndex, out float lightPdf) {
     lightIndex = -1;
@@ -809,8 +951,10 @@ bool lt_pick_power_light(out int lightIndex, out float lightPdf) {
 // Primary — matches RTXDI naming (Reservoir.hlsli: RTXDI_EmptyDIReservoir)
 Reservoir RTXDI_EmptyDIReservoir() {
     Reservoir r;
-    r.lightIndex = -1;
-    r.storedPosition = vec3(0.0);
+    r.lightData = 0u;
+    r.uvData = 0u;
+    r.hasCompactLightData = false;
+    r.compactLightBufferPtr = 0u;
     r.weightSum = 0.0;
     r.targetPdf = 0.0;
     r.M = 0.0;
@@ -825,22 +969,22 @@ Reservoir rtxdi_empty_reservoir() { return RTXDI_EmptyDIReservoir(); }
 
 // Primary — matches RTXDI semantics: only checks light index validity (Reservoir.hlsli: lightData != 0)
 bool RTXDI_IsValidDIReservoir(Reservoir reservoir) {
-    return reservoir.lightIndex >= 0;
+    return reservoir.lightData != 0u;
 }
 
 // Stricter photonics validity check — also requires M > 0 and weightSum > 0.
 // Kept separate from RTXDI_IsValidDIReservoir for callers that need it.
 bool rtxdi_is_valid_reservoir(Reservoir reservoir) {
-    return reservoir.lightIndex >= 0 && reservoir.M > 0.0f && reservoir.weightSum > 0.0f;
+    return reservoir.lightData != 0u && reservoir.M > 0.0f && reservoir.weightSum > 0.0f;
 }
 
 // Accessor wrappers — naming parity with RTXDI's Reservoir.hlsli accessor functions.
 int RTXDI_GetDIReservoirLightIndex(Reservoir reservoir) {
-    return reservoir.lightIndex;
+    return rtxdi_get_light_index(reservoir);
 }
 
-vec3 RTXDI_GetDIReservoirSamplePosition(Reservoir reservoir) {
-    return reservoir.storedPosition;
+vec2 RTXDI_GetDIReservoirSampleUV(Reservoir reservoir) {
+    return rtxdi_get_sample_uv(reservoir);
 }
 
 float RTXDI_GetDIReservoirInvPdf(Reservoir reservoir) {
@@ -904,9 +1048,9 @@ void RTXDI_StoreVisibilityInDIReservoir(inout Reservoir reservoir, vec3 visibili
     reservoir.age = 0.0f;
     if (discardIfInvisible && visibility.x == 0.0f && visibility.y == 0.0f && visibility.z == 0.0f) {
         // RTXDI Reservoir.hlsli lines 93-96: only clears lightData and weightSum.
-        // storedPosition (uvData) is intentionally NOT cleared — RTXDI leaves it intact.
+        // sampleUv (uvData) is intentionally NOT cleared — RTXDI leaves it intact.
         // M and targetPdf are also preserved for correct downstream resampling.
-        reservoir.lightIndex = -1;
+        reservoir.lightData = 0u;
         reservoir.weightSum = 0.0f;
     }
 }
@@ -948,14 +1092,16 @@ void rtxdi_inherit_visibility(
 // Primary — matches RTXDI_StreamSample signature (Reservoir.hlsli).
 // Takes explicit lightIndex, position (RT-space), random value, targetPdf, and invSourcePdf.
 // Always increments M; does NOT reset visibility (caller manages visibility lifecycle).
-bool RTXDI_StreamSample(inout Reservoir reservoir, int lightIndex, vec3 position, float random, float targetPdf, float invSourcePdf) {
+bool RTXDI_StreamSample(inout Reservoir reservoir, int lightIndex, vec2 sampleUv, float random, float targetPdf, float invSourcePdf) {
     float risWeight = targetPdf * invSourcePdf;
     reservoir.M += 1.0f;
     reservoir.weightSum += risWeight;
     bool selectSample = (random * reservoir.weightSum < risWeight);
     if (selectSample) {
-        reservoir.lightIndex = lightIndex;
-        reservoir.storedPosition = position;
+        rtxdi_set_light_index(reservoir, lightIndex);
+        rtxdi_set_sample_uv(reservoir, sampleUv);
+        reservoir.hasCompactLightData = false;
+        reservoir.compactLightBufferPtr = 0u;
         reservoir.targetPdf = targetPdf;
     }
     return selectSample;
@@ -963,7 +1109,6 @@ bool RTXDI_StreamSample(inout Reservoir reservoir, int lightIndex, vec3 position
 
 // Backward-compat alias — preserves original LightSample-based call sites.
 bool rtxdi_stream_sample(inout Reservoir reservoir, LightSample smple, float weight, float samples) {
-    // Always increment M (matching RTXDI_StreamSample behavior)
     reservoir.M += max(samples, 0.0f);
 
     if (smple.index < 0 || weight <= 0.0f || samples <= 0.0f) {
@@ -972,9 +1117,9 @@ bool rtxdi_stream_sample(inout Reservoir reservoir, LightSample smple, float wei
 
     reservoir.weightSum += weight;
     if (rand_next_float() * reservoir.weightSum < weight) {
-        reservoir.lightIndex = smple.index;
-        reservoir.storedPosition = smple.position;
+        rtxdi_set_light_index(reservoir, smple.index);
         reservoir.targetPdf = smple.weight;
+        rtxdi_set_sample_uv(reservoir, lt_encode_light_sample_uv(load_light(smple.index), smple.position));
         rtxdi_reset_visibility(reservoir);
         return true;
     }
@@ -983,23 +1128,20 @@ bool rtxdi_stream_sample(inout Reservoir reservoir, LightSample smple, float wei
 }
 
 float rtxdi_target_pdf_at_surface(Reservoir reservoir, DirectSurface surface) {
-    if (reservoir.lightIndex < 0) {
+    if (!RTXDI_IsValidDIReservoir(reservoir)) {
         return 0.0f;
     }
 
-    return light_sample_target_pdf_at_surface(reservoir.lightIndex, reservoir.storedPosition + world_offset, surface);
+    LightSample smple = light_sample_decode(reservoir, surface, false);
+    return lt_surface_target_pdf(surface, smple);
 }
 
 float rtxdi_target_pdf_at_surface_with_view(Reservoir reservoir, DirectSurface surface, vec3 viewPos) {
-    if (reservoir.lightIndex < 0) {
+    if (!RTXDI_IsValidDIReservoir(reservoir)) {
         return 0.0f;
     }
 
-    LightSample smple = light_sample_new_at_position(
-        load_light(reservoir.lightIndex),
-        reservoir.storedPosition,
-        surface
-    );
+    LightSample smple = light_sample_decode(reservoir, surface, false);
     return lt_surface_target_pdf_with_view(surface, smple, viewPos);
 }
 
@@ -1029,8 +1171,10 @@ bool RTXDI_InternalSimpleResample(
     reservoir.weightSum += risWeight;
     bool selectSample = (randomValue * reservoir.weightSum < risWeight);
     if (selectSample) {
-        reservoir.lightIndex = candidateReservoir.lightIndex;
-        reservoir.storedPosition = candidateReservoir.storedPosition;
+        reservoir.lightData = candidateReservoir.lightData;
+        reservoir.uvData = candidateReservoir.uvData;
+        reservoir.hasCompactLightData = candidateReservoir.hasCompactLightData;
+        reservoir.compactLightBufferPtr = candidateReservoir.compactLightBufferPtr;
         reservoir.targetPdf = targetPdf;
         reservoir.visibility = candidateReservoir.visibility;
         reservoir.age = candidateReservoir.age;
@@ -1072,7 +1216,7 @@ bool rtxdi_internal_simple_resample(
     // which is critical for downstream pairwise MIS balance heuristic weights.
     reservoir.M += max(sampleM, 0.0f);
 
-    if (candidateReservoir.lightIndex < 0 || targetPdf <= 0.0f || sampleNormalization <= 0.0f || sampleM <= 0.0f) {
+    if (candidateReservoir.lightData == 0u || targetPdf <= 0.0f || sampleNormalization <= 0.0f || sampleM <= 0.0f) {
         return false;
     }
 
@@ -1081,8 +1225,10 @@ bool rtxdi_internal_simple_resample(
 
     bool selectSample = randomValue * reservoir.weightSum < risWeight;
     if (selectSample) {
-        reservoir.lightIndex = candidateReservoir.lightIndex;
-        reservoir.storedPosition = candidateReservoir.storedPosition;
+        reservoir.lightData = candidateReservoir.lightData;
+        reservoir.uvData = candidateReservoir.uvData;
+        reservoir.hasCompactLightData = candidateReservoir.hasCompactLightData;
+        reservoir.compactLightBufferPtr = candidateReservoir.compactLightBufferPtr;
         reservoir.targetPdf = targetPdf;
         reservoir.visibility = candidateReservoir.visibility;
         reservoir.age = candidateReservoir.age;
@@ -1216,19 +1362,18 @@ void rtxdi_finalize_resampling(inout Reservoir reservoir, float normalizationNum
 }
 
 void rtxdi_finalize_initial(inout Reservoir reservoir) {
-    // Denominator is numLocalSamples only because BRDF/environment MIS is not yet integrated.
-    // RTXDI uses misData.numMisSamples (local + BRDF + environment total) as the denominator.
-    // TODO: change denominator to numMisSamples when BRDF-MIS sampling is added.
-    rtxdi_finalize_resampling(reservoir, 1.0f, float(max(PH_LIGHTTREE_INITIAL_SAMPLES, 1)), reservoir.targetPdf);
+    // Legacy helper used by old call sites; RTXDI_SampleLocalLights uses RTXDI_FinalizeResampling
+    // with misData.numMisSamples (local + environment + BRDF) directly. Keep this for compat.
+    rtxdi_finalize_resampling(reservoir, 1.0, float(max(PH_LIGHTTREE_INITIAL_SAMPLES, 1)), reservoir.targetPdf);
 }
 
 float light_sample_encode_index(int lightIndex) {
-    return float(lightIndex);
+    return uintBitsToFloat(rtxdi_make_light_data(lightIndex));
 }
 
 vec4 rtxdi_pack_reservoir(Reservoir reservoir) {
     return vec4(
-        light_sample_encode_index(reservoir.lightIndex),
+        uintBitsToFloat(reservoir.lightData),
         reservoir.weightSum,
         reservoir.targetPdf,
         min(reservoir.M, 16383.0f)  // RTXDI_PackedDIReservoir_MaxM = 0x3fff
@@ -1236,11 +1381,11 @@ vec4 rtxdi_pack_reservoir(Reservoir reservoir) {
 }
 
 vec4 rtxdi_pack_reservoir_sample(Reservoir reservoir) {
-    if (reservoir.lightIndex < 0) {
+    if (!RTXDI_IsValidDIReservoir(reservoir)) {
         return vec4(0.0f);
     }
 
-    return vec4(reservoir.storedPosition + world_offset, 1.0f);
+    return vec4(uintBitsToFloat(reservoir.uvData), 0.0f, 0.0f, 0.0f);
 }
 
 // Pack age [0, 255] and spatialDistance [[-127, 127], [-127, 127]] into a single float32.
@@ -1256,13 +1401,13 @@ float rtxdi_pack_age_distance(float age, vec2 sd) {
     return float(iage * 65536 + isx * 256 + isy);
 }
 
-void rtxdi_unpack_age_distance(float packed, out float age, out vec2 sd) {
-    int ipacked = int(packed);
-    int isy = ipacked & 0xFF;
-    int isx = (ipacked >> 8) & 0xFF;
-    int iage = (ipacked >> 16) & 0xFF;  // 8-bit age; RTXDI_PackedDIReservoir_MaxAge = 0xff
+void rtxdi_unpack_age_distance(float packedValue, out float age, out vec2 sd) {
+    int ipacked = int(round(packedValue));
+    int isx = (ipacked << 16) >> 24;
+    int isy = (ipacked << 24) >> 24;
+    int iage = (ipacked >> 16) & 0xFF;
     age = float(iage);
-    sd = vec2(float(isx) - 128.0f, float(isy) - 128.0f);
+    sd = vec2(float(isx), float(isy));
 }
 
 vec4 rtxdi_pack_reservoir_meta(Reservoir reservoir) {
@@ -1275,27 +1420,24 @@ vec4 rtxdi_pack_reservoir_meta(Reservoir reservoir) {
 }
 
 void rtxdi_unpack_reservoir_at_surface(inout Reservoir reservoir, vec4 color, vec4 sampleData, vec4 meta, DirectSurface surface, bool remap) {
-    int index = int(round(color.x));
-    vec3 sampleWorldPosition = sampleData.xyz;
+    uint lightData = floatBitsToUint(color.x);
 
     if (remap) {
-        // Previous→current frame remap via mapping buffer (sized to maxLights).
+        int index = rtxdi_decode_light_index(lightData);
         if (index >= 0 && index < ph_lights_array_mapping.length()) {
             index = ph_lights_array_mapping[index];
         }
-        // After remap, validate against current light count.
         if (index < 0 || index >= ph_light_count) {
-            index = -1;
+            lightData = 0u;
+        } else {
+            lightData = rtxdi_make_light_data(index);
         }
     }
-    // When remap=false, the index is a previous-frame ID and is NOT validated here.
-    // RTXDI_LoadDIReservoir does not validate — remapping happens separately at the
-    // call site (TemporalResampling.hlsli line 135).
+    // When remap=false, lightData preserves the previous-frame packed ID and validity bit.
+    // RTXDI_LoadDIReservoir does not validate — remapping happens separately at the call site.
 
-    reservoir.lightIndex = index;
-    reservoir.storedPosition = (dot(sampleWorldPosition, sampleWorldPosition) > 1e-8)
-        ? sampleWorldPosition - world_offset
-        : vec3(0.0f);
+    reservoir.lightData = lightData;
+    reservoir.uvData = floatBitsToUint(sampleData.x);
     reservoir.weightSum = color.y;
     reservoir.targetPdf = color.z;
     reservoir.M = color.w;
@@ -1306,12 +1448,13 @@ void rtxdi_unpack_reservoir_at_surface(inout Reservoir reservoir, vec4 color, ve
     // which stores vec3(0) when visibility was -1 at pack time. Reuse eligibility is gated by
     // rtxdi_has_reusable_visibility (requires age > 0), NOT by zeroing the value here.
     // This matches RTXDI_GetDIReservoirVisibility which returns packed bits unconditionally.
-    float unpackedAge;
-    vec2 unpackedSd;
-    rtxdi_unpack_age_distance(meta.w, unpackedAge, unpackedSd);
+    int packedMeta = int(floatBitsToUint(meta.w));
     reservoir.visibility = meta.xyz;  // Always preserve raw packed visibility
-    reservoir.age = unpackedAge;
-    reservoir.spatialDistance = unpackedSd;
+    reservoir.age = float((packedMeta >> 16) & 0xFF);
+    reservoir.spatialDistance = vec2(
+        float((packedMeta << 24) >> 24),
+        float((packedMeta << 16) >> 24)
+    );
     reservoir.canonicalWeight = 0.0f;
 
     // RTXDI_UnpackDIReservoir sanitization (ReservoirStorage.hlsli lines 88-91):
@@ -1346,34 +1489,194 @@ void rtxdi_unpack_reservoir(inout Reservoir reservoir, vec4 color, vec3 sample_p
     rtxdi_unpack_reservoir(reservoir, color, vec4(-1.0f, 0.0f, 0.0f, 0.0f), sample_pos, remap);
 }
 
+// RTXDI: RTXDI_InitialSamplingMisData (InitialSampling.hlsli:33-39)
+// Tracks per-technique sample counts and their MIS weights for blended source PDF computation.
+// Defined here so RTXDI_LightBrdfMisWeight and rtxdi_stream_local_light can reference it.
+struct RTXDI_InitialSamplingMisData {
+    int numMisSamples;              // total candidates across all techniques
+    float localLightMisWeight;      // fraction of candidates from local-light sampling
+    float environmentMapMisWeight;  // fraction of candidates from environment sampling
+    float brdfMisWeight;            // fraction of candidates from BRDF sampling
+};
+
+// RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)
+// RTXDI does NOT guard numMisSamples against zero here — the early-exit in RTXDI_SampleLocalLights
+// ensures numMisSamples > 0 before this is used in division.
+// numMisSamples includes local + environment + BRDF sample counts (InitialSampling.hlsli line 45).
+// Environment samples are included even when the environment stub returns M=0 so MIS weights
+// remain consistent with the SDK reference.
+RTXDI_InitialSamplingMisData RTXDI_ComputeInitialSamplingMisData(int numLocalLightSamples, int numEnvironmentSamples, int numBrdfSamples) {
+    RTXDI_InitialSamplingMisData result;
+    result.numMisSamples = numLocalLightSamples + numEnvironmentSamples + numBrdfSamples;
+    int total = max(result.numMisSamples, 1);
+    result.localLightMisWeight = float(numLocalLightSamples) / float(total);
+    result.environmentMapMisWeight = float(numEnvironmentSamples) / float(total);
+    result.brdfMisWeight = float(numBrdfSamples) / float(total);
+    return result;
+}
+
+// Backward-compat overload — passes numEnvironmentSamples=0 for existing two-arg call sites.
+RTXDI_InitialSamplingMisData RTXDI_ComputeInitialSamplingMisData(int numLocalLightSamples, int numBrdfSamples) {
+    return RTXDI_ComputeInitialSamplingMisData(numLocalLightSamples, 0, numBrdfSamples);
+}
+
+// RTXDI: RTXDI_BrdfMaxDistanceFromPdf (InitialSampling.hlsli:57-61)
+// Heuristic max ray length from BRDF PDF, controlling the MIS cutoff region.
+// brdfCutoff == 0 disables shortening (returns +infinity sentinel).
+float rtxdi_brdf_max_distance_from_pdf(float brdfCutoff, float pdf) {
+    const float kRayTMax = 3.402823466e+38;
+    return brdfCutoff > 0.0 ? sqrt((1.0 / brdfCutoff - 1.0) * pdf) : kRayTMax;
+}
+
+// GGX VNDF PDF for a sampled light direction L given view direction V.
+// Matches the sampling distribution of ph_sample_ggx_vndf (ph_core.glsl).
+// Derivation: pdf_H = D(H) * G1(V) * dot(V,H) / max(dot(V,N), eps)
+//             pdf_L = pdf_H / (4 * dot(V,H)) = D(H) * G1(V) / (4 * max(dot(V,N), eps))
+float lt_evaluate_ggx_vndf_pdf(DirectSurface surface, vec3 lightDir, vec3 viewDir) {
+    vec3 N = surface.shadingNormal;
+    float nDotL = dot(N, lightDir);
+    float nDotV = dot(N, viewDir);
+    if (nDotL <= 0.0 || nDotV <= 0.0) {
+        return 0.0;
+    }
+
+    vec3 H = normalize(viewDir + lightDir);
+    float nDotH = max(dot(N, H), 0.0);
+
+    float roughness = clamp(surface.material.x, 0.03, 1.0);
+    float D = lt_distribution_ggx(nDotH, roughness);
+
+    // G1(V) -- Smith-GGX masking, matching lt_geometry_schlick_ggx
+    float a = max(roughness * roughness, 0.02);
+    float k = a * 0.5;
+    float G1 = nDotV / max(nDotV * (1.0 - k) + k, 1e-6);
+
+    // VNDF PDF wrt solid angle: D * G1 / (4 * nDotV)
+    return D * G1 / max(4.0 * nDotV, 1e-6);
+}
+
+// RTXDI: RAB_SurfaceEvaluateBrdfPdf -- evaluates the PDF of the Fresnel-weighted
+// GGX+cosine mixture sampler used by ph_sample_brdf_direction (ph_core.glsl).
+// Fix 1: PDF must match the sampling distribution exactly.
+// ph_sample_brdf_direction selects GGX with probability F (Fresnel intensity), cosine otherwise:
+//   pdf_mixture(L) = F * pdf_ggx(L) + (1 - F) * max(NdotL, 0) / PI
+float rtxdi_surface_evaluate_brdf_pdf(DirectSurface surface, vec3 lightDir) {
+    float nDotL = max(dot(surface.shadingNormal, lightDir), 0.0);
+    if (nDotL <= 0.0) {
+        return 0.0;
+    }
+
+    vec3 viewDir = normalize(rt_camera_position - surface.rtPos);
+    vec3 f0 = lt_surface_f0(surface);
+    // Fresnel selection probability matching ph_sample_brdf_direction: selector.x < F
+    float F = clamp(max(f0.r, max(f0.g, f0.b)), 0.04, 0.98);
+
+    float pdfCosine = nDotL / lt_pi;
+    float pdfGgx = lt_evaluate_ggx_vndf_pdf(surface, lightDir, viewDir);
+
+    return F * pdfGgx + (1.0 - F) * pdfCosine;
+}
+
 // RTXDI: RTXDI_LightBrdfMisWeight (InitialSampling.hlsli:66-96)
-// localLightMisWeight blends the light-selection PDF with the BRDF PDF.
-// When numBrdfSamples=0, localLightMisWeight=1.0 and blendedSourcePdf == sourcePdf,
-// so the RIS weight is numerically identical to the pre-MIS formula.
-void rtxdi_stream_local_light(inout Reservoir reservoir, DirectSurface surface, int lightIndex, float sourcePdf, float localLightMisWeight) {
-    // RTXDI InitialSampling.hlsli:129-133: StreamSample is only called when blendedSourcePdf != 0.
-    // If the light is truly invalid (no valid index or zero PDF), skip streaming entirely — M is NOT
-    // incremented, matching RTXDI where a zero blendedSourcePdf means the stream call is skipped.
-    if (lightIndex < 0 || lightIndex >= ph_light_count || sourcePdf <= 0.0f) {
+// Computes the blended source PDF that mixes the light-selection PDF with the BRDF PDF
+// using a balance-heuristic MIS weight. When brdfMisWeight == 0 or the light is analytic
+// (isinf/delta solid-angle PDF), falls through to the simple lightMisWeight * lightSelectionPdf.
+//
+// For Minecraft point/block lights (delta lights): lt_light_sample_source_pdf() == 1.0,
+// which is NOT isinf, so the BRDF blend is applied. For hard-coded point lights,
+// lightSolidAnglePdf = 1.0 (treating the point as a unit solid-angle basis).
+float RTXDI_LightBrdfMisWeight(
+    DirectSurface surface,
+    LightSample lightSample,
+    float lightSelectionPdf,
+    float lightMisWeight,
+    float brdfMisWeight,
+    float brdfCutoff
+) {
+    float lightSolidAnglePdf = lt_light_sample_source_pdf();
+
+    // RTXDI InitialSampling.hlsli:71-76: skip BRDF blend when:
+    //   - brdfMisWeight == 0 (no BRDF samples counted)
+    //   - degenerate solid-angle PDF (<= 0, isinf, or nan)
+    if (brdfMisWeight == 0.0
+        || lightSolidAnglePdf <= 0.0
+        || isinf(lightSolidAnglePdf)
+        || isnan(lightSolidAnglePdf)) {
+        return lightMisWeight * lightSelectionPdf;
+    }
+
+    // RTXDI InitialSampling.hlsli:83-86: evaluate BRDF PDF and apply MIS distance cutoff.
+    float brdfPdf = rtxdi_surface_evaluate_brdf_pdf(surface, lightSample.dir);
+    float maxDistance = rtxdi_brdf_max_distance_from_pdf(brdfCutoff, brdfPdf);
+    float lightDistance = length(lightSample.position - surface.rtPos);
+    if (lightDistance > maxDistance) {
+        brdfPdf = 0.0;
+    }
+
+    // RTXDI InitialSampling.hlsli:89-95: convert selection PDF to solid-angle domain,
+    // blend with BRDF PDF, then convert back to selection-PDF domain.
+    float sourcePdfWrtSolidAngle = lightSelectionPdf * lightSolidAnglePdf;
+    float blendedPdfWrtSolidAngle = lightMisWeight * sourcePdfWrtSolidAngle + brdfMisWeight * brdfPdf;
+    return blendedPdfWrtSolidAngle / lightSolidAnglePdf;
+}
+
+// RTXDI: RTXDI_StreamLocalLightAtUVIntoReservoir (InitialSampling.hlsli:110-139)
+// Streams a single local-light candidate into the reservoir using BRDF-blended MIS source PDF.
+// Pass misData to activate BRDF participation (Fix 1); brdfCutoff comes from the uniform.
+void rtxdi_stream_local_light(
+    inout Reservoir reservoir,
+    DirectSurface surface,
+    Light light,
+    float sourcePdf,
+    RTXDI_InitialSamplingMisData misData,
+    float brdfCutoff
+) {
+    if (light.index < 0 || light.index >= ph_light_count || sourcePdf <= 0.0) {
         return;
     }
 
-    LightSample smple = light_sample_random_at(load_light(lightIndex), surface);
-    // blendedSourcePdf = localLightMisWeight * sourcePdf * solidAnglePdf
-    // (brdfMisWeight * brdfPdf term is 0 when numBrdfSamples = 0)
-    float blendedSourcePdf = localLightMisWeight * sourcePdf * lt_light_sample_source_pdf();
-    // RTXDI: only skip on exact zero (InitialSampling.hlsli:129) — no epsilon clamp.
+    vec2 sampleUv = vec2(rand_next_float(), rand_next_float());
+    vec3 sampledPosition = lt_sample_light_position_from_uv(light, sampleUv, lt_surface_ray_origin(surface.rtPos, surface.geometryNormal));
+    LightSample smple = light_sample_new_at_position(light, sampledPosition, surface);
+
+    float blendedSourcePdf = RTXDI_LightBrdfMisWeight(
+        surface, smple, sourcePdf,
+        misData.localLightMisWeight,
+        misData.brdfMisWeight,
+        brdfCutoff
+    );
+
     if (blendedSourcePdf == 0.0) {
         return;
     }
+
     float invSourcePdf = 1.0 / blendedSourcePdf;
-    // RTXDI_StreamSample: increments M, uses risWeight = targetPdf * invSourcePdf.
-    RTXDI_StreamSample(reservoir, smple.index, smple.position, rand_next_float(), smple.weight, invSourcePdf);
+    bool selected = RTXDI_StreamSample(reservoir, smple.index, sampleUv, rand_next_float(), smple.weight, invSourcePdf);
+    if (selected) {
+        reservoir.hasCompactLightData = false;
+        reservoir.compactLightBufferPtr = 0u;
+    }
+}
+
+void rtxdi_stream_local_light(inout Reservoir reservoir, DirectSurface surface, int lightIndex, float sourcePdf, RTXDI_InitialSamplingMisData misData, float brdfCutoff) {
+    if (lightIndex < 0 || lightIndex >= ph_light_count || sourcePdf <= 0.0) {
+        return;
+    }
+    rtxdi_stream_local_light(reservoir, surface, load_light(lightIndex), sourcePdf, misData, brdfCutoff);
+}
+
+void rtxdi_stream_local_light(inout Reservoir reservoir, DirectSurface surface, int lightIndex, float sourcePdf, float localLightMisWeight) {
+    RTXDI_InitialSamplingMisData misData;
+    misData.numMisSamples = 1;
+    misData.localLightMisWeight = localLightMisWeight;
+    misData.environmentMapMisWeight = 0.0;
+    misData.brdfMisWeight = 0.0;
+    rtxdi_stream_local_light(reservoir, surface, lightIndex, sourcePdf, misData, 0.0);
 }
 
 // Backward-compat overload — passes localLightMisWeight=1.0 (no MIS blending).
 void rtxdi_stream_local_light(inout Reservoir reservoir, DirectSurface surface, int lightIndex, float sourcePdf) {
-    rtxdi_stream_local_light(reservoir, surface, lightIndex, sourcePdf, 1.0f);
+    rtxdi_stream_local_light(reservoir, surface, lightIndex, sourcePdf, 1.0);
 }
 
 bool lt_pick_power_light_stratified(int sampleIndex, int totalSamples, out int lightIndex, out float lightPdf) {
@@ -1421,31 +1724,39 @@ const int RTXDI_LOCAL_LIGHT_SAMPLING_UNIFORM   = 0;  // Uniform random selection
 const int RTXDI_LOCAL_LIGHT_SAMPLING_POWER_RIS = 1;  // Power-CDF importance sampling (stratified RIS tile)
 const int RTXDI_LOCAL_LIGHT_SAMPLING_REGIR_RIS = 2;  // ReGIR cell-based RIS (with Power_RIS fallback outside grid)
 
-// RTXDI: RTXDI_InitialSamplingMisData (InitialSampling.hlsli:33-39)
-// Tracks per-technique sample counts and their MIS weights for blended source PDF computation.
-struct RTXDI_InitialSamplingMisData {
-    int numMisSamples;         // total candidates across all techniques
-    float localLightMisWeight; // fraction of candidates from local-light sampling
-    float brdfMisWeight;       // fraction of candidates from BRDF sampling (0 until BRDF pass is added)
-};
-
-// RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)
-// RTXDI does NOT guard numMisSamples against zero here — the early-exit in RTXDI_SampleLocalLights
-// ensures numMisSamples > 0 before this is used in division.
-// numMisSamples includes local + environment + BRDF sample counts (InitialSampling.hlsli line 45).
-// Environment samples are included even when the environment stub returns M=0 so MIS weights
-// remain consistent with the SDK reference.
-RTXDI_InitialSamplingMisData RTXDI_ComputeInitialSamplingMisData(int numLocalLightSamples, int numEnvironmentSamples, int numBrdfSamples) {
-    RTXDI_InitialSamplingMisData result;
-    result.numMisSamples = numLocalLightSamples + numEnvironmentSamples + numBrdfSamples;
-    result.localLightMisWeight = float(numLocalLightSamples) / float(result.numMisSamples);
-    result.brdfMisWeight = float(numBrdfSamples) / float(result.numMisSamples);
-    return result;
+// RTXDI: RTXDI_JenkinsHash (Math.hlsli:82-92)
+// 32-bit Jenkins integer hash used by RTXDI_InitRandomSampler.
+uint rtxdi_jenkins_hash(uint a) {
+    a = (a + 0x7ed55d16u) + (a << 12);
+    a = (a ^ 0xc761c23cu) ^ (a >> 19);
+    a = (a + 0x165667b1u) + (a << 5);
+    a = (a + 0xd3a2646cu) ^ (a << 9);
+    a = (a + 0xfd7046c5u) + (a << 3);
+    a = (a ^ 0xb55a4f09u) ^ (a >> 16);
+    return a;
 }
 
-// Backward-compat overload — passes numEnvironmentSamples=0 for existing two-arg call sites.
-RTXDI_InitialSamplingMisData RTXDI_ComputeInitialSamplingMisData(int numLocalLightSamples, int numBrdfSamples) {
-    return RTXDI_ComputeInitialSamplingMisData(numLocalLightSamples, 0, numBrdfSamples);
+// RTXDI: RTXDI_IntegerExplode (Math.hlsli:46-53) — interleaves bits of a 16-bit value.
+uint rtxdi_integer_explode(uint x) {
+    x = (x | (x << 8)) & 0x00FF00FFu;
+    x = (x | (x << 4)) & 0x0F0F0F0Fu;
+    x = (x | (x << 2)) & 0x33333333u;
+    x = (x | (x << 1)) & 0x55555555u;
+    return x;
+}
+
+// RTXDI: RTXDI_ZCurveToLinearIndex (Math.hlsli:68-71) — Morton/Z-curve 2D→1D index.
+uint rtxdi_z_curve_to_linear_index(uvec2 xy) {
+    return rtxdi_integer_explode(xy.x) | (rtxdi_integer_explode(xy.y) << 1);
+}
+
+// RTXDI: RTXDI_InitRandomSampler (RandomSamplerState.hlsli:30-41)
+// Seeds coherent RNG from a tile (block) position and frame index using Jenkins hash.
+// Exact port of the SDK — no pass parameter since we don't use multi-pass seeds here.
+// Tile size = RTXDI_TILE_SIZE_IN_PIXELS = 16, matching the block coord division below.
+uint rtxdi_init_random_sampler(uvec2 tilePos, uint frameIndex) {
+    uint linearIndex = rtxdi_z_curve_to_linear_index(tilePos);
+    return rtxdi_jenkins_hash(linearIndex) + frameIndex;
 }
 
 // RTXDI_SampleLocalLights (InitialSampling.hlsli lines 301-333)
@@ -1461,18 +1772,23 @@ RTXDI_InitialSamplingMisData RTXDI_ComputeInitialSamplingMisData(int numLocalLig
 //   coherentRng (spatially coherent) — drives ReGIR cell jitter and RIS tile selection.
 // RTXDI uses coherentRng exclusively for RTXDI_CalculateReGIRCellIndex and
 // RTXDI_SelectLocalLightReGIRRISTile so neighboring pixels share the same ReGIR cell.
-// Here coherent_rng_state is seeded from the block-aligned (8x8) pixel position to give
-// spatial coherence while avoiding the per-pixel temporal variation of rng_state.
+// Fix 2: coherent_rng_state now uses RTXDI_InitRandomSampler (Jenkins hash + Z-curve),
+// replacing the former LCG-based custom seeding formula.
 Reservoir RTXDI_SampleLocalLights(DirectSurface surface) {
+    // RTXDI: early-out when no lights (InitialSampling.hlsli:319)
+    if (ph_light_count <= 0) {
+        return RTXDI_EmptyDIReservoir();
+    }
+
     Reservoir state = RTXDI_EmptyDIReservoir();
 
-    // Coherent RNG: seeded from 16x16 block-aligned pixel position + frame counter.
-    // Block alignment ensures neighboring pixels in the same block share the ReGIR cell
-    // draw, matching RTXDI's coherentRng semantic for RTXDI_CalculateReGIRCellIndex.
-    // 16x16 matches RTXDI_TILE_SIZE_IN_PIXELS = 16 (RtxdiParameters.h line 65).
-    ivec2 blockCoord = ivec2(tex_coord) / 16;
-    uint coherent_rng_state = uint(blockCoord.x * 1664525u + blockCoord.y * 1013904223u)
-        ^ uint(frameCounter * 2246822519u);
+    // Fix 2: Coherent RNG seeded via RTXDI_InitRandomSampler (RandomSamplerState.hlsli:30-41).
+    // Uses Jenkins hash on the Z-curve-linearized tile position, matching SDK exactly.
+    // RTXDI_TILE_SIZE_IN_PIXELS = 16 (RtxdiParameters.h line 65): divide pixel coord by 16
+    // so all pixels in a 16x16 block share the same coherent seed, giving spatial coherence
+    // for ReGIR cell selection and RIS tile selection.
+    uvec2 tileCoord = uvec2(tex_coord) / 16u;
+    uint coherent_rng_state = rtxdi_init_random_sampler(tileCoord, uint(frameCounter));
 
     // Resolve local light sampling mode from runtime uniform.
     // SDK default (ReSTIRDI.cpp line 45): Uniform (0).
@@ -1505,13 +1821,22 @@ Reservoir RTXDI_SampleLocalLights(DirectSurface surface) {
     }
 
     // RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)
-    // numBrdfSamples=0 for now — will be nonzero when BRDF sampling is added.
+    // Fix 1: numBrdfSamples now defaults to 1 (SDK default), matching RTXDI behavior.
+    //   - ph_restir_initial_num_brdf_samples > 0.0 → use runtime value
+    //   - ph_restir_initial_num_brdf_samples == -1.0 → explicitly disable (0)
+    //   - ph_restir_initial_num_brdf_samples == 0.0 (unbound) → SDK default = 1
     // numEnvironmentSamples: SDK default 1 (ReSTIRDI.cpp line 41). 0.0 (unbound) falls back to 1.
     // Environment stub returns M=0 but the count still appears in the MIS denominator per RTXDI.
     int numEnvironmentSamples = (ph_restir_initial_num_environment_samples > 0.0)
         ? int(ph_restir_initial_num_environment_samples)
         : 1;
-    RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(numLocalSamples, numEnvironmentSamples, 0);
+    int numBrdfSamples = (ph_restir_initial_num_brdf_samples > 0.0)
+        ? int(ph_restir_initial_num_brdf_samples)
+        : (ph_restir_initial_num_brdf_samples < -0.5 ? 0 : 1);
+    RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(numLocalSamples, numEnvironmentSamples, numBrdfSamples);
+
+    // brdfCutoff from uniform; 0.0 (unbound or explicitly zero) means disabled (no distance shortening).
+    float brdfCutoff = max(ph_restir_initial_brdf_cutoff, 0.0);
 
     // For Power_RIS and ReGIR_RIS (outside grid) modes: select ONE RIS tile using coherentRng before the loop.
     // Matches RTXDI RTXDI_InitializeLocalLightSelectionContextRIS / RTXDI_RandomlySelectRISTile:
@@ -1530,7 +1855,7 @@ Reservoir RTXDI_SampleLocalLights(DirectSurface surface) {
 
     for (int i = 0; i < numLocalSamples; i++) {
         int lightIndex = -1;
-        float sourcePdf = 0.0f;
+        float sourcePdf = 0.0;
 
         if (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_REGIR_RIS && useRegir) {
             // ReGIR_RIS, inside grid: draw from the ReGIR cell's RIS slots.
@@ -1540,39 +1865,62 @@ Reservoir RTXDI_SampleLocalLights(DirectSurface surface) {
             // RTXDI_STRATIFY_LOCAL_SAMPLING (InitialSampling.hlsli:280): stratify the
             // per-iteration draw so samples are spread evenly across the cell's slots.
             float regirRnd = (rand_next_float() + float(i)) / float(numLocalSamples);
-            regir_pick_light(regirFlatCellIndex, regirRnd, lightIndex, sourcePdf);
+            bool regirHasCompact = false;
+            uint regirRisBufferPtr = 0u;
+            regir_pick_light(regirFlatCellIndex, regirRnd, lightIndex, sourcePdf, regirHasCompact, regirRisBufferPtr);
+            if (regirHasCompact && lightIndex >= 0 && sourcePdf > 0.0f) {
+                Light compactLight = load_compact_light(regirRisBufferPtr, lightIndex);
+                rtxdi_stream_local_light(state, surface, compactLight, sourcePdf, misData, brdfCutoff);
+                if (RTXDI_IsValidDIReservoir(state) && rtxdi_get_light_index(state) == compactLight.index) {
+                    state.hasCompactLightData = true;
+                    state.compactLightBufferPtr = regirRisBufferPtr;
+                }
+                continue;
+            }
         } else if (hasFallbackTiles) {
             // Power_RIS or ReGIR_RIS (outside grid): draw from the pre-selected RIS tile.
             // Stratified draw spreads iterations across the tile (RTXDI_STRATIFY_LOCAL_SAMPLING).
             // Matches RTXDI_RandomlySelectLightDataFromRISTile in InitialSampling.hlsli.
             float tileRnd = (rand_next_float() + float(i)) / float(numLocalSamples);
             uint risSample = min(uint(floor(tileRnd * float(ph_ris_tile_size))), uint(ph_ris_tile_size) - 1u);
-            uvec2 tileData = ph_ris_tile_data[fallbackTileOffset + risSample];
+            uint risBufferPtr = uint(ph_ris_tile_buffer_offset) + fallbackTileOffset + risSample;
+            uvec2 tileData = ph_ris_data[risBufferPtr];
             bool hasCompactData = (tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u;
             lightIndex = int(tileData.x & RTXDI_LIGHT_INDEX_MASK);
             float invSourcePdf = uintBitsToFloat(tileData.y);
-            if (hasCompactData || invSourcePdf <= 0.0f || lightIndex < 0 || lightIndex >= ph_light_count) {
+            if (invSourcePdf <= 0.0 || lightIndex < 0 || lightIndex >= ph_light_count) {
                 lightIndex = -1;
-                sourcePdf = 0.0f;
+                sourcePdf = 0.0;
             } else {
-                sourcePdf = 1.0f / invSourcePdf;
+                sourcePdf = 1.0 / invSourcePdf;
+                if (hasCompactData) {
+                    Light compactLight = load_compact_light(risBufferPtr, lightIndex);
+                    rtxdi_stream_local_light(state, surface, compactLight, sourcePdf, misData, brdfCutoff);
+                    if (RTXDI_IsValidDIReservoir(state) && rtxdi_get_light_index(state) == compactLight.index) {
+                        state.hasCompactLightData = true;
+                        state.compactLightBufferPtr = risBufferPtr;
+                    }
+                    continue;
+                }
             }
         } else {
-            // Uniform (mode 0, SDK default) or tile buffer unavailable: equal probability from light buffer.
-            lt_pick_uniform_light(lightIndex, sourcePdf);
+            // Uniform with stratification (RTXDI_STRATIFY_LOCAL_SAMPLING)
+            float uniformRnd = (rand_next_float() + float(i)) / float(numLocalSamples);
+            lightIndex = clamp(int(uniformRnd * float(ph_light_count)), 0, ph_light_count - 1);
+            sourcePdf = 1.0 / float(max(ph_light_count, 1));
         }
 
-        // RTXDI: RTXDI_StreamLocalLightAtUVIntoReservoir -- always called, always increments M.
+        // Fix 1: RTXDI_StreamLocalLightAtUVIntoReservoir — pass full misData + brdfCutoff
+        // so that RTXDI_LightBrdfMisWeight blends the BRDF PDF into the source PDF.
         // Invalid entries (lightIndex<0, sourcePdf=0) get zero risWeight -> no contribution.
-        // Pass MIS weight so blendedSourcePdf = localLightMisWeight * sourcePdf (RTXDI:66-96).
-        rtxdi_stream_local_light(state, surface, lightIndex, sourcePdf, misData.localLightMisWeight);
+        rtxdi_stream_local_light(state, surface, lightIndex, sourcePdf, misData, brdfCutoff);
     }
 
     // RTXDI: RTXDI_FinalizeResampling(state, 1.0, misData.numMisSamples) (InitialSampling.hlsli:291).
     // 3-parameter form — no max() guard; zero case is handled by the early exit above.
     RTXDI_FinalizeResampling(state, 1.0, float(misData.numMisSamples));
     // RTXDI sets M=1 after initial RIS (InitialSampling.hlsli:292).
-    state.M = 1.0f;
+    state.M = 1.0;
     return state;
 }
 
@@ -1608,22 +1956,187 @@ Reservoir RTXDI_SampleEnvironmentMap(DirectSurface surface, int numSamples) {
 }
 
 // RTXDI_SampleBrdf (InitialSampling.hlsli lines 501-589)
-// Stub: BRDF importance sampling not yet integrated.
-// Returns empty reservoir with M=0.
-Reservoir RTXDI_SampleBrdf(DirectSurface surface, int numSamples) {
+// BRDF importance sampling: traces a ray in a BRDF-sampled direction and streams any
+// emissive block hit into the reservoir.  Matching the reference structure:
+//   for each sample:
+//     1. Importance-sample a BRDF direction (cosine-weighted + GGX via ph_sample_brdf_direction).
+//     2. Evaluate the BRDF PDF for that direction.
+//     3. Trace a ray; check lightEmittance to detect emissive-block hits.
+//     4. If an emissive block was hit, locate the nearest light in the array.
+//     5. Evaluate targetPdf and MIS-blended source PDF, then stream into reservoir.
+//   FinalizeResampling with misData.numMisSamples matching the reference.
+//
+// numSamples: number of BRDF candidates to generate (matches RTXDI numBrdfSamples).
+// misData:    MIS weight data shared with RTXDI_SampleLocalLights (same frame draw).
+// brdfCutoff: RTXDI brdfCutoff — disables BRDF blend when 0.
+Reservoir RTXDI_SampleBrdf(DirectSurface surface, int numSamples, RTXDI_InitialSamplingMisData misData, float brdfCutoff) {
     Reservoir state = RTXDI_EmptyDIReservoir();
-    // TODO: When adding BRDF ray tracing:
-    // - Importance sample BRDF direction (cosine-weighted + GGX)
-    // - Trace ray to find intersecting lights
-    // - Evaluate target PDF, apply MIS weighting
+    if (numSamples <= 0 || ph_light_count <= 0) {
+        return state;
+    }
+
+    vec3 viewDir = normalize(rt_camera_position - surface.rtPos);
+
+    // Fix 2: RTXDI uses brdfRayMinT to avoid self-intersection (InitialSampling.hlsli line 506).
+    // rayOrigin already has a geometry-normal offset via lt_surface_ray_origin, but brdfRayMinT
+    // provides an additional parametric minimum along the ray direction.
+    const float brdfRayMinT = 0.02;
+
+    vec3 rayOrigin = lt_surface_ray_origin(surface.rtPos, surface.geometryNormal);
+
+    for (int i = 0; i < numSamples; i++) {
+        // Step 1: importance-sample a BRDF direction (Fresnel-weighted GGX or cosine hemisphere).
+        // ph_sample_brdf_direction selects the lobe based on Fresnel weight, matching
+        // RAB_SurfaceImportanceSampleBrdf in the reference.
+        float roughness = clamp(surface.material.x, 0.03f, 1.0f);
+        float metalness = clamp(surface.material.y, 0.0f, 1.0f);
+        vec3 sampleDir = ph_sample_brdf_direction(
+            surface.shadingNormal,
+            viewDir,
+            surface.albedo,
+            roughness,
+            metalness,
+            tex_coord,
+            i
+        );
+
+        // Step 2: evaluate BRDF PDF for the sampled direction.
+        // Fix 1: rtxdi_surface_evaluate_brdf_pdf now evaluates the Fresnel-weighted GGX+cosine
+        // mixture PDF, matching the sampling distribution of ph_sample_brdf_direction exactly.
+        float brdfPdf = rtxdi_surface_evaluate_brdf_pdf(surface, sampleDir);
+        if (brdfPdf <= 0.0) {
+            continue;
+        }
+
+        // Fix 2: RTXDI_BrdfMaxDistanceFromPdf (InitialSampling.hlsli line 525).
+        // Limits trace distance based on PDF to control MIS cutoff region.
+        // High PDF (specular peak) -> large maxDistance; low PDF (diffuse tail) -> shorter.
+        float maxDistance = rtxdi_brdf_max_distance_from_pdf(brdfCutoff, brdfPdf);
+
+        // Step 3: trace ray in sampled direction with brdfRayMinT and maxDistance limits.
+        // breakOnEmpty stops traversal at the first empty block (sky), matching
+        // the early-exit semantics of RAB_TraceRayForLocalLight.
+        lightEmittance = vec3(0.0f);
+        breakOnEmpty = true;
+        ray.origin = rayOrigin + sampleDir * brdfRayMinT;
+        ray.direction = sampleDir;
+        trace_ray(ray, true);
+        breakOnEmpty = false;
+
+        // lightEmittance is set by trace_ray when the terminating block is emissive.
+        // A zero lightEmittance means either air/opaque non-emitter or sky miss.
+        if (!ray.result_hit || ph_luminance(lightEmittance) <= 1e-6f) {
+            continue;
+        }
+
+        // Fix 2: discard hits beyond maxDistance (reference lines 535-546).
+        float hitDistance = length(ray.result_position - rayOrigin);
+        if (hitDistance > maxDistance) {
+            continue;
+        }
+
+        // Step 4: find the nearest light in the list to the hit position.
+        // Minecraft lights are discrete blocks; search for the closest within 1.5 voxels.
+        // Fix 4: search ALL lights (not capped at 128) for correctness.
+        // Optimization opportunity: replace with spatial hash or block->light index table.
+        int lightIndex = -1;
+        float bestDistSq = 2.25f; // (1.5)^2 -- reject anything farther
+        for (int j = 0; j < ph_light_count; j++) {
+            Light candidate = load_light(j);
+            vec3 delta = candidate.position - ray.result_position;
+            float distSq = dot(delta, delta);
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                lightIndex = j;
+            }
+        }
+
+        if (lightIndex < 0) {
+            continue;
+        }
+
+        // Step 5: evaluate target PDF and blended source PDF, then stream.
+        // light_sample_new_at_position builds color + weight (targetPdf) for the surface.
+        Light hitLight = load_light(lightIndex);
+        LightSample brdfSample = light_sample_new_at_position(hitLight, hitLight.position, surface);
+        float targetPdf = brdfSample.weight;
+        if (targetPdf <= 0.0) {
+            continue;
+        }
+
+        // Fix 3: use power-CDF probability for lightSelectionPdf (RAB_EvaluateLocalLightSourcePdf).
+        // This is the probability of picking the specific light via the global importance CDF,
+        // matching RTXDI's RAB_EvaluateLocalLightSourcePdf which uses the actual source distribution.
+        float lightSelectionPdf;
+        float totalCdfWeight = ph_global_light_cdf_data[ph_light_count - 1];
+        if (totalCdfWeight > 1e-6) {
+            float prevCdf = lightIndex > 0 ? ph_global_light_cdf_data[lightIndex - 1] : 0.0;
+            float lightWeight = ph_global_light_cdf_data[lightIndex] - prevCdf;
+            lightSelectionPdf = lightWeight / totalCdfWeight;
+        } else {
+            lightSelectionPdf = 1.0 / float(max(ph_light_count, 1));
+        }
+
+        if (lightSelectionPdf <= 0.0) {
+            continue;
+        }
+
+        // RTXDI_LightBrdfMisWeight blends lightSelectionPdf (converted to solid-angle domain)
+        // with brdfPdf using balance-heuristic MIS, matching reference lines 573-576.
+        float blendedSourcePdf = RTXDI_LightBrdfMisWeight(
+            surface,
+            brdfSample,
+            lightSelectionPdf,
+            misData.localLightMisWeight,
+            misData.brdfMisWeight,
+            brdfCutoff
+        );
+
+        if (blendedSourcePdf <= 0.0) {
+            continue;
+        }
+
+        // Stream into reservoir -- reference line 579.
+        RTXDI_StreamSample(state, brdfSample.index, vec2(0.0f), rand_next_float(), targetPdf, 1.0f / blendedSourcePdf);
+    }
+
+    // Reference line 585: FinalizeResampling(state, 1.0, misData.numMisSamples).
+    RTXDI_FinalizeResampling(state, 1.0, float(misData.numMisSamples));
+    // Reference line 586: state.M = 1.
+    state.M = 1.0;
     return state;
+}
+// Backward-compat overload — stub signature kept so existing zero-sample call sites compile.
+// numSamples == 0 returns an empty reservoir (M=0) with no side-effects.
+Reservoir RTXDI_SampleBrdf(DirectSurface surface, int numSamples) {
+    RTXDI_InitialSamplingMisData fallbackMis;
+    fallbackMis.numMisSamples = 1;
+    fallbackMis.localLightMisWeight = 1.0;
+    fallbackMis.environmentMapMisWeight = 0.0;
+    fallbackMis.brdfMisWeight = 0.0;
+    return RTXDI_SampleBrdf(surface, numSamples, fallbackMis, 0.0);
 }
 
 // RTXDI_SampleLightsForSurface (InitialSampling.hlsli lines 592-671)
 // Combines local, infinite, environment, and BRDF sub-reservoirs into one.
-// Stubs for infinite/environment/BRDF return M=0 reservoirs, which are no-ops
+// Stubs for infinite/environment return M=0 reservoirs, which are no-ops
 // in RTXDI_CombineDIReservoirs (weightSum contribution is 0*M=0).
 Reservoir RTXDI_SampleLightsForSurface(DirectSurface surface) {
+    // Compute numBrdfSamples and misData using the same uniform-reading logic as
+    // RTXDI_SampleLocalLights, so both functions share a consistent MIS denominator.
+    // Mirrors RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54).
+    int numLocalSamples = (ph_restir_initial_num_local_samples > 0.0)
+        ? max(int(ph_restir_initial_num_local_samples), 1)
+        : max(PH_LIGHTTREE_INITIAL_SAMPLES, 1);
+    int numEnvironmentSamples = (ph_restir_initial_num_environment_samples > 0.0)
+        ? int(ph_restir_initial_num_environment_samples)
+        : 1;
+    int numBrdfSamples = (ph_restir_initial_num_brdf_samples > 0.0)
+        ? int(ph_restir_initial_num_brdf_samples)
+        : (ph_restir_initial_num_brdf_samples < -0.5 ? 0 : 1);
+    RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(numLocalSamples, numEnvironmentSamples, numBrdfSamples);
+    float brdfCutoff = max(ph_restir_initial_brdf_cutoff, 0.0);
+
     // 1. Local lights
     Reservoir localReservoir = RTXDI_SampleLocalLights(surface);
 
@@ -1633,8 +2146,9 @@ Reservoir RTXDI_SampleLightsForSurface(DirectSurface surface) {
     // 3. Environment map -- stub for now
     Reservoir environmentReservoir = RTXDI_SampleEnvironmentMap(surface, 0);
 
-    // 4. BRDF samples -- stub for now
-    Reservoir brdfReservoir = RTXDI_SampleBrdf(surface, 0);
+    // 4. BRDF importance sampling — passes misData and brdfCutoff so MIS weights
+    // are consistent with the local-light pass (reference lines 573-576).
+    Reservoir brdfReservoir = RTXDI_SampleBrdf(surface, numBrdfSamples, misData, brdfCutoff);
 
     // Combine all four using RTXDI_CombineDIReservoirs (Algorithm 4, ReSTIR paper)
     Reservoir state = RTXDI_EmptyDIReservoir();
@@ -1646,6 +2160,17 @@ Reservoir RTXDI_SampleLightsForSurface(DirectSurface surface) {
     // RTXDI: FinalizeResampling(state, 1.0, 1.0); state.M = 1;
     RTXDI_FinalizeResampling(state, 1.0, 1.0);
     state.M = 1.0;
+
+    // RTXDI: enableInitialVisibility (InitialSampling.hlsli:661-668)
+    // Applied here on the COMBINED reservoir (local + infinite + env + BRDF), matching RTXDI.
+    if (ph_restir_initial_enable_visibility > -0.5 && RTXDI_IsValidDIReservoir(state)) {
+        LightSample selectedLight = light_sample_decode(state, surface, false);
+        float hitDist = light_sample_trace_hit_surface(selectedLight, false, surface);
+        bool isVisible = hitDist > 0.0 && selectedLight.index >= 0;
+        if (!isVisible) {
+            RTXDI_StoreVisibilityInDIReservoir(state, vec3(0.0), true);
+        }
+    }
 
     return state;
 }
@@ -1669,21 +2194,18 @@ void rtxdi_sample_local_lights_with_visibility(inout Reservoir reservoir, Direct
         return;
     }
 
-    if (!rtxdi_is_valid_reservoir(reservoir)) {
+    if (!RTXDI_IsValidDIReservoir(reservoir)) {
         return;
     }
 
-    // Reconstruct a LightSample from the reservoir's stored index/position for tracing.
-    LightSample selectedLight = light_sample_new_at_position(
-        load_light(reservoir.lightIndex), reservoir.storedPosition, surface);
+    // Reconstruct a LightSample from the reservoir's stored replay state for tracing.
+    LightSample selectedLight = light_sample_decode(reservoir, surface, false);
     float hitDistance = light_sample_trace_hit_surface(selectedLight, false, surface);
     bool isVisible = hitDistance > 0.0f && selectedLight.index >= 0;
 
     if (isVisible) {
         // RTXDI InitialSampling.hlsli lines 661-668: on SUCCESS, do NOT call StoreVisibility.
         // The reservoir keeps its default uninitialized visibility sentinel (vec3(-1)).
-        // Update stored position with the traced hit position for consistency.
-        reservoir.storedPosition = selectedLight.position;
     } else {
         // RTXDI: on FAILURE (occluded), discard the reservoir sample.
         // RTXDI_StoreVisibilityInDIReservoir(state, 0, true) — discardIfInvisible=true clears lightData+weightSum.
@@ -1748,7 +2270,7 @@ bool rtxdi_load_previous_with_surface(
     );
     // RTXDI: when light remap fails the mapped ID becomes invalid;
     // kill the weightSum so the reservoir cannot contribute (matching RTXDI prevSample.weightSum = 0).
-    if (reservoir.lightIndex < 0) {
+    if (!RTXDI_IsValidDIReservoir(reservoir)) {
         reservoir.weightSum = 0.0f;
     }
     return rtxdi_is_valid_reservoir(reservoir) && !isnan(reservoir.weightSum) && !isnan(reservoir.targetPdf);

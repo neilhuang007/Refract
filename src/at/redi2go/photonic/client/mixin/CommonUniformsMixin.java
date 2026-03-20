@@ -4,6 +4,7 @@ import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.RenderDispatcher;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ShaderUtil;
+import at.redi2go.photonic.client.rendering.opengl.rendering.RegirComputeProgram;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
 import java.util.function.Supplier;
 import net.irisshaders.iris.gl.state.FogMode;
@@ -20,6 +21,7 @@ import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 import org.joml.Vector3d;
 import org.joml.Vector3f;
+import org.joml.Vector3i;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -111,7 +113,10 @@ public class CommonUniformsMixin {
          });
          // RTXDI: center-based grid anchoring — origin derived in shader as center - gridRes * cellSize * 0.5
          uniforms.uniform3f(UniformUpdateFrequency.PER_FRAME, "ph_regir_grid_center", () -> worldRegistry.get().getLightRegistry().getRegirGridCenter());
-         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_grid_resolution", () -> worldRegistry.get().getLightRegistry().getRegirGridResolution());
+         uniforms.uniform3i(UniformUpdateFrequency.PER_FRAME, "ph_regir_grid_cells", () -> {
+            int gridRes = worldRegistry.get().getLightRegistry().getRegirGridResolution();
+            return new Vector3i(gridRes, gridRes, gridRes);
+         });
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_lights_per_cell", () -> worldRegistry.get().getLightRegistry().getRegirLightsPerCell());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_cell_size", () -> 32.0F);
          // ph_regir_build_samples is compute-only (set by RegirComputeProgram.dispatch()).
@@ -119,6 +124,12 @@ public class CommonUniformsMixin {
          // compute build uses it for cell radius expansion, per-pixel light_tree.glsl
          // uses it for jitterScale = samplingJitter * cellSize (RTXDI_ReGIR_GetJitterScale).
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_sampling_jitter", () -> 1.0F);
+         // Unified RIS buffer offsets for fragment shaders (light_tree.glsl, reuse_bridge.glsl).
+         // ph_ris_tile_buffer_offset = 0 (tiles always at the start of ph_ris_buffer).
+         // ph_regir_ris_buffer_offset = tileCount * tileSize (ReGIR region follows tiles).
+         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_ris_tile_buffer_offset", () -> 0);
+         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_ris_buffer_offset",
+            () -> RegirComputeProgram.tileCount * RegirComputeProgram.tileSize);
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "light_blend_region_count", () -> worldRegistry.get().getLightBlendRegionCount());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "light_blend_factor", () -> worldRegistry.get().fetchLightBlendFactor());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_min", () -> worldRegistry.get().getLightBlendMin());

@@ -204,38 +204,33 @@ void main() {
         vec4 prevSlow = vec4(0.0);
         vec4 prevFast = vec4(0.0);
         vec4 prevHistoryVec = vec4(0.0);
-        vec4 prevConfidenceVec = vec4(0.0);
 
         if (customWeights.x > 0.0) {
             prevSlow       += texelFetch(prev_spec_slow_input,          tap00, 0) * customWeights.x;
             prevFast       += texelFetch(prev_spec_fast_input,          tap00, 0) * customWeights.x;
             prevHistoryVec += texelFetch(prev_spec_history_length_input, tap00, 0) * customWeights.x;
-            prevConfidenceVec += texelFetch(prev_direct_confidence_input, tap00, 0) * customWeights.x;
         }
         if (customWeights.y > 0.0) {
             prevSlow       += texelFetch(prev_spec_slow_input,          tap10, 0) * customWeights.y;
             prevFast       += texelFetch(prev_spec_fast_input,          tap10, 0) * customWeights.y;
             prevHistoryVec += texelFetch(prev_spec_history_length_input, tap10, 0) * customWeights.y;
-            prevConfidenceVec += texelFetch(prev_direct_confidence_input, tap10, 0) * customWeights.y;
         }
         if (customWeights.z > 0.0) {
             prevSlow       += texelFetch(prev_spec_slow_input,          tap01, 0) * customWeights.z;
             prevFast       += texelFetch(prev_spec_fast_input,          tap01, 0) * customWeights.z;
             prevHistoryVec += texelFetch(prev_spec_history_length_input, tap01, 0) * customWeights.z;
-            prevConfidenceVec += texelFetch(prev_direct_confidence_input, tap01, 0) * customWeights.z;
         }
         if (customWeights.w > 0.0) {
             prevSlow       += texelFetch(prev_spec_slow_input,          tap11, 0) * customWeights.w;
             prevFast       += texelFetch(prev_spec_fast_input,          tap11, 0) * customWeights.w;
             prevHistoryVec += texelFetch(prev_spec_history_length_input, tap11, 0) * customWeights.w;
-            prevConfidenceVec += texelFetch(prev_direct_confidence_input, tap11, 0) * customWeights.w;
         }
 
         float decodedPrevHistory = nrd_decoded_history(prevHistoryVec);
         historyLength = min(decodedPrevHistory + 1.0, specMaxHistoryLength);
 
         // NRD confidence: channel G = specular confidence (channel R = diffuse confidence)
-        float historyConfidence = clamp(prevConfidenceVec.g, 0.0, 1.0);
+        float historyConfidence = 1.0;
         slowMaxAccumulatedFrameNum *= historyConfidence;
         fastMaxAccumulatedFrameNum *= historyConfidence;
 

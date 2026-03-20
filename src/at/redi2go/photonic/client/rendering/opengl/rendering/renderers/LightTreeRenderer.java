@@ -23,9 +23,11 @@ import net.irisshaders.iris.shaderpack.include.IncludeGraph;
 import net.irisshaders.iris.uniforms.SystemTimeUniforms;
 import net.irisshaders.iris.gl.sampler.SamplerHolder;
 import net.irisshaders.iris.gl.uniform.DynamicUniformHolder;
+import net.irisshaders.iris.gl.uniform.UniformUpdateFrequency;
 import net.irisshaders.iris.pipeline.CompositeRenderer;
 import net.minecraft.client.MinecraftClient;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Vector3i;
 import org.joml.Vector4f;
 
 public class LightTreeRenderer extends MainRenderer {
@@ -41,6 +43,7 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String specAtrousFragment = "lighttree/nrd_spec_atrous.fsh";
    private static final String specHistoryClampingFragment = "lighttree/nrd_spec_history_clamping.fsh";
    private static final String indirectTemporalFragment = "lighttree/restir_gi_temporal.fsh";
+   private static final String indirectBoilingFragment = "lighttree/light_tree_indirect_boiling_filter.fsh";
    private static final String indirectAccumulationFragment = "lighttree/light_tree_indirect_accumulation.fsh";
    private static final String indirectInitialFragment = "lighttree/light_tree_indirect_initial.fsh";
    private static final String indirectDenoisingFragment = "lighttree/light_tree_indirect_denoising.fsh";
@@ -119,6 +122,7 @@ public class LightTreeRenderer extends MainRenderer {
    private final RoutingFramebuffer specAtrousFramebuffer;
    private final RoutingFramebuffer indirectInitialFramebuffer;
    private final RoutingFramebuffer indirectTemporalFramebuffer;
+   private final RoutingFramebuffer indirectBoilingFramebuffer;
    private final RoutingFramebuffer indirectAccumulationFramebuffer;
    private final RoutingFramebuffer indirectDenoisingFramebuffer;
    private final RoutingFramebuffer positionWriteFramebuffer;
@@ -155,6 +159,8 @@ public class LightTreeRenderer extends MainRenderer {
    private CompositeRenderer indirectInitialRenderer;
    @Nullable
    private CompositeRenderer indirectTemporalRenderer;
+   @Nullable
+   private CompositeRenderer indirectBoilingRenderer;
    @Nullable
    private CompositeRenderer indirectAccumulationRenderer;
    @Nullable
@@ -252,6 +258,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.specAtrousFramebuffer = this.createSpecAtrousFramebuffer();
       this.indirectInitialFramebuffer = this.createIndirectInitialFramebuffer();
       this.indirectTemporalFramebuffer = this.createIndirectTemporalFramebuffer();
+      this.indirectBoilingFramebuffer = this.createIndirectBoilingFramebuffer();
       this.indirectAccumulationFramebuffer = this.createIndirectAccumulationFramebuffer();
       this.indirectDenoisingFramebuffer = this.createIndirectDenoisingFramebuffer();
       this.positionWriteFramebuffer = this.createPositionWriteFramebuffer();
@@ -267,8 +274,10 @@ public class LightTreeRenderer extends MainRenderer {
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirCellCountMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirLightIndexMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirLightPdfMemoryManager());
+      memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirCompactLightDataMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getLightReverseMappingMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getPreviousLightsMemoryManager());
+      memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getNeighborOffsetMemoryManager());
       return memoryCollection;
    }
 
@@ -321,6 +330,9 @@ public class LightTreeRenderer extends MainRenderer {
       );
       this.indirectTemporalRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(indirectTemporalFragment, "common/screen.vsh", this.memoryCollection, this.indirectTemporalFramebuffer))
+      );
+      this.indirectBoilingRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(indirectBoilingFragment, "common/screen.vsh", this.memoryCollection, this.indirectBoilingFramebuffer))
       );
       this.indirectAccumulationRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(indirectAccumulationFragment, "common/screen.vsh", this.memoryCollection, this.indirectAccumulationFramebuffer))
@@ -500,35 +512,40 @@ public class LightTreeRenderer extends MainRenderer {
 
    @Override
    public void registerCustomUniforms(DynamicUniformHolder uniforms) {
-      uniforms.uniform1i("direct_atrous_step_size", this::getCurrentDirectAtrousStepSize, updater -> {
-         if (updater != null) {
-            updater.run();
-         }
-      });
-      uniforms.uniform1i("direct_atrous_is_last_pass", this::getCurrentDirectAtrousIsLastPass, updater -> {
-         if (updater != null) {
-            updater.run();
-         }
-      });
-      uniforms.uniform1f("ph_direct_sample_budget_scale", this::getDirectSampleBudgetScale, updater -> {
-         if (updater != null) {
-            updater.run();
-         }
-      });
-      uniforms.uniform1f("ph_restir_depth_threshold", () -> this.properties.getRestirDepthThreshold(), null);
-      uniforms.uniform1f("ph_restir_normal_threshold", () -> this.properties.getRestirNormalThreshold(), null);
-      uniforms.uniform1f("ph_restir_visibility_max_age", () -> (float) this.properties.getRestirVisibilityMaxAge(), null);
-      uniforms.uniform1f("ph_restir_visibility_max_distance", () -> this.properties.getRestirVisibilityMaxDistance(), null);
-      uniforms.uniform1f("ph_restir_temporal_max_history", () -> (float) this.properties.getRestirTemporalMaxHistory(), null);
-      uniforms.uniform1f("ph_restir_temporal_depth_threshold", () -> this.properties.getRestirTemporalDepthThreshold(), null);
-      uniforms.uniform1f("ph_restir_temporal_normal_threshold", () -> this.properties.getRestirTemporalNormalThreshold(), null);
-      uniforms.uniform1f("ph_restir_spatial_sample_count", () -> (float) this.properties.getRestirSpatialSampleCount(), null);
-      uniforms.uniform1f("ph_restir_spatial_radius", () -> this.properties.getRestirSpatialRadius(), null);
-      uniforms.uniform1f("ph_restir_spatial_depth_threshold", () -> this.properties.getRestirSpatialDepthThreshold(), null);
-      uniforms.uniform1f("ph_restir_spatial_normal_threshold", () -> this.properties.getRestirSpatialNormalThreshold(), null);
-      uniforms.uniform1f("ph_nrd_max_accumulated_frame_num", () -> 30.0f, null);
-      uniforms.uniform1f("ph_nrd_max_fast_accumulated_frame_num", () -> 6.0f, null);
-      uniforms.uniform1f("ph_nrd_depth_threshold", () -> 0.003f, null);
+      uniforms.uniform1i("direct_atrous_step_size", this::getCurrentDirectAtrousStepSize, Runnable::run);
+      uniforms.uniform1i("direct_atrous_is_last_pass", this::getCurrentDirectAtrousIsLastPass, Runnable::run);
+      uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_active_checkerboard_field", this::getActiveCheckerboardField);
+      uniforms.uniform1f("ph_direct_sample_budget_scale", this::getDirectSampleBudgetScale, Runnable::run);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_depth_threshold", () -> this.properties.getRestirDepthThreshold());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_normal_threshold", () -> this.properties.getRestirNormalThreshold());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_visibility_max_age", () -> (float) this.properties.getRestirVisibilityMaxAge());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_visibility_max_distance", () -> this.properties.getRestirVisibilityMaxDistance());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_max_history", () -> (float) this.properties.getRestirTemporalMaxHistory());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_depth_threshold", () -> this.properties.getRestirTemporalDepthThreshold());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_normal_threshold", () -> this.properties.getRestirTemporalNormalThreshold());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_sample_count", () -> (float) this.properties.getRestirSpatialSampleCount());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_radius", () -> this.properties.getRestirSpatialRadius());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_depth_threshold", () -> this.properties.getRestirSpatialDepthThreshold());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_normal_threshold", () -> this.properties.getRestirSpatialNormalThreshold());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_accumulated_frame_num", () -> 30.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_fast_accumulated_frame_num", () -> 6.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_depth_threshold", () -> 0.003f);
+   }
+
+   private int getActiveCheckerboardField() {
+      String checkerboardMode = PhotonicsStorage.RESTIR_CHECKERBOARD_MODE.value;
+      if (checkerboardMode == null) {
+         return 0;
+      }
+
+      int frameIndex = SystemTimeUniforms.COUNTER.getAsInt();
+      if ("black".equalsIgnoreCase(checkerboardMode)) {
+         return (frameIndex & 1) == 0 ? 2 : 1;
+      }
+      if ("white".equalsIgnoreCase(checkerboardMode)) {
+         return (frameIndex & 1) == 0 ? 1 : 2;
+      }
+      return 0;
    }
 
    @Override
@@ -873,6 +890,15 @@ public class LightTreeRenderer extends MainRenderer {
       );
    }
 
+   private RoutingFramebuffer createIndirectBoilingFramebuffer() {
+      return this.createRoutingFramebuffer(
+         () -> this.indirectReservoirBuffer.getWriteAttachment("position"),
+         () -> this.indirectReservoirBuffer.getWriteAttachment("normal"),
+         () -> this.indirectReservoirBuffer.getWriteAttachment("radiance"),
+         () -> this.indirectReservoirBuffer.getWriteAttachment("meta")
+      );
+   }
+
    private void createLightingBufferAttachments(ColorFramebuffer framebuffer) {
       framebuffer.createAttachment("position", "RGB32F", false);
       framebuffer.createAttachment("normal", "RGB16F", false);
@@ -908,16 +934,17 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createProposalFramebuffer() {
+      // 8 outputs (locations 0-7): position, normal, mapped_normal, albedo, motion, reservoir x3.
+      // Material is written by directFeatureExtract (same computation, runs before consumers need it).
       return this.createRoutingFramebuffer(
          () -> this.lightingStageBuffer.getWriteAttachment("position"),
          () -> this.lightingStageBuffer.getWriteAttachment("normal"),
          () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"),
          () -> this.lightingStageBuffer.getWriteAttachment("albedo"),
-         () -> this.lightingStageBuffer.getWriteAttachment("material"),
+         () -> this.motionVectorBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
-         () -> this.directReservoirBuffer.getWriteAttachment("meta"),
-         () -> this.motionVectorBuffer.getWriteAttachment("data")
+         () -> this.directReservoirBuffer.getWriteAttachment("meta")
       );
    }
 
@@ -1150,12 +1177,14 @@ public class LightTreeRenderer extends MainRenderer {
       // RTXDI defaults: numBuildSamples = 8 (ReGIR.h:141), samplingJitter = 1.0.
       // getRegirLightIndexMemoryManager() is the unified uvec2 ReGIR output buffer,
       // allocated at 8 bytes/slot (cellCount * lightsPerCell * 8) to hold uvec2 entries.
+      int gridRes = lightRegistry.getRegirGridResolution();
       this.regirComputeProgram.dispatch(
          lightRegistry.getLightsMemoryManager(),
          lightRegistry.getGlobalLightCdfMemoryManager(),
          lightRegistry.getRegirLightIndexMemoryManager(),
+         lightRegistry.getRegirCompactLightDataMemoryManager(),
          lightRegistry.getRegirGridCenter(),
-         lightRegistry.getRegirGridResolution(),
+         new Vector3i(gridRes, gridRes, gridRes),
          lightRegistry.getRegirLightsPerCell(),
          32.0f,
          lightRegistry.lightCount(),
@@ -1189,7 +1218,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void renderIndirectAccumulationProfiled() {
-      if (this.indirectInitialRenderer == null && this.indirectTemporalRenderer == null && this.indirectAccumulationRenderer == null) {
+      if (this.indirectInitialRenderer == null && this.indirectTemporalRenderer == null && this.indirectBoilingRenderer == null && this.indirectAccumulationRenderer == null) {
          return;
       }
       this.beginGpuRegion(indirectAccumRegionIndex);
@@ -1198,6 +1227,9 @@ public class LightTreeRenderer extends MainRenderer {
       }
       if (this.indirectTemporalRenderer != null) {
          this.indirectTemporalRenderer.renderAll();
+      }
+      if (this.indirectBoilingRenderer != null) {
+         this.indirectBoilingRenderer.renderAll();
       }
       if (this.indirectAccumulationRenderer != null) {
          this.indirectAccumulationRenderer.renderAll();

@@ -222,46 +222,34 @@ void main() {
         vec4 prevSlow = vec4(0.0);
         vec4 prevFast = vec4(0.0);
         vec4 prevHistoryVec = vec4(0.0);
-        vec4 prevConfidenceVec = vec4(0.0);
 
         if (customWeights.x > 0.0) {
             prevSlow       += texelFetch(prev_direct_slow_input,          tap00, 0) * customWeights.x;
             prevFast       += texelFetch(prev_direct_fast_input,          tap00, 0) * customWeights.x;
             prevHistoryVec += texelFetch(prev_direct_history_length_input, tap00, 0) * customWeights.x;
-            prevConfidenceVec += texelFetch(prev_direct_confidence_input, tap00, 0) * customWeights.x;
         }
         if (customWeights.y > 0.0) {
             prevSlow       += texelFetch(prev_direct_slow_input,          tap10, 0) * customWeights.y;
             prevFast       += texelFetch(prev_direct_fast_input,          tap10, 0) * customWeights.y;
             prevHistoryVec += texelFetch(prev_direct_history_length_input, tap10, 0) * customWeights.y;
-            prevConfidenceVec += texelFetch(prev_direct_confidence_input, tap10, 0) * customWeights.y;
         }
         if (customWeights.z > 0.0) {
             prevSlow       += texelFetch(prev_direct_slow_input,          tap01, 0) * customWeights.z;
             prevFast       += texelFetch(prev_direct_fast_input,          tap01, 0) * customWeights.z;
             prevHistoryVec += texelFetch(prev_direct_history_length_input, tap01, 0) * customWeights.z;
-            prevConfidenceVec += texelFetch(prev_direct_confidence_input, tap01, 0) * customWeights.z;
         }
         if (customWeights.w > 0.0) {
             prevSlow       += texelFetch(prev_direct_slow_input,          tap11, 0) * customWeights.w;
             prevFast       += texelFetch(prev_direct_fast_input,          tap11, 0) * customWeights.w;
             prevHistoryVec += texelFetch(prev_direct_history_length_input, tap11, 0) * customWeights.w;
-            prevConfidenceVec += texelFetch(prev_direct_confidence_input, tap11, 0) * customWeights.w;
         }
 
         float decodedPrevHistory = nrd_decoded_history(prevHistoryVec);
         historyLength = min(decodedPrevHistory + 1.0, directMaxHistoryLength);
 
-        // Match RELAX's confidence-driven accumulation shortening by scaling the
-        // slow / fast history caps with the reprojection confidence.
-        // NRD NOTE: gIn_DiffConfidence in NRD is the CURRENT frame's confidence, not previous.
-        // Our pipeline runs direct_feature_extract before temporal accumulation, writing to
-        // directConfidenceBuffer. prev_direct_confidence_input reads the PREVIOUS frame's buffer.
-        // A current-frame confidence sampler would require adding direct_confidence_input bound to
-        // directConfidenceBuffer.getWriteAttachment("data") on the Java side. Using previous-frame
-        // confidence is a known deviation — functionally close since confidence changes slowly.
-        // NRD confidence: channel R = diffuse confidence (scalar 0-1)
-        float historyConfidence = clamp(prevConfidenceVec.r, 0.0, 1.0);
+        // Confidence input is intentionally disabled in this pipeline.
+        // Keep NRD-facing history contraction neutral instead of sampling stale pseudo-confidence.
+        float historyConfidence = 1.0;
         slowMaxAccumulatedFrameNum *= historyConfidence;
         fastMaxAccumulatedFrameNum *= historyConfidence;
 

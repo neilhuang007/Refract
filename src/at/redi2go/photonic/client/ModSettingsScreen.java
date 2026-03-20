@@ -91,6 +91,13 @@ public class ModSettingsScreen extends Screen {
          w.setMessage(Text.of("Disable Denoiser: " + (disableDenoiser.value ? "On" : "Off")));
          this.reloadShaders();
       }, "Bypasses the temporal/spatial denoiser so you can inspect raw\ndirect and indirect lighting stability.", () -> true));
+      PhotonicsStorage.Parameter<String> checkerboardMode = PhotonicsStorage.RESTIR_CHECKERBOARD_MODE;
+      buttons.add(new ModSettingsScreen.PButton("ReSTIR Checkerboard: " + formatCheckerboardMode(checkerboardMode.value), w -> {
+         checkerboardMode.value = getNextCheckerboardMode(checkerboardMode.value);
+         checkerboardMode.modified();
+         w.setMessage(Text.of("ReSTIR Checkerboard: " + formatCheckerboardMode(checkerboardMode.value)));
+         this.reloadShaders();
+      }, "Cycles ReSTIR checkerboard sampling between Off, Black, and White\nso ph_restir_active_checkerboard_field matches RTXDI runtime modes.", () -> true));
       OilifySlider oilifySizeSlider = new OilifySlider(PhotonicsStorage.OILIFY_SIZE, 3.0f, 15.0f, "OILIFY_SIZE", true);
       OilifySlider oilifySharpnessSlider = new OilifySlider(PhotonicsStorage.OILIFY_SHARPNESS, 0.0f, 1.0f, "Sharpness", false);
       OilifySlider oilifyScaleSlider = new OilifySlider(PhotonicsStorage.OILIFY_SCALE, 1.0f, 4.0f, "Scale", false);
@@ -211,6 +218,26 @@ public class ModSettingsScreen extends Screen {
             Photonic.error("error reloading shaders after lighting pipeline update", e);
          }
       });
+   }
+
+   private static String getNextCheckerboardMode(String checkerboardMode) {
+      if ("off".equalsIgnoreCase(checkerboardMode)) {
+         return "black";
+      }
+      if ("black".equalsIgnoreCase(checkerboardMode)) {
+         return "white";
+      }
+      return "off";
+   }
+
+   private static String formatCheckerboardMode(String checkerboardMode) {
+      if ("black".equalsIgnoreCase(checkerboardMode)) {
+         return "Black";
+      }
+      if ("white".equalsIgnoreCase(checkerboardMode)) {
+         return "White";
+      }
+      return "Off";
    }
 
    private static SplashOverlay buildLoadingOverlay(Supplier<Float> progressSupplier) {

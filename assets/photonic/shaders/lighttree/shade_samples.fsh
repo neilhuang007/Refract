@@ -76,16 +76,12 @@ void main() {
     if (hasValidReservoir) {
         if (!enableFinalVisibility) {
             // RTXDI: enableFinalVisibility=false — shade without any visibility test.
-            LightSample shadeSample = light_sample_new_at_position(
-                load_light(reservoir.lightIndex), reservoir.storedPosition, currentSurface);
+            LightSample shadeSample = light_sample_decode(reservoir, currentSurface, false);
             if (shadeSample.index >= 0) {
                 LtSplitRadiance splitShade = lt_shade_surface_split(currentSurface, shadeSample);
                 shadedDiffuse = splitShade.diffuse * reservoir.weightSum;
                 shadedSpecular = splitShade.specular * reservoir.weightSum;
-                // Fix #7: hit distance from currentSurface.worldPos to light position,
-                // matching RTXDI ShadingHelpers.hlsli convention (not from ray origin sample_pos).
-                // reservoir.storedPosition is in RT-space; add world_offset to get world-space.
-                directHitDistance = length((reservoir.storedPosition + world_offset) - currentSurface.worldPos);
+                directHitDistance = length(shadeSample.position + world_offset - currentSurface.worldPos);
             }
         } else if (reuseFinalVisibility && rtxdi_has_reusable_visibility(reservoir)) {
             // RTXDI: reuseFinalVisibility=true and cached visibility is still valid — reuse RGB value.
@@ -93,20 +89,17 @@ void main() {
             // and partial occlusion are preserved.
             vec3 visRgb = rtxdi_get_visibility(reservoir);
             if (rtxdi_is_visible(reservoir)) {
-                LightSample shadeSample = light_sample_new_at_position(
-                    load_light(reservoir.lightIndex), reservoir.storedPosition, currentSurface);
+                LightSample shadeSample = light_sample_decode(reservoir, currentSurface, false);
                 if (shadeSample.index >= 0) {
                     LtSplitRadiance splitShade = lt_shade_surface_split(currentSurface, shadeSample);
                     shadedDiffuse = splitShade.diffuse * reservoir.weightSum * visRgb;
                     shadedSpecular = splitShade.specular * reservoir.weightSum * visRgb;
-                    // Fix #7: hit distance from currentSurface.worldPos to light position.
-                    directHitDistance = length((reservoir.storedPosition + world_offset) - currentSurface.worldPos);
+                    directHitDistance = length(shadeSample.position + world_offset - currentSurface.worldPos);
                 }
             }
         } else {
             // Trace a fresh visibility ray (reuseFinalVisibility=false or no cached visibility).
-            LightSample traceSample = light_sample_new_at_position(
-                load_light(reservoir.lightIndex), reservoir.storedPosition, currentSurface);
+            LightSample traceSample = light_sample_decode(reservoir, currentSurface, false);
             if (traceSample.index >= 0) {
                 float hitDist = light_sample_trace_hit_surface(traceSample, false, currentSurface);
                 bool isVisible = hitDist > 0.0f && traceSample.index >= 0;
@@ -114,15 +107,12 @@ void main() {
                 // When discardIfInvisible=true and invisible: lightData+weightSum are cleared (RTXDI lines 93-96).
                 RTXDI_StoreVisibilityInDIReservoir(reservoir, isVisible ? vec3(1.0f) : vec3(0.0f), discardIfInvisible);
                 if (isVisible) {
-                    reservoir.storedPosition = traceSample.position;
                     // Use RGB visibility from the freshly traced result (binary: vec3(1) when hit).
                     vec3 visRgb = rtxdi_get_visibility(reservoir);
                     LtSplitRadiance splitShade = lt_shade_surface_split(currentSurface, traceSample);
                     shadedDiffuse = splitShade.diffuse * reservoir.weightSum * visRgb;
                     shadedSpecular = splitShade.specular * reservoir.weightSum * visRgb;
-                    // Fix #7: hit distance from currentSurface.worldPos to light position.
-                    // traceSample.position is in RT-space; add world_offset for world-space.
-                    directHitDistance = length((traceSample.position + world_offset) - currentSurface.worldPos);
+                    directHitDistance = length(traceSample.position + world_offset - currentSurface.worldPos);
                 }
             } else {
                 RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0.0f), discardIfInvisible);
