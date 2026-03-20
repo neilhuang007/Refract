@@ -33,38 +33,42 @@ public class CommonUniformsMixin {
    @Unique
    private static Matrix4f previousModelViewProjection = new Matrix4f().identity();
    @Unique
+   private static Matrix4f currentModelViewProjection = new Matrix4f().identity();
+   @Unique
    private static Vector3d previousWorldCameraPosition = new Vector3d();
+   @Unique
+   private static Vector3d currentWorldCameraPosition = new Vector3d();
 
    @Inject(method = "addNonDynamicUniforms", at = @At("TAIL"))
    private static void addIrisExclusiveUniforms(
       UniformHolder uniforms, IdMap idMap, PackDirectives directives, FrameUpdateNotifier updateNotifier, CallbackInfo ci
    ) {
-      if (Raytracer.shouldBeEnabled()) {
-         Supplier<WorldRegistry> worldRegistry = () -> Raytracer.INSTANCE.getWorldRegistry();
-         Supplier<RenderDispatcher> renderDispatcher = () -> Raytracer.INSTANCE.getRenderDispatcher();
+      Raytracer raytracer = Raytracer.INSTANCE;
+      if (Raytracer.shouldBeEnabled() && raytracer != null) {
+         Supplier<WorldRegistry> worldRegistry = raytracer::getWorldRegistry;
+         Supplier<RenderDispatcher> renderDispatcher = raytracer::getRenderDispatcher;
+         photonic$beginFrameSnapshot(renderDispatcher.get());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_camera_position", CommonUniformsMixin::photonic$getWorldCameraPosition);
          uniforms.uniformMatrix(
             UniformUpdateFrequency.PER_FRAME,
             "direction_transformation_matrix_in",
-            () -> ShaderUtil.createScreenCameraMatrix(
-               CapturedRenderingState.INSTANCE.getGbufferProjection(), CapturedRenderingState.INSTANCE.getGbufferModelView()
-            )
+            () -> {
+               org.joml.Matrix4fc projection = CapturedRenderingState.INSTANCE.getGbufferProjection();
+               org.joml.Matrix4fc modelView = CapturedRenderingState.INSTANCE.getGbufferModelView();
+               if (projection == null || modelView == null) {
+                  return new Matrix4f();
+               }
+
+               return ShaderUtil.createScreenCameraMatrix(projection, modelView);
+            }
          );
          uniforms.uniformMatrix(
             UniformUpdateFrequency.PER_FRAME,
             "modelview_projection",
             () -> renderDispatcher.get().getModelViewProjectionMatrix(new Vector3f(photonic$getCameraPosition()))
          );
-         uniforms.uniformMatrix(UniformUpdateFrequency.PER_FRAME, "previous_modelview_projection", () -> {
-            Matrix4f previous = previousModelViewProjection;
-            previousModelViewProjection = renderDispatcher.get().getModelViewProjectionMatrix(new Vector3f(photonic$getCameraPosition()));
-            return previous;
-         });
-         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "previous_world_camera_position", () -> {
-            Vector3d previous = previousWorldCameraPosition;
-            previousWorldCameraPosition = photonic$getWorldCameraPosition();
-            return previous;
-         });
+         uniforms.uniformMatrix(UniformUpdateFrequency.PER_FRAME, "previous_modelview_projection", () -> new Matrix4f(previousModelViewProjection));
+         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "previous_world_camera_position", () -> new Vector3d(previousWorldCameraPosition));
          uniforms.uniform3f(UniformUpdateFrequency.PER_FRAME, "handheld_color", () -> renderDispatcher.get().getHandheldColor());
          uniforms.uniform1b(UniformUpdateFrequency.PER_FRAME, "left_handed", () -> renderDispatcher.get().isLeftHanded());
          uniforms.uniform1b(UniformUpdateFrequency.PER_FRAME, "light_reload", () -> worldRegistry.get().fetchLightReload());
@@ -101,8 +105,9 @@ public class CommonUniformsMixin {
 
    @Inject(method = "addDynamicUniforms", at = @At("TAIL"))
    private static void addIrisExclusiveUniforms(DynamicUniformHolder uniforms, FogMode fogMode, CallbackInfo ci) {
-      if (Raytracer.shouldBeEnabled()) {
-         Supplier<WorldRegistry> worldRegistry = () -> Raytracer.INSTANCE.getWorldRegistry();
+      Raytracer raytracer = Raytracer.INSTANCE;
+      if (Raytracer.shouldBeEnabled() && raytracer != null) {
+         Supplier<WorldRegistry> worldRegistry = raytracer::getWorldRegistry;
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_offset", () -> worldRegistry.get().getWorldOffset());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_min_voxel", () -> new Vector3d(worldRegistry.get().getWorldMinVoxel().toVector()));
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_max_voxel", () -> new Vector3d(worldRegistry.get().getWorldMaxVoxel().toVector()));
@@ -125,6 +130,8 @@ public class CommonUniformsMixin {
          // uses it for jitterScale = samplingJitter * cellSize (RTXDI_ReGIR_GetJitterScale).
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_sampling_jitter", () -> 1.0F);
          // Unified RIS buffer offsets for fragment shaders (light_tree.glsl, reuse_bridge.glsl).
+         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_ris_tile_size", () -> RegirComputeProgram.tileSize);
+         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_ris_tile_count", () -> RegirComputeProgram.tileCount);
          // ph_ris_tile_buffer_offset = 0 (tiles always at the start of ph_ris_buffer).
          // ph_regir_ris_buffer_offset = tileCount * tileSize (ReGIR region follows tiles).
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_ris_tile_buffer_offset", () -> 0);
@@ -141,8 +148,19 @@ public class CommonUniformsMixin {
          photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 5);
          photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 6);
          photonic$registerLightBlendRegionUniform(uniforms, worldRegistry, 7);
-         Raytracer.INSTANCE.getMainRenderer().registerCustomUniforms(uniforms);
+         raytracer.getMainRenderer().registerCustomUniforms(uniforms);
       }
+   }
+
+   @Unique
+   private static void photonic$beginFrameSnapshot(RenderDispatcher renderDispatcher) {
+      Vector3f cameraPosition = photonic$getCameraPosition();
+      Matrix4f nextModelViewProjection = renderDispatcher.getModelViewProjectionMatrix(new Vector3f(cameraPosition));
+      Vector3d nextWorldCameraPosition = new Vector3d(cameraPosition.x, cameraPosition.y, cameraPosition.z);
+      previousModelViewProjection = new Matrix4f(currentModelViewProjection);
+      previousWorldCameraPosition = new Vector3d(currentWorldCameraPosition);
+      currentModelViewProjection = nextModelViewProjection;
+      currentWorldCameraPosition = nextWorldCameraPosition;
    }
 
    @Unique
@@ -155,7 +173,12 @@ public class CommonUniformsMixin {
 
    @Unique
    private static Vector3f photonic$getCameraPosition() {
-      Vec3d position = MinecraftClient.getInstance().gameRenderer.getCamera().getPos();
+      MinecraftClient client = MinecraftClient.getInstance();
+      if (client == null || client.gameRenderer == null || client.gameRenderer.getCamera() == null) {
+         return new Vector3f();
+      }
+
+      Vec3d position = client.gameRenderer.getCamera().getPos();
       return new Vector3f((float) position.x, (float) position.y, (float) position.z);
    }
 

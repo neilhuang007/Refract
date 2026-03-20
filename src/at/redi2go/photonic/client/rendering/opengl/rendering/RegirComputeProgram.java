@@ -50,7 +50,8 @@ public class RegirComputeProgram {
     // PDF mipmap texture (RTXDI 2D R32F texture for light flux)
     // -----------------------------------------------------------------------
     private int pdfTextureId = 0;
-    private int pdfTextureSize = 0;   // width = height (square, power of 2)
+    private int pdfTextureWidth = 0;
+    private int pdfTextureHeight = 0;
     private int pdfTextureMipLevels = 0;
     private static final int bindPdfTextureUnit = 0; // texture unit for sampler2D
 
@@ -68,9 +69,8 @@ public class RegirComputeProgram {
     // -----------------------------------------------------------------------
     // RIS tile buffer parameters
     // RTXDI defaults: tileSize = 1024, tileCount = 128.
-    // We use tileSize = 256 to keep dispatch count at 128*256/256 = 128 groups.
     // -----------------------------------------------------------------------
-    public static final int tileSize  = 256;
+    public static final int tileSize  = 1024;
     public static final int tileCount = 128;
 
 
@@ -175,10 +175,16 @@ public class RegirComputeProgram {
     // -----------------------------------------------------------------------
     // PDF texture helpers (matching RTXDI ComputePdfTextureSize / Z-curve)
     // -----------------------------------------------------------------------
-    private static int computePdfTextureSize(int maxLights) {
-        double w = Math.max(1.0, Math.ceil(Math.sqrt(maxLights)));
-        w = Math.pow(2, Math.ceil(Math.log(w) / Math.log(2)));
-        return (int) w; // square power-of-2
+    private record PdfTextureLayout(int width, int height, int mipLevels) {
+    }
+
+    private static PdfTextureLayout computePdfTextureSize(int maxLights) {
+        double textureWidth = Math.max(1.0, Math.ceil(Math.sqrt(Math.max(maxLights, 1))));
+        textureWidth = Math.pow(2.0, Math.ceil(Math.log(textureWidth) / Math.log(2.0)));
+        double textureHeight = Math.max(1.0, Math.ceil(Math.max(maxLights, 1) / textureWidth));
+        textureHeight = Math.pow(2.0, Math.ceil(Math.log(textureHeight) / Math.log(2.0)));
+        double textureMips = Math.max(1.0, Math.log(Math.max(textureWidth, textureHeight)) / Math.log(2.0) + 1.0);
+        return new PdfTextureLayout((int) textureWidth, (int) textureHeight, (int) textureMips);
     }
 
     private static int integerCompact(int x) {
@@ -198,14 +204,27 @@ public class RegirComputeProgram {
     // PDF texture creation / update
     // -----------------------------------------------------------------------
     public void createPdfTexture(int maxLights) {
-        if (this.pdfTextureId != 0) return;
-        this.pdfTextureSize = computePdfTextureSize(maxLights);
-        this.pdfTextureMipLevels = (int) (Math.log(this.pdfTextureSize) / Math.log(2)) + 1;
+        PdfTextureLayout layout = computePdfTextureSize(maxLights);
+        if (this.pdfTextureId != 0
+            && this.pdfTextureWidth == layout.width()
+            && this.pdfTextureHeight == layout.height()
+            && this.pdfTextureMipLevels == layout.mipLevels()) {
+            return;
+        }
+
+        if (this.pdfTextureId != 0) {
+            GL11.glDeleteTextures(this.pdfTextureId);
+            this.pdfTextureId = 0;
+        }
+
+        this.pdfTextureWidth = layout.width();
+        this.pdfTextureHeight = layout.height();
+        this.pdfTextureMipLevels = layout.mipLevels();
 
         this.pdfTextureId = GL11.glGenTextures();
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.pdfTextureId);
         // Immutable storage with all mip levels
-        GL42.glTexStorage2D(GL11.GL_TEXTURE_2D, this.pdfTextureMipLevels, GL30.GL_R32F, this.pdfTextureSize, this.pdfTextureSize);
+        GL42.glTexStorage2D(GL11.GL_TEXTURE_2D, this.pdfTextureMipLevels, GL30.GL_R32F, this.pdfTextureWidth, this.pdfTextureHeight);
         // Nearest filtering — we need exact texel values, no interpolation
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST_MIPMAP_NEAREST);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
@@ -214,30 +233,31 @@ public class RegirComputeProgram {
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
 
         Photonic.info("[RegirCompute] PDF texture created ({}x{}, {} mip levels, textureId={})",
-                this.pdfTextureSize, this.pdfTextureSize, this.pdfTextureMipLevels, this.pdfTextureId);
+                this.pdfTextureWidth, this.pdfTextureHeight, this.pdfTextureMipLevels, this.pdfTextureId);
     }
 
     public void updatePdfTexture(float[] lightPowers, int lightCount) {
         if (this.pdfTextureId == 0) return;
 
         // Fill a zero-initialised buffer (texture may be larger than lightCount)
-        int texelCount = this.pdfTextureSize * this.pdfTextureSize;
+        int texelCount = this.pdfTextureWidth * this.pdfTextureHeight;
         float[] texData = new float[texelCount];
+        int availableLightCount = Math.min(lightCount, lightPowers.length);
 
         // Write each light's power at its Z-curve position
-        for (int i = 0; i < lightCount && i < texelCount; i++) {
+        for (int i = 0; i < availableLightCount && i < texelCount; i++) {
             int[] zc = linearToZCurve(i);
             int x = zc[0];
             int y = zc[1];
-            if (x < this.pdfTextureSize && y < this.pdfTextureSize) {
-                texData[y * this.pdfTextureSize + x] = lightPowers[i];
+            if (x < this.pdfTextureWidth && y < this.pdfTextureHeight) {
+                texData[y * this.pdfTextureWidth + x] = lightPowers[i];
             }
         }
 
         // Upload to mip 0 and generate the full mip chain
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.pdfTextureId);
         GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0,
-                this.pdfTextureSize, this.pdfTextureSize,
+                this.pdfTextureWidth, this.pdfTextureHeight,
                 GL11.GL_RED, GL11.GL_FLOAT, texData);
         GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
@@ -305,7 +325,7 @@ public class RegirComputeProgram {
                 GL20.glUniform1i(
                         GL20.glGetUniformLocation(this.presampleProgramId, "u_LocalLightPdfTexture"),
                         bindPdfTextureUnit);
-                GL20.glUniform2i(this.presampleLocPdfTextureSize, this.pdfTextureSize, this.pdfTextureSize);
+                GL20.glUniform2i(this.presampleLocPdfTextureSize, this.pdfTextureWidth, this.pdfTextureHeight);
             }
 
             // RTXDI 2D dispatch: Dispatch(tileSize/GROUP_SIZE, tileCount, 1)
@@ -427,7 +447,8 @@ public class RegirComputeProgram {
         this.presampleProgramId = 0;
         this.presampleCompiled  = false;
         this.pdfTextureId       = 0;
-        this.pdfTextureSize     = 0;
+        this.pdfTextureWidth    = 0;
+        this.pdfTextureHeight   = 0;
         this.pdfTextureMipLevels = 0;
 
         this.locGridCenter             = -1;

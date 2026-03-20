@@ -59,7 +59,8 @@ void main() {
     vec4 stageMappedNormal = texelFetch(stage_radiosity_mapped_normal, tex_coord, 0);
     vec4 stageAlbedo = texelFetch(stage_radiosity_albedo, tex_coord, 0);
     vec4 stageMaterial = texelFetch(stage_radiosity_material, tex_coord, 0);
-    vec4 rawDirect = texelFetch(stage_radiosity_direct, tex_coord, 0);
+    vec4 directDiffuse = texelFetch(stage_radiosity_direct, tex_coord, 0);
+    vec4 directSpecular = texelFetch(stage_radiosity_direct_specular, tex_coord, 0);
     vec4 prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
 
     position_frag_out = stagePosition;
@@ -67,6 +68,6 @@ void main() {
     mapped_normal_frag_out = stageMappedNormal;
     albedo_frag_out = stageAlbedo;
     material_frag_out = stageMaterial;
-    direct_frag_out = rawDirect;
-    direct_soft_frag_out = vec4(prevSoft.rgb + rawDirect.rgb, prevSoft.a + 1.0f);
+    direct_frag_out = directDiffuse + directSpecular;
+    direct_soft_frag_out = vec4(prevSoft.rgb + directDiffuse.rgb + directSpecular.rgb, prevSoft.a + 1.0f);
 }

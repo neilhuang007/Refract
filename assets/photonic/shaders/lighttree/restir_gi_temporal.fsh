@@ -57,8 +57,8 @@ void main() {
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
     ivec2 prevPos = ivec2(round(vec2(tex_coord) + motionVector.xy));
     float expectedPrevLinearDepth = length(currentSurface.worldPos - world_camera_position) + motionVector.z;
-    uint uniformRandomNumber = ph_restir_temporal_uniform_random != 0u
-        ? ph_restir_temporal_uniform_random
+    uint uniformRandomNumber = ph_restir_temporal_uniform_random != 0
+        ? uint(ph_restir_temporal_uniform_random)
         : uint(frameCounter);
     int temporalSampleStartIdx = int(rand_next_float() * 8.0f);
     float temporalSearchRadius = (activeCheckerboardField == 0) ? 1.0f : 2.0f;
@@ -107,8 +107,11 @@ void main() {
             continue;
         }
 
-        ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
-        RTXDI_GIReservoir candidateReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, reservoirPos, activeCheckerboardField);
+        ivec2 reservoirPos = idx;
+        if (activeCheckerboardField != 0) {
+            reservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
+        }
+        RTXDI_GIReservoir candidateReservoir = RTXDI_LoadPreviousGIReservoir(reservoirPos, activeCheckerboardField);
         if (!RTXDI_IsValidGIReservoir(candidateReservoir)) {
             continue;
         }

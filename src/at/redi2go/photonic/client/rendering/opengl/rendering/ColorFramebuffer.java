@@ -31,6 +31,7 @@ public class ColorFramebuffer extends GlFramebuffer {
    private int previousDrawFramebuffer;
    private int[] drawBuffers;
    private int viewportSide = -1;
+   private int viewportWidth = -1;
    private int lastFrameUpdate = -1;
    private boolean needsClear = false;
    private final List<String> attachmentNames = new ArrayList<>();
@@ -57,12 +58,12 @@ public class ColorFramebuffer extends GlFramebuffer {
       this.updatePerFrame();
       this.previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
       GL30.glBindFramebuffer(36160, this.getId());
+      int viewportWidth = this.resolveViewportWidth();
       if (this.viewportSide != -1) {
-         int x = this.viewportSide * this.width / 2;
-         int w = this.width / 2;
-         GL11.glViewport(x, 0, w, this.height);
+         int x = this.viewportSide * viewportWidth;
+         GL11.glViewport(x, 0, viewportWidth, this.height);
       } else {
-         GL11.glViewport(0, 0, this.width, this.height);
+         GL11.glViewport(0, 0, viewportWidth, this.height);
       }
 
       int i = 0;
@@ -179,16 +180,16 @@ public class ColorFramebuffer extends GlFramebuffer {
       }
 
       for (int drawBuffer : drawBuffers) {
-         if (drawBuffer < 0 || drawBuffer >= colorAttachmentCount) {
+         if (drawBuffer < -1 || drawBuffer >= colorAttachmentCount) {
             throw new IllegalArgumentException(
-               "Draw buffer " + drawBuffer + " is outside the color attachment range 0.." + Math.max(colorAttachmentCount - 1, 0)
+               "Draw buffer " + drawBuffer + " is outside the color attachment range -1.." + Math.max(colorAttachmentCount - 1, 0)
             );
          }
       }
 
       int[] resolved = new int[drawBuffers.length];
       for (int i = 0; i < drawBuffers.length; i++) {
-         resolved[i] = GL30.GL_COLOR_ATTACHMENT0 + drawBuffers[i];
+         resolved[i] = drawBuffers[i] < 0 ? GL11.GL_NONE : GL30.GL_COLOR_ATTACHMENT0 + drawBuffers[i];
       }
       return resolved;
    }
@@ -199,6 +200,20 @@ public class ColorFramebuffer extends GlFramebuffer {
 
    public void setViewportSide(int viewportSide) {
       this.viewportSide = viewportSide;
+   }
+
+   public void setViewportWidth(int viewportWidth) {
+      this.viewportWidth = viewportWidth;
+   }
+
+   private int resolveViewportWidth() {
+      if (this.viewportSide == -1) {
+         return this.width;
+      }
+      if (this.viewportWidth > 0) {
+         return this.viewportWidth;
+      }
+      return Math.max(1, this.width / 2);
    }
 
    protected void destroyInternal() {

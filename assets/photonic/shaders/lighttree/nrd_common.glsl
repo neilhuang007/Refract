@@ -110,6 +110,137 @@ float nrd_normal_weight_atrous(vec3 centerNormal, vec3 sampleNormal, float norma
     return nrd_compute_weight(angle, normalWeightParam, 0.0);
 }
 
+// NRD Common.hlsli:499 GetRoughnessWeightParams
+const float NRD_ROUGHNESS_SENSITIVITY = 0.01;
+
+vec2 nrd_roughness_weight_params(float roughness, float fraction) {
+    float a = 1.0 / mix(NRD_ROUGHNESS_SENSITIVITY, 1.0, clamp(roughness * fraction, 0.0, 1.0));
+    float b = roughness * a;
+    return vec2(a, -b);
+}
+
+// NRD RELAX_Common.hlsli:122 GetNormalWeightParams_ATrous
+// Returns vec2(angle, f) for specular normal weight with roughness-aware cone
+vec2 nrd_spec_normal_weight_params_atrous(
+    float roughness, float numFramesInHistory, float specReprojConfidence,
+    float normalEdgeStoppingRelaxation, float lobeAngleFraction, float lobeAngleSlack
+) {
+    float relaxation = clamp(numFramesInHistory / 5.0, 0.0, 1.0);
+    relaxation *= mix(1.0, specReprojConfidence, normalEdgeStoppingRelaxation);
+    float f = 0.9 + 0.1 * relaxation;
+    float angle = atan(nrd_spec_lobe_tan_half_angle(roughness, lobeAngleFraction));
+    angle *= 10.0 - 9.0 * relaxation;
+    angle += lobeAngleSlack;
+    const float HALF_PI = 1.5707963;
+    angle = min(HALF_PI, angle);
+    return vec2(angle, f);
+}
+
+// NRD RELAX_Common.hlsli:143 GetSpecularNormalWeight_ATrous
+// Uses min of normal dot and view dot for specular lobe awareness
+float nrd_spec_normal_weight_atrous_full(vec2 params0, vec3 n0, vec3 n, vec3 v0, vec3 v) {
+    float cosaN = dot(n0, n);
+    float cosaV = dot(v0, v);
+    float cosa = min(cosaN, cosaV);
+    float a = acos(clamp(cosa, -1.0, 1.0));
+    a = smoothstep(0.0, params0.x, a);
+    return clamp(1.0 - a * params0.y, 0.0, 1.0);
+}
+
+// NRD Common.hlsli:289 IsInScreenNearest
+float nrd_is_in_screen_nearest(vec2 uv) {
+    return (all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) ? 1.0 : 0.0;
+}
+
+// NRD Common.hlsli:302 IsInScreenBilinear — per-tap screen validity for 2x2 footprint
+// Returns vec4(tap00, tap10, tap01, tap11) validity
+vec4 nrd_is_in_screen_bilinear(vec2 footprintOrigin, vec2 rectSize) {
+    vec4 p = vec4(footprintOrigin, footprintOrigin + vec2(1.0));
+    vec4 r = vec4(greaterThanEqual(p, vec4(0.0)));
+    r *= vec4(lessThan(p, rectSize.xyxy));
+    return vec4(r.x * r.y, r.z * r.y, r.x * r.w, r.z * r.w);
+}
+
+// NRD RELAX_Common.hlsli:29 BilinearWithCustomWeightsImmediateFloat
+float nrd_bilinear_custom_float(float s00, float s10, float s01, float s11, vec4 weights) {
+    float output = s00 * weights.x + s10 * weights.y + s01 * weights.z + s11 * weights.w;
+    float sumWeights = dot(weights, vec4(1.0));
+    return sumWeights < 0.0001 ? 0.0 : output / sumWeights;
+}
+
+// NRD RELAX_Common.hlsli:42 BilinearWithCustomWeightsImmediateFloat4
+vec4 nrd_bilinear_custom_vec4(vec4 s00, vec4 s10, vec4 s01, vec4 s11, vec4 weights) {
+    vec4 output = s00 * weights.x + s10 * weights.y + s01 * weights.z + s11 * weights.w;
+    float sumWeights = dot(weights, vec4(1.0));
+    return sumWeights < 0.0001 ? vec4(0.0) : output / sumWeights;
+}
+
+// NRD Common.hlsli:30 isReprojectionTapValid — world-space plane distance check
+float nrd_is_reprojection_tap_valid(vec3 currentWorldPos, vec3 previousWorldPos, vec3 currentNormal, float disocclusionThreshold) {
+    float maxPlaneDistance = abs(dot(currentWorldPos - previousWorldPos, currentNormal));
+    return maxPlaneDistance > disocclusionThreshold ? 0.0 : 1.0;
+}
+
+// NRD Common.hlsli:23 ApplyThinLensEquation — virtual position depth correction for curved specular
+float nrd_apply_thin_lens_equation(float O, float curvature) {
+    return O / (2.0 * curvature * O + 1.0);
+}
+
+// NRD Common.hlsli:507 GetRelaxedRoughnessWeightParams
+vec2 nrd_relaxed_roughness_weight_params(float m, float fraction) {
+    float a = 1.0 / mix(NRD_ROUGHNESS_SENSITIVITY, 1.0, mix(m * m, m, clamp(fraction, 0.0, 1.0)));
+    float b = m * a;
+    return vec2(a, -b);
+}
+
+// NRD: GetSpecMagicCurve — roughness-dependent interpolation factor
+float nrd_spec_magic_curve(float roughness) {
+    return 1.0 - exp(-200.0 * roughness * roughness);
+}
+
+// NRD: GetModifiedRoughnessFromNormalVariance
+float nrd_modified_roughness_from_normal_variance(float roughness, vec3 avgNormal) {
+    float avgNormalLen = length(avgNormal);
+    float normalVariance = clamp(1.0 - avgNormalLen, 0.0, 1.0);
+    return clamp(roughness + normalVariance * 0.25, 0.0, 1.0);
+}
+
+// NRD: GetXvirtual — compute virtual world position for specular reprojection
+// Uses thin-lens equation with curvature to find virtual reflection point
+vec3 nrd_get_xvirtual(float hitDist, float curvature, vec3 X, vec3 Xprev, vec3 N, vec3 V, float roughness) {
+    float NoV = abs(dot(N, V));
+    // Dominant direction factor (GGX lobe dominant direction)
+    float dominantFactor = mix(1.0, NoV, clamp(roughness, 0.0, 1.0));
+    vec3 Xvirtual = X - V * nrd_apply_thin_lens_equation(hitDist * dominantFactor, curvature);
+    return Xvirtual;
+}
+
+// NRD: GetSpecularDominantFactor — how much virtual motion matters based on roughness
+float nrd_specular_dominant_factor(vec3 N, vec3 V, float roughness) {
+    float NoV = abs(dot(N, V));
+    float dominantFactor = (1.0 - roughness * roughness) / (1.0 + roughness);
+    return clamp(dominantFactor, 0.0, 1.0);
+}
+
+// NRD Common.hlsli:554 GetEncodingAwareNormalWeight — for VMB normal validation
+float nrd_encoding_aware_normal_weight(vec3 Ncurr, vec3 Nprev, float maxAngle, float curvatureAngle, float thresholdAngle) {
+    float cosa = dot(Ncurr, Nprev);
+    float angle = acos(clamp(cosa, -1.0, 1.0));
+    float w = smoothstep(1.0, 0.0, (angle - curvatureAngle - thresholdAngle) / max(maxAngle, 1e-6));
+    return clamp(w, 0.0, 1.0);
+}
+
+// NRD: Schlick Fresnel Pow5 approximation
+float nrd_pow5(float x) {
+    float x2 = x * x;
+    return x2 * x2 * x;
+}
+
+const float RELAX_NORMAL_ULP = 1.5 / 255.0;
+const float NRD_EPS = 1e-6;
+const float NRD_INF = 1e30;
+const float RELAX_MAX_ACCUM_FRAME_NUM = 255.0;
+
 // Area-ReSTIR / PathTracer reference writes materialID = 0.f in NRD-facing guide buffers.
 const float NRD_DEFAULT_MIN_MATERIAL = 0.0;
 

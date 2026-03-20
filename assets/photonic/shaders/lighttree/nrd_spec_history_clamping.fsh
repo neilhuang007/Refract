@@ -11,7 +11,7 @@ layout(location = 1) out vec4 spec_clamped_fast_out;
 uniform sampler2D spec_historyfix_output;
 uniform sampler2D spec_fast_input;
 uniform sampler2D spec_noisy_input;
-uniform sampler2D spec_history_length_input;
+uniform sampler2D spec_history_length_clamp_input;
 uniform float ph_nrd_max_accumulated_frame_num;
 uniform float ph_nrd_max_fast_accumulated_frame_num;
 
@@ -85,7 +85,7 @@ void main() {
     // --- Fetch inputs ---
     NrdDirectHistorySample slowInput = nrd_unpack_direct_history(texelFetch(spec_historyfix_output, tex_coord, 0));
     NrdDirectHistorySample fastInput = nrd_unpack_direct_history(texelFetch(spec_fast_input, tex_coord, 0));
-    float historyLength = nrd_decoded_history(texelFetch(spec_history_length_input, tex_coord, 0));
+    float historyLength = nrd_decoded_history(texelFetch(spec_history_length_clamp_input, tex_coord, 0));
 
     vec3 slowYcocg = nrd_rgb_to_ycocg(slowInput.radiance);
     vec3 fastYcocg = nrd_rgb_to_ycocg(fastInput.radiance);
@@ -128,7 +128,9 @@ void main() {
             : clamp((clampedSlowYcocg.x - slowYcocg.x) / (fastYcocg.x - slowYcocg.x), 0.0, 1.0));
 
     // --- History acceleration magnitude ---
-    float historyDifferenceL = RELAX_ANTILAG_ACCELERATION_AMOUNT_SCALE
+    // NRD reference: specular uses 0.33x scale because specular reprojection
+    // already has rejection heuristics that diffuse does not have
+    float historyDifferenceL = 0.33 * RELAX_ANTILAG_ACCELERATION_AMOUNT_SCALE
         * spec_history_acceleration_amount
         * nrd_luminance(abs(fastInput.radiance - slowInput.radiance));
     historyDifferenceL *= clampFactor;
@@ -155,7 +157,8 @@ void main() {
     float noisyTemporalSigma = spec_history_reset_temporal_sigma_scale
         * sqrt(max(0.0, noisySecondMoment - noisyMeanL * noisyMeanL));
     float noisySpatialSigma = spec_history_reset_spatial_sigma_scale * fastSigmaYcocg.x;
-    float resetAmount = spec_history_reset_amount
+    // NRD reference: specular reset amount scaled by 0.5 vs diffuse
+    float resetAmount = 0.5 * spec_history_reset_amount
         * max(0.0, abs(slowL - noisyMeanL) - noisySpatialSigma - noisyTemporalSigma)
         / (1.0e-6 + max(slowL, noisyMeanL) + noisySpatialSigma + noisyTemporalSigma);
     resetAmount = clamp(resetAmount, 0.0, 1.0);

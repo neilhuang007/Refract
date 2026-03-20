@@ -539,7 +539,7 @@ uniform float ph_restir_enable_final_visibility;
 uniform float ph_restir_indirect_enable_final_mis;
 uniform float ph_restir_temporal_bias_mode;
 uniform float ph_restir_temporal_permutation_sampling;
-uniform uint ph_restir_temporal_uniform_random;
+uniform int ph_restir_temporal_uniform_random;
 uniform float ph_restir_temporal_fallback_sampling_mode;
 uniform float ph_restir_temporal_max_reservoir_age;
 uniform float ph_restir_indirect_boiling_filter_strength;
@@ -659,6 +659,21 @@ RTXDI_GIReservoir RTXDI_LoadGIReservoir(int bufferIndex, ivec2 uv) {
 RTXDI_GIReservoir RTXDI_LoadGIReservoir(int bufferIndex, ivec2 reservoirPos, int activeCheckerboardField) {
     ivec2 pixelPos = RTXDI_ReservoirPosToPixelPos(reservoirPos, activeCheckerboardField);
     return RTXDI_LoadGIReservoir(bufferIndex, pixelPos);
+}
+
+RTXDI_GIReservoir RTXDI_LoadPreviousGIReservoir(ivec2 uv) {
+    return gi_unpack_reservoir(RTXDI_PackedGIReservoir(
+        texelFetch(prev_radiosity_indirect_reservoir_position, uv, 0).xyz,
+        floatBitsToUint(texelFetch(prev_radiosity_indirect_reservoir_position, uv, 0).w),
+        floatBitsToUint(texelFetch(prev_radiosity_indirect_reservoir_normal, uv, 0).x),
+        texelFetch(prev_radiosity_indirect_reservoir_normal, uv, 0).y,
+        texelFetch(prev_radiosity_indirect_reservoir_radiance, uv, 0)
+    ));
+}
+
+RTXDI_GIReservoir RTXDI_LoadPreviousGIReservoir(ivec2 reservoirPos, int activeCheckerboardField) {
+    ivec2 pixelPos = RTXDI_ReservoirPosToPixelPos(reservoirPos, activeCheckerboardField);
+    return RTXDI_LoadPreviousGIReservoir(pixelPos);
 }
 
 bool GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample);

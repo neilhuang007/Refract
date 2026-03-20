@@ -11,7 +11,7 @@ layout(location = 1) out vec4 nrd_clamped_fast_out;
 uniform sampler2D direct_historyfix_output;
 uniform sampler2D nrd_diff_fast_input;
 uniform sampler2D nrd_diff_noisy_input;
-uniform sampler2D nrd_history_length_tex;
+uniform sampler2D direct_history_length_clamp_input;
 uniform float ph_nrd_max_accumulated_frame_num;
 uniform float ph_nrd_max_fast_accumulated_frame_num;
 
@@ -95,7 +95,7 @@ void main() {
     // --- Fetch inputs ---
     NrdDirectHistorySample slowInput = nrd_unpack_direct_history(texelFetch(direct_historyfix_output, tex_coord, 0));
     NrdDirectHistorySample fastInput = nrd_unpack_direct_history(texelFetch(nrd_diff_fast_input, tex_coord, 0));
-    float historyLength = nrd_decoded_history(texelFetch(nrd_history_length_tex, tex_coord, 0));
+    float historyLength = nrd_decoded_history(texelFetch(direct_history_length_clamp_input, tex_coord, 0));
 
     vec3 slowYcocg = nrd_rgb_to_ycocg(slowInput.radiance);
     vec3 fastYcocg = nrd_rgb_to_ycocg(fastInput.radiance);

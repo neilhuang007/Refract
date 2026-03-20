@@ -13,11 +13,17 @@ import org.lwjgl.opengl.GL30;
 
 public class RoutingFramebuffer extends ColorFramebuffer {
    private final List<Supplier<TextureObject>> attachmentSuppliers = new ArrayList<>();
+   private final Supplier<Integer> viewportWidthSupplier;
    private int[] routingDrawBuffers;
    private int previousDrawFramebuffer;
 
    public RoutingFramebuffer() {
+      this(null);
+   }
+
+   public RoutingFramebuffer(Supplier<Integer> viewportWidthSupplier) {
       super(1.0f);
+      this.viewportWidthSupplier = viewportWidthSupplier;
    }
 
    public void addAttachment(Supplier<TextureObject> attachmentSupplier) {
@@ -62,9 +68,9 @@ public class RoutingFramebuffer extends ColorFramebuffer {
          attachmentIndex++;
       }
 
-      GL11.glViewport(0, 0, width, height);
-
-      int[] resolvedDrawBuffers = resolveDrawBuffers(this.routingDrawBuffers, attachmentIndex);
+      int viewportWidth = this.resolveViewportWidth(width);
+      GL11.glViewport(0, 0, viewportWidth, height);
+      int[] resolvedDrawBuffers = ColorFramebuffer.resolveDrawBuffers(this.routingDrawBuffers, attachmentIndex);
       IntBuffer buffer = BufferUtils.createIntBuffer(resolvedDrawBuffers.length);
       for (int drawBuffer : resolvedDrawBuffers) {
          buffer.put(drawBuffer);
@@ -104,6 +110,17 @@ public class RoutingFramebuffer extends ColorFramebuffer {
             attachment.updatePerFrame();
          }
       }
+   }
+
+   private int resolveViewportWidth(int fallbackWidth) {
+      if (this.viewportWidthSupplier == null) {
+         return fallbackWidth;
+      }
+      Integer viewportWidth = this.viewportWidthSupplier.get();
+      if (viewportWidth == null || viewportWidth <= 0) {
+         return fallbackWidth;
+      }
+      return Math.min(viewportWidth, fallbackWidth);
    }
 
    @Override

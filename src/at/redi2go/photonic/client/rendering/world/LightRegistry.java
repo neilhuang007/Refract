@@ -258,7 +258,7 @@ public class LightRegistry implements Destructable {
          compactTotalEntries * 4 * 16,
          false
       );
-      this.neighborOffsetMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_neighbor_offsets", NEIGHBOR_OFFSET_COUNT * Integer.BYTES * 2, false);
+      this.neighborOffsetMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_neighbor_offsets", NEIGHBOR_OFFSET_COUNT * 2, false);
       this.neighborOffsetMemory = new SimpleMemoryOwner(this.neighborOffsetMemoryManager, this.neighborOffsetMemoryManager.getCapacity());
       this.fillNeighborOffsets();
       this.lightListObserver = PhotonicsConfig.observe(c -> PhotonicsConfig.getLightList(), c -> {
@@ -582,12 +582,57 @@ public class LightRegistry implements Destructable {
    }
 
    private void updateRegirGridOriginOnly() {
-      // Camera position (offset) is the center of the grid.
-      // Snap to cell-boundary multiples so the grid is stable across small camera movements.
-      int centerCellX = (int) Math.round((double) this.offset.x / GRID_CELL_SIZE) * GRID_CELL_SIZE;
-      int centerCellY = (int) Math.round((double) this.offset.y / GRID_CELL_SIZE) * GRID_CELL_SIZE;
-      int centerCellZ = (int) Math.round((double) this.offset.z / GRID_CELL_SIZE) * GRID_CELL_SIZE;
-      this.regirGridCenter.set(centerCellX, centerCellY, centerCellZ);
+      Vector3f gridCenter = getLightSelectionCameraPosition();
+      this.regirGridCenter.set(gridCenter);
+      this.updateRegirActivityStats(gridCenter);
+   }
+
+   private void updateRegirActivityStats(Vector3f gridCenter) {
+      this.regirActiveCellCount = 0;
+      this.regirActiveLightSlotCount = 0;
+
+      if (this.lightGrid == null || this.lightGrid.isEmpty() || this.tracedLights.length == 0) {
+         return;
+      }
+
+      float halfExtent = this.regirGridResolution * GRID_CELL_SIZE * 0.5f;
+      int originCellX = (int) Math.floor((gridCenter.x - halfExtent) / GRID_CELL_SIZE);
+      int originCellY = (int) Math.floor((gridCenter.y - halfExtent) / GRID_CELL_SIZE);
+      int originCellZ = (int) Math.floor((gridCenter.z - halfExtent) / GRID_CELL_SIZE);
+      Vector3f cellCenter = new Vector3f();
+
+      for (int z = 0; z < this.regirGridResolution; z++) {
+         for (int y = 0; y < this.regirGridResolution; y++) {
+            for (int x = 0; x < this.regirGridResolution; x++) {
+               List<Integer> cellLights = this.lightGrid.get(gridKey(originCellX + x, originCellY + y, originCellZ + z));
+               if (cellLights == null || cellLights.isEmpty()) {
+                  continue;
+               }
+
+               cellCenter.set(
+                  (float)(originCellX * GRID_CELL_SIZE) + (x + 0.5F) * GRID_CELL_SIZE,
+                  (float)(originCellY * GRID_CELL_SIZE) + (y + 0.5F) * GRID_CELL_SIZE,
+                  (float)(originCellZ * GRID_CELL_SIZE) + (z + 0.5F) * GRID_CELL_SIZE
+               );
+
+               int cellIndex = x + this.regirGridResolution * (y + this.regirGridResolution * z);
+               int count = 0;
+               for (int slot = 0; slot < this.regirLightsPerCell; slot++) {
+                  long seed = (((long) cellIndex) << 32)
+                     ^ (((long) slot + 1L) * 0x9E3779B97F4A7C15L);
+                  WeightedLightSelection selection = sampleRegirCellLight(cellLights, this.tracedLights, cellCenter, REGIR_CELL_RADIUS, seed);
+                  if (selection.lightIndex() >= 0 && selection.invSourcePdf() > 0.0F) {
+                     count++;
+                  }
+               }
+
+               if (count > 0) {
+                  this.regirActiveCellCount++;
+                  this.regirActiveLightSlotCount += count;
+               }
+            }
+         }
+      }
    }
 
    private void buildRegirGrid() {
@@ -603,17 +648,13 @@ public class LightRegistry implements Destructable {
          lightPdfBuffer.put(i, 0.0F);
       }
 
-      // RTXDI: gridCenter = camera position (snapped to cell boundary).
-      // Origin is derived in the shader; here we compute it for the CPU-side spatial grid lookup.
-      int centerCellX = (int) Math.round((double) this.offset.x / GRID_CELL_SIZE) * GRID_CELL_SIZE;
-      int centerCellY = (int) Math.round((double) this.offset.y / GRID_CELL_SIZE) * GRID_CELL_SIZE;
-      int centerCellZ = (int) Math.round((double) this.offset.z / GRID_CELL_SIZE) * GRID_CELL_SIZE;
-      this.regirGridCenter.set(centerCellX, centerCellY, centerCellZ);
+      Vector3f gridCenter = getLightSelectionCameraPosition();
+      this.regirGridCenter.set(gridCenter);
       // Derive origin for CPU-side cell iteration (mirrors shader derivation)
       float halfExtent = this.regirGridResolution * GRID_CELL_SIZE * 0.5f;
-      int originCellX = Math.round((centerCellX - halfExtent) / GRID_CELL_SIZE);
-      int originCellY = Math.round((centerCellY - halfExtent) / GRID_CELL_SIZE);
-      int originCellZ = Math.round((centerCellZ - halfExtent) / GRID_CELL_SIZE);
+      int originCellX = (int) Math.floor((gridCenter.x - halfExtent) / GRID_CELL_SIZE);
+      int originCellY = (int) Math.floor((gridCenter.y - halfExtent) / GRID_CELL_SIZE);
+      int originCellZ = (int) Math.floor((gridCenter.z - halfExtent) / GRID_CELL_SIZE);
       this.regirActiveCellCount = 0;
       this.regirActiveLightSlotCount = 0;
 
@@ -1039,7 +1080,7 @@ public class LightRegistry implements Destructable {
 
    /** Returns the world-space center of the ReGIR grid (RTXDI: gridCenter = camera position). */
    public Vector3f getRegirGridCenter() {
-      return new Vector3f(this.regirGridCenter);
+      return getLightSelectionCameraPosition();
    }
 
    /** @deprecated Use {@link #getRegirGridCenter()} — kept for backward compatibility. */
@@ -1047,10 +1088,11 @@ public class LightRegistry implements Destructable {
    public Vector3f getRegirGridOrigin() {
       // Derive origin from center for callers that still need it.
       float halfExtent = this.regirGridResolution * GRID_CELL_SIZE * 0.5f;
+      Vector3f center = this.getRegirGridCenter();
       return new Vector3f(
-         this.regirGridCenter.x - halfExtent,
-         this.regirGridCenter.y - halfExtent,
-         this.regirGridCenter.z - halfExtent
+         center.x - halfExtent,
+         center.y - halfExtent,
+         center.z - halfExtent
       );
    }
 

@@ -408,9 +408,9 @@ class LightRegistryIncrementalInvalidationTest {
       invokeBuildRegirGrid(registry);
 
       Vector3f gridOrigin = registry.getRegirGridOrigin();
-      assertEquals(0.0F, gridOrigin.x);
-      assertEquals(0.0F, gridOrigin.y);
-      assertEquals(0.0F, gridOrigin.z);
+      assertEquals(-64.0F, gridOrigin.x);
+      assertEquals(-64.0F, gridOrigin.y);
+      assertEquals(-64.0F, gridOrigin.z);
       assertEquals(4, registry.getRegirGridResolution());
       assertTrue(registry.getRegirActiveCellCount() >= 3);
       assertTrue(registry.getRegirActiveLightSlotCount() >= lights.length);

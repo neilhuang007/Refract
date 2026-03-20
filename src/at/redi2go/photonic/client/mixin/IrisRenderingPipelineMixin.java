@@ -76,6 +76,20 @@ public abstract class IrisRenderingPipelineMixin {
       }
    }
 
+   @Inject(method = "<init>", at = @At("HEAD"))
+   private static void photonic$bootstrapRaytracer(ProgramSet programSet, CallbackInfo ci) {
+      if (!Raytracer.shouldBeEnabled()) {
+         return;
+      }
+
+      if (Raytracer.INSTANCE != null) {
+         Raytracer.INSTANCE.free();
+      }
+
+      Raytracer.INSTANCE = new Raytracer();
+      Raytracer.INSTANCE.getWorldRegistry().getLightRegistry().init();
+   }
+
    @Inject(
       method = "<init>",
       at = @At(
@@ -86,11 +100,10 @@ public abstract class IrisRenderingPipelineMixin {
    )
    public void init(ProgramSet programSet, CallbackInfo ci, @Local BufferFlipper flipper) {
       if (Raytracer.shouldBeEnabled()) {
-         if (Raytracer.INSTANCE != null) {
-            Raytracer.INSTANCE.free();
+         if (Raytracer.INSTANCE == null) {
+            Raytracer.INSTANCE = new Raytracer();
+            Raytracer.INSTANCE.getWorldRegistry().getLightRegistry().init();
          }
-         Raytracer.INSTANCE = new Raytracer();
-         Raytracer.INSTANCE.getWorldRegistry().getLightRegistry().init();
          Raytracer.INSTANCE
             .getMainRenderer()
             .createCompositeRenderer(

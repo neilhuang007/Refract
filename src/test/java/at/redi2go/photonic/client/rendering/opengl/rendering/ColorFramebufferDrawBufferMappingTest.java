@@ -52,6 +52,20 @@ class ColorFramebufferDrawBufferMappingTest {
    }
 
    @Test
+   void routesUnboundOutputsToGlNone() {
+      assertArrayEquals(
+         new int[]{
+            GL30.GL_COLOR_ATTACHMENT0,
+            GL30.GL_COLOR_ATTACHMENT0 + 1,
+            GL30.GL_NONE,
+            GL30.GL_NONE,
+            GL30.GL_NONE
+         },
+         ColorFramebuffer.resolveDrawBuffers(new int[]{0, 1, -1, -1, -1}, 2)
+      );
+   }
+
+   @Test
    void rejectsOutOfRangeDrawBufferIndices() {
       assertThrows(IllegalArgumentException.class, () -> ColorFramebuffer.resolveDrawBuffers(new int[]{7}, 7));
    }

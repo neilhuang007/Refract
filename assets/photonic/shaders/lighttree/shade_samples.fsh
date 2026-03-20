@@ -26,14 +26,29 @@ uniform float ph_restir_enable_denoiser_packing;    // RTXDI: enableDenoiserInpu
 // for both temporal bias correction and final shading.
 uniform float ph_restir_temporal_visibility_shortcut;  // RTXDI: enableVisibilityShortcut
 
+void storeEmptyShadeOutputs() {
+    direct_diffuse_frag_out = vec4(0.0f);
+    direct_specular_frag_out = vec4(0.0f);
+}
+
+void storeReservoirOutputs(Reservoir reservoir) {
+    reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
+    reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
+    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+}
+
 void main() {
-    if (!is_in_world()) {
-        direct_diffuse_frag_out = vec4(0.0f);
-        direct_specular_frag_out = vec4(0.0f);
-        Reservoir emptyReservoir = rtxdi_empty_reservoir();
-        reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
-        reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
-        reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(emptyReservoir);
+    ivec2 reservoirPos = lt_current_reservoir_pos();
+    ivec2 pixelPosition = lt_current_pixel_pos();
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition) || !is_in_world()) {
+        storeEmptyShadeOutputs();
+        storeReservoirOutputs(rtxdi_empty_reservoir());
+        return;
+    }
+
+    if (!lt_is_active_reservoir_lane(reservoirPos)) {
+        storeEmptyShadeOutputs();
+        storeReservoirOutputs(rtxdi_empty_reservoir());
         return;
     }
 
@@ -47,9 +62,9 @@ void main() {
     Reservoir reservoir = rtxdi_empty_reservoir();
     rtxdi_unpack_reservoir_at_surface(
         reservoir,
-        texelFetch(radiosity_reservoirs, tex_coord, 0),
-        texelFetch(radiosity_reservoir_samples, tex_coord, 0),
-        texelFetch(radiosity_reservoir_meta, tex_coord, 0),
+        texelFetch(radiosity_reservoirs, reservoirPos, 0),
+        texelFetch(radiosity_reservoir_samples, reservoirPos, 0),
+        texelFetch(radiosity_reservoir_meta, reservoirPos, 0),
         currentSurface,
         false
     );
@@ -120,21 +135,7 @@ void main() {
         }
     }
 
-    // Fix #8: enableDenoiserInputPacking — conditionally NRD-pack or output raw radiance+distance.
-    // Matches RTXDI_ShadingParameters::enableDenoiserInputPacking (ReSTIRDIParameters.h line 205).
-    // SDK default (ReSTIRDI.cpp line 109): enableDenoiserInputPacking = false.
-    // Sentinel pattern: < -0.5 → explicitly disabled (same as default), 0.0 (unbound) → SDK default false, >= 0.5 → enabled.
-    // When enabled (>= 0.5): outputs are NRD-packed via nrd_pack_direct_signal.
-    // When unbound or disabled: outputs raw, unclamped radiance in xyz and raw hit distance in w.
-    bool enableDenoiserPacking = ph_restir_enable_denoiser_packing >= 0.5;
-    if (enableDenoiserPacking) {
-        direct_diffuse_frag_out = nrd_pack_direct_signal(shadedDiffuse, directHitDistance);
-        direct_specular_frag_out = nrd_pack_direct_signal(shadedSpecular, directHitDistance);
-    } else {
-        direct_diffuse_frag_out = vec4(shadedDiffuse, directHitDistance);
-        direct_specular_frag_out = vec4(shadedSpecular, directHitDistance);
-    }
-    reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
-    reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    direct_diffuse_frag_out = nrd_pack_direct_signal(shadedDiffuse, directHitDistance);
+    direct_specular_frag_out = nrd_pack_direct_signal(shadedSpecular, directHitDistance);
+    storeReservoirOutputs(reservoir);
 }

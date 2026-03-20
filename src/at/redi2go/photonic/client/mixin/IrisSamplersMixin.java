@@ -14,8 +14,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class IrisSamplersMixin {
    @Inject(method = "addCustomTextures", at = @At("TAIL"))
    private static void addCustomTexture(SamplerHolder samplers, Object2ObjectMap<String, TextureAccess> irisCustomTextures, CallbackInfo ci) {
-      if (Raytracer.shouldBeEnabled()) {
-         Raytracer.INSTANCE.getMainRenderer().registerCustomTextures(samplers);
+      Raytracer raytracer = Raytracer.INSTANCE;
+      if (Raytracer.shouldBeEnabled() && raytracer != null) {
+         raytracer.getMainRenderer().registerCustomTextures(samplers);
       }
    }
 }

@@ -15,10 +15,14 @@ uniform float ph_nrd_depth_threshold;
 const float spec_phi_luminance = 2.0;
 const float spec_lobe_angle_fraction = 0.5;
 
-// NRD RELAX: max luminance relative difference cap (RELAX_Atrous.cs.hlsl:219)
+// NRD RELAX constants matching reference defaults
 const float gSpecMaxLuminanceRelativeDifference = 10.0;
-// NRD RELAX: confidence-driven luminance edge-stopping relaxation scalar
 const float gConfidenceDrivenLuminanceRelaxation = 0.5;
+const float gRoughnessFraction = 0.5;
+const float gSpecLobeAngleSlack = 0.15;
+const float gRoughnessEdgeStoppingRelaxation = 0.3;
+const float gNormalEdgeStoppingRelaxation = 0.3;
+const bool gRoughnessEdgeStoppingEnabled = true;
 
 const float gaussian3x3[2] = float[](0.44198, 0.27901);
 
@@ -29,15 +33,6 @@ uint spec_hash(uint x) {
     return x;
 }
 
-float spec_normal_weight_param(float historyLength, float specConfidence) {
-    float normalFraction = spec_lobe_angle_fraction / sqrt(float(max(direct_atrous_step_size, 1)));
-    float historyFactor = clamp(historyLength / 5.0, 0.0, 1.0);
-    float relaxedFraction = mix(0.99, normalFraction, historyFactor);
-    // NRD RELAX: lerp toward 1.0 as confidence decreases (more permissive normal filter)
-    float confidenceRelaxedFraction = mix(1.0, relaxedFraction, specConfidence);
-    return nrd_normal_weight_param(1.0, confidenceRelaxedFraction);
-}
-
 void main() {
     if (!is_in_world()) {
         spec_atrous_out = vec4(0.0);
@@ -46,30 +41,54 @@ void main() {
 
     vec4 centerData = texelFetch(spec_atrous_input, tex_coord, 0);
     vec4 centerMaterial = texelFetch(radiosity_material, tex_coord, 0);
+    float centerRoughness = clamp(centerMaterial.x, 0.0, 1.0);
     vec3 centerColor = centerData.rgb;
     float centerLuma = nrd_luminance(centerColor);
-    // NRD RELAX: do not clamp history to >= 1.0 — use raw decoded value
     float historyLength = nrd_decoded_history(texelFetch(spec_history_length_input, tex_coord, 0));
 
     vec3 centerPosition = texelFetch(radiosity_position, tex_coord, 0).xyz;
     vec3 centerGeometryNormal = nrd_safe_normal(texelFetch(radiosity_normal, tex_coord, 0).xyz);
     vec3 centerMappedNormal = nrd_select_surface_normal(centerGeometryNormal, texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz);
 
-    // NRD RELAX: specular confidence from channel G (diffuse is R)
-    float specConfidence = texelFetch(spec_confidence_input, tex_coord, 0).r;
+    // NRD RELAX: specular confidence from channel G
+    float specConfidence = texelFetch(spec_confidence_input, tex_coord, 0).g;
+
+    // NRD RELAX: view vector for specular normal weight (RELAX_Atrous.cs.hlsl:132)
+    vec3 centerV = -normalize(centerPosition - world_camera_position);
+
+    // NRD RELAX: diffuse-like simplified normal weight param (fallback when roughness edge-stopping disabled)
+    float diffuseLobeAngleFraction = spec_lobe_angle_fraction / sqrt(float(max(direct_atrous_step_size, 1)));
+    diffuseLobeAngleFraction = mix(0.99, diffuseLobeAngleFraction, clamp(historyLength / 5.0, 0.0, 1.0));
+    float specNormalWeightParamSimplified = nrd_normal_weight_param(1.0, diffuseLobeAngleFraction);
+
+    // NRD RELAX: full specular normal weight params with roughness-aware cone (RELAX_Atrous.cs.hlsl:83-90)
+    float specLobeAngleFraction = spec_lobe_angle_fraction;
+    vec2 specNormalWeightParams = nrd_spec_normal_weight_params_atrous(
+        centerRoughness, historyLength, specConfidence,
+        gNormalEdgeStoppingRelaxation, specLobeAngleFraction, gSpecLobeAngleSlack
+    );
+
+    // NRD RELAX: roughness weight params (RELAX_Atrous.cs.hlsl:58)
+    vec2 roughnessWeightParams = nrd_roughness_weight_params(centerRoughness, gRoughnessFraction);
+
+    // NRD RELAX: luminance relaxation (RELAX_Atrous.cs.hlsl:63-65)
+    float specLuminanceWeightRelaxation = 1.0;
+    if (direct_atrous_step_size <= 4)
+        specLuminanceWeightRelaxation = mix(1.0, specConfidence, gConfidenceDrivenLuminanceRelaxation);
 
     float centerWeight = gaussian3x3[0] * gaussian3x3[0];
     vec3 sumColor = centerColor * centerWeight;
-    // NRD RELAX: .a channel is variance, not raw second moment
     float centerVariance = max(centerData.a, 0.0);
     float sumVariance = centerVariance * centerWeight * centerWeight;
     float sumWeight = centerWeight;
-    float normalWeightParam = spec_normal_weight_param(historyLength, specConfidence);
     float lumaSigma = spec_phi_luminance * sqrt(max(centerVariance, 1e-6));
+    float specPhiLInv = 1.0 / max(lumaSigma, 1e-4);
 
     ivec2 textureSizeValue = textureSize(spec_atrous_input, 0);
+    float centerViewDist = max(length(centerPosition - world_camera_position), 1e-3);
+    float depthThreshold = ph_nrd_depth_threshold * centerViewDist;
 
-    // Random offset to reduce ringing at large step sizes (matches NRD reference)
+    // Random offset to reduce ringing at large step sizes
     ivec2 sampleOffset = ivec2(0);
     if (direct_atrous_step_size > 4) {
         uint seed = uint(tex_coord.x) + uint(tex_coord.y) * uint(textureSizeValue.x) + uint(frameCounter) * 16777259u;
@@ -85,13 +104,13 @@ void main() {
             }
 
             ivec2 sampleCoord = tex_coord + sampleOffset + ivec2(dx, dy) * direct_atrous_step_size;
-            bool isOutOfBounds = any(lessThan(sampleCoord, ivec2(0))) || any(greaterThanEqual(sampleCoord, textureSizeValue));
-            if (isOutOfBounds) {
+            if (any(lessThan(sampleCoord, ivec2(0))) || any(greaterThanEqual(sampleCoord, textureSizeValue))) {
                 continue;
             }
 
             vec4 sampleData = texelFetch(spec_atrous_input, sampleCoord, 0);
             vec4 sampleMaterial = texelFetch(radiosity_material, sampleCoord, 0);
+            float sampleRoughness = clamp(sampleMaterial.x, 0.0, 1.0);
             vec3 sampleRadiance = sampleData.rgb;
             vec3 samplePosition = texelFetch(radiosity_position, sampleCoord, 0).xyz;
             vec3 sampleGeometryNormal = nrd_safe_normal(texelFetch(radiosity_normal, sampleCoord, 0).xyz);
@@ -100,37 +119,45 @@ void main() {
                 texelFetch(radiosity_mapped_normal, sampleCoord, 0).xyz
             );
 
-            float centerViewDist = max(length(centerPosition - world_camera_position), 1e-3);
-            float geometryWeight = nrd_plane_distance_weight(centerPosition, centerMappedNormal, samplePosition, ph_nrd_depth_threshold * centerViewDist);
-            float normalWeight = nrd_normal_weight_atrous(centerMappedNormal, sampleMappedNormal, normalWeightParam);
+            // NRD RELAX: geometry weight (RELAX_Atrous.cs.hlsl:168)
+            float geometryWeight = nrd_plane_distance_weight(centerPosition, centerMappedNormal, samplePosition, depthThreshold);
+            float kernelWeight = gaussian3x3[abs(dx)] * gaussian3x3[abs(dy)];
+            geometryWeight *= kernelWeight;
+
+            // NRD RELAX: view-direction relaxation for specular (RELAX_Atrous.cs.hlsl:176)
+            vec3 sampleV = -normalize(samplePosition - world_camera_position + gRoughnessEdgeStoppingRelaxation * (centerPosition - world_camera_position));
+
+            // NRD RELAX: specular normal weight - full vs simplified (RELAX_Atrous.cs.hlsl:179-185)
+            float normalWSpecularSimplified = nrd_normal_weight_atrous(centerMappedNormal, sampleMappedNormal, specNormalWeightParamSimplified);
+            float normalWSpecularFull = nrd_spec_normal_weight_atrous_full(specNormalWeightParams, centerMappedNormal, sampleMappedNormal, centerV, sampleV);
+            float roughnessWSpecular = nrd_compute_weight(sampleRoughness, roughnessWeightParams.x, roughnessWeightParams.y);
+
+            float normalAndRoughnessWeight = gRoughnessEdgeStoppingEnabled
+                ? (normalWSpecularFull * roughnessWSpecular)
+                : normalWSpecularSimplified;
+
             float materialWeight = nrd_material_weight(centerMaterial, sampleMaterial);
-            if (materialWeight <= 0.0) {
+
+            float wSpecular = geometryWeight * normalAndRoughnessWeight * materialWeight;
+            if (wSpecular <= 1e-4) {
                 continue;
             }
+
             float sampleLuma = nrd_luminance(sampleRadiance);
 
-            // NRD RELAX luminance weight: exp(-min(|ΔL|/sigma, maxRelDiff) * relaxation)
-            float specPhiLInv = 1.0 / max(lumaSigma, 1e-7);
+            // NRD RELAX luminance weight (RELAX_Atrous.cs.hlsl:192-196)
             float lumaDiff = abs(centerLuma - sampleLuma) * specPhiLInv;
             float cappedLumaDiff = min(lumaDiff, gSpecMaxLuminanceRelativeDifference);
-            float lumaRelaxation = mix(1.0, gConfidenceDrivenLuminanceRelaxation, 1.0 - specConfidence);
-            float lumaWeight = exp(-cappedLumaDiff * lumaRelaxation);
-
-            float kernelWeight = gaussian3x3[abs(dx)] * gaussian3x3[abs(dy)];
-            float weight = geometryWeight * normalWeight * materialWeight * lumaWeight * kernelWeight;
-            if (weight <= 1e-4) {
-                continue;
-            }
+            wSpecular *= exp(-cappedLumaDiff * specLuminanceWeightRelaxation);
 
             float sampleVariance = max(sampleData.a, 0.0);
-            sumColor += sampleRadiance * weight;
-            sumVariance += sampleVariance * weight * weight;
-            sumWeight += weight;
+            sumColor += sampleRadiance * wSpecular;
+            sumVariance += sampleVariance * wSpecular * wSpecular;
+            sumWeight += wSpecular;
         }
     }
 
     vec3 resolvedColor = sumColor / max(sumWeight, 1e-4);
-    // NRD RELAX: variance is w^2-weighted, normalized by total weight squared
     float resolvedVariance = sumVariance / max(sumWeight * sumWeight, 1e-8);
     spec_atrous_out = vec4(resolvedColor, resolvedVariance);
 }

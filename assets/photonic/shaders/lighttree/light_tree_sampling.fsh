@@ -14,17 +14,33 @@ layout(location = 7) out vec4 reservoir_meta_frag_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 
+void storeEmptySurfaceOutputs() {
+    position_frag_out = vec4(0.0f);
+    normal_frag_out = vec4(0.0f);
+    mapped_normal_frag_out = vec4(0.0f);
+    albedo_frag_out = vec4(0.0f);
+    motion_frag_out = vec4(0.0);
+}
+
+void storeEmptyProposalReservoirOutputs() {
+    Reservoir emptyReservoir = rtxdi_empty_reservoir();
+    reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
+    reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
+    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(emptyReservoir);
+}
+
 void main() {
-    if (!is_in_world()) {
-        position_frag_out = vec4(0.0f);
-        normal_frag_out = vec4(0.0f);
-        mapped_normal_frag_out = vec4(0.0f);
-        albedo_frag_out = vec4(0.0f);
-        motion_frag_out = vec4(0.0);
-        Reservoir emptyReservoir = rtxdi_empty_reservoir();
-        reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
-        reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
-        reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(emptyReservoir);
+    ivec2 reservoirPos = lt_current_reservoir_pos();
+    if (!lt_is_active_reservoir_lane(reservoirPos)) {
+        storeEmptySurfaceOutputs();
+        storeEmptyProposalReservoirOutputs();
+        return;
+    }
+
+    ivec2 pixelPosition = lt_current_pixel_pos();
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition) || !is_in_world()) {
+        storeEmptySurfaceOutputs();
+        storeEmptyProposalReservoirOutputs();
         return;
     }
 
@@ -32,12 +48,16 @@ void main() {
     rt_pos = world_pos - world_offset;
     bad_angle = is_bad_angle(world_pos, block_normal);
 
-    position_frag_out = vec4(world_pos, 1.0f);
-    normal_frag_out = vec4(normalize(block_normal), 1.0f);
-    mapped_normal_frag_out = vec4(normalize(normal), 1.0f);
-    albedo_frag_out = vec4(clamp(albedo, vec3(0.0f), vec3(1.0f)), 1.0f);
-
     DirectSurface currentSurface = lt_current_surface();
+    vec3 worldPos = currentSurface.worldPos;
+    vec3 geometryNormal = currentSurface.geometryNormal;
+    vec3 shadingNormal = currentSurface.shadingNormal;
+    vec3 surfaceAlbedo = currentSurface.albedo;
+
+    position_frag_out = vec4(worldPos, 1.0f);
+    normal_frag_out = vec4(geometryNormal, 1.0f);
+    mapped_normal_frag_out = vec4(shadingNormal, 1.0f);
+    albedo_frag_out = vec4(surfaceAlbedo, 1.0f);
 
     // RTXDI_SampleLightsForSurface: initial sampling (local lights + stubs for infinite/env/BRDF).
     // Initial visibility (RTXDI InitialSampling.hlsli:661-668) is applied INSIDE
@@ -48,21 +68,19 @@ void main() {
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 
-    // Compute screen-space motion vector matching RTXDI's screenSpaceMotion convention:
-    //   motion.xy = previousPixel - currentPixel  (RTXDI: prevPos = pixelPosition + motion.xy)
-    //   motion.z  = expectedPrevLinearDepth - currentLinearDepth  (depth delta)
-    // RTXDI convention: motion.xy = previousPixel - pixelPosition (integer pixel coords).
-    // prevPos = pixelPosition + motion.xy = previousPixel.
-    vec2 pixelPosition = vec2(tex_coord);  // integer pixel coordinate (matches RTXDI uint2 pixelPosition)
+    // Compute screen-space motion vector using the same current/previous pixel semantics
+    // consumed by the RTXDI temporal path:
+    //   motion.xy = previousPixel - currentPixel
+    //   motion.z  = previousLinearDepth - currentLinearDepth
     vec2 previousPixel = ph_reprojectf(
         previous_modelview_projection,
-        world_pos,
+        worldPos,
         vec2(viewWidth, viewHeight),
-        get_taa_jitter()
+        vec2(0.0f)
     );
     vec2 motionXY = previousPixel - pixelPosition;
-    float currentLinearDepth = length(world_pos - world_camera_position);
-    float expectedPrevLinearDepth = length(world_pos - previous_world_camera_position);
+    float currentLinearDepth = length(worldPos - world_camera_position);
+    float expectedPrevLinearDepth = length(worldPos - previous_world_camera_position);
     float motionZ = expectedPrevLinearDepth - currentLinearDepth;
     motion_frag_out = vec4(motionXY, motionZ, 1.0);
 }

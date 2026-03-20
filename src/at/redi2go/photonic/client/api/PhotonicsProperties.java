@@ -8,9 +8,9 @@ public interface PhotonicsProperties {
    int DEFAULT_MAX_SAMPLES = 20;
    float DEFAULT_MIN_TRACED_LIGHT_LUMA = 0.001F;
    AlphaMode DEFAULT_ALPHA_MODE = AlphaMode.NONE;
-   int DEFAULT_LIGHTTREE_INITIAL_SAMPLES = 12;
-   int DEFAULT_LIGHTTREE_SPATIAL_REUSE_SAMPLES = 5;
-   float DEFAULT_LIGHTTREE_SPATIAL_REUSE_RADIUS = 30.0F;
+   int DEFAULT_LIGHTTREE_INITIAL_SAMPLES = 8;
+   int DEFAULT_LIGHTTREE_SPATIAL_REUSE_SAMPLES = 1;
+   float DEFAULT_LIGHTTREE_SPATIAL_REUSE_RADIUS = 32.0F;
    int DEFAULT_LIGHTTREE_ACCUMULATION_FRAMES = 15;
    int DEFAULT_LIGHTTREE_DENOISER_PASSES = 5;
    int DEFAULT_NRD_ATROUS_PASSES = 5;
@@ -25,6 +25,14 @@ public interface PhotonicsProperties {
    float DEFAULT_RESTIR_SPATIAL_NORMAL_THRESHOLD = 0.5f;
    int DEFAULT_RESTIR_VISIBILITY_MAX_AGE = 4;
    float DEFAULT_RESTIR_VISIBILITY_MAX_DISTANCE = 16.0f;
+   float DEFAULT_RESTIR_TEMPORAL_BIAS_MODE = 1.0f;
+   float DEFAULT_RESTIR_TEMPORAL_PERMUTATION_SAMPLING = 1.0f;
+   float DEFAULT_RESTIR_TEMPORAL_VISIBILITY_SHORTCUT = 0.0f;
+   float DEFAULT_RESTIR_SPATIAL_BIAS_MODE = 1.0f;
+   float DEFAULT_RESTIR_SPATIAL_DISCOUNT_NAIVE = 1.0f;
+   float DEFAULT_RESTIR_SPATIAL_MATERIAL_TEST = 1.0f;
+   float DEFAULT_RESTIR_SPATIAL_BOOST_SAMPLES = 8.0f;
+   float DEFAULT_RESTIR_SPATIAL_TARGET_HISTORY = 0.0f;
 
    OptionalBoolean isPhotonicsEnabled();
    float getRenderScale();
@@ -54,4 +62,12 @@ public interface PhotonicsProperties {
    float getRestirSpatialNormalThreshold();
    int getRestirVisibilityMaxAge();
    float getRestirVisibilityMaxDistance();
+   float getRestirTemporalBiasMode();
+   float getRestirTemporalPermutationSampling();
+   float getRestirTemporalVisibilityShortcut();
+   float getRestirSpatialBiasMode();
+   float getRestirSpatialDiscountNaive();
+   float getRestirSpatialMaterialTest();
+   float getRestirSpatialBoostSamples();
+   float getRestirSpatialTargetHistory();
 }

@@ -119,7 +119,10 @@ void main() {
             float diffusePhiLInv = 1.0 / max(lumaSigma, 1e-7);
             float lumaDiff = abs(centerLuma - sampleLuma) * diffusePhiLInv;
             float cappedLumaDiff = min(lumaDiff, gDiffMaxLuminanceRelativeDifference);
-            float lumaRelaxation = mix(1.0, gConfidenceDrivenLuminanceRelaxation, 1.0 - diffuseConfidence);
+            // NRD RELAX: confidence-driven luminance relaxation only applies at step size <= 4
+            float lumaRelaxation = (direct_atrous_step_size <= 4)
+                ? mix(1.0, diffuseConfidence, gConfidenceDrivenLuminanceRelaxation)
+                : 1.0;
             float lumaWeight = exp(-cappedLumaDiff * lumaRelaxation);
 
             float kernelWeight = gaussian3x3[abs(dx)] * gaussian3x3[abs(dy)];

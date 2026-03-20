@@ -113,6 +113,7 @@ void main() {
     float smbParallaxInPixels1 = spec_compute_parallax_in_pixels(currentPosition, cameraDelta);
     float smbParallaxInPixels2 = spec_compute_parallax_in_pixels(currentPosition, -cameraDelta);
     float smbParallaxInPixelsMax = max(smbParallaxInPixels1, smbParallaxInPixels2);
+    float smbParallaxInPixelsMin = min(smbParallaxInPixels1, smbParallaxInPixels2);
 
     // --- Reprojection UV ---
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
@@ -224,11 +225,11 @@ void main() {
         float decodedPrevHistory = nrd_decoded_history(prevHistoryVec);
         historyLength = min(decodedPrevHistory + 1.0, specMaxHistoryLength);
 
-        // Confidence input is intentionally disabled in this pipeline.
-        // Keep NRD-facing history contraction neutral instead of sampling stale spec confidence.
-        float historyConfidence = 1.0;
-        slowMaxAccumulatedFrameNum *= historyConfidence;
-        fastMaxAccumulatedFrameNum *= historyConfidence;
+        float specConfidence = texelFetch(spec_confidence_input, tex_coord, 0).g;
+        float historyConfidence = texelFetch(spec_history_confidence_input, tex_coord, 0).b;
+        float combinedHistoryConfidence = clamp(min(specConfidence, historyConfidence), 0.0, 1.0);
+        slowMaxAccumulatedFrameNum *= combinedHistoryConfidence;
+        fastMaxAccumulatedFrameNum *= combinedHistoryConfidence;
 
         if (footprintQuality < 1.0) {
             historyLength *= sqrt(footprintQuality);

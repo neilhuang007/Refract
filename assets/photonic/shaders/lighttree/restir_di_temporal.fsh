@@ -32,7 +32,7 @@ const int RTXDI_BIAS_CORRECTION_RAY_TRACED = 3;
 // When unbound (0.0) each falls back to the RTXDI SDK default documented below.
 uniform float ph_restir_temporal_permutation_sampling;   // SDK default: 1 (enabled) (ReSTIRDI.cpp line 61)
 uniform float ph_restir_temporal_visibility_shortcut;    // SDK default: 0 (disabled) (ReSTIRDI.cpp line 60)
-uniform uint  ph_restir_temporal_uniform_random;         // SDK: uniformRandomNumber (per-frame Jenkins hash)
+uniform int   ph_restir_temporal_uniform_random;         // SDK: uniformRandomNumber (per-frame Jenkins hash), provided by Iris as int and cast back to uint
 
 // ENGINE-SPECIFIC EXTENSION (Fix #11): light_reload temporal reset guard.
 // Not present in the RTXDI SDK. This engine-specific flag is set by LightRegistry when
@@ -41,13 +41,13 @@ uniform uint  ph_restir_temporal_uniform_random;         // SDK: uniformRandomNu
 // corrupt current-frame output. This is a sound extension: the SDK would require equivalent
 // bookkeeping through its RAB_TranslateLightIndex returning -1 for all lights on a full reload.
 
-bool RTXDI_LoadCurrentProposal(DirectSurface currentSurface, out Reservoir reservoir) {
+bool RTXDI_LoadCurrentProposal(DirectSurface currentSurface, ivec2 reservoirPos, out Reservoir reservoir) {
     reservoir = RTXDI_EmptyDIReservoir();
     rtxdi_unpack_reservoir_at_surface(
         reservoir,
-        texelFetch(radiosity_proposal_reservoirs, tex_coord, 0),
-        texelFetch(radiosity_proposal_reservoir_samples, tex_coord, 0),
-        texelFetch(radiosity_proposal_reservoir_meta, tex_coord, 0),
+        texelFetch(radiosity_proposal_reservoirs, reservoirPos, 0),
+        texelFetch(radiosity_proposal_reservoir_samples, reservoirPos, 0),
+        texelFetch(radiosity_proposal_reservoir_meta, reservoirPos, 0),
         currentSurface,
         false
     );
@@ -63,6 +63,12 @@ void RTXDI_StoreEmptyOutputs() {
 }
 
 void main() {
+    ivec2 reservoirPos = lt_current_reservoir_pos();
+    if (!lt_is_active_reservoir_lane(reservoirPos)) {
+        RTXDI_StoreEmptyOutputs();
+        return;
+    }
+
     if (!is_in_world()) {
         RTXDI_StoreEmptyOutputs();
         return;
@@ -73,13 +79,15 @@ void main() {
     bad_angle = is_bad_angle(world_pos, block_normal);
 
     DirectSurface currentSurface = lt_current_surface();
+    ivec2 pixelPosition = lt_current_pixel_pos();
+    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(uvec2(pixelPosition), uint(frameCounter), RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED);
 
     // Step 1: Load curSample from proposal buffer
     // Don't abort on empty curSample — RTXDI proceeds unconditionally (TemporalResampling.hlsli
     // line 54: CombineDIReservoirs is always called). When curSample is empty (targetPdf=0,
     // weightSum=0, M=0) the combine is a no-op, and temporal history can still populate state.
     Reservoir curSample = RTXDI_EmptyDIReservoir();
-    RTXDI_LoadCurrentProposal(currentSurface, curSample);
+    RTXDI_LoadCurrentProposal(currentSurface, reservoirPos, curSample);
 
     // RTXDI line 42: historyLimit = min(MaxM, uint(tparams.maxHistoryLength * curSample.M))
     // ph_restir_temporal_max_history is the runtime uniform matching tparams.maxHistoryLength.
@@ -115,23 +123,19 @@ void main() {
     // which kills stale reservoirs through the standard remap path (lines 216-234).
     {
         // Step 4: Backproject using per-pixel motion vectors (RTXDI lines 57-67).
-        // RTXDI line 57: float3 motion = screenSpaceMotion;
-        vec3 motion = texelFetch(radiosity_motion, tex_coord, 0).xyz;
+        vec3 motion = texelFetch(radiosity_motion, pixelPosition, 0).xyz;
 
         // RTXDI lines 59-62: sub-pixel jitter when permutation sampling is disabled.
         // SDK default (ReSTIRDI.cpp line 61): enablePermutationSampling = true.
         // Sentinel pattern (SDK-default-true): unbound (0.0) or -1.0 → true (SDK default).
         // Explicit false: pass -2.0 (< -1.5) to force disabled.
-        // NOTE: ph_restir_temporal_uniform_random must be set by LightTreeRenderer.java to
-        // JenkinsHash(frameIndex) each frame. When unbound (0), uint(frameCounter) is used
-        // as a fallback (see permutation sampling block below).
         bool enablePermutationSampling = (ph_restir_temporal_permutation_sampling < -1.5) ? false : true;
         if (!enablePermutationSampling) {
-            motion.xy += vec2(rand_next_float(), rand_next_float()) - 0.5;
+            motion.xy += vec2(RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng)) - 0.5;
         }
 
         // RTXDI line 64-65: float2 reprojectedSamplePosition = float2(pixelPosition) + motion.xy;
-        vec2 reprojectedSamplePosition = vec2(tex_coord) + motion.xy;
+        vec2 reprojectedSamplePosition = vec2(pixelPosition) + motion.xy;
         ivec2 prevPos = ivec2(round(reprojectedSamplePosition));
 
         // RTXDI line 67: expectedPrevLinearDepth = currentLinearDepth + motion.z
@@ -161,8 +165,8 @@ void main() {
             ivec2 offset = ivec2(0, 0);
             if (i > 0) {
                 // RTXDI lines 80-81: random offsets
-                offset.x = int((rand_next_float() - 0.5) * searchRadius);
-                offset.y = int((rand_next_float() - 0.5) * searchRadius);
+                offset.x = int((RTXDI_GetNextRandom(rng) - 0.5) * searchRadius);
+                offset.y = int((RTXDI_GetNextRandom(rng) - 0.5) * searchRadius);
             }
 
             ivec2 idx = prevPos + offset;
@@ -174,11 +178,8 @@ void main() {
             //   prevPixelPos.x ^= 3; prevPixelPos.y ^= 3;
             //   prevPixelPos -= offset;
             if (enablePermutationSampling && i == 0) {
-                // Use ph_restir_temporal_uniform_random when provided (LightTreeRenderer.java sets this
-                // to JenkinsHash(frameIndex) each frame). Fall back to uint(frameCounter) when unbound (0).
-                uint uniformRandom = (ph_restir_temporal_uniform_random != 0u)
-                    ? ph_restir_temporal_uniform_random
-                    : uint(frameCounter);
+                // Use the Java-provided per-frame Jenkins hash directly.
+                uint uniformRandom = uint(ph_restir_temporal_uniform_random);
                 ivec2 permOffset = ivec2(
                     int(uniformRandom & 3u),
                     int((uniformRandom >> 2u) & 3u)
@@ -290,7 +291,7 @@ void main() {
 
             // RTXDI line 164: combine
             bool sampleSelected = RTXDI_CombineDIReservoirs(
-                state, prevSample, rand_next_float(), weightAtCurrent);
+                state, prevSample, RTXDI_GetNextRandom(rng), weightAtCurrent);
 
             // RTXDI lines 165-170
             if (sampleSelected) {

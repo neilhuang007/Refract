@@ -235,13 +235,23 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
    }
 
    public Matrix4f getModelViewMatrix(Vector3f cameraPosition) {
-      Matrix4f matrix4f = new Matrix4f(CapturedRenderingState.INSTANCE.getGbufferModelView());
+      org.joml.Matrix4fc gbufferModelView = CapturedRenderingState.INSTANCE.getGbufferModelView();
+      if (gbufferModelView == null) {
+         return new Matrix4f();
+      }
+
+      Matrix4f matrix4f = new Matrix4f(gbufferModelView);
       return matrix4f.translate(-cameraPosition.x, -cameraPosition.y, -cameraPosition.z);
    }
 
    @Override
    public Matrix4f getModelViewProjectionMatrix(Vector3f cameraPosition) {
-      return new Matrix4f(CapturedRenderingState.INSTANCE.getGbufferProjection()).mul(this.getModelViewMatrix(cameraPosition));
+      org.joml.Matrix4fc gbufferProjection = CapturedRenderingState.INSTANCE.getGbufferProjection();
+      if (gbufferProjection == null) {
+         return new Matrix4f();
+      }
+
+      return new Matrix4f(gbufferProjection).mul(this.getModelViewMatrix(cameraPosition));
    }
 
    @Override

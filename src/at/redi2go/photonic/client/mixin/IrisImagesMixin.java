@@ -30,9 +30,14 @@ public class IrisImagesMixin {
 
    @Unique
    private static void addImageSampler(ImageHolder images, String name, InternalTextureFormat internalTextureFormat) {
-      Supplier<RenderDispatcher> renderDispatcher = () -> Raytracer.INSTANCE.getRenderDispatcher();
       images.addTextureImage(() -> {
-         TextureObject image = renderDispatcher.get().getTextureObject(name);
+         Raytracer raytracer = Raytracer.INSTANCE;
+         if (raytracer == null) {
+            return 0;
+         }
+
+         RenderDispatcher renderDispatcher = raytracer.getRenderDispatcher();
+         TextureObject image = renderDispatcher.getTextureObject(name);
          if (image.getInternalTextureFormat() != internalTextureFormat) {
             throw new IllegalStateException();
          } else {

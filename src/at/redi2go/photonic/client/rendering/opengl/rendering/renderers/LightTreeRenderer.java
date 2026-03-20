@@ -17,7 +17,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.function.Function;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import net.irisshaders.iris.shaderpack.include.IncludeGraph;
 import net.irisshaders.iris.uniforms.SystemTimeUniforms;
@@ -27,6 +29,7 @@ import net.irisshaders.iris.gl.uniform.UniformUpdateFrequency;
 import net.irisshaders.iris.pipeline.CompositeRenderer;
 import net.minecraft.client.MinecraftClient;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Vector2f;
 import org.joml.Vector3i;
 import org.joml.Vector4f;
 
@@ -48,6 +51,10 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String indirectInitialFragment = "lighttree/light_tree_indirect_initial.fsh";
    private static final String indirectDenoisingFragment = "lighttree/light_tree_indirect_denoising.fsh";
    private static final String shadeSamplesFragment = "lighttree/shade_samples.fsh";
+   private static final int[] proposalGeometryDrawBuffers = new int[]{0, 1, 2, 3, 4, -1, -1, -1};
+   private static final int[] proposalReservoirDrawBuffers = new int[]{-1, -1, -1, -1, -1, 0, 1, 2};
+   private static final int[] shadeSamplesLightingDrawBuffers = new int[]{0, 1, -1, -1, -1};
+   private static final int[] shadeSamplesReservoirDrawBuffers = new int[]{-1, -1, 0, 1, 2};
    private static final int profilerLogIntervalFrames = 60;
    private static final String[] gpuProfilerRegionNames = new String[]{
       "proposalSampling", "reuseResolve", "shadeSamples", "directFeatureExtract", "directTemporal", "directAntiFirefly", "directHistoryFix", "directHistoryClamping", "directAtrous", "specTemporal", "specAntiFirefly", "specHistoryFix", "specHistoryClamping", "specAtrous", "indirectAccum", "indirectDenoise", "accumulation", "indirect"
@@ -107,6 +114,7 @@ public class LightTreeRenderer extends MainRenderer {
    private final ColorFramebuffer indirectReservoirBuffer;
    private final ColorFramebuffer indirectDenoisedBuffer;
    private final RoutingFramebuffer proposalFramebuffer;
+   private final RoutingFramebuffer proposalReservoirFramebuffer;
    private final RoutingFramebuffer directTemporalReservoirFramebuffer;
    private final RoutingFramebuffer reuseResolveFramebuffer;
    private final RoutingFramebuffer directFeatureFramebuffer;
@@ -127,6 +135,7 @@ public class LightTreeRenderer extends MainRenderer {
    private final RoutingFramebuffer indirectDenoisingFramebuffer;
    private final RoutingFramebuffer positionWriteFramebuffer;
    private final RoutingFramebuffer shadeSamplesFramebuffer;
+   private final RoutingFramebuffer shadeSamplesReservoirFramebuffer;
    @Nullable
    private CompositeRenderer proposalRenderer;
    @Nullable
@@ -175,6 +184,7 @@ public class LightTreeRenderer extends MainRenderer {
    @Nullable
    private RegirComputeProgram regirComputeProgram;
    private final int[] directAtrousStepSizes;
+   private final Random temporalUniformRandom = new Random(0x4c6f6e67L);
    private int directAtrousIteration = 0;
    private int specAtrousIteration = 0;
    private boolean compatDirectSoftDirty = true;
@@ -242,7 +252,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.createIndirectReservoirAttachments(this.indirectReservoirBuffer);
       this.indirectDenoisedBuffer = new ColorFramebuffer(renderScale);
       this.indirectDenoisedBuffer.createAttachment("data", "RGBA16F", false);
-      this.proposalFramebuffer = this.createProposalFramebuffer();
+      this.proposalFramebuffer = this.createProposalGeometryFramebuffer();
+      this.proposalReservoirFramebuffer = this.createProposalReservoirFramebuffer();
       this.directTemporalReservoirFramebuffer = this.createDirectTemporalReservoirFramebuffer();
       this.reuseResolveFramebuffer = this.createReuseResolveFramebuffer();
       this.directFeatureFramebuffer = this.createDirectFeatureFramebuffer();
@@ -262,7 +273,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectAccumulationFramebuffer = this.createIndirectAccumulationFramebuffer();
       this.indirectDenoisingFramebuffer = this.createIndirectDenoisingFramebuffer();
       this.positionWriteFramebuffer = this.createPositionWriteFramebuffer();
-      this.shadeSamplesFramebuffer = this.createShadeSamplesFramebuffer();
+      this.shadeSamplesFramebuffer = this.createShadeSamplesLightingFramebuffer();
+      this.shadeSamplesReservoirFramebuffer = this.createShadeSamplesReservoirFramebuffer();
       this.gpuTimerQuery = this.createGpuTimerQuery();
       this.regirComputeProgram = new RegirComputeProgram();
    }
@@ -284,7 +296,10 @@ public class LightTreeRenderer extends MainRenderer {
    @Override
    public void createCompositeRenderer(Function<List<PhotonicsShader>, CompositeRenderer> rendererCreator) {
       this.proposalRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader("lighttree/light_tree_sampling.fsh", "common/screen.vsh", this.memoryCollection, this.proposalFramebuffer))
+         List.of(
+            new PhotonicsShader("lighttree/light_tree_sampling.fsh", "common/screen.vsh", this.memoryCollection, this.proposalFramebuffer, proposalGeometryDrawBuffers),
+            new PhotonicsShader("lighttree/light_tree_sampling.fsh", "common/screen.vsh", this.memoryCollection, this.proposalReservoirFramebuffer, proposalReservoirDrawBuffers)
+         )
       );
       this.directTemporalResamplingRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(directTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.directTemporalReservoirFramebuffer))
@@ -347,7 +362,10 @@ public class LightTreeRenderer extends MainRenderer {
          List.of(new PhotonicsShader("common/indirect.fsh", "common/screen.vsh", this.memoryCollection, null))
       );
       this.shadeSamplesRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(shadeSamplesFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesFramebuffer))
+         List.of(
+            new PhotonicsShader(shadeSamplesFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesFramebuffer, shadeSamplesLightingDrawBuffers),
+            new PhotonicsShader(shadeSamplesFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesReservoirFramebuffer, shadeSamplesReservoirDrawBuffers)
+         )
       );
       this.compileRegirComputeShader();
    }
@@ -360,9 +378,6 @@ public class LightTreeRenderer extends MainRenderer {
          String presampleSource = this.loadShaderSource("lighttree/regir_presample_tiles.glsl");
          if (presampleSource != null) {
             this.regirComputeProgram.compilePresample(presampleSource);
-            if (this.regirComputeProgram.isPresampleCompiled()) {
-               this.regirComputeProgram.createPdfTexture(this.worldRegistry.getLightRegistry().totalLights());
-            }
          } else {
             Photonic.warn("[LightTree] Presample tile shader not found — ReGIR build will use tile buffer only if present");
          }
@@ -411,9 +426,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "radiosity_proposal_reservoir_samples", () -> this.directReservoirBuffer.getWriteAttachment("sample"));
       this.addTextureSampler(samplers, "radiosity_proposal_reservoir_meta", () -> this.directReservoirBuffer.getWriteAttachment("meta"));
       this.addTextureSampler(samplers, "radiosity_direct", this::getResolvedDirectTexture);
-      this.addTextureSampler(samplers, "radiosity_reservoirs", () -> this.directReservoirBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "radiosity_reservoir_samples", () -> this.directReservoirBuffer.getWriteAttachment("sample"));
-      this.addTextureSampler(samplers, "radiosity_reservoir_meta", () -> this.directReservoirBuffer.getWriteAttachment("meta"));
+      this.addTextureSampler(samplers, "radiosity_reservoirs", this::getCurrentDirectReservoirDataTexture);
+      this.addTextureSampler(samplers, "radiosity_reservoir_samples", this::getCurrentDirectReservoirSampleTexture);
+      this.addTextureSampler(samplers, "radiosity_reservoir_meta", this::getCurrentDirectReservoirMetaTexture);
       this.addTextureSampler(samplers, "radiosity_temporal_reservoirs", () -> this.directTemporalReservoirBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "radiosity_temporal_reservoir_samples", () -> this.directTemporalReservoirBuffer.getWriteAttachment("sample"));
       this.addTextureSampler(samplers, "radiosity_temporal_reservoir_meta", () -> this.directTemporalReservoirBuffer.getWriteAttachment("meta"));
@@ -421,10 +436,10 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "radiosity_handheld", () -> this.lightingBuffer.getWriteAttachment("handheld"));
       this.addTextureSampler(samplers, "radiosity_indirect", () -> this.lightingBuffer.getWriteAttachment("indirect"));
       this.addTextureSampler(samplers, "radiosity_indirect_variance", () -> this.lightingBuffer.getWriteAttachment("indirect_variance"));
-      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_position", () -> this.indirectReservoirBuffer.getWriteAttachment("position"));
-      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_normal", () -> this.indirectReservoirBuffer.getWriteAttachment("normal"));
-      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_radiance", () -> this.indirectReservoirBuffer.getWriteAttachment("radiance"));
-      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_meta", () -> this.indirectReservoirBuffer.getWriteAttachment("meta"));
+      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_position", this::getCurrentIndirectReservoirPositionTexture);
+      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_normal", this::getCurrentIndirectReservoirNormalTexture);
+      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_radiance", this::getCurrentIndirectReservoirRadianceTexture);
+      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_meta", this::getCurrentIndirectReservoirMetaTexture);
       this.addTextureSampler(samplers, "radiosity_indirect_initial_position", () -> this.indirectInitialReservoirBuffer.getWriteAttachment("position"));
       this.addTextureSampler(samplers, "radiosity_indirect_initial_normal", () -> this.indirectInitialReservoirBuffer.getWriteAttachment("normal"));
       this.addTextureSampler(samplers, "radiosity_indirect_initial_radiance", () -> this.indirectInitialReservoirBuffer.getWriteAttachment("radiance"));
@@ -436,6 +451,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "radiosity_indirect_resolved", this::getResolvedIndirectTexture);
       this.addTextureSampler(samplers, "radiosity_motion", () -> this.motionVectorBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "direct_confidence_input", () -> this.directConfidenceBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "diffuse_confidence_input", () -> this.directConfidenceBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "spec_confidence_input", () -> this.directConfidenceBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "spec_history_confidence_input", () -> this.directConfidenceBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "stage_radiosity_position", () -> this.lightingStageBuffer.getWriteAttachment("position"));
       this.addTextureSampler(samplers, "stage_radiosity_normal", () -> this.lightingStageBuffer.getWriteAttachment("normal"));
       this.addTextureSampler(samplers, "stage_radiosity_mapped_normal", () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"));
@@ -473,7 +491,7 @@ public class LightTreeRenderer extends MainRenderer {
       // RELAX keeps the fast feedback after history clamping, but the permanent slow
       // history is post-anti-firefly and is what temporal accumulation must read next frame.
       this.addTextureSampler(samplers, "prev_direct_slow_input", () -> this.directSlowBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "prev_direct_fast_input", () -> this.directClampedFastBuffer.getReadAttachment("data"));
+      this.addTextureSampler(samplers, "prev_direct_fast_input", () -> this.directFastBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_direct_history_length_input", () -> this.directHistoryLengthBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "direct_firefly_input", () -> this.directClampedSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "direct_historyfix_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
@@ -493,6 +511,7 @@ public class LightTreeRenderer extends MainRenderer {
          }
          return this.directHistoryLengthBuffer.getReadAttachment("data");
       });
+      this.addTextureSampler(samplers, "direct_history_length_clamp_input", () -> this.directHistoryLengthBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "direct_atrous_input", this::getCurrentDirectAtrousInputTexture);
       this.addTextureSampler(samplers, "spec_noisy_input", () -> this.specularNoisyBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "prev_spec_noisy_input", () -> this.specularNoisyBuffer.getReadAttachment("data"));
@@ -500,7 +519,13 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "prev_spec_slow_input", () -> this.specularSlowBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "spec_fast_input", () -> this.specularFastBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "prev_spec_fast_input", () -> this.specularClampedFastBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "spec_history_length_input", () -> this.specularHistoryLengthBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "spec_history_length_input", () -> {
+         if (this.shouldUseCurrentSpecHistoryLength()) {
+            return this.specularHistoryLengthBuffer.getWriteAttachment("data");
+         }
+         return this.specularHistoryLengthBuffer.getReadAttachment("data");
+      });
+      this.addTextureSampler(samplers, "spec_history_length_clamp_input", () -> this.specularHistoryLengthBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "prev_spec_history_length_input", () -> this.specularHistoryLengthBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "spec_firefly_input", () -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "spec_historyfix_input", () -> this.specularSlowBuffer.getWriteAttachment("data"));
@@ -518,18 +543,40 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f("ph_direct_sample_budget_scale", this::getDirectSampleBudgetScale, listener -> {});
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_depth_threshold", () -> this.properties.getRestirDepthThreshold());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_normal_threshold", () -> this.properties.getRestirNormalThreshold());
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_visibility_max_age", () -> (float) this.properties.getRestirVisibilityMaxAge());
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_visibility_max_distance", () -> this.properties.getRestirVisibilityMaxDistance());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_max_history", () -> (float) this.properties.getRestirTemporalMaxHistory());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_depth_threshold", () -> this.properties.getRestirTemporalDepthThreshold());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_normal_threshold", () -> this.properties.getRestirTemporalNormalThreshold());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_visibility_max_age", () -> (float) this.properties.getRestirVisibilityMaxAge());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_visibility_max_distance", () -> this.properties.getRestirVisibilityMaxDistance());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_num_local_samples", () -> (float) this.properties.getLightTreeInitialSamples());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_num_environment_samples", () -> 1.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_num_brdf_samples", () -> 1.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_enable_visibility", () -> 1.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_brdf_cutoff", () -> 0.0001f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> 2.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> this.properties.getRestirTemporalBiasMode());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_permutation_sampling", () -> this.properties.getRestirTemporalPermutationSampling());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_visibility_shortcut", () -> this.properties.getRestirTemporalVisibilityShortcut());
+      uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_uniform_random", () -> this.getTemporalUniformRandom());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_bias_mode", () -> this.properties.getRestirSpatialBiasMode());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_discount_naive", () -> this.properties.getRestirSpatialDiscountNaive());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_material_test", () -> this.properties.getRestirSpatialMaterialTest());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_boost_samples", () -> this.properties.getRestirSpatialBoostSamples());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_target_history", () -> this.properties.getRestirSpatialTargetHistory());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_sample_count", () -> (float) this.properties.getRestirSpatialSampleCount());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_radius", () -> this.properties.getRestirSpatialRadius());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_depth_threshold", () -> this.properties.getRestirSpatialDepthThreshold());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_normal_threshold", () -> this.properties.getRestirSpatialNormalThreshold());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_final_visibility", () -> 1.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_reuse_final_visibility", () -> 1.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_accumulated_frame_num", () -> 30.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_fast_accumulated_frame_num", () -> 6.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_depth_threshold", () -> 0.003f);
+   }
+
+   private int getTemporalUniformRandom() {
+      return this.temporalUniformRandom.nextInt();
    }
 
    private int getActiveCheckerboardField() {
@@ -592,6 +639,11 @@ public class LightTreeRenderer extends MainRenderer {
       long t1 = System.nanoTime();
       this.renderDirectReuseProfiled();
       long t2 = System.nanoTime();
+      // RTXDI shades the current frame's resolved reservoir and stores the updated
+      // visibility back for future reuse. Our ping-pong framebuffer needs an
+      // explicit mid-frame flip here so shadeSamples reads the freshly resolved
+      // reservoir and writes the visibility-updated result into the other side.
+      this.directReservoirBuffer.swap();
       this.renderProfiled(shadeSamplesRegionIndex, this.shadeSamplesRenderer);
       long t3 = System.nanoTime();
       this.renderProfiled(directFeatureRegionIndex, this.directFeatureRenderer);
@@ -705,6 +757,7 @@ public class LightTreeRenderer extends MainRenderer {
    @Override
    public void free() {
       this.proposalFramebuffer.destroy();
+      this.proposalReservoirFramebuffer.destroy();
       this.directTemporalReservoirFramebuffer.destroy();
       this.reuseResolveFramebuffer.destroy();
       this.directFeatureFramebuffer.destroy();
@@ -724,6 +777,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectDenoisingFramebuffer.destroy();
       this.positionWriteFramebuffer.destroy();
       this.shadeSamplesFramebuffer.destroy();
+      this.shadeSamplesReservoirFramebuffer.destroy();
       this.lightingBuffer.destroy();
       this.lightingStageBuffer.destroy();
       this.compatDirectSoftBuffer.destroy();
@@ -789,7 +843,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private ColorFramebuffer createDirectReservoirFramebuffer(float renderScale) {
-      ColorFramebuffer framebuffer = new ColorFramebuffer(renderScale);
+      ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
       framebuffer.createAttachment("data", "RGBA32F", false);
       framebuffer.createAttachment("sample", "RGBA32F", false);
       // RGBA32F required: RGB channels store per-channel visibility floats [0,1];
@@ -797,6 +851,18 @@ public class LightTreeRenderer extends MainRenderer {
       // RGBA16F lacks the integer precision needed for the bit packing (max ~8M).
       framebuffer.createAttachment("meta", "RGBA32F", false);
       return framebuffer;
+   }
+
+   private Vector2f getDirectReservoirResolution() {
+      Vector2f framebufferSize = new Vector2f(
+         MinecraftClient.getInstance().getWindow().getFramebufferWidth(),
+         MinecraftClient.getInstance().getWindow().getFramebufferHeight()
+      );
+      if (this.getActiveCheckerboardField() == 0) {
+         return framebufferSize;
+      }
+      framebufferSize.x = Math.max(1.0f, (float) Math.ceil(framebufferSize.x * 0.5f));
+      return framebufferSize;
    }
 
    private RoutingFramebuffer createDirectTemporalFramebuffer() {
@@ -933,15 +999,18 @@ public class LightTreeRenderer extends MainRenderer {
       framebuffer.createAttachment("meta", "RGBA32F", false);
    }
 
-   private RoutingFramebuffer createProposalFramebuffer() {
-      // 8 outputs (locations 0-7): position, normal, mapped_normal, albedo, motion, reservoir x3.
-      // Material is written by directFeatureExtract (same computation, runs before consumers need it).
+   private RoutingFramebuffer createProposalGeometryFramebuffer() {
       return this.createRoutingFramebuffer(
          () -> this.lightingStageBuffer.getWriteAttachment("position"),
          () -> this.lightingStageBuffer.getWriteAttachment("normal"),
          () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"),
          () -> this.lightingStageBuffer.getWriteAttachment("albedo"),
-         () -> this.motionVectorBuffer.getWriteAttachment("data"),
+         () -> this.motionVectorBuffer.getWriteAttachment("data")
+      );
+   }
+
+   private RoutingFramebuffer createProposalReservoirFramebuffer() {
+      return this.createDirectPackedRoutingFramebuffer(
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta")
@@ -958,10 +1027,15 @@ public class LightTreeRenderer extends MainRenderer {
       );
    }
 
-   private RoutingFramebuffer createShadeSamplesFramebuffer() {
+   private RoutingFramebuffer createShadeSamplesLightingFramebuffer() {
       return this.createRoutingFramebuffer(
          () -> this.lightingStageBuffer.getWriteAttachment("direct"),
-         () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"),
+         () -> this.lightingStageBuffer.getWriteAttachment("direct_specular")
+      );
+   }
+
+   private RoutingFramebuffer createShadeSamplesReservoirFramebuffer() {
+      return this.createDirectPackedRoutingFramebuffer(
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta")
@@ -996,13 +1070,30 @@ public class LightTreeRenderer extends MainRenderer {
       );
    }
 
-   @SafeVarargs
-   private final RoutingFramebuffer createRoutingFramebuffer(Supplier<TextureObject>... attachments) {
+   private RoutingFramebuffer createRoutingFramebuffer(Supplier<TextureObject>... attachments) {
       RoutingFramebuffer framebuffer = new RoutingFramebuffer();
       for (Supplier<TextureObject> attachment : attachments) {
          framebuffer.addAttachment(attachment);
       }
       return framebuffer;
+   }
+
+   @SafeVarargs
+   private final RoutingFramebuffer createDirectPackedRoutingFramebuffer(Supplier<TextureObject>... attachments) {
+      return this.createRoutingFramebuffer(this::getDirectPackedViewportWidth, attachments);
+   }
+
+   @SafeVarargs
+   private final RoutingFramebuffer createRoutingFramebuffer(IntSupplier viewportWidthSupplier, Supplier<TextureObject>... attachments) {
+      RoutingFramebuffer framebuffer = new RoutingFramebuffer(viewportWidthSupplier::getAsInt);
+      for (Supplier<TextureObject> attachment : attachments) {
+         framebuffer.addAttachment(attachment);
+      }
+      return framebuffer;
+   }
+
+   private int getDirectPackedViewportWidth() {
+      return Math.max(1, this.directReservoirBuffer.getWriteAttachment("data").getTextureDimensions()[0]);
    }
 
    private TextureObject getCurrentGeometryPositionTexture() {
@@ -1042,13 +1133,17 @@ public class LightTreeRenderer extends MainRenderer {
 
    private boolean shouldUseStageGeometry() {
       return this.isCurrentPhotonicsFragment(shadeSamplesFragment)
+         || this.isCurrentPhotonicsFragment("lighttree/reuse_resolve.fsh")
+         || this.isCurrentPhotonicsFragment(directAntiFireflyFragment)
          || this.isCurrentPhotonicsFragment(directHistoryFixFragment)
          || this.isCurrentPhotonicsFragment(directHistoryClampingFragment)
          || this.isCurrentPhotonicsFragment(directAtrousFragment)
          || this.isCurrentPhotonicsFragment(specTemporalFragment)
+         || this.isCurrentPhotonicsFragment(specAntiFireflyFragment)
          || this.isCurrentPhotonicsFragment(specHistoryFixFragment)
          || this.isCurrentPhotonicsFragment(specHistoryClampingFragment)
          || this.isCurrentPhotonicsFragment(specAtrousFragment)
+         || this.isCurrentPhotonicsFragment(indirectAccumulationFragment)
          // GI denoising runs before the accumulation pass copies the current frame
          // guides into lightingBuffer, so it must read the live stage geometry.
          || this.isCurrentPhotonicsFragment(indirectDenoisingFragment);
@@ -1057,12 +1152,14 @@ public class LightTreeRenderer extends MainRenderer {
    private boolean shouldUseCurrentDirectHistoryLength() {
       return this.isCurrentPhotonicsFragment(directTemporalFragment)
          || this.isCurrentPhotonicsFragment(directHistoryFixFragment)
+         || this.isCurrentPhotonicsFragment(directHistoryClampingFragment)
          || this.isCurrentPhotonicsFragment(directAtrousFragment);
    }
 
    private boolean shouldUseCurrentSpecHistoryLength() {
       return this.isCurrentPhotonicsFragment(specTemporalFragment)
          || this.isCurrentPhotonicsFragment(specHistoryFixFragment)
+         || this.isCurrentPhotonicsFragment(specHistoryClampingFragment)
          || this.isCurrentPhotonicsFragment(specAtrousFragment);
    }
 
@@ -1076,8 +1173,17 @@ public class LightTreeRenderer extends MainRenderer {
       return this.directDenoisedBuffer.getWriteAttachment("data");
    }
 
+   private boolean isFinalDirectAtrousIteration() {
+      return this.directAtrousIteration == this.directAtrousStepSizes.length - 1;
+   }
+
    private TextureObject getCurrentDirectAtrousOutputTexture() {
-      if (this.directAtrousIteration == this.directAtrousStepSizes.length - 1) {
+      boolean isFinalPass = this.isFinalDirectAtrousIteration();
+      boolean readsDenoisedBuffer = this.directAtrousIteration > 0 && (this.directAtrousIteration & 1) == 0;
+      if (isFinalPass && readsDenoisedBuffer) {
+         return this.directAtrousPingBuffer.getWriteAttachment("data");
+      }
+      if (isFinalPass) {
          return this.directDenoisedBuffer.getWriteAttachment("data");
       }
       if ((this.directAtrousIteration & 1) == 0) {
@@ -1096,8 +1202,17 @@ public class LightTreeRenderer extends MainRenderer {
       return this.specularDenoisedBuffer.getWriteAttachment("data");
    }
 
+   private boolean isFinalSpecAtrousIteration() {
+      return this.specAtrousIteration == this.directAtrousStepSizes.length - 1;
+   }
+
    private TextureObject getCurrentSpecAtrousOutputTexture() {
-      if (this.specAtrousIteration == this.directAtrousStepSizes.length - 1) {
+      boolean isFinalPass = this.isFinalSpecAtrousIteration();
+      boolean readsDenoisedBuffer = this.specAtrousIteration > 0 && (this.specAtrousIteration & 1) == 0;
+      if (isFinalPass && readsDenoisedBuffer) {
+         return this.specularAtrousPingBuffer.getWriteAttachment("data");
+      }
+      if (isFinalPass) {
          return this.specularDenoisedBuffer.getWriteAttachment("data");
       }
       if ((this.specAtrousIteration & 1) == 0) {
@@ -1171,6 +1286,7 @@ public class LightTreeRenderer extends MainRenderer {
       // Update PDF mipmap texture with current per-light power values
       float[] powers = lightRegistry.getLightPowers();
       if (powers.length > 0) {
+         this.regirComputeProgram.createPdfTexture(lightRegistry.lightCount());
          this.regirComputeProgram.updatePdfTexture(powers, lightRegistry.lightCount());
       }
 
@@ -1232,6 +1348,10 @@ public class LightTreeRenderer extends MainRenderer {
          this.indirectBoilingRenderer.renderAll();
       }
       if (this.indirectAccumulationRenderer != null) {
+         // RTXDI spatial GI resampling consumes the current frame's boiled temporal
+         // output and writes the final reservoir. With ping-pong attachments we need
+         // the same mid-frame flip as the direct path before accumulation samples it.
+         this.indirectReservoirBuffer.swap();
          this.indirectAccumulationRenderer.renderAll();
       }
       this.endGpuRegion(indirectAccumRegionIndex);
@@ -1271,6 +1391,9 @@ public class LightTreeRenderer extends MainRenderer {
       if (PhotonicsStorage.DEBUG_DISABLE_DENOISER.value) {
          return this.lightingStageBuffer.getWriteAttachment("direct");
       }
+      if (this.isFinalDirectAtrousIteration() && (this.directAtrousIteration & 1) == 0 && this.directAtrousIteration > 0) {
+         return this.directAtrousPingBuffer.getWriteAttachment("data");
+      }
       return this.directDenoisedBuffer.getWriteAttachment("data");
    }
 
@@ -1286,6 +1409,55 @@ public class LightTreeRenderer extends MainRenderer {
          return this.lightingBuffer.getWriteAttachment("indirect");
       }
       return this.indirectDenoisedBuffer.getWriteAttachment("data");
+   }
+
+   private TextureObject getCurrentDirectReservoirDataTexture() {
+      if (this.isCurrentPhotonicsFragment(shadeSamplesFragment)) {
+         return this.directReservoirBuffer.getReadAttachment("data");
+      }
+      return this.directReservoirBuffer.getWriteAttachment("data");
+   }
+
+   private TextureObject getCurrentDirectReservoirSampleTexture() {
+      if (this.isCurrentPhotonicsFragment(shadeSamplesFragment)) {
+         return this.directReservoirBuffer.getReadAttachment("sample");
+      }
+      return this.directReservoirBuffer.getWriteAttachment("sample");
+   }
+
+   private TextureObject getCurrentDirectReservoirMetaTexture() {
+      if (this.isCurrentPhotonicsFragment(shadeSamplesFragment)) {
+         return this.directReservoirBuffer.getReadAttachment("meta");
+      }
+      return this.directReservoirBuffer.getWriteAttachment("meta");
+   }
+
+   private TextureObject getCurrentIndirectReservoirPositionTexture() {
+      if (this.isCurrentPhotonicsFragment(indirectAccumulationFragment)) {
+         return this.indirectReservoirBuffer.getReadAttachment("position");
+      }
+      return this.indirectReservoirBuffer.getWriteAttachment("position");
+   }
+
+   private TextureObject getCurrentIndirectReservoirNormalTexture() {
+      if (this.isCurrentPhotonicsFragment(indirectAccumulationFragment)) {
+         return this.indirectReservoirBuffer.getReadAttachment("normal");
+      }
+      return this.indirectReservoirBuffer.getWriteAttachment("normal");
+   }
+
+   private TextureObject getCurrentIndirectReservoirRadianceTexture() {
+      if (this.isCurrentPhotonicsFragment(indirectAccumulationFragment)) {
+         return this.indirectReservoirBuffer.getReadAttachment("radiance");
+      }
+      return this.indirectReservoirBuffer.getWriteAttachment("radiance");
+   }
+
+   private TextureObject getCurrentIndirectReservoirMetaTexture() {
+      if (this.isCurrentPhotonicsFragment(indirectAccumulationFragment)) {
+         return this.indirectReservoirBuffer.getReadAttachment("meta");
+      }
+      return this.indirectReservoirBuffer.getWriteAttachment("meta");
    }
 
    private TextureObject getCompatDirectSoftTexture() {

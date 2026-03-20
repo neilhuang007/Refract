@@ -76,6 +76,22 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    private int restirVisibilityMaxAge = DEFAULT_RESTIR_VISIBILITY_MAX_AGE;
    @Unique
    private float restirVisibilityMaxDistance = DEFAULT_RESTIR_VISIBILITY_MAX_DISTANCE;
+   @Unique
+   private float restirTemporalBiasMode = DEFAULT_RESTIR_TEMPORAL_BIAS_MODE;
+   @Unique
+   private float restirTemporalPermutationSampling = DEFAULT_RESTIR_TEMPORAL_PERMUTATION_SAMPLING;
+   @Unique
+   private float restirTemporalVisibilityShortcut = DEFAULT_RESTIR_TEMPORAL_VISIBILITY_SHORTCUT;
+   @Unique
+   private float restirSpatialBiasMode = DEFAULT_RESTIR_SPATIAL_BIAS_MODE;
+   @Unique
+   private float restirSpatialDiscountNaive = DEFAULT_RESTIR_SPATIAL_DISCOUNT_NAIVE;
+   @Unique
+   private float restirSpatialMaterialTest = DEFAULT_RESTIR_SPATIAL_MATERIAL_TEST;
+   @Unique
+   private float restirSpatialBoostSamples = DEFAULT_RESTIR_SPATIAL_BOOST_SAMPLES;
+   @Unique
+   private float restirSpatialTargetHistory = DEFAULT_RESTIR_SPATIAL_TARGET_HISTORY;
 
    @Inject(
       method = "<init>(Ljava/lang/String;Lnet/irisshaders/iris/shaderpack/option/ShaderPackOptions;Ljava/lang/Iterable;)V",
@@ -134,6 +150,14 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
          case "photonics.restirSpatialNormalThreshold" -> photonics$parseFloat(key, value, e -> this.restirSpatialNormalThreshold = e);
          case "photonics.restirVisibilityMaxAge" -> photonics$parseUnsignedInt(key, value, e -> this.restirVisibilityMaxAge = e);
          case "photonics.restirVisibilityMaxDistance" -> photonics$parseFloat(key, value, e -> this.restirVisibilityMaxDistance = e);
+         case "photonics.restirTemporalBiasMode" -> photonics$parseFloat(key, value, e -> this.restirTemporalBiasMode = e);
+         case "photonics.restirTemporalPermutationSampling" -> photonics$parseFloat(key, value, e -> this.restirTemporalPermutationSampling = e);
+         case "photonics.restirTemporalVisibilityShortcut" -> photonics$parseFloat(key, value, e -> this.restirTemporalVisibilityShortcut = e);
+         case "photonics.restirSpatialBiasMode" -> photonics$parseFloat(key, value, e -> this.restirSpatialBiasMode = e);
+         case "photonics.restirSpatialDiscountNaive" -> photonics$parseFloat(key, value, e -> this.restirSpatialDiscountNaive = e);
+         case "photonics.restirSpatialMaterialTest" -> photonics$parseFloat(key, value, e -> this.restirSpatialMaterialTest = e);
+         case "photonics.restirSpatialBoostSamples" -> photonics$parseFloat(key, value, e -> this.restirSpatialBoostSamples = e);
+         case "photonics.restirSpatialTargetHistory" -> photonics$parseFloat(key, value, e -> this.restirSpatialTargetHistory = e);
       }
    }
 
@@ -276,6 +300,46 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Override
    public float getRestirVisibilityMaxDistance() {
       return this.restirVisibilityMaxDistance;
+   }
+
+   @Override
+   public float getRestirTemporalBiasMode() {
+      return this.restirTemporalBiasMode;
+   }
+
+   @Override
+   public float getRestirTemporalPermutationSampling() {
+      return this.restirTemporalPermutationSampling;
+   }
+
+   @Override
+   public float getRestirTemporalVisibilityShortcut() {
+      return this.restirTemporalVisibilityShortcut;
+   }
+
+   @Override
+   public float getRestirSpatialBiasMode() {
+      return this.restirSpatialBiasMode;
+   }
+
+   @Override
+   public float getRestirSpatialDiscountNaive() {
+      return this.restirSpatialDiscountNaive;
+   }
+
+   @Override
+   public float getRestirSpatialMaterialTest() {
+      return this.restirSpatialMaterialTest;
+   }
+
+   @Override
+   public float getRestirSpatialBoostSamples() {
+      return this.restirSpatialBoostSamples;
+   }
+
+   @Override
+   public float getRestirSpatialTargetHistory() {
+      return this.restirSpatialTargetHistory;
    }
 
    @Unique
