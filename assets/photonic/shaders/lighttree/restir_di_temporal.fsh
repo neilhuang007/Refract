@@ -69,17 +69,17 @@ void main() {
         return;
     }
 
-    if (!is_in_world()) {
+    ivec2 pixelPosition = lt_current_pixel_pos();
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
         RTXDI_StoreEmptyOutputs();
         return;
     }
 
-    load_fragment_variables(albedo, world_pos, block_normal, normal);
-    rt_pos = world_pos - world_offset;
-    bad_angle = is_bad_angle(world_pos, block_normal);
-
-    DirectSurface currentSurface = lt_current_surface();
-    ivec2 pixelPosition = lt_current_pixel_pos();
+    DirectSurface currentSurface = lt_load_surface(pixelPosition);
+    if (!lt_is_valid_surface(currentSurface)) {
+        RTXDI_StoreEmptyOutputs();
+        return;
+    }
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(uvec2(pixelPosition), uint(frameCounter), RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED);
 
     // Step 1: Load curSample from proposal buffer

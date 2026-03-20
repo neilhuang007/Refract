@@ -24,26 +24,21 @@ void RTXDI_ApplyPermutationSampling(inout ivec2 prevPixelPos, uint uniformRandom
 
 void main() {
     RTXDI_GIReservoirStore temporalStore = gi_make_invalid_reservoir_store();
-
-    if (!is_in_world()) {
+    DirectSurface currentSurface = lt_load_surface(tex_coord);
+    if (!lt_is_valid_surface(currentSurface)) {
         indirect_temporal_position_frag_out = temporalStore.positionData;
         indirect_temporal_normal_frag_out = temporalStore.normalData;
         indirect_temporal_radiance_frag_out = temporalStore.radianceData;
         indirect_temporal_meta_frag_out = temporalStore.metaData;
         return;
     }
-
-    load_fragment_variables(albedo, world_pos, block_normal, normal);
-    rt_pos = world_pos - world_offset;
-    bad_angle = is_bad_angle(world_pos, block_normal);
-
-    DirectSurface currentSurface = lt_current_surface();
     RTXDI_GIReservoir inputReservoir = RTXDI_LoadInitialGIReservoir(tex_coord);
     RTXDI_GIReservoir state = RTXDI_EmptyGIReservoir();
     float selectedTargetPdf = 0.0f;
     float temporalMaxHistory = gi_runtime_temporal_max_history();
     float temporalDepthThreshold = gi_runtime_temporal_depth_threshold();
     float temporalNormalThreshold = gi_runtime_temporal_normal_threshold();
+    float temporalMaxReservoirAge = gi_runtime_temporal_max_reservoir_age() * (0.5f + rand_next_float() * 0.5f);
     bool enableFallbackSampling = gi_runtime_enable_fallback_sampling();
     bool enablePermutationSampling = gi_runtime_enable_permutation_sampling();
     int biasCorrectionMode = gi_runtime_bias_correction_mode(ph_restir_temporal_bias_mode);
@@ -107,11 +102,8 @@ void main() {
             continue;
         }
 
-        ivec2 reservoirPos = idx;
-        if (activeCheckerboardField != 0) {
-            reservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
-        }
-        RTXDI_GIReservoir candidateReservoir = RTXDI_LoadPreviousGIReservoir(reservoirPos, activeCheckerboardField);
+        ivec2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
+        RTXDI_GIReservoir candidateReservoir = RTXDI_LoadPreviousGIReservoir(prevReservoirPos, activeCheckerboardField);
         if (!RTXDI_IsValidGIReservoir(candidateReservoir)) {
             continue;
         }
@@ -130,7 +122,7 @@ void main() {
             temporalReservoir.weight_sum *= jacobian;
             temporalReservoir.samples = min(temporalReservoir.samples, temporalMaxHistory);
             temporalReservoir.age += 1.0f;
-            if (temporalReservoir.age > gi_runtime_temporal_max_reservoir_age()) {
+            if (temporalReservoir.age > temporalMaxReservoirAge) {
                 foundTemporalReservoir = false;
             }
         }
@@ -145,7 +137,7 @@ void main() {
         }
     }
 
-    if (foundTemporalReservoir) {
+    if (biasCorrectionMode >= gi_bias_correction_mode_basic && foundTemporalReservoir) {
         float pi = selectedTargetPdf;
         float piSum = selectedTargetPdf * inputReservoir.samples;
         float temporalP = RAB_GetGISampleTargetPdfForSurface(temporalSurface, state.selected);

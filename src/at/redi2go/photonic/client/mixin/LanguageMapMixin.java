@@ -1,7 +1,6 @@
 package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.Raytracer;
-import at.redi2go.photonic.client.ShaderPackPath;
 import at.redi2go.photonic.client.rendering.patching.Patch;
 import com.llamalad7.mixinextras.sugar.Local;
 import java.io.IOException;
@@ -20,7 +19,7 @@ public class LanguageMapMixin {
    public void loadProperties(Properties instance, Reader reader, @Local(argsOnly = true) Path path) throws IOException {
       Patch patch = Raytracer.getAppliedPatch();
       if (patch != null) {
-         String patchedFile = patch.readPatchedFile(new ShaderPackPath(path));
+         String patchedFile = patch.readPatchedFile(path);
          if (patchedFile != null) {
             instance.load(new StringReader(patchedFile));
             return;

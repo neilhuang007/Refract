@@ -49,7 +49,7 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
    @Unique
    private int lightTreeAccumulationFrames = DEFAULT_LIGHTTREE_ACCUMULATION_FRAMES;
    @Unique
-   private OptionalBoolean lightTreeSoftShadows = OptionalBoolean.DEFAULT;
+   private OptionalBoolean lightTreeSoftShadows = OptionalBoolean.FALSE;
    @Unique
    private int denoiserPasses = DEFAULT_LIGHTTREE_DENOISER_PASSES;
    @Unique

@@ -11,11 +11,23 @@ layout(location = 5) out vec4 direct_frag_out;
 layout(location = 6) out vec4 direct_soft_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/nrd_material_id.glsl"
+#include "/photonics/lighttree/nrd_common.glsl"
 
 // Samplers NOT already declared in lighttree/samplers.glsl — declare only the extras here
 
 // Debug: when enabled, light_reload is ignored and temporal history is never wiped
 uniform float ph_debug_disable_temporal_reset;
+uniform float ph_restir_enable_denoiser_packing;
+
+vec4 lt_extract_accumulation_material(vec2 uv) {
+    vec4 spec = texture(specular, uv);
+    float smoothness = clamp(spec.r, 0.0, 1.0);
+    float roughness = clamp(1.0 - smoothness, 0.0, 1.0);
+    float metallic = clamp(spec.g, 0.0, 1.0);
+    float emission = clamp(spec.a, 0.0, 1.0);
+    return vec4(roughness, metallic, emission, nrd_encode_material_id(nrd_derive_material_id(spec)));
+}
 
 bool is_valid_reprojection(ivec2 prevUv, ivec2 textureBounds) {
     bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
@@ -42,6 +54,58 @@ vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
     return any(isnan(prevSoft)) ? vec4(0.0f) : prevSoft;
 }
 
+bool lt_is_active_checkerboard_pixel(ivec2 pixelPosition, int activeCheckerboardField) {
+    if (activeCheckerboardField == 0) {
+        return true;
+    }
+
+    return ((pixelPosition.x + pixelPosition.y) & 1) == (activeCheckerboardField & 1);
+}
+
+ivec2 lt_other_checkerboard_pixel(ivec2 pixelPosition, int activeCheckerboardField) {
+    ivec2 otherFieldPixelPosition = pixelPosition;
+    otherFieldPixelPosition.x += ((activeCheckerboardField == 1) == ((pixelPosition.y & 1) != 0)) ? 1 : -1;
+    return otherFieldPixelPosition;
+}
+
+vec4 lt_load_stage_direct_lobe(sampler2D stageTexture, ivec2 pixelPosition, int activeCheckerboardField) {
+    if (ph_restir_enable_denoiser_packing >= 0.5f
+        || activeCheckerboardField == 0
+        || lt_is_active_checkerboard_pixel(pixelPosition, activeCheckerboardField)) {
+        return texelFetch(stageTexture, pixelPosition, 0);
+    }
+
+    ivec2 otherFieldPixelPosition = lt_other_checkerboard_pixel(pixelPosition, activeCheckerboardField);
+    ivec2 textureBounds = textureSize(stageTexture, 0);
+    if (any(lessThan(otherFieldPixelPosition, ivec2(0))) || any(greaterThanEqual(otherFieldPixelPosition, textureBounds))) {
+        return vec4(0.0f);
+    }
+
+    return texelFetch(stageTexture, otherFieldPixelPosition, 0);
+}
+
+vec3 lt_safe_normalize(vec3 value, vec3 fallbackValue) {
+    float valueLengthSq = dot(value, value);
+    if (valueLengthSq > 1e-6f) {
+        return value * inversesqrt(valueLengthSq);
+    }
+
+    float fallbackLengthSq = dot(fallbackValue, fallbackValue);
+    if (fallbackLengthSq > 1e-6f) {
+        return fallbackValue * inversesqrt(fallbackLengthSq);
+    }
+
+    return vec3(0.0f, 1.0f, 0.0f);
+}
+
+vec3 lt_unpack_stage_direct_radiance(vec4 encodedSignal, vec3 remodulationFactor) {
+    if (ph_restir_enable_denoiser_packing < 0.5f) {
+        return encodedSignal.rgb;
+    }
+
+    return nrd_safe_remodulate(nrd_unpack_direct_signal(encodedSignal).radiance, remodulationFactor);
+}
+
 void main() {
     if (!is_in_world()) {
         position_frag_out = vec4(0.0f);
@@ -58,16 +122,30 @@ void main() {
     vec4 stageNormal = texelFetch(stage_radiosity_normal, tex_coord, 0);
     vec4 stageMappedNormal = texelFetch(stage_radiosity_mapped_normal, tex_coord, 0);
     vec4 stageAlbedo = texelFetch(stage_radiosity_albedo, tex_coord, 0);
-    vec4 stageMaterial = texelFetch(stage_radiosity_material, tex_coord, 0);
-    vec4 directDiffuse = texelFetch(stage_radiosity_direct, tex_coord, 0);
-    vec4 directSpecular = texelFetch(stage_radiosity_direct_specular, tex_coord, 0);
+    vec2 uv = (vec2(tex_coord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
+    vec4 stageMaterial = lt_extract_accumulation_material(uv);
+    int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
+    vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord, activeCheckerboardField);
+    vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord, activeCheckerboardField);
     vec4 prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
+    vec3 N = lt_safe_normalize(stageMappedNormal.xyz, stageNormal.xyz);
+    vec3 V = lt_safe_normalize(world_camera_position - stagePosition.xyz, N);
+    float roughness = clamp(stageMaterial.x, 0.0, 1.0);
+    float metallic = clamp(stageMaterial.y, 0.0, 1.0);
+    vec3 Rf0 = mix(vec3(0.04), clamp(stageAlbedo.rgb, vec3(0.0), vec3(1.0)), metallic);
+    vec3 diffDemod;
+    vec3 specDemod;
+    nrd_material_factors(N, V, stageAlbedo.rgb, Rf0, roughness, diffDemod, specDemod);
+    vec3 directCombined =
+        lt_unpack_stage_direct_radiance(directDiffuse, diffDemod) +
+        lt_unpack_stage_direct_radiance(directSpecular, specDemod);
+    float directHitDistance = max(directDiffuse.a, directSpecular.a);
 
     position_frag_out = stagePosition;
     normal_frag_out = stageNormal;
     mapped_normal_frag_out = stageMappedNormal;
     albedo_frag_out = stageAlbedo;
     material_frag_out = stageMaterial;
-    direct_frag_out = directDiffuse + directSpecular;
-    direct_soft_frag_out = vec4(prevSoft.rgb + directDiffuse.rgb + directSpecular.rgb, prevSoft.a + 1.0f);
+    direct_frag_out = vec4(directCombined, directHitDistance);
+    direct_soft_frag_out = vec4(prevSoft.rgb + directCombined, prevSoft.a + 1.0f);
 }

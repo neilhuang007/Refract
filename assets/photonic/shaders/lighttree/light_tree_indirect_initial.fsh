@@ -12,7 +12,8 @@ layout(location = 3) out vec4 indirect_initial_meta_frag_out;
 
 void main() {
     RTXDI_GIReservoirStore initialStore = gi_make_invalid_reservoir_store();
-    if (!is_in_world()) {
+    DirectSurface currentSurface = lt_load_surface(tex_coord);
+    if (!lt_is_valid_surface(currentSurface)) {
         indirect_initial_position_frag_out = initialStore.positionData;
         indirect_initial_normal_frag_out = initialStore.normalData;
         indirect_initial_radiance_frag_out = initialStore.radianceData;
@@ -20,11 +21,7 @@ void main() {
         return;
     }
 
-    load_fragment_variables(albedo, world_pos, block_normal, normal);
-    rt_pos = world_pos - world_offset;
-    bad_angle = is_bad_angle(world_pos, block_normal);
-
-    RTXDI_GIReservoir reservoir = gi_build_initial_reservoir(lt_current_surface());
+    RTXDI_GIReservoir reservoir = gi_build_initial_reservoir(currentSurface);
     initialStore = gi_make_reservoir_store(reservoir);
     indirect_initial_position_frag_out = initialStore.positionData;
     indirect_initial_normal_frag_out = initialStore.normalData;

@@ -97,14 +97,20 @@ uniform float ph_restir_spatial_radius;            // RTXDI: samplingRadius (def
 // RTXDI: params.activeCheckerboardField (0 = off, 1/2 = alternating fields).
 // SDK default (ReSTIRDI.cpp UpdateCheckerboardField): 0 (off) for CheckerboardMode::Off.
 // Shared across temporal and spatial passes — declared here so reuse_resolve.fsh can read it.
+#ifndef PH_RESTIR_CHECKERBOARD_DECLARED
+#define PH_RESTIR_CHECKERBOARD_DECLARED
 uniform int ph_restir_active_checkerboard_field;
+#endif
 uniform float ph_restir_spatial_depth_threshold;   // RTXDI: spatial depthThreshold (default 0.1)
 uniform float ph_restir_spatial_normal_threshold;  // RTXDI: spatial normalThreshold (default 0.5)
 
 // Initial sampling parameters — matches RTXDI_DIInitialSamplingParameters (ReSTIRDIParameters.h lines 69-85).
 // When 0.0 (unbound), fall back to compile-time macro values.
 uniform float ph_restir_initial_num_local_samples;       // RTXDI: numLocalLightSamples
-uniform float ph_restir_initial_num_environment_samples; // RTXDI: numEnvironmentSamples (SDK default 1, ReSTIRDI.cpp line 41)
+// RTXDI: numEnvironmentSamples (SDK default 1, ReSTIRDI.cpp line 41).
+// This port uses a negative sentinel to explicitly disable the technique when the
+// environment-light path is not implemented. 0.0 remains "use SDK default".
+uniform float ph_restir_initial_num_environment_samples;
 uniform float ph_restir_initial_num_brdf_samples;        // RTXDI: numBrdfSamples; SDK default=1. -1.0=disable, 0.0(unbound)=SDK default(1), >0=explicit count
 uniform float ph_restir_initial_enable_visibility;  // RTXDI: enableInitialVisibility; SDK default true. Sentinel: -1.0=disabled, 0.0(unbound)=enabled, 1.0=enabled
 uniform float ph_restir_initial_brdf_cutoff;        // RTXDI: brdfCutoff (MIS cutoff for BRDF-length shortening)
@@ -306,7 +312,7 @@ vec4 lt_extract_material_at_uv(vec2 uv) {
     float roughness = clamp(1.0f - smoothness, 0.0f, 1.0f);
     float metallic = clamp(spec.g, 0.0f, 1.0f);
     float emission = clamp(spec.a, 0.0f, 1.0f);
-    return vec4(roughness, metallic, emission, nrd_encode_material_id(NRD_MATERIAL_ID_DISABLED));
+    return vec4(roughness, metallic, emission, nrd_encode_material_id(nrd_derive_material_id(spec)));
 }
 
 DirectSurface lt_make_surface(vec3 worldPosValue, vec3 geometryNormalValue, vec3 shadingNormalValue, vec3 albedoValue, vec4 materialValue) {
@@ -435,7 +441,7 @@ bool RTXDI_IsValidTemporalNeighbor(
 }
 
 vec3 lt_surface_ray_origin(vec3 samplePos, vec3 geometryNormal) {
-    return samplePos + geometryNormal * 0.02f;
+    return samplePos + geometryNormal * 0.001f;
 }
 
 struct LightSample {
@@ -444,14 +450,16 @@ struct LightSample {
     vec3 sample_pos;
     vec3 color;
     vec3 dir;
+    float solidAnglePdf;
     float weight;
 };
 
 LightSample lt_null_sample() {
-    return LightSample(-1, vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f), 0.0f);
+    return LightSample(-1, vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f), 0.0f, 0.0f);
 }
 
 const float lt_pi = 3.14159265359f;
+const float lt_min_roughness = 0.03f;
 
 struct LightBrdf {
     float demodulatedDiffuse;
@@ -463,12 +471,36 @@ vec3 lt_surface_f0(DirectSurface surface) {
     return mix(vec3(0.04f), clamp(surface.albedo, vec3(0.0f), vec3(1.0f)), metallic);
 }
 
+vec3 lt_fresnel_schlick(float cosTheta, vec3 f0);
+
+float lt_surface_diffuse_probability_with_view(DirectSurface surface, vec3 viewDir) {
+    float viewLengthSq = dot(viewDir, viewDir);
+    if (viewLengthSq <= 1e-6f) {
+        return 1.0f;
+    }
+
+    vec3 V = viewDir * inversesqrt(viewLengthSq);
+    float diffuseWeight = ph_luminance(clamp(surface.albedo, vec3(0.0f), vec3(1.0f)));
+    float specularWeight = ph_luminance(
+        lt_fresnel_schlick(
+            clamp(dot(V, surface.shadingNormal), 0.0f, 1.0f),
+            lt_surface_f0(surface)
+        )
+    );
+    float sumWeights = diffuseWeight + specularWeight;
+    return sumWeights < 1e-7f ? 1.0f : diffuseWeight / sumWeights;
+}
+
+float lt_surface_diffuse_probability(DirectSurface surface) {
+    return lt_surface_diffuse_probability_with_view(surface, rt_camera_position - surface.rtPos);
+}
+
 vec3 lt_fresnel_schlick(float cosTheta, vec3 f0) {
     return f0 + (vec3(1.0f) - f0) * pow(1.0f - clamp(cosTheta, 0.0f, 1.0f), 5.0f);
 }
 
 float lt_distribution_ggx(float nDotH, float roughness) {
-    float clampedRoughness = max(roughness, 0.03f);
+    float clampedRoughness = max(roughness, lt_min_roughness);
     float a = clampedRoughness * clampedRoughness;  // α = roughness²
     float a2 = a * a;                                // α² = roughness⁴
     float denom = nDotH * nDotH * (a2 - 1.0f) + 1.0f;
@@ -476,7 +508,7 @@ float lt_distribution_ggx(float nDotH, float roughness) {
 }
 
 float lt_geometry_schlick_ggx(float nDotX, float roughness) {
-    float a = max(roughness, 0.03f) * max(roughness, 0.03f);  // α = roughness², clamped
+    float a = max(roughness, lt_min_roughness) * max(roughness, lt_min_roughness);  // α = roughness², clamped
     float k = a * 0.5f;                                        // k = α/2 (analytic Smith-GGX)
     return nDotX / max(nDotX * (1.0f - k) + k, 1e-6f);
 }
@@ -488,32 +520,36 @@ float lt_geometry_smith(float nDotV, float nDotL, float roughness) {
 LightBrdf lt_evaluate_surface_brdf_with_view(DirectSurface surface, vec3 lightDir, vec3 viewDir) {
     LightBrdf brdf = LightBrdf(0.0f, vec3(0.0f));
 
+    float lightLengthSq = dot(lightDir, lightDir);
+    if (lightLengthSq <= 1e-6f) {
+        return brdf;
+    }
+    lightDir *= inversesqrt(lightLengthSq);
+
     float nDotL = max(dot(surface.shadingNormal, lightDir), 0.0f);
     if (nDotL <= 0.0f) {
         return brdf;
     }
-
     float viewLengthSq = dot(viewDir, viewDir);
     if (viewLengthSq <= 1e-6f) {
         return brdf;
     }
     viewDir *= inversesqrt(viewLengthSq);
 
+    brdf.demodulatedDiffuse = nDotL / lt_pi;
+
     float nDotV = max(dot(surface.shadingNormal, viewDir), 0.0f);
-    if (nDotV <= 0.0f) {
-        return brdf;
+    float roughness = clamp(surface.material.x, 0.0f, 1.0f);
+    if (roughness >= lt_min_roughness && nDotV > 0.0f) {
+        vec3 halfVector = normalize(viewDir + lightDir);
+        float nDotH = max(dot(surface.shadingNormal, halfVector), 0.0f);
+        float vDotH = max(dot(viewDir, halfVector), 0.0f);
+        vec3 fresnel = lt_fresnel_schlick(vDotH, lt_surface_f0(surface));
+        float distribution = lt_distribution_ggx(nDotH, roughness);
+        float geometry = lt_geometry_smith(nDotV, nDotL, roughness);
+        brdf.specular = distribution * geometry * fresnel / max(4.0f * nDotV, 1e-4f);
     }
 
-    vec3 halfVector = normalize(viewDir + lightDir);
-    float nDotH = max(dot(surface.shadingNormal, halfVector), 0.0f);
-    float vDotH = max(dot(viewDir, halfVector), 0.0f);
-    float roughness = clamp(surface.material.x, 0.03f, 1.0f);
-    vec3 fresnel = lt_fresnel_schlick(vDotH, lt_surface_f0(surface));
-    float distribution = lt_distribution_ggx(nDotH, roughness);
-    float geometry = lt_geometry_smith(nDotV, nDotL, roughness);
-
-    brdf.demodulatedDiffuse = nDotL / lt_pi;
-    brdf.specular = distribution * geometry * fresnel / max(4.0f * nDotV, 1e-4f);
     return brdf;
 }
 
@@ -521,17 +557,35 @@ LightBrdf lt_evaluate_surface_brdf(DirectSurface surface, vec3 lightDir) {
     return lt_evaluate_surface_brdf_with_view(surface, lightDir, rt_camera_position - surface.rtPos);
 }
 
+vec3 lt_light_sample_radiance(Light light, vec3 toLight) {
+    float lightDistanceSq = dot(toLight, toLight);
+    if (lightDistanceSq <= 1e-6f) {
+        return vec3(0.0f);
+    }
+
+    vec3 lightDir = toLight * inversesqrt(lightDistanceSq);
+    vec3 resultColor = light.color * light.intensity / dot(vec2(1.0f, lightDistanceSq * light.falloff), light.attenuation);
+
+    if (light.orientationSpread < lt_pi) {
+        float axisAngle = acos(clamp(dot(light.emissionAxis, -lightDir), -1.0f, 1.0f));
+        resultColor *= max(cos(max(axisAngle - light.orientationSpread, 0.0f)), 0.0f);
+    }
+
+    return resultColor;
+}
+
 vec3 lt_light_sample_incident_radiance(DirectSurface surface, LightSample smple) {
     if (smple.index < 0 || ph_luminance(smple.color) <= 1e-6f) {
         return vec3(0.0f);
     }
 
-    float nDotL = max(dot(surface.shadingNormal, smple.dir), 0.0f);
-    if (nDotL <= 0.0f) {
-        return vec3(0.0f);
-    }
+    return smple.color;
+}
 
-    return smple.color / max(nDotL, 1e-4f);
+float lt_light_sample_solid_angle_pdf(DirectSurface surface, vec3 lightPosition) {
+    // RTXDI reference point lights are analytic and report solidAnglePdf = 1.
+    // The Minecraft local-light bridge follows that exact point-light contract.
+    return 1.0f;
 }
 
 vec3 lt_surface_reflected_radiance_with_view(DirectSurface surface, LightSample smple, vec3 viewDir) {
@@ -549,15 +603,15 @@ vec3 lt_surface_reflected_radiance(DirectSurface surface, LightSample smple) {
 }
 
 float lt_surface_target_pdf(DirectSurface surface, LightSample smple) {
-    if (smple.index < 0) {
+    if (smple.index < 0 || smple.solidAnglePdf <= 0.0f) {
         return 0.0f;
     }
 
-    return ph_luminance(max(lt_surface_reflected_radiance(surface, smple), vec3(0.0f)));
+    return ph_luminance(max(lt_surface_reflected_radiance(surface, smple), vec3(0.0f))) / smple.solidAnglePdf;
 }
 
 float lt_surface_target_pdf_with_view(DirectSurface surface, LightSample smple, vec3 viewPos) {
-    if (smple.index < 0) {
+    if (smple.index < 0 || smple.solidAnglePdf <= 0.0f) {
         return 0.0f;
     }
 
@@ -567,7 +621,7 @@ float lt_surface_target_pdf_with_view(DirectSurface surface, LightSample smple, 
     }
 
     LightBrdf brdf = lt_evaluate_surface_brdf_with_view(surface, smple.dir, viewPos - surface.rtPos);
-    return ph_luminance(max(incidentRadiance * (brdf.demodulatedDiffuse * surface.albedo + brdf.specular), vec3(0.0f)));
+    return ph_luminance(max(incidentRadiance * (brdf.demodulatedDiffuse * surface.albedo + brdf.specular), vec3(0.0f))) / smple.solidAnglePdf;
 }
 
 vec3 lt_shade_surface_light_sample(DirectSurface surface, LightSample smple) {
@@ -607,7 +661,7 @@ void light_sample_compute_weight(inout LightSample smple, DirectSurface surface)
 
 LightSample light_sample_new_at_position(Light light, vec3 lightPosition, DirectSurface surface) {
     vec3 origin = lt_surface_ray_origin(surface.rtPos, surface.geometryNormal);
-    vec3 toLight = lightPosition - origin;
+    vec3 toLight = lightPosition - surface.rtPos;
     float lightDistanceSq = dot(toLight, toLight);
     if (lightDistanceSq <= 1e-6f) {
         return lt_null_sample();
@@ -619,17 +673,11 @@ LightSample light_sample_new_at_position(Light light, vec3 lightPosition, Direct
         origin,
         vec3(0.0f),
         toLight * inversesqrt(lightDistanceSq),
+        lt_light_sample_solid_angle_pdf(surface, lightPosition),
         0.0f
     );
 
-    result.color = ph_compute_attenuation(
-        light,
-        toLight,
-        origin,
-        lightPosition,
-        surface.geometryNormal,
-        surface.shadingNormal
-    );
+    result.color = lt_light_sample_radiance(light, toLight);
 
     if (ph_luminance(result.color) <= 1e-6f) {
         return lt_null_sample();
@@ -644,36 +692,13 @@ LightSample light_sample_new_at(Light light, DirectSurface surface) {
 }
 
 vec3 lt_sample_light_position_from_uv(Light light, vec2 sampleUv, vec3 shadowRayOrigin) {
-#ifdef PH_LIGHTTREE_SOFT_SHADOWS
-    float radius = max(ph_light_jitter_radius, 0.0f);
-    if (radius <= 1e-6f) {
-        return light.position;
-    }
-
-    float angle = sampleUv.x * (2.0f * lt_pi);
-    float radial = sqrt(clamp(sampleUv.y, 0.0f, 1.0f)) * radius;
-    vec2 disk = vec2(cos(angle), sin(angle)) * radial;
-    return light.position + vec3(disk.x, 0.0f, disk.y);
-#else
+    // RTXDI point lights ignore UVs during sampling.
     return light.position;
-#endif
 }
 
 vec2 lt_encode_light_sample_uv(Light light, vec3 lightPosition) {
-#ifdef PH_LIGHTTREE_SOFT_SHADOWS
-    float radius = max(ph_light_jitter_radius, 0.0f);
-    if (radius <= 1e-6f) {
-        return vec2(0.0f);
-    }
-
-    vec2 disk = (lightPosition - light.position).xz;
-    float normalizedRadius = clamp(length(disk) / radius, 0.0f, 1.0f);
-    float angle = atan(disk.y, disk.x);
-    float normalizedAngle = fract((angle / (2.0f * lt_pi)) + 1.0f);
-    return vec2(normalizedAngle, normalizedRadius * normalizedRadius);
-#else
+    // RTXDI point lights do not carry a sampled-light UV.
     return vec2(0.0f);
-#endif
 }
 
 vec3 lt_sample_light_position(Light light, vec3 shadowRayOrigin) {
@@ -681,19 +706,12 @@ vec3 lt_sample_light_position(Light light, vec3 shadowRayOrigin) {
 }
 
 float lt_light_sample_source_pdf() {
-#ifdef PH_LIGHTTREE_SOFT_SHADOWS
-    return 1.0f / max(lt_pi * ph_light_jitter_radius * ph_light_jitter_radius, 1e-6f);
-#else
     return 1.0f;
-#endif
 }
 
 bool rtxdi_is_analytic_light_sample(LightSample lightSample) {
-#ifdef PH_LIGHTTREE_SOFT_SHADOWS
-    return ph_light_jitter_radius <= 1e-6f;
-#else
+    // All bridged Minecraft local lights map to RTXDI analytic point lights.
     return lightSample.index >= 0;
-#endif
 }
 
 LightSample light_sample_random_at(Light light, DirectSurface surface) {
@@ -748,48 +766,59 @@ float light_sample_target_pdf_at_surface_with_view(int lightIndex, DirectSurface
     return lt_surface_target_pdf_with_view(surface, smple, viewPos);
 }
 
-float light_sample_trace_hit_surface(inout LightSample smple, bool jitter, DirectSurface surface) {
+bool lt_ray_reached_target_cell(vec3 targetPosition) {
+    ivec3 targetCell = ivec3(floor(targetPosition));
+    ivec3 hitCell = ivec3(floor(ray.result_position));
+    return ray.result_hit && all(equal(hitCell, targetCell));
+}
+
+float light_sample_trace_hit_surface_with_offset(inout LightSample smple, bool jitter, DirectSurface surface, float rayOffset) {
     if (smple.index < 0) {
         return 0.0f;
     }
 
     Light light = load_light(smple.index);
     vec3 targetPosition = smple.position;
-    if (distance(targetPosition, light.position) <= 1e-5f && jitter) {
-        ray.origin = smple.sample_pos;
-        jitter_sample_position(targetPosition);
-    }
 
-    vec3 toLight = targetPosition - smple.sample_pos;
-    float lightDistance = length(toLight);
-    if (lightDistance <= 1e-5f) {
+    vec3 rayOrigin = surface.rtPos + surface.geometryNormal * rayOffset;
+    smple.sample_pos = rayOrigin;
+
+    vec3 shadowToLight = targetPosition - smple.sample_pos;
+    float shadowDistance = length(shadowToLight);
+    if (shadowDistance <= 1e-5f) {
         smple = lt_null_sample();
         return 0.0f;
     }
 
     smple.position = targetPosition;
-    smple.dir = toLight / lightDistance;
 
     ray.origin = smple.sample_pos;
-    ray.direction = smple.dir;
+    ray.direction = shadowToLight / shadowDistance;
     ray_target = ivec3(smple.position);
     trace_ray(ray, true);
 
-    if (!ray.result_hit) {
+    if (!lt_ray_reached_target_cell(smple.position)) {
         smple.color = vec3(0.0f);
         return 0.0f;
     }
 
-    smple.color = ph_compute_attenuation(
-        light,
-        toLight,
-        smple.sample_pos,
-        smple.position,
-        surface.geometryNormal,
-        surface.shadingNormal
-    );
+    vec3 surfaceToLight = targetPosition - surface.rtPos;
+    float lightDistanceSq = dot(surfaceToLight, surfaceToLight);
+    if (lightDistanceSq <= 1e-6f) {
+        smple = lt_null_sample();
+        return 0.0f;
+    }
+
+    smple.dir = surfaceToLight * inversesqrt(lightDistanceSq);
+    smple.solidAnglePdf = lt_light_sample_solid_angle_pdf(surface, targetPosition);
+    smple.color = lt_light_sample_radiance(light, surfaceToLight);
     light_sample_compute_weight(smple, surface);
-    return lightDistance;
+    return sqrt(lightDistanceSq);
+}
+
+float light_sample_trace_hit_surface(inout LightSample smple, bool jitter, DirectSurface surface) {
+    // Conservative visibility paths match RTXDI RAB_GetConservativeVisibility's 0.001 offset.
+    return light_sample_trace_hit_surface_with_offset(smple, jitter, surface, 0.001f);
 }
 
 float light_sample_trace_hit_at(inout LightSample smple, bool jitter, vec3 geometryNormal, vec3 shadingNormal) {
@@ -938,7 +967,7 @@ LightSample light_sample_decode_at(float value, vec2 sampleUv, DirectSurface sur
     replayReservoir.weightSum = 0.0;
     replayReservoir.targetPdf = 0.0;
     replayReservoir.M = 0.0;
-    replayReservoir.visibility = vec3(-1.0);
+    replayReservoir.visibility = vec3(0.0);
     replayReservoir.age = 0.0;
     replayReservoir.spatialDistance = vec2(0.0);
     replayReservoir.canonicalWeight = 0.0;
@@ -1010,7 +1039,7 @@ Reservoir RTXDI_EmptyDIReservoir() {
     r.weightSum = 0.0;
     r.targetPdf = 0.0;
     r.M = 0.0;
-    r.visibility = vec3(-1.0);  // uninitialized marker
+    r.visibility = vec3(0.0);
     r.age = 0.0;
     r.spatialDistance = vec2(0.0);
     r.canonicalWeight = 0.0;
@@ -1050,7 +1079,7 @@ bool lt_is_valid_surface(DirectSurface surface) {
 }
 
 void rtxdi_reset_visibility(inout Reservoir reservoir) {
-    reservoir.visibility = vec3(-1.0f);
+    reservoir.visibility = vec3(0.0f);
     reservoir.age = 0.0f;
     reservoir.spatialDistance = vec2(0.0f);
 }
@@ -1073,16 +1102,14 @@ bool rtxdi_has_reusable_visibility(Reservoir reservoir) {
     //   finalVisibilityMaxDistance = 16  (ReSTIRDI.cpp line 115)
     float maxAge      = (ph_restir_visibility_max_age      > 0.0f) ? ph_restir_visibility_max_age      : lt_visibility_reuse_max_age;
     float maxDistance = (ph_restir_visibility_max_distance > 0.0f) ? ph_restir_visibility_max_distance : lt_visibility_reuse_max_distance;
-    return any(greaterThan(reservoir.visibility, vec3(-0.5f)))
-        && reservoir.age > 0.0f
+    return reservoir.age > 0.0f
         && reservoir.age <= maxAge
         && length(reservoir.spatialDistance) < maxDistance;
 }
 
-// Returns the stored RGB visibility. Uninitialized (sentinel -1) is treated as fully visible
-// so that reservoirs without a traced visibility ray are not incorrectly discarded.
+// Returns the stored RGB visibility exactly as packed in the reservoir.
 vec3 rtxdi_get_visibility(Reservoir reservoir) {
-    return (reservoir.visibility.x < -0.5f) ? vec3(1.0f) : clamp(reservoir.visibility, vec3(0.0f), vec3(1.0f));
+    return clamp(reservoir.visibility, vec3(0.0f), vec3(1.0f));
 }
 
 // Scalar visibility test — true when at least one channel exceeds 0 via luminance.
@@ -1129,11 +1156,7 @@ void rtxdi_inherit_visibility(
     reservoir.age = sourceReservoir.age;
     reservoir.spatialDistance = sourceReservoir.spatialDistance;
 
-    if (!any(greaterThan(sourceReservoir.visibility, vec3(-0.5f)))) {
-        return;
-    }
-
-    reservoir.age = min(sourceReservoir.age + 1.0f, ph_restir_visibility_max_age);
+    reservoir.age = sourceReservoir.age + 1.0f;
     if (temporalReuse) {
         reservoir.spatialDistance = vec2(0.0f);
     } else {
@@ -1155,6 +1178,9 @@ bool RTXDI_StreamSample(inout Reservoir reservoir, int lightIndex, vec2 sampleUv
         reservoir.hasCompactLightData = false;
         reservoir.compactLightBufferPtr = 0u;
         reservoir.targetPdf = targetPdf;
+        reservoir.visibility = vec3(0.0);
+        reservoir.age = 0.0;
+        reservoir.spatialDistance = vec2(0.0);
     }
     return selectSample;
 }
@@ -1514,6 +1540,8 @@ void rtxdi_unpack_reservoir_at_surface(inout Reservoir reservoir, vec4 color, ve
 
     reservoir.lightData = lightData;
     reservoir.uvData = floatBitsToUint(sampleData.x);
+    reservoir.hasCompactLightData = false;
+    reservoir.compactLightBufferPtr = 0u;
     reservoir.weightSum = color.y;
     reservoir.targetPdf = color.z;
     uint packedVisibilityAndM = floatBitsToUint(color.w);
@@ -1523,11 +1551,7 @@ void rtxdi_unpack_reservoir_at_surface(inout Reservoir reservoir, vec4 color, ve
     // packedVisibility lives in color.w with M, matching RTXDI_PackedDIReservoir::mVisibility.
     uint packedDistanceAge = floatBitsToUint(meta.w);
     reservoir.visibility = rtxdi_unpack_visibility(packedVisibilityAndM & RTXDI_PackedDIReservoir_VisibilityMask);
-    reservoir.age = float((packedDistanceAge >> 16) & 0xFFu);
-    reservoir.spatialDistance = vec2(
-        float(int((packedDistanceAge << 24u) >> 24u)),
-        float(int((packedDistanceAge << 16u) >> 24u))
-    );
+    rtxdi_unpack_age_distance(packedDistanceAge, reservoir.age, reservoir.spatialDistance);
     reservoir.canonicalWeight = 0.0f;
 
     // RTXDI_UnpackDIReservoir sanitization (ReservoirStorage.hlsli lines 88-91):
@@ -1615,7 +1639,7 @@ float lt_evaluate_ggx_vndf_pdf(DirectSurface surface, vec3 lightDir, vec3 viewDi
     vec3 H = normalize(viewDir + lightDir);
     float nDotH = max(dot(N, H), 0.0);
 
-    float roughness = clamp(surface.material.x, 0.03, 1.0);
+    float roughness = clamp(surface.material.x, lt_min_roughness, 1.0);
     float D = lt_distribution_ggx(nDotH, roughness);
 
     // G1(V) -- Smith-GGX masking, matching lt_geometry_schlick_ggx
@@ -1627,11 +1651,64 @@ float lt_evaluate_ggx_vndf_pdf(DirectSurface surface, vec3 lightDir, vec3 viewDi
     return D * G1 / max(4.0 * nDotV, 1e-6);
 }
 
-// RTXDI: RAB_SurfaceEvaluateBrdfPdf -- evaluates the PDF of the Fresnel-weighted
-// GGX+cosine mixture sampler used by ph_sample_brdf_direction (ph_core.glsl).
-// Fix 1: PDF must match the sampling distribution exactly.
-// ph_sample_brdf_direction selects GGX with probability F (Fresnel intensity), cosine otherwise:
-//   pdf_mixture(L) = F * pdf_ggx(L) + (1 - F) * max(NdotL, 0) / PI
+vec3 lt_sample_cosine_hemisphere_rtxdi(vec3 normal, vec2 rnd) {
+    float phi = rnd.x * (2.0f * lt_pi);
+    float r = sqrt(rnd.y);
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+    float z = sqrt(max(0.0f, 1.0f - rnd.y));
+
+    vec3 tangent = ph_build_tangent(normal);
+    vec3 bitangent = cross(normal, tangent);
+    return normalize(tangent * x + bitangent * y + normal * z);
+}
+
+vec3 lt_sample_ggx_vndf_rtxdi(vec3 viewDir, vec3 normal, float roughness, vec2 rnd) {
+    float a = max(roughness * roughness, 0.02f);
+
+    vec3 tangent = ph_build_tangent(normal);
+    vec3 bitangent = cross(normal, tangent);
+    mat3 basis = mat3(tangent, bitangent, normal);
+
+    vec3 Ve = transpose(basis) * normalize(viewDir);
+    vec3 Vh = normalize(vec3(a * Ve.x, a * Ve.y, max(Ve.z, 1e-4f)));
+
+    float lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+    vec3 T1 = lensq > 1e-7f ? vec3(-Vh.y, Vh.x, 0.0f) * inversesqrt(lensq) : vec3(1.0f, 0.0f, 0.0f);
+    vec3 T2 = cross(Vh, T1);
+
+    float r = sqrt(rnd.x);
+    float phi = 2.0f * lt_pi * rnd.y;
+    float t1 = r * cos(phi);
+    float t2 = r * sin(phi);
+    float s = 0.5f * (1.0f + Vh.z);
+    t2 = mix(sqrt(max(0.0f, 1.0f - t1 * t1)), t2, s);
+
+    vec3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0f, 1.0f - t1 * t1 - t2 * t2)) * Vh;
+    vec3 Ne = normalize(vec3(a * Nh.x, a * Nh.y, max(0.0f, Nh.z)));
+    vec3 H = normalize(basis * Ne);
+    return normalize(reflect(-viewDir, H));
+}
+
+bool rtxdi_surface_importance_sample_brdf(DirectSurface surface, inout RTXDI_RandomSamplerState rng, out vec3 dir) {
+    vec3 rand = vec3(RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng));
+    float diffuseProbability = lt_surface_diffuse_probability(surface);
+    if (rand.x < diffuseProbability) {
+        dir = lt_sample_cosine_hemisphere_rtxdi(surface.shadingNormal, rand.yz);
+    } else {
+        dir = lt_sample_ggx_vndf_rtxdi(
+            normalize(rt_camera_position - surface.rtPos),
+            surface.shadingNormal,
+            max(surface.material.x, lt_min_roughness),
+            rand.yz
+        );
+    }
+
+    return dot(surface.shadingNormal, dir) > 0.0f;
+}
+
+// RTXDI: RAB_SurfaceEvaluateBrdfPdf -- evaluates the PDF of the diffuse/specular
+// mixture used by RAB_SurfaceImportanceSampleBrdf.
 float rtxdi_surface_evaluate_brdf_pdf(DirectSurface surface, vec3 lightDir) {
     float nDotL = max(dot(surface.shadingNormal, lightDir), 0.0);
     if (nDotL <= 0.0) {
@@ -1639,14 +1716,10 @@ float rtxdi_surface_evaluate_brdf_pdf(DirectSurface surface, vec3 lightDir) {
     }
 
     vec3 viewDir = normalize(rt_camera_position - surface.rtPos);
-    vec3 f0 = lt_surface_f0(surface);
-    // Fresnel selection probability matching ph_sample_brdf_direction: selector.x < F
-    float F = clamp(max(f0.r, max(f0.g, f0.b)), 0.04, 0.98);
-
     float pdfCosine = nDotL / lt_pi;
     float pdfGgx = lt_evaluate_ggx_vndf_pdf(surface, lightDir, viewDir);
-
-    return F * pdfGgx + (1.0 - F) * pdfCosine;
+    float diffuseProbability = lt_surface_diffuse_probability_with_view(surface, viewDir);
+    return mix(pdfGgx, pdfCosine, diffuseProbability);
 }
 
 // RTXDI: RTXDI_LightBrdfMisWeight (InitialSampling.hlsli:66-96)
@@ -1660,7 +1733,7 @@ float RTXDI_LightBrdfMisWeight(
     float brdfMisWeight,
     float brdfCutoff
 ) {
-    float lightSolidAnglePdf = lt_light_sample_source_pdf();
+    float lightSolidAnglePdf = lightSample.solidAnglePdf;
 
     // RTXDI InitialSampling.hlsli:71-76: skip BRDF blend when:
     //   - brdfMisWeight == 0 (no BRDF samples counted)
@@ -1929,6 +2002,10 @@ Reservoir RTXDI_SampleLocalLights(inout RTXDI_RandomSamplerState rng, inout RTXD
         ? max(int(ph_restir_initial_num_local_samples), 1)
         : max(PH_LIGHTTREE_INITIAL_SAMPLES, 1);
 
+    if (ph_light_count <= 0) {
+        return RTXDI_EmptyDIReservoir();
+    }
+
     // RTXDI: early exit when numLocalLightSamples == 0 (InitialSampling.hlsli lines 322-323).
     if (numLocalSamples == 0) {
         return RTXDI_EmptyDIReservoir();
@@ -1939,11 +2016,12 @@ Reservoir RTXDI_SampleLocalLights(inout RTXDI_RandomSamplerState rng, inout RTXD
     //   - ph_restir_initial_num_brdf_samples > 0.0 → use runtime value
     //   - ph_restir_initial_num_brdf_samples == -1.0 → explicitly disable (0)
     //   - ph_restir_initial_num_brdf_samples == 0.0 (unbound) → SDK default = 1
-    // numEnvironmentSamples: SDK default 1 (ReSTIRDI.cpp line 41). 0.0 (unbound) falls back to 1.
-    // Environment stub returns M=0 but the count still appears in the MIS denominator per RTXDI.
+    // numEnvironmentSamples: SDK default 1 (ReSTIRDI.cpp line 41).
+    // 0.0 (unbound) falls back to 1; negative values explicitly disable the technique
+    // when the environment-light path is absent in this bridge.
     int numEnvironmentSamples = (ph_restir_initial_num_environment_samples > 0.0)
         ? int(ph_restir_initial_num_environment_samples)
-        : 1;
+        : (ph_restir_initial_num_environment_samples < -0.5 ? 0 : 1);
     int numBrdfSamples = (ph_restir_initial_num_brdf_samples > 0.0)
         ? int(ph_restir_initial_num_brdf_samples)
         : (ph_restir_initial_num_brdf_samples < -0.5 ? 0 : 1);
@@ -2106,28 +2184,18 @@ Reservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, DirectSurface sur
 
     vec3 viewDir = normalize(rt_camera_position - surface.rtPos);
 
-    // Fix 2: RTXDI uses brdfRayMinT to avoid self-intersection (InitialSampling.hlsli line 506).
-    // rayOrigin already has a geometry-normal offset via lt_surface_ray_origin, but brdfRayMinT
-    // provides an additional parametric minimum along the ray direction.
-    const float brdfRayMinT = 0.02;
+    // Match RTXDI DI initial sampling default (ReSTIRDI.cpp line 42).
+    const float brdfRayMinT = 0.001f;
 
     vec3 rayOrigin = lt_surface_ray_origin(surface.rtPos, surface.geometryNormal);
 
     for (int i = 0; i < numSamples; i++) {
-        // Step 1: importance-sample a BRDF direction (Fresnel-weighted GGX or cosine hemisphere).
-        // ph_sample_brdf_direction selects the lobe based on Fresnel weight, matching
-        // RAB_SurfaceImportanceSampleBrdf in the reference.
-        float roughness = clamp(surface.material.x, 0.03f, 1.0f);
-        float metalness = clamp(surface.material.y, 0.0f, 1.0f);
-        vec3 sampleDir = ph_sample_brdf_direction(
-            surface.shadingNormal,
-            viewDir,
-            surface.albedo,
-            roughness,
-            metalness,
-            tex_coord,
-            i
-        );
+        // Step 1: importance-sample a BRDF direction using RTXDI's random-sampler-driven
+        // diffuse/specular mixture (RAB_SurfaceImportanceSampleBrdf).
+        vec3 sampleDir = vec3(0.0f);
+        if (!rtxdi_surface_importance_sample_brdf(surface, rng, sampleDir)) {
+            continue;
+        }
 
         // Step 2: evaluate BRDF PDF for the sampled direction.
         // Fix 1: rtxdi_surface_evaluate_brdf_pdf now evaluates the Fresnel-weighted GGX+cosine
@@ -2164,14 +2232,20 @@ Reservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, DirectSurface sur
             continue;
         }
 
-        // Step 4: find the nearest light in the list to the hit position.
-        // Minecraft lights are discrete blocks; search for the closest within 1.5 voxels.
-        // Fix 4: search ALL lights (not capped at 128) for correctness.
-        // Optimization opportunity: replace with spatial hash or block->light index table.
+        // Step 4: identify the exact emitter cell that was hit.
+        // RTXDI's bridge receives the exact hit light from RAB_TraceRayForLocalLight.
+        // For Minecraft block lights, the bridge equivalent is: require the traced hit
+        // cell to match the candidate light's block cell exactly. Do not fall back to a
+        // nearest-light heuristic across neighboring cells.
         int lightIndex = -1;
-        float bestDistSq = 2.25f; // (1.5)^2 -- reject anything farther
+        float bestDistSq = 3.402823466e+38f;
+        ivec3 hitCell = ivec3(floor(ray.result_position));
         for (int j = 0; j < ph_light_count; j++) {
             Light candidate = load_light(j);
+            if (any(notEqual(ivec3(floor(candidate.position)), hitCell))) {
+                continue;
+            }
+
             vec3 delta = candidate.position - ray.result_position;
             float distSq = dot(delta, delta);
             if (distSq < bestDistSq) {
@@ -2185,9 +2259,13 @@ Reservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, DirectSurface sur
         }
 
         // Step 5: evaluate target PDF and blended source PDF, then stream.
-        // light_sample_new_at_position builds color + weight (targetPdf) for the surface.
+        // Preserve the hit-derived sample point when reconstructing the candidate so the
+        // reservoir UV and the sampled emitter point stay aligned, matching RTXDI's use of
+        // the hit-derived randXY in RAB_SamplePolymorphicLight.
         Light hitLight = load_light(lightIndex);
-        LightSample brdfSample = light_sample_new_at_position(hitLight, hitLight.position, surface);
+        vec3 sampledPosition = hitLight.position;
+        vec2 sampleUv = vec2(0.0f);
+        LightSample brdfSample = light_sample_new_at_position(hitLight, sampledPosition, surface);
         float targetPdf = brdfSample.weight;
         if (targetPdf <= 0.0) {
             continue;
@@ -2226,7 +2304,7 @@ Reservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, DirectSurface sur
         }
 
         // Stream into reservoir -- reference line 579.
-        bool selected = RTXDI_StreamSample(state, brdfSample.index, vec2(0.0f), RTXDI_GetNextRandom(rng), targetPdf, 1.0f / blendedSourcePdf);
+        bool selected = RTXDI_StreamSample(state, brdfSample.index, sampleUv, RTXDI_GetNextRandom(rng), targetPdf, 1.0f / blendedSourcePdf);
         if (selected) {
             o_selectedSample = brdfSample;
         }
@@ -2273,7 +2351,7 @@ Reservoir RTXDI_SampleLightsForSurface(DirectSurface surface) {
         : max(PH_LIGHTTREE_INITIAL_SAMPLES, 1);
     int numEnvironmentSamples = (ph_restir_initial_num_environment_samples > 0.0)
         ? int(ph_restir_initial_num_environment_samples)
-        : 1;
+        : (ph_restir_initial_num_environment_samples < -0.5 ? 0 : 1);
     int numBrdfSamples = (ph_restir_initial_num_brdf_samples > 0.0)
         ? int(ph_restir_initial_num_brdf_samples)
         : (ph_restir_initial_num_brdf_samples < -0.5 ? 0 : 1);
@@ -2338,7 +2416,7 @@ Reservoir RTXDI_SampleLightsForSurface(DirectSurface surface) {
 //   if (enableInitialVisibility && RTXDI_IsValidDIReservoir(state)) {
 //     if (!RAB_GetConservativeVisibility(surface, selectedSample))
 //       RTXDI_StoreVisibilityInDIReservoir(state, 0, true)  // discard invisible
-//     // visible: do NOT store — leave reservoir visibility at its uninitialized sentinel
+//     // visible: do NOT store — leave visibility/age at the default zero state
 //   }
 void rtxdi_sample_local_lights_with_visibility(inout Reservoir reservoir, DirectSurface surface) {
     rtxdi_sample_local_lights(reservoir, surface);
@@ -2360,7 +2438,7 @@ void rtxdi_sample_local_lights_with_visibility(inout Reservoir reservoir, Direct
 
     if (isVisible) {
         // RTXDI InitialSampling.hlsli lines 661-668: on SUCCESS, do NOT call StoreVisibility.
-        // The reservoir keeps its default uninitialized visibility sentinel (vec3(-1)).
+        // The reservoir keeps its default packedVisibility=0, age=0 state.
     } else {
         // RTXDI: on FAILURE (occluded), discard the reservoir sample.
         // RTXDI_StoreVisibilityInDIReservoir(state, 0, true) — discardIfInvisible=true clears lightData+weightSum.

@@ -1,7 +1,6 @@
 package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.Raytracer;
-import at.redi2go.photonic.client.ShaderPackPath;
 import at.redi2go.photonic.client.UniformPatcher;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import at.redi2go.photonic.client.rendering.patching.Patch;
@@ -88,7 +87,7 @@ public abstract class ShaderPackMixin {
             return;
          }
 
-         String patchedFile = patch.readPatchedFile(new ShaderPackPath(shaderPath.resolve(name)));
+         String patchedFile = patch.readPatchedFile(shaderPath.resolve(name));
          if (patchedFile == null) {
             return;
          }
@@ -207,7 +206,7 @@ public abstract class ShaderPackMixin {
       intDefine(newEnvDefines, "PH_LIGHTTREE_DENOISER_PASSES", properties.getLightTreeDenoiserPasses());
       intDefine(newEnvDefines, "PH_RESTIR_DENOISER_PASSES", properties.getLightTreeDenoiserPasses());
       intDefine(newEnvDefines, "PH_NRD_ATROUS_PASSES", properties.getNrdAtrousPasses());
-      if (properties.useLightTreeSoftShadows().orElse(true)) {
+      if (properties.useLightTreeSoftShadows().orElse(false)) {
          stringDefine(newEnvDefines, "PH_LIGHTTREE_SOFT_SHADOWS", "");
          stringDefine(newEnvDefines, "PH_RESTIR_SOFT_SHADOWS", "");
       }

@@ -238,6 +238,10 @@ public class Patch {
       }
    }
 
+   public String readPatchedFile(Path path) {
+      return this.readPatchedFile(new ShaderPackPath(path));
+   }
+
 
    public static Patch selectBestPatch(List<Patch> patches, String shaderPackName, boolean photonicsEnabled) {
       if (shaderPackName == null) {

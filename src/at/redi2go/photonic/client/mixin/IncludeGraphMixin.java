@@ -2,7 +2,6 @@ package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.Raytracer;
-import at.redi2go.photonic.client.ShaderPackPath;
 import at.redi2go.photonic.client.rendering.patching.Patch;
 import com.google.common.collect.ImmutableList;
 import com.llamalad7.mixinextras.sugar.Local;
@@ -66,8 +65,7 @@ public class IncludeGraphMixin {
 
    @Inject(method = "readFile", at = @At("HEAD"), cancellable = true)
    private static void readFile(Path path, CallbackInfoReturnable<String> cir) throws IOException {
-      ShaderPackPath spp = new ShaderPackPath(path);
-      String result = Raytracer.readShaderFile(spp, true);
+      String result = Raytracer.readShaderFile(path, true);
       cir.setReturnValue(result);
       cir.cancel();
    }

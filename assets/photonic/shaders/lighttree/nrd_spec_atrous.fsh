@@ -72,6 +72,8 @@ void main() {
     vec2 roughnessWeightParams = nrd_roughness_weight_params(centerRoughness, gRoughnessFraction);
 
     // NRD RELAX: luminance relaxation (RELAX_Atrous.cs.hlsl:63-65)
+    // Reference: specularLuminanceWeightRelaxation = lerp(1.0, specReprojConfidence, gLuminanceEdgeStoppingRelaxation)
+    // Low confidence → relaxation closer to 1.0 → stricter; high confidence → closer to specConfidence
     float specLuminanceWeightRelaxation = 1.0;
     if (direct_atrous_step_size <= 4)
         specLuminanceWeightRelaxation = mix(1.0, specConfidence, gConfidenceDrivenLuminanceRelaxation);

@@ -344,6 +344,12 @@ void main() {
     uint cy = (cellIndex / uint(ph_regir_grid_cells.x)) % uint(ph_regir_grid_cells.y);
     uint cz = cellIndex / uint(ph_regir_grid_cells.x * ph_regir_grid_cells.y);
 
+    // RTXDI ReGIRSampling.hlsli: bounds check — reject over-dispatched threads
+    if (cz >= uint(ph_regir_grid_cells.z)) {
+        ph_ris_data[risBufferPtr] = uvec2(0u, 0u);
+        return;
+    }
+
     vec3 gridOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
 
     vec3  cellCenter = gridOrigin

@@ -23,27 +23,20 @@ void main() {
     indirect_reservoir_radiance_frag_out = outputStore.radianceData;
     indirect_reservoir_meta_frag_out = outputStore.metaData;
 
-    if (!is_in_world()) {
+    handheld_frag_out = lt_build_handheld_stage();
+
+    DirectSurface currentSurface = lt_load_surface(tex_coord);
+    if (!lt_is_valid_surface(currentSurface)) {
         indirect_frag_out = vec4(0.0f);
         indirect_variance_frag_out = vec4(0.0f);
         return;
     }
 
-    load_fragment_variables(albedo, world_pos, block_normal, normal);
-    rt_pos = world_pos - world_offset;
-    bad_angle = is_bad_angle(world_pos, block_normal);
-
-    handheld_frag_out = lt_build_handheld_stage();
-
-    DirectSurface currentSurface = lt_current_surface();
     RTXDI_GIReservoir initialReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_initial, tex_coord);
-    if (!RTXDI_IsValidGIReservoir(initialReservoir)) {
-        initialReservoir = gi_build_initial_reservoir(currentSurface);
-    }
 
     int activeCheckerboardField = ph_restir_active_checkerboard_field;
     ivec2 currentReservoirPos = RTXDI_PixelPosToReservoirPos(tex_coord, activeCheckerboardField);
-    RTXDI_GIReservoir currentReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, tex_coord);
+    RTXDI_GIReservoir currentReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, currentReservoirPos, activeCheckerboardField);
     RTXDI_GIReservoir state = RTXDI_EmptyGIReservoir();
     float selectedTargetPdf = 0.0f;
     float inputM = 0.0f;
@@ -80,7 +73,7 @@ void main() {
         }
 
         ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
-        RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
+        RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, neighborReservoirPos, activeCheckerboardField);
         if (!RTXDI_IsValidGIReservoir(neighborReservoir)) {
             continue;
         }
@@ -101,7 +94,7 @@ void main() {
 
     float normalizationNumerator = 1.0f;
     float normalizationDenominator = state.samples * selectedTargetPdf;
-    if (biasCorrectionMode >= gi_bias_correction_mode_basic && cachedResult != 0u) {
+    if (biasCorrectionMode >= gi_bias_correction_mode_basic) {
         float pi = selectedTargetPdf;
         float piSum = selectedTargetPdf * inputM;
 
@@ -119,7 +112,7 @@ void main() {
 
             DirectSurface neighborSurface = lt_load_surface(neighborUv);
             ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
-            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
+            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, neighborReservoirPos, activeCheckerboardField);
             float ps = RAB_GetGISampleTargetPdfForSurface(neighborSurface, state.selected);
 
             if (biasCorrectionMode == gi_bias_correction_mode_ray_traced && ps > 0.0f && !RAB_GetConservativeVisibility(neighborSurface, state.selected.position)) {

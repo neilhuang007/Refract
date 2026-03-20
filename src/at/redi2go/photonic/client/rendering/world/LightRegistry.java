@@ -74,10 +74,6 @@ public class LightRegistry implements Destructable {
       if (cmp != 0) return cmp;
       return a.type().compareTo(b.type());
    };
-   // Dense scenes can have many lights with nearly identical view scores; keep
-   // the capped top-N set sticky until a challenger is meaningfully better.
-   private static final float LIGHT_SELECTION_RETENTION_RATIO = 0.85F;
-
    private static float selectionCameraScore(LightInstance light, Vector3f cameraPosition) {
       return light.type().luminanceFrom(light.position(), cameraPosition);
    }
@@ -113,31 +109,11 @@ public class LightRegistry implements Destructable {
       }
 
       candidates.sort(LightRegistry::compareLightSelectionOrder);
-      float admissionScore = candidates.get(maxLights - 1).cameraScore();
-      List<LightSelectionCandidate> selected = new ArrayList<>(maxLights);
-      Set<LightInstance> retainedLights = new HashSet<>();
-      for (LightSelectionCandidate candidate : candidates) {
-         if (!candidate.previouslySelected() || candidate.cameraScore() < admissionScore * LIGHT_SELECTION_RETENTION_RATIO) {
-            continue;
-         }
-         selected.add(candidate);
-         retainedLights.add(candidate.light());
-         if (selected.size() == maxLights) {
-            return selected.stream().map(LightSelectionCandidate::light).sorted(STABLE_LIGHT_ORDER).toArray(LightInstance[]::new);
-         }
-      }
-
-      for (LightSelectionCandidate candidate : candidates) {
-         if (retainedLights.contains(candidate.light())) {
-            continue;
-         }
-         selected.add(candidate);
-         if (selected.size() == maxLights) {
-            break;
-         }
-      }
-
-      return selected.stream().map(LightSelectionCandidate::light).sorted(STABLE_LIGHT_ORDER).toArray(LightInstance[]::new);
+      return candidates.stream()
+         .limit(maxLights)
+         .map(LightSelectionCandidate::light)
+         .sorted(STABLE_LIGHT_ORDER)
+         .toArray(LightInstance[]::new);
    }
 
    private record LightSelectionCandidate(LightInstance light, float cameraScore, float sourceScore, boolean previouslySelected) {

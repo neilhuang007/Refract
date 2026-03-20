@@ -37,6 +37,14 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
+def shaderGameTestDisableDenoiser = System.getProperty("photonics.debugDisableDenoiser")
+if (shaderGameTestDisableDenoiser == null || shaderGameTestDisableDenoiser.isBlank()) {
+    shaderGameTestDisableDenoiser = System.getenv("PHOTONICS_DEBUG_DISABLE_DENOISER")
+}
+if (shaderGameTestDisableDenoiser == null || shaderGameTestDisableDenoiser.isBlank()) {
+    shaderGameTestDisableDenoiser = "false"
+}
+
 def mainClasspathGroup = "${layout.buildDirectory.dir('classes/java/main').get().asFile.absolutePath}${File.pathSeparator}${layout.buildDirectory.dir('resources/main').get().asFile.absolutePath}"
 
 loom {
@@ -60,7 +68,7 @@ loom {
             programArg "quickPlay/log.json"
             vmArg "-Dphotonics.automation.enabled=true"
             vmArg "-Dphotonics.profilerEnabled=true"
-            vmArg "-Dphotonics.debugDisableDenoiser=false"
+            vmArg "-Dphotonics.debugDisableDenoiser=${shaderGameTestDisableDenoiser}"
             vmArg "-Dphotonics.automation.worldName=backup"
             vmArg "-Dphotonics.automation.autoStartWorld=false"
             vmArg "-Dphotonics.automation.startDelayTicks=220"

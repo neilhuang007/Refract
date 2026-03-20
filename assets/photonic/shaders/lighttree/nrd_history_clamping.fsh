@@ -14,6 +14,7 @@ uniform sampler2D nrd_diff_noisy_input;
 uniform sampler2D direct_history_length_clamp_input;
 uniform float ph_nrd_max_accumulated_frame_num;
 uniform float ph_nrd_max_fast_accumulated_frame_num;
+uniform float ph_nrd_denoising_range;
 
 const float nrd_fast_history_clamping_sigma_scale = 2.0;
 const float nrd_history_acceleration_amount = 0.3;
@@ -38,10 +39,11 @@ void nrd_accumulate_fast_history_stats(ivec2 centerCoord, out vec3 meanYcocg, ou
     for (int dy = -2; dy <= 2; dy++) {
         for (int dx = -2; dx <= 2; dx++) {
             ivec2 sampleCoord = nrd_clamp_texel(centerCoord + ivec2(dx, dy), texSize);
-            // NRD uses viewZ < gDenoisingRange for validity; we approximate with normal length
-            // Reference validity gate: skip sky/invalid pixels (equivalent to viewZ < denoisingRange)
-            vec3 sampleNorm = texelFetch(radiosity_normal, sampleCoord, 0).xyz;
-            if (dot(sampleNorm, sampleNorm) < 0.01) continue;
+            // NRD per-sample validity: viewZ > gDenoisingRange skips the tap.
+            // Uses viewZ = length(worldPos - cameraPos) (NRD Common.hlsli:244).
+            vec3 samplePos = texelFetch(radiosity_position, sampleCoord, 0).xyz;
+            float sampleViewZ = nrd_compute_view_z(samplePos);
+            if (sampleViewZ > ph_nrd_denoising_range || sampleViewZ < 0.001) continue;
             NrdDirectHistorySample s = nrd_unpack_direct_history(texelFetch(nrd_diff_fast_input, sampleCoord, 0));
             vec3 ycocg = nrd_rgb_to_ycocg(s.radiance);
             sumFirst  += ycocg;
@@ -50,7 +52,12 @@ void nrd_accumulate_fast_history_stats(ivec2 centerCoord, out vec3 meanYcocg, ou
         }
     }
 
-    float inv = 1.0 / max(sampleCount, 1e-4);
+    if (sampleCount == 0.0) {
+        meanYcocg = vec3(0.0);
+        sigmaYcocg = vec3(0.0);
+        return;
+    }
+    float inv = 1.0 / sampleCount;
     meanYcocg = sumFirst * inv;
     sigmaYcocg = sqrt(max(sumSecond * inv - meanYcocg * meanYcocg, vec3(0.0)));
 }
@@ -68,10 +75,11 @@ void nrd_accumulate_noisy_stats(ivec2 centerCoord, out vec3 noisyMean, out float
     for (int dy = -2; dy <= 2; dy++) {
         for (int dx = -2; dx <= 2; dx++) {
             ivec2 sampleCoord = nrd_clamp_texel(centerCoord + ivec2(dx, dy), texSize);
-            // NRD uses viewZ < gDenoisingRange for validity; we approximate with normal length
-            // Reference validity gate: skip sky/invalid pixels
-            vec3 sampleNorm = texelFetch(radiosity_normal, sampleCoord, 0).xyz;
-            if (dot(sampleNorm, sampleNorm) < 0.01) continue;
+            // NRD per-sample validity: viewZ > gDenoisingRange skips the tap.
+            // Uses viewZ = length(worldPos - cameraPos) (NRD Common.hlsli:244).
+            vec3 samplePos = texelFetch(radiosity_position, sampleCoord, 0).xyz;
+            float sampleViewZ = nrd_compute_view_z(samplePos);
+            if (sampleViewZ > ph_nrd_denoising_range || sampleViewZ < 0.001) continue;
             NrdDirectHistorySample s = nrd_unpack_direct_history(texelFetch(nrd_diff_noisy_input, sampleCoord, 0));
             float luma = nrd_luminance(s.radiance);
             rgbSum += s.radiance;
@@ -80,7 +88,12 @@ void nrd_accumulate_noisy_stats(ivec2 centerCoord, out vec3 noisyMean, out float
         }
     }
 
-    float inv = 1.0 / max(sampleCount, 1e-4);
+    if (sampleCount == 0.0) {
+        noisyMean = vec3(0.0);
+        noisySecondMoment = 0.0;
+        return;
+    }
+    float inv = 1.0 / sampleCount;
     noisyMean = rgbSum * inv;
     noisySecondMoment = lumaSquareSum * inv;
 }
@@ -89,6 +102,16 @@ void main() {
     if (!is_in_world()) {
         nrd_clamped_slow_out = vec4(0.0);
         nrd_clamped_fast_out = vec4(0.0);
+        return;
+    }
+
+    // Center pixel validity check: NRD reference s_DiffNoisy_IsValid[center].w == 0 early-out.
+    // Uses viewZ = length(worldPos - cameraPos) vs gDenoisingRange (NRD Common.hlsli:244).
+    vec3 centerPos = texelFetch(radiosity_position, tex_coord, 0).xyz;
+    float centerViewZ = nrd_compute_view_z(centerPos);
+    if (centerViewZ > ph_nrd_denoising_range || centerViewZ < 0.001) {
+        nrd_clamped_slow_out = texelFetch(direct_historyfix_output, tex_coord, 0);
+        nrd_clamped_fast_out = texelFetch(nrd_diff_fast_input, tex_coord, 0);
         return;
     }
 

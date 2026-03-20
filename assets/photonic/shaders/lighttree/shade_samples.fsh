@@ -40,7 +40,7 @@ void storeReservoirOutputs(Reservoir reservoir) {
 void main() {
     ivec2 reservoirPos = lt_current_reservoir_pos();
     ivec2 pixelPosition = lt_current_pixel_pos();
-    if (!lt_is_viewport_uv_in_bounds(pixelPosition) || !is_in_world()) {
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
         storeEmptyShadeOutputs();
         storeReservoirOutputs(rtxdi_empty_reservoir());
         return;
@@ -52,11 +52,12 @@ void main() {
         return;
     }
 
-    load_fragment_variables(albedo, world_pos, block_normal, normal);
-    rt_pos = world_pos - world_offset;
-    bad_angle = is_bad_angle(world_pos, block_normal);
-
-    DirectSurface currentSurface = lt_current_surface();
+    DirectSurface currentSurface = lt_load_surface(pixelPosition);
+    if (!lt_is_valid_surface(currentSurface)) {
+        storeEmptyShadeOutputs();
+        storeReservoirOutputs(rtxdi_empty_reservoir());
+        return;
+    }
 
     // Load the final reservoir from the spatial resampling output.
     Reservoir reservoir = rtxdi_empty_reservoir();
@@ -92,10 +93,11 @@ void main() {
         if (!enableFinalVisibility) {
             // RTXDI: enableFinalVisibility=false — shade without any visibility test.
             LightSample shadeSample = light_sample_decode(reservoir, currentSurface, false);
-            if (shadeSample.index >= 0) {
+            if (shadeSample.index >= 0 && shadeSample.solidAnglePdf > 0.0f) {
+                shadeSample.color *= RTXDI_GetDIReservoirInvPdf(reservoir) / shadeSample.solidAnglePdf;
                 LtSplitRadiance splitShade = lt_shade_surface_split(currentSurface, shadeSample);
-                shadedDiffuse = splitShade.diffuse * reservoir.weightSum;
-                shadedSpecular = splitShade.specular * reservoir.weightSum;
+                shadedDiffuse = splitShade.diffuse;
+                shadedSpecular = splitShade.specular;
                 directHitDistance = length(shadeSample.position + world_offset - currentSurface.worldPos);
             }
         } else if (reuseFinalVisibility && rtxdi_has_reusable_visibility(reservoir)) {
@@ -105,10 +107,11 @@ void main() {
             vec3 visRgb = rtxdi_get_visibility(reservoir);
             if (rtxdi_is_visible(reservoir)) {
                 LightSample shadeSample = light_sample_decode(reservoir, currentSurface, false);
-                if (shadeSample.index >= 0) {
+                if (shadeSample.index >= 0 && shadeSample.solidAnglePdf > 0.0f) {
+                    shadeSample.color *= visRgb * (RTXDI_GetDIReservoirInvPdf(reservoir) / shadeSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(currentSurface, shadeSample);
-                    shadedDiffuse = splitShade.diffuse * reservoir.weightSum * visRgb;
-                    shadedSpecular = splitShade.specular * reservoir.weightSum * visRgb;
+                    shadedDiffuse = splitShade.diffuse;
+                    shadedSpecular = splitShade.specular;
                     directHitDistance = length(shadeSample.position + world_offset - currentSurface.worldPos);
                 }
             }
@@ -116,26 +119,40 @@ void main() {
             // Trace a fresh visibility ray (reuseFinalVisibility=false or no cached visibility).
             LightSample traceSample = light_sample_decode(reservoir, currentSurface, false);
             if (traceSample.index >= 0) {
-                float hitDist = light_sample_trace_hit_surface(traceSample, false, currentSurface);
+                // RTXDI GetFinalVisibility uses a 0.01 ray offset for final shading.
+                float hitDist = light_sample_trace_hit_surface_with_offset(traceSample, false, currentSurface, 0.01f);
                 bool isVisible = hitDist > 0.0f && traceSample.index >= 0;
                 // Wire discardIfInvisible from enableVisibilityShortcut (ShadeSamples.hlsl line 64).
                 // When discardIfInvisible=true and invisible: lightData+weightSum are cleared (RTXDI lines 93-96).
                 RTXDI_StoreVisibilityInDIReservoir(reservoir, isVisible ? vec3(1.0f) : vec3(0.0f), discardIfInvisible);
-                if (isVisible) {
+                if (isVisible && traceSample.solidAnglePdf > 0.0f) {
                     // Use RGB visibility from the freshly traced result (binary: vec3(1) when hit).
                     vec3 visRgb = rtxdi_get_visibility(reservoir);
+                    traceSample.color *= visRgb * (RTXDI_GetDIReservoirInvPdf(reservoir) / traceSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(currentSurface, traceSample);
-                    shadedDiffuse = splitShade.diffuse * reservoir.weightSum * visRgb;
-                    shadedSpecular = splitShade.specular * reservoir.weightSum * visRgb;
+                    shadedDiffuse = splitShade.diffuse;
+                    shadedSpecular = splitShade.specular;
                     directHitDistance = length(traceSample.position + world_offset - currentSurface.worldPos);
                 }
-            } else {
-                RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0.0f), discardIfInvisible);
             }
         }
     }
 
-    direct_diffuse_frag_out = nrd_pack_direct_signal(shadedDiffuse, directHitDistance);
-    direct_specular_frag_out = nrd_pack_direct_signal(shadedSpecular, directHitDistance);
+    if (ph_restir_enable_denoiser_packing >= 0.5f) {
+        // NRD expects demodulated signals using full view-dependent material factors.
+        // NRD.hlsli:733 NRD_MaterialFactors with proper N, V, Rf0, roughness.
+        vec3 N = currentSurface.shadingNormal;
+        vec3 V = normalize(world_camera_position - currentSurface.worldPos);
+        float roughness = clamp(currentSurface.material.x, 0.0, 1.0);
+        float metallic = clamp(currentSurface.material.y, 0.0, 1.0);
+        vec3 Rf0 = mix(vec3(0.04), clamp(currentSurface.albedo, vec3(0.0), vec3(1.0)), metallic);
+        vec3 diffDemod, specDemod;
+        nrd_material_factors(N, V, currentSurface.albedo, Rf0, roughness, diffDemod, specDemod);
+        direct_diffuse_frag_out = nrd_pack_direct_signal(nrd_safe_demodulate(shadedDiffuse, diffDemod), directHitDistance);
+        direct_specular_frag_out = nrd_pack_direct_signal(nrd_safe_demodulate(shadedSpecular, specDemod), directHitDistance);
+    } else {
+        direct_diffuse_frag_out = vec4(shadedDiffuse, directHitDistance);
+        direct_specular_frag_out = vec4(shadedSpecular, directHitDistance);
+    }
     storeReservoirOutputs(reservoir);
 }

@@ -19,6 +19,8 @@ const float direct_lobe_angle_fraction = 0.5;
 const float gDiffMaxLuminanceRelativeDifference = 10.0;
 // NRD RELAX: confidence-driven luminance edge-stopping relaxation scalar
 const float gConfidenceDrivenLuminanceRelaxation = 0.5;
+// NRD RELAX: confidence-driven normal edge-stopping relaxation scalar
+const float gConfidenceDrivenNormalRelaxation = 0.5;
 
 const float gaussian3x3[2] = float[](0.44198, 0.27901);
 
@@ -37,8 +39,11 @@ float direct_normal_weight_param(float historyLength, float diffuseConfidence) {
     float normalFraction = direct_lobe_angle_fraction / sqrt(float(max(direct_atrous_step_size, 1)));
     float historyFactor = clamp(historyLength / 5.0, 0.0, 1.0);
     float relaxedFraction = mix(0.99, normalFraction, historyFactor);
-    // NRD RELAX: lerp toward 1.0 as confidence decreases (more permissive normal filter)
-    float confidenceRelaxedFraction = mix(1.0, relaxedFraction, diffuseConfidence);
+    // NRD RELAX confidence-driven normal relaxation (RELAX_Atrous.cs.hlsl:114-115):
+    // diffuseLobeAngleFraction = lerp(diffuseLobeAngleFraction, 1.0, normalR)
+    float diffConfidenceRelaxation = clamp(1.0 * (1.0 - diffuseConfidence), 0.0, 1.0);
+    float normalR = clamp(diffConfidenceRelaxation * gConfidenceDrivenNormalRelaxation, 0.0, 1.0);
+    float confidenceRelaxedFraction = mix(relaxedFraction, 1.0, normalR);
     return nrd_normal_weight_param(1.0, confidenceRelaxedFraction);
 }
 
@@ -119,10 +124,10 @@ void main() {
             float diffusePhiLInv = 1.0 / max(lumaSigma, 1e-7);
             float lumaDiff = abs(centerLuma - sampleLuma) * diffusePhiLInv;
             float cappedLumaDiff = min(lumaDiff, gDiffMaxLuminanceRelativeDifference);
-            // NRD RELAX: confidence-driven luminance relaxation only applies at step size <= 4
-            float lumaRelaxation = (direct_atrous_step_size <= 4)
-                ? mix(1.0, diffuseConfidence, gConfidenceDrivenLuminanceRelaxation)
-                : 1.0;
+            // NRD RELAX confidence-driven relaxation (RELAX_Atrous.cs.hlsl:107-119):
+            // Low confidence → high relaxation → more permissive luminance and normal weights.
+            float diffConfidenceRelaxation = clamp(1.0 * (1.0 - diffuseConfidence), 0.0, 1.0);
+            float lumaRelaxation = 1.0 - clamp(diffConfidenceRelaxation * gConfidenceDrivenLuminanceRelaxation, 0.0, 1.0);
             float lumaWeight = exp(-cappedLumaDiff * lumaRelaxation);
 
             float kernelWeight = gaussian3x3[abs(dx)] * gaussian3x3[abs(dy)];

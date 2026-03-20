@@ -10,6 +10,7 @@ layout(location = 0) out vec4 direct_historyfix_out;
 uniform sampler2D direct_historyfix_input;
 uniform sampler2D nrd_history_length_tex;
 uniform float ph_nrd_depth_threshold;
+uniform float ph_nrd_denoising_range;
 
 const float direct_history_fix_frame_num = 4.0;
 const float direct_history_fix_base_stride = 14.0;
@@ -43,6 +44,8 @@ void main() {
     );
     vec4 centerMaterial = texelFetch(radiosity_material, tex_coord, 0);
 
+    float centerViewDist = max(length(centerPosition - world_camera_position), 1e-3);
+
     // NRD: round(baseStride / (1 + historyLength)) — no explicit lower bound of 1
     float strideValue = round(direct_history_fix_base_stride / (1.0 + historyLength));
     int stride = max(int(strideValue), 1);
@@ -63,20 +66,26 @@ void main() {
             vec2 uv = (vec2(tex_coord + offset) + 0.5) / vec2(texSize);
             uv = nrd_mirror_uv(uv);
             ivec2 sampleCoord = ivec2(uv * vec2(texSize));
+            vec3 samplePosition = texelFetch(radiosity_position, sampleCoord, 0).xyz;
+
+            // NRD: geometryWeight = 0 when sampleViewZ >= gDenoisingRange (NRD Common.hlsli:244)
+            float sampleViewZ = nrd_compute_view_z(samplePosition);
+            if (sampleViewZ > ph_nrd_denoising_range || sampleViewZ < 0.001) {
+                continue;
+            }
+
             vec4 sampleSignal = texelFetch(direct_historyfix_input, sampleCoord, 0);
             NrdDirectHistorySample sampleHistory = nrd_unpack_direct_history(sampleSignal);
-            vec3 samplePosition = texelFetch(radiosity_position, sampleCoord, 0).xyz;
             vec3 sampleGeometryNormal = nrd_safe_normal(texelFetch(radiosity_normal, sampleCoord, 0).xyz);
             vec3 sampleMappedNormal = nrd_select_surface_normal(
                 sampleGeometryNormal,
                 texelFetch(radiosity_mapped_normal, sampleCoord, 0).xyz
             );
 
-            // NRD scales plane distance threshold by centerViewZ; we approximate with Euclidean distance.
-            float centerViewDist = max(length(centerPosition - world_camera_position), 1e-3);
             // NRD uses same unpacked normal for both plane-distance and angular tests
+            // nrd_normal_weight clamps power to max(power, 0.01) matching reference getDiffuseNormalWeight
             float geometryWeight = nrd_plane_distance_weight(centerPosition, centerMappedNormal, samplePosition, ph_nrd_depth_threshold * centerViewDist);
-            float normalWeight = nrd_normal_weight(centerMappedNormal, sampleMappedNormal, direct_history_fix_normal_power);
+            float normalWeight = nrd_normal_weight(centerMappedNormal, sampleMappedNormal, max(direct_history_fix_normal_power, 0.01));
             vec4 sampleMaterial = texelFetch(radiosity_material, sampleCoord, 0);
             float materialWeight = nrd_material_weight(centerMaterial, sampleMaterial);
             if (materialWeight <= 0.0) {

@@ -77,7 +77,8 @@ void main() {
         return;
     }
 
-    if (!is_in_world()) {
+    ivec2 centerPixelPos = lt_current_pixel_pos();
+    if (!lt_is_viewport_uv_in_bounds(centerPixelPos)) {
         Reservoir emptyReservoir = rtxdi_empty_reservoir();
         reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
         reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
@@ -85,18 +86,19 @@ void main() {
         return;
     }
 
-    load_fragment_variables(albedo, world_pos, block_normal, normal);
-    rt_pos = world_pos - world_offset;
-    bad_angle = is_bad_angle(world_pos, block_normal);
-
     int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
     ivec2 centerReservoirPos = reservoirPos;
-    ivec2 centerPixelPos = lt_current_pixel_pos();
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(uvec2(centerPixelPos), uint(frameCounter), RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED);
 
     // Variable names match RTXDI_DISpatialResamplingWithPairwiseMIS (SpatialResampling.hlsli line 36).
-    DirectSurface centerSurface = lt_current_surface();
-    bool isCenterComplexSurface = lt_is_complex_surface(centerSurface);
+    DirectSurface centerSurface = lt_load_surface(centerPixelPos);
+    if (!lt_is_valid_surface(centerSurface)) {
+        Reservoir emptyReservoir = rtxdi_empty_reservoir();
+        reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
+        reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
+        reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(emptyReservoir);
+        return;
+    }
     // Don't abort on empty center sample — RTXDI proceeds unconditionally
     // (SpatialResampling.hlsli line 52: centerSample.M is read without any prior
     // validity guard). When centerSample is empty, neighbors via pairwise MIS
@@ -209,7 +211,7 @@ void main() {
 
             if (!lt_surface_matches(centerSurface, neighborSurface, spatialDepthThreshold, spatialNormalThreshold)) continue;
 
-            if (isCenterComplexSurface && lt_enable_material_similarity_test && !lt_materials_similar(centerSurface, neighborSurface)) continue;
+            if (lt_enable_material_similarity_test && !lt_materials_similar(centerSurface, neighborSurface)) continue;
 
             // Always load the neighbor sample.
             // RTXDI SpatialResampling.hlsli line 85: RTXDI_DIReservoir neighborSample = RTXDI_LoadDIReservoir(...)
@@ -219,11 +221,14 @@ void main() {
             rtxdi_prepare_spatial_reuse(neighborSample, spatialOffset);
 
             // RTXDI SpatialResampling.hlsli lines 89-93: discountNaiveSamples check.
+            // Only count this neighbor as valid after it passes the discount check.
             if (RTXDI_IsValidDIReservoir(neighborSample)) {
                 if (lt_discount_naive_samples && neighborSample.M <= rtxdi_naive_sampling_m_threshold) continue;
             }
 
             // RTXDI SpatialResampling.hlsli line 95: validSpatialSamples++
+            // Surface-similar neighbors count even if the loaded reservoir is invalid;
+            // only discounted naive samples are skipped before the increment.
             validSpatialSamples++;
 
             // RTXDI SpatialResampling.hlsli line 98: if (neighborSample.M <= 0) continue;
@@ -287,7 +292,7 @@ void main() {
 
             if (!lt_surface_matches(centerSurface, neighborSurface, spatialDepthThreshold, spatialNormalThreshold)) continue;
 
-            if (isCenterComplexSurface && lt_enable_material_similarity_test && !lt_materials_similar(centerSurface, neighborSurface)) continue;
+            if (lt_enable_material_similarity_test && !lt_materials_similar(centerSurface, neighborSurface)) continue;
 
             ivec2 neighborReservoirPos = lt_pass_pixel_to_reservoir_pos(idx);
             Reservoir neighborSample = rtxdi_empty_reservoir();
@@ -338,6 +343,7 @@ void main() {
                     RTXDI_ActivateCheckerboardPixel(idx, false, activeCheckerboardField);
 
                     DirectSurface neighborSurface = lt_load_surface(idx);
+                    if (!lt_is_valid_surface(neighborSurface)) continue;
 
                     // Evaluate selected sample at this neighbor's surface (line 267-270).
                     float ps = 0.0f;

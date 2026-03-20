@@ -294,6 +294,10 @@ public class Raytracer implements Destructable {
 
    private record PathFsPair(Path path, FileSystem fs) {}
 
+   public static String readShaderFile(Path path, boolean patchFile) {
+      return readShaderFile(new ShaderPackPath(path), patchFile);
+   }
+
    public static String readShaderFile(ShaderPackPath path, boolean patchFile) {
       String source = null;
       Patch patch = getAppliedPatch();

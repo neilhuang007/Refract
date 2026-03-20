@@ -3,13 +3,72 @@
 
 #include "/photonics/lighttree/nrd_material_id.glsl"
 
+// Checkerboard support for NRD passes — mirrors RTXDI Checkerboard.hlsli logic.
+// Guard against duplicate declaration when both nrd_common.glsl and reuse_bridge.glsl are included.
+#ifndef PH_RESTIR_CHECKERBOARD_DECLARED
+#define PH_RESTIR_CHECKERBOARD_DECLARED
+uniform int ph_restir_active_checkerboard_field;
+#endif
+
+// RTXDI Checkerboard.hlsli:16-25 — test whether a pixel is active in the current checkerboard field.
+bool nrd_is_active_checkerboard_pixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField) {
+    if (activeCheckerboardField == 0)
+        return true;
+    return ((pixelPosition.x + pixelPosition.y + int(previousFrame)) & 1) == (activeCheckerboardField & 1);
+}
+
+// Geometry-aware checkerboard reconstruction: for inactive pixels, blend from valid cardinal
+// neighbors weighted by normal/depth similarity. This matches NRD RELAX's pre-temporal
+// reconstruction step that fills checkerboard holes before temporal accumulation.
+vec4 nrd_reconstruct_checkerboard_signal(sampler2D signalTex, ivec2 coord, sampler2D positionTex, sampler2D normalTex) {
+    vec3 centerPos = texelFetch(positionTex, coord, 0).xyz;
+    vec3 centerNormal = texelFetch(normalTex, coord, 0).xyz;
+    float centerViewZ = length(centerPos - world_camera_position);
+
+    vec4 result = vec4(0.0);
+    float totalWeight = 0.0;
+
+    // Sample 4 cardinal neighbors — in checkerboard pattern, all cardinal neighbors
+    // of an inactive pixel are active.
+    ivec2 offsets[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+    ivec2 texSize = textureSize(signalTex, 0);
+
+    for (int i = 0; i < 4; i++) {
+        ivec2 neighborCoord = coord + offsets[i];
+        if (any(lessThan(neighborCoord, ivec2(0))) || any(greaterThanEqual(neighborCoord, texSize)))
+            continue;
+
+        vec3 neighborPos = texelFetch(positionTex, neighborCoord, 0).xyz;
+        vec3 neighborNormal = texelFetch(normalTex, neighborCoord, 0).xyz;
+
+        // Depth-plane similarity
+        float planeDist = abs(dot(neighborPos - centerPos, centerNormal));
+        float neighborViewZ = length(neighborPos - world_camera_position);
+        float depthWeight = (planeDist / max(centerViewZ, 1e-3)) < 0.1 ? 1.0 : 0.0;
+
+        // Normal similarity
+        float normalDot = max(dot(normalize(centerNormal), normalize(neighborNormal)), 0.0);
+        float normalWeight = normalDot > 0.9 ? 1.0 : 0.0;
+
+        float w = depthWeight * normalWeight;
+        result += texelFetch(signalTex, neighborCoord, 0) * w;
+        totalWeight += w;
+    }
+
+    return totalWeight > 0.0 ? result / totalWeight : texelFetch(signalTex, coord, 0);
+}
+
 const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;
-const float PH_NRD_CONFIDENCE_DISABLED = 0.0;
 
 float nrd_luminance(vec3 value) {
     return dot(value, PH_NRD_LUMA_COEFF);
+}
+
+// NRD Common.hlsli:244 UnpackViewZ — compute linear view-space depth from world position
+float nrd_compute_view_z(vec3 worldPos) {
+    return length(worldPos - world_camera_position);
 }
 
 // NRD.hlsli STL::Color::LinearToYCoCg (NRD.hlsli:396-412)
@@ -163,16 +222,16 @@ vec4 nrd_is_in_screen_bilinear(vec2 footprintOrigin, vec2 rectSize) {
 
 // NRD RELAX_Common.hlsli:29 BilinearWithCustomWeightsImmediateFloat
 float nrd_bilinear_custom_float(float s00, float s10, float s01, float s11, vec4 weights) {
-    float output = s00 * weights.x + s10 * weights.y + s01 * weights.z + s11 * weights.w;
+    float result = s00 * weights.x + s10 * weights.y + s01 * weights.z + s11 * weights.w;
     float sumWeights = dot(weights, vec4(1.0));
-    return sumWeights < 0.0001 ? 0.0 : output / sumWeights;
+    return sumWeights < 0.0001 ? 0.0 : result / sumWeights;
 }
 
 // NRD RELAX_Common.hlsli:42 BilinearWithCustomWeightsImmediateFloat4
 vec4 nrd_bilinear_custom_vec4(vec4 s00, vec4 s10, vec4 s01, vec4 s11, vec4 weights) {
-    vec4 output = s00 * weights.x + s10 * weights.y + s01 * weights.z + s11 * weights.w;
+    vec4 result = s00 * weights.x + s10 * weights.y + s01 * weights.z + s11 * weights.w;
     float sumWeights = dot(weights, vec4(1.0));
-    return sumWeights < 0.0001 ? vec4(0.0) : output / sumWeights;
+    return sumWeights < 0.0001 ? vec4(0.0) : result / sumWeights;
 }
 
 // NRD Common.hlsli:30 isReprojectionTapValid — world-space plane distance check
@@ -244,12 +303,33 @@ const float RELAX_MAX_ACCUM_FRAME_NUM = 255.0;
 // Area-ReSTIR / PathTracer reference writes materialID = 0.f in NRD-facing guide buffers.
 const float NRD_DEFAULT_MIN_MATERIAL = 0.0;
 
-float nrd_material_weight_with_min(vec4 currentMaterial, vec4 previousMaterial, float minMaterial) {
-    return 1.0;
+// NRD Common.hlsli:238-242 CompareMaterials reference:
+//   #if NRD_NORMAL_ENCODING == R10G10B10A2_UNORM:
+//     CompareMaterials(m0, m, minm) = (max(m0, minm) == max(m, minm))
+//   #else:
+//     CompareMaterials(m0, m, minm) = true
+//
+// Material ID is packed into the .w channel of the material texture.
+// nrd_decode_material_id() recovers the raw ID from the encoded value.
+// When either pixel decodes to NRD_MATERIAL_ID_DISABLED (0.0), the
+// comparison is always treated as passing (returns 1.0), matching the
+// NRD behaviour for pipelines that do not supply material IDs.
+float nrd_material_weight_with_min(vec4 centerMaterial, vec4 sampleMaterial, float minMaterial) {
+    float centerID = nrd_decode_material_id(centerMaterial.w);
+    float sampleID = nrd_decode_material_id(sampleMaterial.w);
+
+    // If either side has material IDs disabled, always pass (matches NRD default).
+    if (centerID == NRD_MATERIAL_ID_DISABLED || sampleID == NRD_MATERIAL_ID_DISABLED) return 1.0;
+
+    // NRD CompareMaterials: max(m0, minm) == max(m, minm)
+    // This groups all IDs below minMaterial into a single bucket.
+    return (max(centerID, minMaterial) == max(sampleID, minMaterial)) ? 1.0 : 0.0;
 }
 
-float nrd_material_weight(vec4 currentMaterial, vec4 previousMaterial) {
-    return 1.0;
+// Convenience overload using the NRD default minimum material threshold.
+// Material IDs are derived from specular properties (emissive=2, smooth metal=1, dielectric=3).
+float nrd_material_weight(vec4 centerMaterial, vec4 sampleMaterial) {
+    return nrd_material_weight_with_min(centerMaterial, sampleMaterial, NRD_DEFAULT_MIN_MATERIAL);
 }
 
 float nrd_luminance_weight(float centerLuma, float sampleLuma, float sigma) {
@@ -324,15 +404,21 @@ vec3 nrd_safe_remodulate(vec3 radiance, vec3 factor) {
 }
 
 float nrd_confidence_from_history(float historyLength, float maxHistoryLength) {
-    return PH_NRD_CONFIDENCE_DISABLED;
+    return clamp(historyLength / max(maxHistoryLength, 1.0), 0.0, 1.0);
 }
 
 float nrd_gradient_to_confidence(vec3 previousRadiance, vec3 currentRadiance, float historyLength, float maxHistoryLength) {
-    return PH_NRD_CONFIDENCE_DISABLED;
+    float prevLuma = nrd_luminance(max(previousRadiance, vec3(0.0)));
+    float currLuma = nrd_luminance(max(currentRadiance, vec3(0.0)));
+    float maxLuma = max(prevLuma, currLuma);
+    float gradient = (maxLuma > 1e-6) ? abs(prevLuma - currLuma) / maxLuma : 0.0;
+    float historyFactor = clamp(historyLength / max(maxHistoryLength, 1.0), 0.0, 1.0);
+    return clamp(1.0 - gradient * (1.0 - historyFactor), 0.0, 1.0);
 }
 
 float nrd_hit_distance_confidence(float hitDistance, float viewDistance) {
-    return PH_NRD_CONFIDENCE_DISABLED;
+    float ratio = hitDistance / max(viewDistance, 1e-3);
+    return clamp(1.0 - ratio * 0.5, 0.1, 1.0);
 }
 
 struct NrdDirectSignal {

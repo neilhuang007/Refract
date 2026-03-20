@@ -222,6 +222,14 @@ float GetMISWeight(SplitBrdf roughBrdf, SplitBrdf trueBrdf, vec3 diffuseAlbedo) 
     return initialWeight * initialWeight * initialWeight;
 }
 
+vec3 gi_clamp_secondary_radiance(vec3 radiance) {
+    return ph_clamp_indirect_radiance(max(radiance, vec3(0.0f)));
+}
+
+vec3 gi_demodulate_specular(vec3 specular, DirectSurface surface) {
+    return specular / max(vec3(0.01f), gi_surface_f0(surface));
+}
+
 DirectSurface gi_load_stage_surface(ivec2 uv) {
     return lt_make_surface(
         texelFetch(stage_radiosity_position, uv, 0).xyz,
@@ -288,11 +296,7 @@ vec3 gi_stage_secondary_radiance(DirectSurface primarySurface, ivec2 stageUv, Di
         if (rtxdi_has_reusable_visibility(stageReservoir)) {
             visible = rtxdi_is_visible(stageReservoir);
         } else {
-#ifdef PH_LIGHTTREE_SOFT_SHADOWS
-            light_sample_trace_hit_surface(stageLightSample, true, stageSurface);
-#else
             light_sample_trace_hit_surface(stageLightSample, false, stageSurface);
-#endif
             visible = ph_luminance(stageLightSample.color) > 1e-6f;
         }
 
@@ -538,7 +542,7 @@ void RTXDI_StoreGIReservoir(RTXDI_GIReservoir reservoir, out vec4 positionData, 
 uniform float ph_restir_enable_final_visibility;
 uniform float ph_restir_indirect_enable_final_mis;
 uniform float ph_restir_temporal_bias_mode;
-uniform float ph_restir_temporal_permutation_sampling;
+uniform float ph_restir_indirect_temporal_permutation_sampling;
 uniform int ph_restir_temporal_uniform_random;
 uniform float ph_restir_temporal_fallback_sampling_mode;
 uniform float ph_restir_temporal_max_reservoir_age;
@@ -578,7 +582,13 @@ int gi_runtime_bias_correction_mode(float configuredMode) {
 }
 
 bool gi_runtime_enable_permutation_sampling() {
-    return ph_restir_temporal_permutation_sampling >= -1.5f;
+    if (ph_restir_indirect_temporal_permutation_sampling > 0.5f) {
+        return true;
+    }
+    if (ph_restir_indirect_temporal_permutation_sampling < -0.5f) {
+        return false;
+    }
+    return false;
 }
 
 bool gi_runtime_enable_fallback_sampling() {
@@ -711,11 +721,60 @@ bool GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample) {
     ray.direction = toSample / distance;
     ray_target = ivec3(giSample.position);
     trace_ray(ray, true);
-    return ray.result_hit && floor(giSample.position) == floor(ray.result_position);
+    bool reachedSampleCell = lt_ray_reached_target_cell(giSample.position);
+    bool environmentMiss = !ray.result_hit && !ray_iteration_bound_reached;
+    return reachedSampleCell || environmentMiss;
 }
 
 bool gi_sample_requires_final_visibility(DirectSurface surface, RTXDI_GISample giSample) {
     return ph_restir_enable_final_visibility >= -1.5f;
+}
+
+DirectSurface gi_make_secondary_shading_surface(DirectSurface secondarySurface) {
+    ivec2 secondaryStageUv = ivec2(0);
+    DirectSurface secondaryStageSurface = secondarySurface;
+    if (gi_try_resolve_stage_surface(secondarySurface, secondaryStageUv, secondaryStageSurface)) {
+        secondarySurface.geometryNormal = secondaryStageSurface.geometryNormal;
+        secondarySurface.shadingNormal = secondaryStageSurface.shadingNormal;
+        secondarySurface.albedo = secondaryStageSurface.albedo;
+        secondarySurface.material = secondaryStageSurface.material;
+    }
+    return secondarySurface;
+}
+
+bool gi_shade_secondary_surface(
+    DirectSurface currentSurface,
+    DirectSurface secondarySurface,
+    vec3 emissionRadiance,
+    out vec3 shadedRadiance
+) {
+    shadedRadiance = max(emissionRadiance, vec3(0.0f));
+
+    Reservoir secondaryLightReservoir = RTXDI_SampleLightsForSurface(secondarySurface);
+    if (!RTXDI_IsValidDIReservoir(secondaryLightReservoir)) {
+        shadedRadiance = gi_clamp_secondary_radiance(shadedRadiance);
+        return ph_luminance(shadedRadiance) > 1e-6f;
+    }
+
+    LightSample secondaryLightSample = light_sample_decode(secondaryLightReservoir, secondarySurface, false);
+    if (secondaryLightSample.index < 0) {
+        shadedRadiance = gi_clamp_secondary_radiance(shadedRadiance);
+        return ph_luminance(shadedRadiance) > 1e-6f;
+    }
+
+    light_sample_trace_hit_surface(secondaryLightSample, false, secondarySurface);
+
+    if (ph_luminance(secondaryLightSample.color) > 1e-6f) {
+        vec3 secondaryViewDir = gi_secondary_view_dir(currentSurface, secondarySurface);
+        shadedRadiance += lt_shade_surface_light_sample_with_view(
+            secondarySurface,
+            secondaryLightSample,
+            secondaryViewDir
+        ) * secondaryLightReservoir.weightSum;
+    }
+
+    shadedRadiance = gi_clamp_secondary_radiance(shadedRadiance);
+    return ph_luminance(shadedRadiance) > 1e-6f;
 }
 
 bool gi_build_initial_sample(DirectSurface currentSurface, out RTXDI_GISample giSample, out float samplePdf) {
@@ -723,11 +782,7 @@ bool gi_build_initial_sample(DirectSurface currentSurface, out RTXDI_GISample gi
     samplePdf = 0.0f;
 
     vec3 viewDir = normalize(rt_camera_position - currentSurface.rtPos);
-
-    lightEmittance = vec3(0.0f);
-    breakOnEmpty = true;
-    ray.origin = currentSurface.rtPos + 0.1f * currentSurface.geometryNormal;
-    ray.direction = ph_sample_brdf_direction(
+    vec3 sampleDir = ph_sample_brdf_direction(
         currentSurface.shadingNormal,
         viewDir,
         gi_surface_albedo(currentSurface),
@@ -736,79 +791,48 @@ bool gi_build_initial_sample(DirectSurface currentSurface, out RTXDI_GISample gi
         tex_coord,
         frameCounter
     );
+    float distanceScale = max(1.0f, 0.1f * length(currentSurface.worldPos - world_camera_position));
+    float brdfRayMinT = 0.001f * distanceScale;
+
+    lightEmittance = vec3(0.0f);
+    breakOnEmpty = true;
+    ray.origin = currentSurface.rtPos + sampleDir * brdfRayMinT;
+    ray.direction = sampleDir;
     trace_ray(ray, true);
     breakOnEmpty = false;
 
-    samplePdf = gi_brdf_sample_pdf(currentSurface, ray.direction);
+    samplePdf = gi_brdf_sample_pdf(currentSurface, sampleDir);
     if (samplePdf <= 0.0f) {
         return false;
     }
 
     if (!ray.result_hit && !ray_iteration_bound_reached) {
-        giSample.position = currentSurface.rtPos + ray.direction * 256.0f;
-        giSample.normal = -ray.direction;
+        giSample.position = currentSurface.rtPos + sampleDir * 256.0f;
+        giSample.normal = -sampleDir;
         giSample.radiance = ph_clamp_indirect_radiance(indirect_light_color);
-        return gi_sample_is_valid(giSample);
-    }
-
-    if (dot(lightEmittance, lightEmittance) > 0.0f) {
-        giSample.position = ray.result_position;
-        giSample.normal = normalize(ray.result_normal);
-        giSample.radiance = ph_clamp_indirect_radiance(lightEmittance);
         return gi_sample_is_valid(giSample);
     }
 
     vec3 secondaryPos = ray.result_position;
     vec3 secondaryNormal = normalize(ray.result_normal);
     vec3 secondaryAlbedo = max(ray.result_color, vec3(0.0f));
-    DirectSurface secondarySurface = lt_make_surface(
+    vec3 emissionRadiance = dot(lightEmittance, lightEmittance) > 0.0f ? lightEmittance : vec3(0.0f);
+    DirectSurface secondarySurface = gi_make_secondary_shading_surface(lt_make_surface(
         secondaryPos + world_offset,
         secondaryNormal,
         secondaryNormal,
         secondaryAlbedo,
         vec4(1.0f, 0.0f, 0.0f, 0.0f)
-    );
+    ));
 
-    ivec2 secondaryStageUv = ivec2(0);
-    DirectSurface secondaryStageSurface = secondarySurface;
-    if (gi_try_resolve_stage_surface(secondarySurface, secondaryStageUv, secondaryStageSurface)) {
-        vec3 stageRadiance = gi_stage_secondary_radiance(currentSurface, secondaryStageUv, secondaryStageSurface);
-        if (ph_luminance(stageRadiance) > 1e-6f) {
-            giSample.position = secondaryStageSurface.rtPos;
-            giSample.normal = normalize(secondaryStageSurface.shadingNormal);
-            giSample.radiance = stageRadiance;
-            return gi_sample_is_valid(giSample);
-        }
-    }
-
-    Reservoir secondaryLightReservoir = rtxdi_empty_reservoir();
-    rtxdi_sample_local_lights(secondaryLightReservoir, secondarySurface);
-    if (!rtxdi_is_valid_reservoir(secondaryLightReservoir)) {
+    vec3 secondaryRadiance = vec3(0.0f);
+    if (!gi_shade_secondary_surface(currentSurface, secondarySurface, emissionRadiance, secondaryRadiance)) {
         return false;
     }
 
-    LightSample secondaryLightSample = light_sample_new_at(
-        load_light(rtxdi_get_light_index(secondaryLightReservoir)), secondarySurface);
-#ifdef PH_LIGHTTREE_SOFT_SHADOWS
-    light_sample_trace_hit_surface(secondaryLightSample, true, secondarySurface);
-#else
-    light_sample_trace_hit_surface(secondaryLightSample, false, secondarySurface);
-#endif
-
-    if (ph_luminance(secondaryLightSample.color) <= 1e-6f) {
-        return false;
-    }
-
-    vec3 secondaryViewDir = gi_secondary_view_dir(currentSurface, secondarySurface);
     giSample.position = secondaryPos;
-    giSample.normal = secondaryNormal;
-    giSample.radiance = ph_clamp_indirect_radiance(
-        lt_shade_surface_light_sample_with_view(
-            secondarySurface,
-            secondaryLightSample,
-            secondaryViewDir
-        ) * secondaryLightReservoir.weightSum
-    );
+    giSample.normal = secondarySurface.shadingNormal;
+    giSample.radiance = secondaryRadiance;
     return gi_sample_is_valid(giSample);
 }
 
@@ -890,6 +914,8 @@ void gi_shade_reservoir(DirectSurface currentSurface, RTXDI_GIReservoir reservoi
         outDiffuse = finalBrdf.demodulatedDiffuse * finalRadiance;
         outSpecular = finalBrdf.specular * finalRadiance;
     }
+
+    outSpecular = gi_demodulate_specular(outSpecular, currentSurface);
 }
 
 #endif

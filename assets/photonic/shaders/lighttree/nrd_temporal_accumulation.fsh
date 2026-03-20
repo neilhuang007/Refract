@@ -20,15 +20,14 @@ uniform sampler2D prev_direct_slow_input;
 uniform sampler2D prev_direct_fast_input;
 uniform sampler2D prev_direct_history_length_input;
 
-// NRD NOTE (checkerboard): NRD RELAX supports checkerboard rendering (reconstruct missing pixels
-// from neighbors before temporal accumulation). Minecraft does not use checkerboard rendering,
-// so this step is intentionally omitted.
+// NRD checkerboard reconstruction: when checkerboard rendering is active, inactive pixels
+// receive zero radiance from shade_samples. Reconstruct from geometry-aware neighbors
+// before temporal accumulation, matching NRD RELAX's built-in checkerboard support.
 
 // NRD Common.hlsli:331 - ComputeParallaxInPixels
 // Computes parallax by projecting the surface position with a camera offset into clip space
 // and measuring the UV difference in pixels.
 float direct_compute_parallax_in_pixels(vec3 currentPosition, vec3 cameraDelta) {
-    // Parallax method 1: prevWorldPos + cameraDelta projected through previous clip
     vec3 shiftedPos = currentPosition + cameraDelta;
     vec2 shiftedUv = ph_reprojectf(
         previous_modelview_projection,
@@ -43,11 +42,18 @@ float direct_compute_parallax_in_pixels(vec3 currentPosition, vec3 cameraDelta) 
 
 // NRD RELAX per-tap disocclusion check.
 // Returns 1.0 if the tap is valid for reprojection, 0.0 otherwise.
+// Uses world-space plane distance against a per-tap scalar threshold (already resolved from vec4).
 float direct_check_tap(ivec2 tapCoord, ivec2 texSize,
     vec3 currentPosition, vec3 currentNormal, vec4 currentMaterial,
-    float disocclusionThreshold)
+    float tapDisocclusionThreshold)
 {
     if (any(lessThan(tapCoord, ivec2(0))) || any(greaterThanEqual(tapCoord, texSize))) {
+        return 0.0;
+    }
+
+    // Checkerboard validity: previous frame taps on inactive pixels hold stale/zero data.
+    // Match RTXDI Checkerboard.hlsli — reject taps that were inactive in the previous frame.
+    if (!nrd_is_active_checkerboard_pixel(tapCoord, true, ph_restir_active_checkerboard_field)) {
         return 0.0;
     }
 
@@ -57,11 +63,8 @@ float direct_check_tap(ivec2 tapCoord, ivec2 texSize,
     }
 
     vec3 prevPosition = texelFetch(prev_radiosity_position, tapCoord, 0).xyz;
-    if (abs(dot(prevPosition - currentPosition, currentNormal)) > disocclusionThreshold) {
-        return 0.0;
-    }
-
-    return 1.0;
+    float planeDist = abs(dot(prevPosition - currentPosition, currentNormal));
+    return planeDist <= tapDisocclusionThreshold ? 1.0 : 0.0;
 }
 
 void direct_reset_outputs() {
@@ -79,7 +82,16 @@ void main() {
     }
 
     // --- Setup: fetch current frame data ---
-    NrdDirectSignal currentDirect = nrd_unpack_direct_signal(texelFetch(stage_radiosity_direct, tex_coord, 0));
+    // Checkerboard reconstruction: inactive pixels have zero radiance from shade_samples.
+    // Reconstruct from geometry-aware neighbors before temporal accumulation.
+    vec4 rawDirect = texelFetch(stage_radiosity_direct, tex_coord, 0);
+    if (ph_restir_active_checkerboard_field != 0
+        && !nrd_is_active_checkerboard_pixel(tex_coord, false, ph_restir_active_checkerboard_field)) {
+        rawDirect = nrd_reconstruct_checkerboard_signal(
+            stage_radiosity_direct, tex_coord,
+            stage_radiosity_position, stage_radiosity_normal);
+    }
+    NrdDirectSignal currentDirect = nrd_unpack_direct_signal(rawDirect);
     vec4 currentMaterial = texelFetch(stage_radiosity_material, tex_coord, 0);
     vec3 currentPosition = texelFetch(stage_radiosity_position, tex_coord, 0).xyz;
     vec3 currentGeometryNormal = texelFetch(stage_radiosity_normal, tex_coord, 0).xyz;
@@ -88,12 +100,13 @@ void main() {
         texelFetch(stage_radiosity_mapped_normal, tex_coord, 0).xyz
     );
 
-    // NRD RELAX: average normal over 3x3 neighborhood for reprojection validation only.
-    // NRD uses this averaged normal only for backface rejection during reprojection,
-    // NOT as the main shading normal for NoV, disocclusion, etc.
-    vec3 avgNormal = vec3(0.0);
+    // NRD RELAX reference line 439-457: average normal over 3x3 neighborhood.
+    // Reference starts with currentNormal (center pixel), adds 8 neighbors, then divides by 9.
+    // The divide-by-9 happens before normalization (reference line 457: currentNormalAveraged /= 9.0).
+    vec3 avgNormal = currentNormal;
     for (int ny = -1; ny <= 1; ny++) {
         for (int nx = -1; nx <= 1; nx++) {
+            if (nx == 0 && ny == 0) continue;
             ivec2 nCoord = tex_coord + ivec2(nx, ny);
             ivec2 texSizeLocal = textureSize(stage_radiosity_normal, 0);
             if (any(lessThan(nCoord, ivec2(0))) || any(greaterThanEqual(nCoord, texSizeLocal))) continue;
@@ -104,7 +117,8 @@ void main() {
             avgNormal += sn;
         }
     }
-    // NRD averages all 9 normals unconditionally
+    // Reference line 457: divide by 9.0 before normalizing.
+    avgNormal /= 9.0;
     vec3 reprojectionNormal = normalize(avgNormal);
 
     NrdDirectHistorySample currentHistory = nrd_direct_history_from_radiance(currentDirect.radiance);
@@ -145,16 +159,49 @@ void main() {
     vec2 bilinearWeights = fract(prevPixelPosFloat - 0.5);
     ivec2 texSize = textureSize(prev_radiosity_position, 0);
 
-    // --- NRD RELAX disocclusion threshold scaled by NoV and pixel parallax ---
-    // NRD: 1/lerp(lerp(0.05, 1.0, NoV), 1.0, saturate(pixelParallax/30.0)) — uses smbParallaxInPixelsMax
-    float NoVfactor = mix(mix(0.05, 1.0, NoV), 1.0, clamp(smbParallaxInPixelsMax / 30.0, 0.0, 1.0));
-    float disocclusionScale = 1.0 / max(NoVfactor, 0.05);
-    // NRD: threshold = gDisocclusionThreshold * PixelRadiusToWorld(1, viewZ) * min(rectSize).
-    // For perspective: PixelRadiusToWorld ≈ viewZ * (2*tan(fov/2)/height).
-    // Our viewDistance ≈ viewZ for typical FOVs; the scaling is functionally equivalent.
-    float disocclusionThreshold = ph_nrd_depth_threshold * viewDistance * disocclusionScale;
+    // --- Per-tap disocclusion threshold as vec4 (reference lines 112-117) ---
+    // pixelSize = PixelRadiusToWorld(1, viewZ) ~= viewDistance * (2*tan(fov/2) / viewHeight)
+    // frustumSize = pixelSize * min(rectSize.x, rectSize.y)
+    // For perspective: using ph_nrd_depth_threshold * viewDistance as frustumSize approximation,
+    // matching the existing scalar approach but structured as the reference requires.
+    float disocclusionThresholdSlopeScale =
+        1.0 / max(mix(mix(0.05, 1.0, NoV), 1.0, clamp(smbParallaxInPixelsMax / 30.0, 0.0, 1.0)), 0.05);
+    float frustumSize = ph_nrd_depth_threshold * viewDistance;
 
-    // --- Standard bilinear weights ---
+    // Reference line 115-117: per-tap vec4, gated by IsInScreenBilinear, minus NRD_EPS.
+    vec4 screenValidity = nrd_is_in_screen_bilinear(vec2(bilinearOrigin), vec2(texSize));
+    vec4 smbDisocclusionThreshold =
+        clamp(ph_nrd_depth_threshold * disocclusionThresholdSlopeScale, 0.0, 1.0)
+        * frustumSize
+        * screenValidity
+        - NRD_EPS;
+
+    // --- Tap coordinates ---
+    ivec2 tap00 = bilinearOrigin;
+    ivec2 tap10 = bilinearOrigin + ivec2(1, 0);
+    ivec2 tap01 = bilinearOrigin + ivec2(0, 1);
+    ivec2 tap11 = bilinearOrigin + ivec2(1, 1);
+
+    // --- Per-tap validity using per-tap threshold (reference line 125-134) ---
+    vec4 bilinearTapsValid;
+    bilinearTapsValid.x = direct_check_tap(tap00, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.x);
+    bilinearTapsValid.y = direct_check_tap(tap10, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.y);
+    bilinearTapsValid.z = direct_check_tap(tap01, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.z);
+    bilinearTapsValid.w = direct_check_tap(tap11, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.w);
+
+    // --- NRD RELAX backface rejection: bilinear sample of previous normal at reprojection center ---
+    // NRD samples one bilinearly filtered previous normal at the footprint center.
+    vec2 prevNormalUv = (prevPixelPosFloat + 0.5) / vec2(textureSize(prev_radiosity_normal, 0));
+    vec3 prevNormalBilinear = texture(prev_radiosity_normal, prevNormalUv).xyz;
+    vec3 prevMappedNormalBilinear = texture(prev_radiosity_mapped_normal, prevNormalUv).xyz;
+    vec3 prevNormalFiltered = nrd_select_surface_normal(prevNormalBilinear, prevMappedNormalBilinear);
+    // Reference lines 145-150: reject all taps if previous normal backfaces current reprojection normal.
+    if (dot(reprojectionNormal, prevNormalFiltered) < 0.0) {
+        bilinearTapsValid = vec4(0.0);
+    }
+
+    // --- Bilinear custom weights (reference line 155) ---
+    // GetBilinearCustomWeights: standardWeights * tapValid, then normalized.
     float fx = bilinearWeights.x;
     float fy = bilinearWeights.y;
     vec4 standardWeights = vec4(
@@ -163,48 +210,32 @@ void main() {
         (1.0 - fx) * fy,
         fx         * fy
     );
+    vec4 bilinearCustomWeights = standardWeights * bilinearTapsValid;
+    float sumCustomWeights = dot(bilinearCustomWeights, vec4(1.0));
+    bool canReproject = sumCustomWeights > 1e-4;
+    if (canReproject) bilinearCustomWeights /= sumCustomWeights;
 
-    // --- Per-tap validity (NRD RELAX bilinear disocclusion check) ---
-    ivec2 tap00 = bilinearOrigin;
-    ivec2 tap10 = bilinearOrigin + ivec2(1, 0);
-    ivec2 tap01 = bilinearOrigin + ivec2(0, 1);
-    ivec2 tap11 = bilinearOrigin + ivec2(1, 1);
-
-    vec4 tapValid;
-    tapValid.x = direct_check_tap(tap00, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
-    tapValid.y = direct_check_tap(tap10, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
-    tapValid.z = direct_check_tap(tap01, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
-    tapValid.w = direct_check_tap(tap11, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
-
-    // --- NRD RELAX backface rejection: bilinear sample of previous normal at reprojection center ---
-    // NRD samples one bilinearly filtered previous normal at the footprint center, not an average
-    // of valid taps. Uses texture() (bilinear) instead of texelFetch() (point).
-    vec2 prevNormalUv = (prevPixelPosFloat + 0.5) / vec2(textureSize(prev_radiosity_normal, 0));
-    vec3 prevNormalBilinear = texture(prev_radiosity_normal, prevNormalUv).xyz;
-    vec3 prevMappedNormalBilinear = texture(prev_radiosity_mapped_normal, prevNormalUv).xyz;
-    vec3 prevNormalFiltered = nrd_select_surface_normal(prevNormalBilinear, prevMappedNormalBilinear);
-    // Reject all taps if previous normal backfaces current reprojection normal
-    if (dot(reprojectionNormal, prevNormalFiltered) < 0.0) {
-        tapValid = vec4(0.0);
+    // --- Footprint quality (reference line 223) ---
+    // bicubicValid = all 4 bilinear taps valid (bicubic equivalent without bicubic infrastructure).
+    // footprintQuality = bicubicValid ? 1.0 : dot(bilinearCustomWeights, 1.0)
+    // When no taps valid, reprojectionFound = 0 and footprintQuality = 0.
+    bool bicubicEquivalentValid = (bilinearTapsValid == vec4(1.0));
+    float footprintQuality = 0.0;
+    if (canReproject) {
+        footprintQuality = bicubicEquivalentValid ? 1.0 : dot(bilinearCustomWeights, vec4(1.0));
     }
 
-    // --- Custom bilinear weights accounting for per-tap validity ---
-    vec4 customWeights = standardWeights * tapValid;
-    float sumCustom = dot(customWeights, vec4(1.0));
-    bool canReproject = sumCustom > 1e-4;
-    float footprintQuality = canReproject ? sumCustom : 0.0;
-    if (canReproject) customWeights /= sumCustom;
-
-    // --- NRD RELAX footprint stretching detection (lines 557-563) ---
+    // --- NRD RELAX footprint stretching detection (reference lines 558-563) ---
     // Penalizes reprojection when the previous viewpoint was nearly grazing vs current.
-    // NRD uses prevWorldPos for size quality; approximate from reprojected previous position.
+    // sizeQuality + abs(orthoMode): orthoMode = 0 here so the +0.0 is a no-op (documented).
     vec3 prevWorldPos = texture(prev_radiosity_position, prevNormalUv).xyz;
     vec3 Vprev = normalize(prevWorldPos - previous_world_camera_position);
     float NoVprev = abs(dot(currentNormal, Vprev));
     float sizeQuality = (NoVprev + 1e-3) / (NoV + 1e-3);
     sizeQuality *= sizeQuality;
     sizeQuality *= sizeQuality;
-    footprintQuality *= mix(0.1, 1.0, clamp(sizeQuality, 0.0, 1.0));
+    // Reference line 563: saturate(sizeQuality + abs(gOrthoMode)) — orthoMode=0 so +0.0.
+    footprintQuality *= mix(0.1, 1.0, clamp(sizeQuality + 0.0, 0.0, 1.0));
 
     // --- Temporal accumulation ---
     bool temporalReset = light_reload && (ph_debug_disable_temporal_reset < 0.5);
@@ -219,42 +250,47 @@ void main() {
     float fastMaxAccumulatedFrameNum = ph_nrd_max_fast_accumulated_frame_num;
 
     if (!temporalReset && canReproject) {
-        // Weighted bilinear fetch of history buffers across 4 taps.
-        vec4 prevSlow = vec4(0.0);
-        vec4 prevFast = vec4(0.0);
-        vec4 prevHistoryVec = vec4(0.0);
+        // --- History length: gather per-tap raw scalars, blend with nrd_bilinear_custom_float ---
+        // Reference lines 207-214: gather 4 raw encoded history values (float), then call
+        // BilinearWithCustomWeightsImmediateFloat which decodes (multiplies by 255) inside the blend.
+        // We decode each tap individually before blending, matching the reference contract.
+        float h00 = nrd_decoded_history(texelFetch(prev_direct_history_length_input, tap00, 0));
+        float h10 = nrd_decoded_history(texelFetch(prev_direct_history_length_input, tap10, 0));
+        float h01 = nrd_decoded_history(texelFetch(prev_direct_history_length_input, tap01, 0));
+        float h11 = nrd_decoded_history(texelFetch(prev_direct_history_length_input, tap11, 0));
+        float decodedPrevHistory = nrd_bilinear_custom_float(h00, h10, h01, h11, bilinearCustomWeights);
 
-        if (customWeights.x > 0.0) {
-            prevSlow       += texelFetch(prev_direct_slow_input,          tap00, 0) * customWeights.x;
-            prevFast       += texelFetch(prev_direct_fast_input,          tap00, 0) * customWeights.x;
-            prevHistoryVec += texelFetch(prev_direct_history_length_input, tap00, 0) * customWeights.x;
-        }
-        if (customWeights.y > 0.0) {
-            prevSlow       += texelFetch(prev_direct_slow_input,          tap10, 0) * customWeights.y;
-            prevFast       += texelFetch(prev_direct_fast_input,          tap10, 0) * customWeights.y;
-            prevHistoryVec += texelFetch(prev_direct_history_length_input, tap10, 0) * customWeights.y;
-        }
-        if (customWeights.z > 0.0) {
-            prevSlow       += texelFetch(prev_direct_slow_input,          tap01, 0) * customWeights.z;
-            prevFast       += texelFetch(prev_direct_fast_input,          tap01, 0) * customWeights.z;
-            prevHistoryVec += texelFetch(prev_direct_history_length_input, tap01, 0) * customWeights.z;
-        }
-        if (customWeights.w > 0.0) {
-            prevSlow       += texelFetch(prev_direct_slow_input,          tap11, 0) * customWeights.w;
-            prevFast       += texelFetch(prev_direct_fast_input,          tap11, 0) * customWeights.w;
-            prevHistoryVec += texelFetch(prev_direct_history_length_input, tap11, 0) * customWeights.w;
-        }
-
-        float decodedPrevHistory = nrd_decoded_history(prevHistoryVec);
+        // Reference lines 554-555: historyLength = historyLength + 1.0, then clamp to max.
         historyLength = min(decodedPrevHistory + 1.0, directMaxHistoryLength);
 
-        // Confidence input is intentionally disabled in this pipeline.
-        // Keep NRD-facing history contraction neutral instead of sampling stale pseudo-confidence.
-        float historyConfidence = 1.0;
-        slowMaxAccumulatedFrameNum *= historyConfidence;
-        fastMaxAccumulatedFrameNum *= historyConfidence;
+        // --- Weighted bilinear fetch of slow/fast history buffers across 4 taps ---
+        vec4 prevSlow = vec4(0.0);
+        vec4 prevFast = vec4(0.0);
 
-        // NRD RELAX footprint quality shortening (lines 567-572):
+        if (bilinearCustomWeights.x > 0.0) {
+            prevSlow += texelFetch(prev_direct_slow_input, tap00, 0) * bilinearCustomWeights.x;
+            prevFast += texelFetch(prev_direct_fast_input, tap00, 0) * bilinearCustomWeights.x;
+        }
+        if (bilinearCustomWeights.y > 0.0) {
+            prevSlow += texelFetch(prev_direct_slow_input, tap10, 0) * bilinearCustomWeights.y;
+            prevFast += texelFetch(prev_direct_fast_input, tap10, 0) * bilinearCustomWeights.y;
+        }
+        if (bilinearCustomWeights.z > 0.0) {
+            prevSlow += texelFetch(prev_direct_slow_input, tap01, 0) * bilinearCustomWeights.z;
+            prevFast += texelFetch(prev_direct_fast_input, tap01, 0) * bilinearCustomWeights.z;
+        }
+        if (bilinearCustomWeights.w > 0.0) {
+            prevSlow += texelFetch(prev_direct_slow_input, tap11, 0) * bilinearCustomWeights.w;
+            prevFast += texelFetch(prev_direct_fast_input, tap11, 0) * bilinearCustomWeights.w;
+        }
+
+        // NRD RELAX reference (RELAX_TemporalAccumulation.cs.hlsl:595-600):
+        // Sample diffuse confidence at current pixel (prev UV is ideal but current is acceptable approximation).
+        float diffConfidence = clamp(texelFetch(diffuse_confidence_input, tex_coord, 0).r, 0.0, 1.0);
+        slowMaxAccumulatedFrameNum *= diffConfidence;
+        fastMaxAccumulatedFrameNum *= diffConfidence;
+
+        // NRD RELAX footprint quality shortening (reference lines 567-572):
         // Partial footprints accumulate less history to prevent ghosting.
         if (footprintQuality < 1.0) {
             historyLength *= sqrt(footprintQuality);
