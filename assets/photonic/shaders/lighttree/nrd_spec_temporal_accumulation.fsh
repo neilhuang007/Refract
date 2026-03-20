@@ -15,11 +15,6 @@ uniform float ph_debug_disable_temporal_reset;
 uniform float ph_nrd_max_accumulated_frame_num;
 uniform float ph_nrd_max_fast_accumulated_frame_num;
 uniform float ph_nrd_depth_threshold;
-
-uniform sampler2D prev_spec_slow_input;
-uniform sampler2D prev_spec_fast_input;
-uniform sampler2D prev_spec_history_length_input;
-
 // NRD NOTE (checkerboard): NRD RELAX supports checkerboard rendering (reconstruct missing pixels
 // from neighbors before temporal accumulation). Minecraft does not use checkerboard rendering,
 // so this step is intentionally omitted.
@@ -229,7 +224,8 @@ void main() {
         float decodedPrevHistory = nrd_decoded_history(prevHistoryVec);
         historyLength = min(decodedPrevHistory + 1.0, specMaxHistoryLength);
 
-        // NRD confidence: channel G = specular confidence (channel R = diffuse confidence)
+        // Confidence input is intentionally disabled in this pipeline.
+        // Keep NRD-facing history contraction neutral instead of sampling stale spec confidence.
         float historyConfidence = 1.0;
         slowMaxAccumulatedFrameNum *= historyConfidence;
         fastMaxAccumulatedFrameNum *= historyConfidence;

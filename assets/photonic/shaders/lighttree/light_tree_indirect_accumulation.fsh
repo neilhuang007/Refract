@@ -43,7 +43,7 @@ void main() {
 
     int activeCheckerboardField = ph_restir_active_checkerboard_field;
     ivec2 currentReservoirPos = RTXDI_PixelPosToReservoirPos(tex_coord, activeCheckerboardField);
-    RTXDI_GIReservoir currentReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, currentReservoirPos, activeCheckerboardField);
+    RTXDI_GIReservoir currentReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, currentReservoirPos);
     RTXDI_GIReservoir state = RTXDI_EmptyGIReservoir();
     float selectedTargetPdf = 0.0f;
     float inputM = 0.0f;
@@ -101,7 +101,7 @@ void main() {
 
     float normalizationNumerator = 1.0f;
     float normalizationDenominator = state.samples * selectedTargetPdf;
-    if (cachedResult != 0u) {
+    if (biasCorrectionMode >= gi_bias_correction_mode_basic && cachedResult != 0u) {
         float pi = selectedTargetPdf;
         float piSum = selectedTargetPdf * inputM;
 
@@ -150,7 +150,7 @@ void main() {
     gi_shade_reservoir(currentSurface, state, initialReservoir, shadedDiffuse, shadedSpecular);
 
     vec3 demodulatedIndirect = max(shadedDiffuse + shadedSpecular, vec3(0.0f));
-    float history = min(state.age + 1.0f, lt_indirect_max_history);
+    float history = min(state.age + 1.0f, gi_runtime_temporal_max_history());
     float luma = ph_luminance(demodulatedIndirect);
     float secondMoment = luma * luma;
     float variance = max(secondMoment / max(history, 1.0f), 1e-6f);

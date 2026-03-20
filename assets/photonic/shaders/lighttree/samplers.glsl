@@ -1,3 +1,6 @@
+#ifndef PH_LIGHTTREE_SAMPLERS_GLSL
+#define PH_LIGHTTREE_SAMPLERS_GLSL
+
 uniform sampler2D radiosity_position;
 uniform sampler2D radiosity_normal;
 uniform sampler2D radiosity_mapped_normal;
@@ -33,7 +36,6 @@ uniform sampler2D radiosity_indirect_temporal_normal;
 uniform sampler2D radiosity_indirect_temporal_radiance;
 uniform sampler2D radiosity_indirect_temporal_meta;
 uniform sampler2D radiosity_motion;
-uniform sampler2D direct_confidence_input;
 
 uniform sampler2D prev_radiosity_position;
 uniform sampler2D prev_radiosity_normal;
@@ -55,14 +57,20 @@ uniform sampler2D prev_radiosity_indirect_reservoir_meta;
 uniform sampler2D prev_radiosity_lighting;
 uniform sampler2D prev_radiosity_lighting_variance;
 uniform sampler2D prev_radiosity_motion;
-uniform sampler2D prev_direct_confidence_input;
-uniform sampler2D prev_direct_history_length_input;
+uniform sampler2D prev_spec_slow_input;
+uniform sampler2D prev_spec_fast_input;
+uniform sampler2D prev_spec_history_length_input;
+
+uniform sampler2D diffuse_confidence_input;
+uniform sampler2D spec_confidence_input;
+uniform sampler2D spec_history_confidence_input;
 
 // Raw stage buffers are declared here because several LIGHT_TREE passes include
 // this sampler header and still read the per-frame stage direct signal.
 uniform sampler2D stage_radiosity_position;
 uniform sampler2D stage_radiosity_normal;
 uniform sampler2D stage_radiosity_direct;
+uniform sampler2D stage_radiosity_direct_specular;
 uniform sampler2D stage_radiosity_mapped_normal;
 uniform sampler2D stage_radiosity_albedo;
 uniform sampler2D stage_radiosity_material;
@@ -85,7 +93,7 @@ vec3 sample_photonics_handheld(vec2 tex_coord) {
     #ifdef PH_ENABLE_HANDHELD_LIGHT
     return texture2D(radiosity_handheld, tex_coord).rgb;
     #else
-    return vec3(0f);
+    return vec3(0.0f);
     #endif
 }
 
@@ -93,3 +101,5 @@ vec3 sample_photonics_indirect(vec2 tex_coord) {
     if (ph_debug_show_indirect < 0.5) return vec3(0.0);
     return texture2D(radiosity_indirect_resolved, tex_coord).rgb;
 }
+
+#endif

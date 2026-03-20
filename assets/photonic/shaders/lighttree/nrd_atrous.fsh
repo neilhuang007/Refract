@@ -6,11 +6,9 @@ layout(location = 0) out vec4 direct_atrous_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
-#include "/photonics/lighttree/samplers.glsl"
 
 uniform sampler2D direct_atrous_input;
 uniform sampler2D nrd_history_length_tex;
-
 uniform int direct_atrous_step_size;
 uniform float ph_nrd_depth_threshold;
 
@@ -62,7 +60,7 @@ void main() {
     vec3 centerMappedNormal = nrd_select_surface_normal(centerGeometryNormal, texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz);
 
     // NRD RELAX: confidence-driven normal and luminance relaxation (RELAX_Atrous.cs.hlsl:111-114, 219)
-    float diffuseConfidence = texelFetch(direct_confidence_input, tex_coord, 0).r;
+    float diffuseConfidence = texelFetch(diffuse_confidence_input, tex_coord, 0).r;
 
     float centerWeight = gaussian3x3[0] * gaussian3x3[0];
     vec3 sumColor = centerColor * centerWeight;

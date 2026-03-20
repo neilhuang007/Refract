@@ -18,6 +18,7 @@ uniform float ph_nrd_depth_threshold;
 
 uniform sampler2D prev_direct_slow_input;
 uniform sampler2D prev_direct_fast_input;
+uniform sampler2D prev_direct_history_length_input;
 
 // NRD NOTE (checkerboard): NRD RELAX supports checkerboard rendering (reconstruct missing pixels
 // from neighbors before temporal accumulation). Minecraft does not use checkerboard rendering,

@@ -53,6 +53,7 @@ void main() {
         RTXDI_CombineGIReservoirs(state, inputReservoir, 0.5f, selectedTargetPdf);
     }
 
+    int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
     ivec2 prevPos = ivec2(round(vec2(tex_coord) + motionVector.xy));
     float expectedPrevLinearDepth = length(currentSurface.worldPos - world_camera_position) + motionVector.z;

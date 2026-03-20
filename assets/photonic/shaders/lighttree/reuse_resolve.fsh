@@ -41,8 +41,8 @@ const int RTXDI_BIAS_CORRECTION_BASIC = 1;
 const int RTXDI_BIAS_CORRECTION_PAIRWISE = 2;
 const int RTXDI_BIAS_CORRECTION_RAY_TRACED = 3;
 
-// Fix #9: rtxdi_unpack_reservoir_at_surface resets to empty on NaN/Inf (fix #2 in reuse_bridge.glsl).
-// When the reservoir has corrupt weightSum or targetPdf the unpack returns RTXDI_EmptyDIReservoir(),
+// Fix #9: rtxdi_unpack_reservoir_at_surface resets to empty on invalid weightSum (fix #2 in reuse_bridge.glsl).
+// When the reservoir has corrupt weightSum the unpack returns RTXDI_EmptyDIReservoir(),
 // causing this function to return false and the reservoir to remain at its empty initial state.
 bool lt_load_direct_temporal_reservoir(ivec2 uv, DirectSurface surface, out Reservoir reservoir) {
     reservoir = rtxdi_empty_reservoir();
@@ -60,7 +60,7 @@ bool lt_load_direct_temporal_reservoir(ivec2 uv, DirectSurface surface, out Rese
     );
     // RTXDI_UnpackDIReservoir (ReservoirStorage.hlsli lines 88-91) only sanitizes weightSum, not targetPdf.
     // Match RTXDI exactly: do NOT check targetPdf for NaN here.
-    return rtxdi_is_valid_reservoir(reservoir) && !isnan(reservoir.weightSum);
+    return RTXDI_IsValidDIReservoir(reservoir) && !isnan(reservoir.weightSum);
 }
 
 void main() {
@@ -159,8 +159,10 @@ void main() {
 
     // RTXDI line 57: uint startIdx = uint(RTXDI_GetNextRandom(rng) * params.neighborOffsetMask);
     // neighborOffsetMask = lt_neighbor_offset_count - 1 (power-of-2 bitmask).
-    int neighborOffsetMask = lt_neighbor_offset_count - 1;
-    int startIdx = int(rand_next_float() * float(neighborOffsetMask));
+    uint neighborOffsetMask = uint(lt_neighbor_offset_count - 1);
+    uint startIdx = uint(rand_next_float() * float(neighborOffsetMask));
+
+    int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
 
     // State reservoir — matches RTXDI_DISpatialResamplingWithPairwiseMIS variable name "state".
     Reservoir state = rtxdi_empty_reservoir();
@@ -175,14 +177,15 @@ void main() {
         int validSpatialSamples = 0;
 
         for (int i = 0; i < numSpatialSamples; i++) {
-            ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(startIdx + i, spatialRadius);
+            int sampleIdx = int((startIdx + uint(i)) & neighborOffsetMask);
+            ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(sampleIdx, spatialRadius);
             // RTXDI SpatialResampling.hlsli line 65: int2 idx = int2(pixelPosition) + spatialOffset
             ivec2 idx = tex_coord + spatialOffset;
             // RTXDI SpatialResampling.hlsli line 66: RAB_ClampSamplePositionIntoView
             // Reflects at screen edges (not clamps) — ports RAB_SpatialHelpers.hlsli lines 20-33.
             idx = RAB_ClampSamplePositionIntoView(idx, false);
             // RTXDI SpatialResampling.hlsli line 68: RTXDI_ActivateCheckerboardPixel
-            RTXDI_ActivateCheckerboardPixel(idx, false, int(ph_restir_active_checkerboard_field));
+            RTXDI_ActivateCheckerboardPixel(idx, false, activeCheckerboardField);
 
             DirectSurface neighborSurface = lt_load_surface(idx);
             if (!lt_is_valid_surface(neighborSurface)) continue;
@@ -193,8 +196,9 @@ void main() {
 
             // Always load the neighbor sample.
             // RTXDI SpatialResampling.hlsli line 85: RTXDI_DIReservoir neighborSample = RTXDI_LoadDIReservoir(...)
+            ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
             Reservoir neighborSample = rtxdi_empty_reservoir();
-            lt_load_direct_temporal_reservoir(idx, neighborSurface, neighborSample);
+            lt_load_direct_temporal_reservoir(reservoirPos, neighborSurface, neighborSample);
             rtxdi_prepare_spatial_reuse(neighborSample, spatialOffset);
 
             // RTXDI SpatialResampling.hlsli lines 89-93: discountNaiveSamples check.
@@ -252,13 +256,14 @@ void main() {
         RTXDI_CombineDIReservoirs(state, centerSample, 0.5f, centerSample.targetPdf);
 
         for (int i = 0; i < numSpatialSamples; i++) {
-            ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(startIdx + i, spatialRadius);
+            int sampleIdx = int((startIdx + uint(i)) & neighborOffsetMask);
+            ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(sampleIdx, spatialRadius);
             ivec2 idx = tex_coord + spatialOffset;
             // RTXDI SpatialResampling.hlsli line 66: RAB_ClampSamplePositionIntoView
             // Reflects at screen edges (not clamps) — ports RAB_SpatialHelpers.hlsli lines 20-33.
             idx = RAB_ClampSamplePositionIntoView(idx, false);
             // RTXDI SpatialResampling.hlsli line 68: RTXDI_ActivateCheckerboardPixel
-            RTXDI_ActivateCheckerboardPixel(idx, false, int(ph_restir_active_checkerboard_field));
+            RTXDI_ActivateCheckerboardPixel(idx, false, activeCheckerboardField);
 
             DirectSurface neighborSurface = lt_load_surface(idx);
             if (!lt_is_valid_surface(neighborSurface)) continue;
@@ -267,8 +272,9 @@ void main() {
 
             if (lt_enable_material_similarity_test && !lt_materials_similar(centerSurface, neighborSurface)) continue;
 
+            ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
             Reservoir neighborSample = rtxdi_empty_reservoir();
-            lt_load_direct_temporal_reservoir(idx, neighborSurface, neighborSample);
+            lt_load_direct_temporal_reservoir(reservoirPos, neighborSurface, neighborSample);
             rtxdi_prepare_spatial_reuse(neighborSample, spatialOffset);
 
             // Cache this neighbor at the same point as RTXDI SpatialResampling.hlsli line 211:
@@ -306,13 +312,13 @@ void main() {
                 for (int i = 0; i < numSpatialSamples; i++) {
                     if ((cachedResult & (1u << uint(i))) == 0u) continue;
 
-                    uint sampleIdx = uint(startIdx + i) & uint(neighborOffsetMask);
-                    ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(int(sampleIdx), spatialRadius);
+                    int sampleIdx = int((startIdx + uint(i)) & neighborOffsetMask);
+                    ivec2 spatialOffset = lt_calculate_spatial_resampling_offset(sampleIdx, spatialRadius);
                     ivec2 idx = tex_coord + spatialOffset;
                     // RTXDI SpatialResampling.hlsli line 66: RAB_ClampSamplePositionIntoView
                     // Reflects at screen edges (not clamps) — ports RAB_SpatialHelpers.hlsli lines 20-33.
                     idx = RAB_ClampSamplePositionIntoView(idx, false);
-                    RTXDI_ActivateCheckerboardPixel(idx, false, int(ph_restir_active_checkerboard_field));
+                    RTXDI_ActivateCheckerboardPixel(idx, false, activeCheckerboardField);
 
                     DirectSurface neighborSurface = lt_load_surface(idx);
 
@@ -340,8 +346,9 @@ void main() {
                         }
                     }
 
+                    ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
                     Reservoir neighborSample = rtxdi_empty_reservoir();
-                    lt_load_direct_temporal_reservoir(idx, neighborSurface, neighborSample);
+                    lt_load_direct_temporal_reservoir(reservoirPos, neighborSurface, neighborSample);
 
                     pi = (selected == i) ? ps : pi;
                     piSum += ps * neighborSample.M;

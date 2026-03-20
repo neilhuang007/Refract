@@ -10,8 +10,6 @@ layout(location = 3) out vec4 filtered_meta_frag_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/restir_gi_bridge.glsl"
 
-// RTXDI default: boilingFilterStrength = 0.2
-const float gi_boiling_filter_strength = 0.2f;
 const int gi_boiling_filter_radius = 4; // half of 8x8 tile
 
 void main() {

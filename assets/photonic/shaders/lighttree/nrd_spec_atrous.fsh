@@ -6,11 +6,9 @@ layout(location = 0) out vec4 spec_atrous_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
-#include "/photonics/lighttree/samplers.glsl"
 
 uniform sampler2D spec_atrous_input;
 uniform sampler2D spec_history_length_input;
-
 uniform int direct_atrous_step_size;
 uniform float ph_nrd_depth_threshold;
 
@@ -58,7 +56,7 @@ void main() {
     vec3 centerMappedNormal = nrd_select_surface_normal(centerGeometryNormal, texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz);
 
     // NRD RELAX: specular confidence from channel G (diffuse is R)
-    float specConfidence = texelFetch(direct_confidence_input, tex_coord, 0).g;
+    float specConfidence = texelFetch(spec_confidence_input, tex_coord, 0).r;
 
     float centerWeight = gaussian3x3[0] * gaussian3x3[0];
     vec3 sumColor = centerColor * centerWeight;
