@@ -719,7 +719,7 @@ bool GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample) {
 
     ray.origin = lt_surface_ray_origin(surface.rtPos, surface.geometryNormal);
     ray.direction = toSample / distance;
-    ray_target = ivec3(giSample.position);
+    ray_target = ivec3(floor(giSample.position));
     trace_ray(ray, true);
     bool reachedSampleCell = lt_ray_reached_target_cell(giSample.position);
     bool environmentMiss = !ray.result_hit && !ray_iteration_bound_reached;

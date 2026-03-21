@@ -43,7 +43,8 @@ void load_fragment_variables(out vec3 albedo, out vec3 world_pos, out vec3 world
     vec3 normalEncoded = 2.0f * texelFetch(colortex11, texelCoord, 0).xyz - 1.0f;
     world_normal = normalize(mat3(gbufferModelViewInverse) * normalEncoded);
     world_normal_mapped = world_normal;
-    world_pos = load_world_position() - 0.01f * world_normal;
+    // RTXDI expects the reconstructed surface position here; visibility offsets happen later.
+    world_pos = load_world_position();
 }
 #endreplace
 

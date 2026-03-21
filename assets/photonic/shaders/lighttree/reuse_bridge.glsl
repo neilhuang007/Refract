@@ -779,22 +779,26 @@ float light_sample_trace_hit_surface_with_offset(inout LightSample smple, bool j
 
     Light light = load_light(smple.index);
     vec3 targetPosition = smple.position;
-
-    vec3 rayOrigin = surface.rtPos + surface.geometryNormal * rayOffset;
-    smple.sample_pos = rayOrigin;
-
-    vec3 shadowToLight = targetPosition - smple.sample_pos;
-    float shadowDistance = length(shadowToLight);
+    vec3 surfaceToLight = targetPosition - surface.rtPos;
+    float shadowDistance = length(surfaceToLight);
     if (shadowDistance <= 1e-5f) {
         smple = lt_null_sample();
         return 0.0f;
     }
 
+    // RTXDI visibility rays originate at the surface and advance by TMin along the
+    // shadow-ray direction. Our voxel tracer has no explicit TMin/TMax, so offset
+    // the origin along the ray direction instead of along the geometric normal.
+    vec3 rayDirection = surfaceToLight / shadowDistance;
+    vec3 rayOrigin = surface.rtPos + rayDirection * rayOffset;
+    smple.sample_pos = rayOrigin;
+
+    vec3 shadowToLight = targetPosition - smple.sample_pos;
     smple.position = targetPosition;
 
     ray.origin = smple.sample_pos;
-    ray.direction = shadowToLight / shadowDistance;
-    ray_target = ivec3(smple.position);
+    ray.direction = rayDirection;
+    ray_target = ivec3(floor(smple.position));
     trace_ray(ray, true);
 
     if (!lt_ray_reached_target_cell(smple.position)) {
@@ -802,7 +806,6 @@ float light_sample_trace_hit_surface_with_offset(inout LightSample smple, bool j
         return 0.0f;
     }
 
-    vec3 surfaceToLight = targetPosition - surface.rtPos;
     float lightDistanceSq = dot(surfaceToLight, surfaceToLight);
     if (lightDistanceSq <= 1e-6f) {
         smple = lt_null_sample();

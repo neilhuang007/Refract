@@ -1068,6 +1068,7 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.lightingStageBuffer.getWriteAttachment("normal"),
          () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"),
          () -> this.lightingStageBuffer.getWriteAttachment("albedo"),
+         () -> this.lightingStageBuffer.getWriteAttachment("material"),
          () -> this.motionVectorBuffer.getWriteAttachment("data")
       );
    }
