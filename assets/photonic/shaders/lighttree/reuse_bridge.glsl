@@ -772,28 +772,105 @@ bool lt_ray_reached_target_cell(vec3 targetPosition) {
     return ray.result_hit && all(equal(hitCell, targetCell));
 }
 
-float light_sample_trace_hit_surface_with_offset(inout LightSample smple, bool jitter, DirectSurface surface, float rayOffset) {
+// Mirrors RTXDI's setupVisibilityRay helper:
+//   L        = samplePosition - surface.worldPos
+//   TMin     = offset
+//   TMax     = max(offset, length(L) - offset * 2)
+//   Direction= normalize(L)
+//   Origin   = surface.worldPos
+// Our voxel tracer has no explicit TMin/TMax. For voxel cells, the closest equivalent to
+// RTXDI's "skip hits very close to the shading surface" semantics is a geometric-normal
+// origin bias, which moves the ray out of the source voxel without sliding it laterally
+// through the surface at grazing angles. Once the origin is biased, the direction must be
+// recomputed from that biased origin; otherwise the ray drifts off the intended target cell
+// on grazing terrain samples and over-rejects conservative visibility.
+bool lt_setup_visibility_ray(
+    DirectSurface surface,
+    vec3 targetPosition,
+    float offset,
+    out vec3 rayOrigin,
+    out vec3 rayDirection,
+    out float traceDistance
+) {
+    vec3 unbiasedToTarget = targetPosition - surface.rtPos;
+    float lightDistance = length(unbiasedToTarget);
+    if (lightDistance <= 1e-5f) {
+        rayOrigin = surface.rtPos;
+        rayDirection = vec3(0.0f);
+        traceDistance = 0.0f;
+        return false;
+    }
+
+    rayOrigin = surface.rtPos + surface.geometryNormal * offset;
+    vec3 biasedToTarget = targetPosition - rayOrigin;
+    float biasedDistance = length(biasedToTarget);
+    if (biasedDistance <= 1e-5f) {
+        rayDirection = vec3(0.0f);
+        traceDistance = 0.0f;
+        return false;
+    }
+
+    rayDirection = biasedToTarget / biasedDistance;
+    traceDistance = max(offset, lightDistance - offset * 2.0f);
+    return traceDistance > 0.0f;
+}
+
+// Match RTXDI's final-visibility contract: the expensive visibility query returns an RGB
+// throughput term, not just a binary hit/miss. Our voxel tracer accumulates that through
+// transparent voxels in result_tint_color.
+vec3 lt_trace_visibility_transmittance() {
+    return clamp(result_tint_color, vec3(0.0f), vec3(1.0f));
+}
+
+// Mirrors RTXDI's GetConservativeVisibility / RAB_GetConservativeVisibility path:
+// trace a cheap visibility ray, treat translucent surfaces conservatively as visible,
+// and return a boolean visible/invisible result for resampling.
+bool lt_trace_conservative_visibility(inout LightSample smple, DirectSurface surface) {
     if (smple.index < 0) {
-        return 0.0f;
+        return false;
+    }
+
+    vec3 targetPosition = smple.position;
+    vec3 rayOrigin;
+    vec3 rayDirection;
+    float traceDistance;
+    if (!lt_setup_visibility_ray(surface, targetPosition, 0.001f, rayOrigin, rayDirection, traceDistance)) {
+        return false;
+    }
+
+    smple.sample_pos = rayOrigin;
+    smple.position = targetPosition;
+    ray.origin = smple.sample_pos;
+    ray.direction = rayDirection;
+    ray_target = ivec3(floor(smple.position));
+    trace_ray(ray, true);
+    return lt_ray_reached_target_cell(smple.position);
+}
+
+// Mirrors RTXDI's GetFinalVisibility path:
+// trace the expensive final-visibility ray with a 0.01 offset and return RGB throughput.
+vec3 lt_trace_final_visibility_with_offset(
+    inout LightSample smple,
+    DirectSurface surface,
+    float rayOffset,
+    out float hitDistance
+) {
+    hitDistance = 0.0f;
+    if (smple.index < 0) {
+        return vec3(0.0f);
     }
 
     Light light = load_light(smple.index);
     vec3 targetPosition = smple.position;
-    vec3 surfaceToLight = targetPosition - surface.rtPos;
-    float shadowDistance = length(surfaceToLight);
-    if (shadowDistance <= 1e-5f) {
+    vec3 rayOrigin;
+    vec3 rayDirection;
+    float traceDistance;
+    if (!lt_setup_visibility_ray(surface, targetPosition, rayOffset, rayOrigin, rayDirection, traceDistance)) {
         smple = lt_null_sample();
-        return 0.0f;
+        return vec3(0.0f);
     }
 
-    // RTXDI visibility rays originate at the surface and advance by TMin along the
-    // shadow-ray direction. Our voxel tracer has no explicit TMin/TMax, so offset
-    // the origin along the ray direction instead of along the geometric normal.
-    vec3 rayDirection = surfaceToLight / shadowDistance;
-    vec3 rayOrigin = surface.rtPos + rayDirection * rayOffset;
     smple.sample_pos = rayOrigin;
-
-    vec3 shadowToLight = targetPosition - smple.sample_pos;
     smple.position = targetPosition;
 
     ray.origin = smple.sample_pos;
@@ -803,25 +880,32 @@ float light_sample_trace_hit_surface_with_offset(inout LightSample smple, bool j
 
     if (!lt_ray_reached_target_cell(smple.position)) {
         smple.color = vec3(0.0f);
-        return 0.0f;
+        return vec3(0.0f);
     }
 
+    vec3 surfaceToLight = targetPosition - surface.rtPos;
     float lightDistanceSq = dot(surfaceToLight, surfaceToLight);
     if (lightDistanceSq <= 1e-6f) {
         smple = lt_null_sample();
-        return 0.0f;
+        return vec3(0.0f);
     }
 
     smple.dir = surfaceToLight * inversesqrt(lightDistanceSq);
     smple.solidAnglePdf = lt_light_sample_solid_angle_pdf(surface, targetPosition);
     smple.color = lt_light_sample_radiance(light, surfaceToLight);
     light_sample_compute_weight(smple, surface);
-    return sqrt(lightDistanceSq);
+    hitDistance = sqrt(lightDistanceSq);
+    return lt_trace_visibility_transmittance();
+}
+
+float light_sample_trace_hit_surface_with_offset(inout LightSample smple, bool jitter, DirectSurface surface, float rayOffset) {
+    float hitDistance = 0.0f;
+    lt_trace_final_visibility_with_offset(smple, surface, rayOffset, hitDistance);
+    return hitDistance;
 }
 
 float light_sample_trace_hit_surface(inout LightSample smple, bool jitter, DirectSurface surface) {
-    // Conservative visibility paths match RTXDI RAB_GetConservativeVisibility's 0.001 offset.
-    return light_sample_trace_hit_surface_with_offset(smple, jitter, surface, 0.001f);
+    return lt_trace_conservative_visibility(smple, surface) ? 1.0f : 0.0f;
 }
 
 float light_sample_trace_hit_at(inout LightSample smple, bool jitter, vec3 geometryNormal, vec3 shadingNormal) {
@@ -1181,9 +1265,6 @@ bool RTXDI_StreamSample(inout Reservoir reservoir, int lightIndex, vec2 sampleUv
         reservoir.hasCompactLightData = false;
         reservoir.compactLightBufferPtr = 0u;
         reservoir.targetPdf = targetPdf;
-        reservoir.visibility = vec3(0.0);
-        reservoir.age = 0.0;
-        reservoir.spatialDistance = vec2(0.0);
     }
     return selectSample;
 }
@@ -1201,7 +1282,6 @@ bool rtxdi_stream_sample(inout Reservoir reservoir, LightSample smple, float wei
         rtxdi_set_light_index(reservoir, smple.index);
         reservoir.targetPdf = smple.weight;
         rtxdi_set_sample_uv(reservoir, lt_encode_light_sample_uv(load_light(smple.index), smple.position));
-        rtxdi_reset_visibility(reservoir);
         return true;
     }
 

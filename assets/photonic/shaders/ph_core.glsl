@@ -38,6 +38,7 @@ Light load_light(int index) {
     );
 }
 
+#ifdef PH_DECLARE_GI_IMAGES
 void ph_get_key(vec3 world_pos, vec3 normal, vec3 world_camera_pos, inout ivec3 key, out uint pos_i) {
     vec3 to_camera = world_pos - world_camera_pos;
     float view_distance_sq = dot(to_camera, to_camera);
@@ -103,6 +104,7 @@ ivec3 ph_read(vec3 world_pos, vec3 normal, mat4 mvp, vec3 world_camera_pos) {
 
     return !mismatch ? key : ivec3(NULL);
 }
+#endif
 
 ivec2 ph_reproject(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jitter) {
     return ivec2(floor(ph_reprojectf(mvp_matrix, world_position, viewSize, jitter)));

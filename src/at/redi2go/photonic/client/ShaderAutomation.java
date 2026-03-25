@@ -451,6 +451,126 @@ public final class ShaderAutomation {
       };
    }
 
+   private static ReservoirDebugStats computeReservoirDebugStats(TextureObject texture) {
+      if (texture == null) {
+         return ReservoirDebugStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null || pixels.length < 4) {
+         return ReservoirDebugStats.EMPTY;
+      }
+
+      int pixelCount = pixels.length / 4;
+      int lightValidPixels = 0;
+      int strictValidPixels = 0;
+      double weightSum = 0.0;
+      double mSum = 0.0;
+      for (int i = 0; i < pixelCount; i++) {
+         int base = i * 4;
+         int lightData = Float.floatToRawIntBits(pixels[base]);
+         float weight = pixels[base + 1];
+         int packedVisibilityAndM = Float.floatToRawIntBits(pixels[base + 3]);
+         int reservoirM = packedVisibilityAndM >>> 18 & 16383;
+         if (lightData != 0) {
+            lightValidPixels++;
+         }
+         if (lightData != 0 && weight > 0.0f && reservoirM > 0) {
+            strictValidPixels++;
+         }
+         weightSum += Math.max(weight, 0.0f);
+         mSum += reservoirM;
+      }
+
+      return new ReservoirDebugStats(
+         lightValidPixels / (double)pixelCount,
+         strictValidPixels / (double)pixelCount,
+         weightSum / pixelCount,
+         mSum / pixelCount
+      );
+   }
+
+   private static DirectTemporalDebugStats computeDirectTemporalDebugStats(TextureObject texture) {
+      if (texture == null) {
+         return DirectTemporalDebugStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null || pixels.length < 4) {
+         return DirectTemporalDebugStats.EMPTY;
+      }
+
+      int pixelCount = pixels.length / 4;
+      double neighborMatchSum = 0.0;
+      double remapValidSum = 0.0;
+      double positiveWeightSum = 0.0;
+      for (int i = 0; i < pixelCount; i++) {
+         int base = i * 4;
+         neighborMatchSum += Math.clamp(pixels[base + 1], 0.0f, 1.0f);
+         remapValidSum += Math.clamp(pixels[base + 2], 0.0f, 1.0f);
+         positiveWeightSum += Math.clamp(pixels[base + 3], 0.0f, 1.0f);
+      }
+
+      double pixelCountDouble = Math.max(1, pixelCount);
+      return new DirectTemporalDebugStats(
+         neighborMatchSum / pixelCountDouble,
+         remapValidSum / pixelCountDouble,
+         positiveWeightSum / pixelCountDouble
+      );
+   }
+
+   private static PositionDebugStats computePositionDebugStats(TextureObject texture) {
+      if (texture == null) {
+         return PositionDebugStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null || pixels.length < 4) {
+         return PositionDebugStats.EMPTY;
+      }
+
+      int pixelCount = pixels.length / 4;
+      double sumX = 0.0;
+      double sumY = 0.0;
+      double sumZ = 0.0;
+      double minX = Double.POSITIVE_INFINITY;
+      double minY = Double.POSITIVE_INFINITY;
+      double minZ = Double.POSITIVE_INFINITY;
+      double maxX = Double.NEGATIVE_INFINITY;
+      double maxY = Double.NEGATIVE_INFINITY;
+      double maxZ = Double.NEGATIVE_INFINITY;
+      for (int i = 0; i < pixelCount; i++) {
+         int base = i * 4;
+         float x = pixels[base];
+         float y = pixels[base + 1];
+         float z = pixels[base + 2];
+         sumX += x;
+         sumY += y;
+         sumZ += z;
+         minX = Math.min(minX, x);
+         minY = Math.min(minY, y);
+         minZ = Math.min(minZ, z);
+         maxX = Math.max(maxX, x);
+         maxY = Math.max(maxY, y);
+         maxZ = Math.max(maxZ, z);
+      }
+
+      return new PositionDebugStats(
+         sumX / pixelCount,
+         sumY / pixelCount,
+         sumZ / pixelCount,
+         minX,
+         minY,
+         minZ,
+         maxX,
+         maxY,
+         maxZ
+      );
+   }
+
    static double computeImageBrightnessVariance(BufferedImage image) {
       if (image == null) {
          return 0.0;
@@ -654,11 +774,20 @@ public final class ShaderAutomation {
          Files.createDirectories(this.captureDir);
          int captureIndex = this.capturesTaken + 1;
          TextureObject directTexture = textures.get("direct");
+         TextureObject directReservoirTexture = textures.get("direct_reservoir");
+         TextureObject directResolvedReservoirTexture = textures.get("direct_reservoir_resolved");
          TextureObject directSoftTexture = textures.get("direct_soft");
          TextureObject directDenoisedTexture = textures.get("direct_denoised");
          TextureObject directRawTexture = textures.get("direct_raw");
+         TextureObject directTemporalReservoirTexture = textures.get("direct_temporal_reservoir");
+         TextureObject directTemporalReservoirSampleTexture = textures.get("direct_temporal_reservoir_sample");
          TextureObject lightingTexture = textures.get("lighting");
+         TextureObject stageAlbedoTexture = textures.get("stage_albedo");
          TextureObject stageLightingTexture = textures.get("stage_lighting");
+         TextureObject stageMappedNormalTexture = textures.get("stage_mapped_normal");
+         TextureObject stageMaterialTexture = textures.get("stage_material");
+         TextureObject stageNormalTexture = textures.get("stage_normal");
+         TextureObject stagePositionTexture = textures.get("stage_position");
          TextureObject stageIndirectTexture = textures.get("stage_indirect");
          TextureObject handheldTexture = textures.get("handheld");
          TextureObject indirectRawTexture = textures.get("indirect_raw");
@@ -667,8 +796,14 @@ public final class ShaderAutomation {
          BufferedImage directSoftImage = this.captureTexture("direct_soft", directSoftTexture, captureIndex);
          BufferedImage directDenoisedImage = this.captureTexture("direct_denoised", directDenoisedTexture, captureIndex);
          BufferedImage directRawImage = this.captureTexture("direct_raw", directRawTexture, captureIndex);
+         this.captureTexture("direct_temporal_reservoir_sample", directTemporalReservoirSampleTexture, captureIndex);
          BufferedImage lightingImage = this.captureTexture("lighting", lightingTexture, captureIndex);
+         this.captureTexture("stage_albedo", stageAlbedoTexture, captureIndex);
          BufferedImage stageLightingImage = this.captureTexture("stage_lighting", stageLightingTexture, captureIndex);
+         this.captureTexture("stage_mapped_normal", stageMappedNormalTexture, captureIndex);
+         this.captureTexture("stage_material", stageMaterialTexture, captureIndex);
+         this.captureTexture("stage_normal", stageNormalTexture, captureIndex);
+         this.captureTexture("stage_position", stagePositionTexture, captureIndex);
          BufferedImage stageIndirectImage = this.captureTexture("stage_indirect", stageIndirectTexture, captureIndex);
          BufferedImage handheldImage = this.captureTexture("handheld", handheldTexture, captureIndex);
          BufferedImage indirectRawImage = this.captureTexture("indirect_raw", indirectRawTexture, captureIndex);
@@ -677,6 +812,11 @@ public final class ShaderAutomation {
             indirectRawTexture == null ? TextureObject.TextureStats.EMPTY : indirectRawTexture.readStats();
          TextureObject.TextureStats stageIndirectLinearStats =
             stageIndirectTexture == null ? TextureObject.TextureStats.EMPTY : stageIndirectTexture.readStats();
+         ReservoirDebugStats temporalReservoirStats = computeReservoirDebugStats(directTemporalReservoirTexture);
+         DirectTemporalDebugStats temporalDebugStats = computeDirectTemporalDebugStats(directTemporalReservoirSampleTexture);
+         ReservoirDebugStats resolvedReservoirStats = computeReservoirDebugStats(directResolvedReservoirTexture);
+         ReservoirDebugStats shadedReservoirStats = computeReservoirDebugStats(directReservoirTexture);
+         PositionDebugStats stagePositionStats = computePositionDebugStats(stagePositionTexture);
          double[] directStats = computeImageStats(directImage);
          double[] directSoftStats = computeImageStats(directSoftImage);
          double[] directDenoisedStats = computeImageStats(directDenoisedImage);
@@ -878,6 +1018,38 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", this.directSoftTemporalDeltaMax),
             String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(false, true)),
             String.format(Locale.ROOT, "%.5f", this.indirectTemporalDeltaMax));
+         Photonic.info(
+            "[Automation] reservoir capture={} temporal(lightValid={}, strict={}, meanWeight={}, meanM={}) resolved(lightValid={}, strict={}, meanWeight={}, meanM={}) shaded(lightValid={}, strict={}, meanWeight={}, meanM={}) stagePosition(mean=({}, {}, {}), min=({}, {}, {}), max=({}, {}, {}))",
+            this.capturesTaken,
+            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.lightValidFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.strictValidFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.meanWeight()),
+            String.format(Locale.ROOT, "%.2f", temporalReservoirStats.meanM()),
+            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.lightValidFraction()),
+            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.strictValidFraction()),
+            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.meanWeight()),
+            String.format(Locale.ROOT, "%.2f", resolvedReservoirStats.meanM()),
+            String.format(Locale.ROOT, "%.5f", shadedReservoirStats.lightValidFraction()),
+            String.format(Locale.ROOT, "%.5f", shadedReservoirStats.strictValidFraction()),
+            String.format(Locale.ROOT, "%.5f", shadedReservoirStats.meanWeight()),
+            String.format(Locale.ROOT, "%.2f", shadedReservoirStats.meanM()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.meanX()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.meanY()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.meanZ()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.minX()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.minY()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.minZ()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.maxX()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.maxY()),
+            String.format(Locale.ROOT, "%.3f", stagePositionStats.maxZ())
+         );
+         Photonic.info(
+            "[Automation] temporal debug capture={} neighborMatch={} remapValid={} positiveWeight={}",
+            this.capturesTaken,
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.neighborMatchFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.remapValidFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.positiveWeightFraction())
+         );
          Photonic.info("[Automation] denoise gain capture={} direct(latest={}, avg={}, max={}) indirect(latest={}, avg={}, max={})",
             this.capturesTaken,
             String.format(Locale.ROOT, "%.5f", this.latestDirectDenoiserGain),
@@ -1994,6 +2166,37 @@ public final class ShaderAutomation {
       int currentTimeOfDayCommandCount,
       int currentBlockToggleCommandCount
    ) {
+   }
+
+   private record ReservoirDebugStats(
+      double lightValidFraction,
+      double strictValidFraction,
+      double meanWeight,
+      double meanM
+   ) {
+      private static final ReservoirDebugStats EMPTY = new ReservoirDebugStats(0.0, 0.0, 0.0, 0.0);
+   }
+
+   private record DirectTemporalDebugStats(
+      double neighborMatchFraction,
+      double remapValidFraction,
+      double positiveWeightFraction
+   ) {
+      private static final DirectTemporalDebugStats EMPTY = new DirectTemporalDebugStats(0.0, 0.0, 0.0);
+   }
+
+   private record PositionDebugStats(
+      double meanX,
+      double meanY,
+      double meanZ,
+      double minX,
+      double minY,
+      double minZ,
+      double maxX,
+      double maxY,
+      double maxZ
+   ) {
+      private static final PositionDebugStats EMPTY = new PositionDebugStats(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
    }
 }
 

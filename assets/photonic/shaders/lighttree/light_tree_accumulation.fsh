@@ -69,19 +69,19 @@ ivec2 lt_other_checkerboard_pixel(ivec2 pixelPosition, int activeCheckerboardFie
 }
 
 vec4 lt_load_stage_direct_lobe(sampler2D stageTexture, ivec2 pixelPosition, int activeCheckerboardField) {
-    if (ph_restir_enable_denoiser_packing >= 0.5f
-        || activeCheckerboardField == 0
+    if (activeCheckerboardField == 0
         || lt_is_active_checkerboard_pixel(pixelPosition, activeCheckerboardField)) {
         return texelFetch(stageTexture, pixelPosition, 0);
     }
 
-    ivec2 otherFieldPixelPosition = lt_other_checkerboard_pixel(pixelPosition, activeCheckerboardField);
-    ivec2 textureBounds = textureSize(stageTexture, 0);
-    if (any(lessThan(otherFieldPixelPosition, ivec2(0))) || any(greaterThanEqual(otherFieldPixelPosition, textureBounds))) {
-        return vec4(0.0f);
-    }
-
-    return texelFetch(stageTexture, otherFieldPixelPosition, 0);
+    // Reconstruct inactive checkerboard pixels before accumulation so the compatibility
+    // direct/direct_soft outputs are not left as alternating sparse fields.
+    return nrd_reconstruct_checkerboard_signal(
+        stageTexture,
+        pixelPosition,
+        stage_radiosity_position,
+        stage_radiosity_normal
+    );
 }
 
 vec3 lt_safe_normalize(vec3 value, vec3 fallbackValue) {

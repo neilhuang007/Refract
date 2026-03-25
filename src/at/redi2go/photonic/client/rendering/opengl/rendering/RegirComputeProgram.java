@@ -404,7 +404,7 @@ public class RegirComputeProgram {
         long regirByteSize   = (long) totalCells * lightsPerCell * 8L;
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, risBuffer.getId());
         GL43.glClearBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, GL30.GL_R32UI,
-                regirByteOffset, regirByteSize, GL11.GL_RED, GL11.GL_UNSIGNED_INT, new int[]{0});
+                regirByteOffset, regirByteSize, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, new int[]{0});
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
     }
 
@@ -413,7 +413,7 @@ public class RegirComputeProgram {
     private void clearCompactLightDataBuffer(GlMemoryManager compactLightData) {
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, compactLightData.getId());
         GL43.glClearBufferData(GL43.GL_SHADER_STORAGE_BUFFER, GL30.GL_R32UI,
-                GL11.GL_RED, GL11.GL_UNSIGNED_INT, new int[]{0});
+                GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, new int[]{0});
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
     }
 

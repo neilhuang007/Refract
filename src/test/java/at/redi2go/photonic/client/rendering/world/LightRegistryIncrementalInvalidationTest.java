@@ -282,8 +282,10 @@ class LightRegistryIncrementalInvalidationTest {
    void queueIdentityLightMappingsIfNeededWritesIdentityOnce() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       MemoryOwner lightMappingMemory = (MemoryOwner) getField(registry, "lightMappingMemory");
+      MemoryOwner lightReverseMappingMemory = (MemoryOwner) getField(registry, "lightReverseMappingMemory");
       for (int i = 0; i < 8; i++) {
          lightMappingMemory.getMemory().getBuffer().asIntBuffer().put(i, -1);
+         lightReverseMappingMemory.getMemory().getBuffer().asIntBuffer().put(i, -1);
       }
 
       setField(registry, "identityLightMappingPending", true);
@@ -294,10 +296,16 @@ class LightRegistryIncrementalInvalidationTest {
       int[] mappings = new int[8];
       lightMappingMemory.getMemory().getBuffer().asIntBuffer().get(0, mappings);
       assertArrayEquals(new int[]{0, 1, 2, 3, 4, 5, 6, 7}, mappings);
+      int[] reverseMappings = new int[8];
+      lightReverseMappingMemory.getMemory().getBuffer().asIntBuffer().get(0, reverseMappings);
+      assertArrayEquals(new int[]{0, 1, 2, 3, 4, 5, 6, 7}, reverseMappings);
 
       @SuppressWarnings("unchecked")
       Deque<MemoryOwner> uploadQueue = (Deque<MemoryOwner>) getField(registry.getLightMappingMemoryManager(), "uploadQueue");
       assertEquals(1, uploadQueue.size());
+      @SuppressWarnings("unchecked")
+      Deque<MemoryOwner> reverseUploadQueue = (Deque<MemoryOwner>) getField(getField(registry, "lightReverseMappingMemoryManager"), "uploadQueue");
+      assertEquals(1, reverseUploadQueue.size());
    }
 
    @Test

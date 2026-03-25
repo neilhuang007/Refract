@@ -52,6 +52,9 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
    private static final MinecraftClient MC_INSTANCE = MinecraftClient.getInstance();
    private static final int INBOUND_NEAR_KEEP_CHUNKS = 2;
    private static final int INBOUND_VERTICAL_KEEP_CHUNKS = 3;
+   // Match WorldRegistry's 64-block RT residency radius so nearby lighting does not
+   // depend on raster visibility or the order Sodium finishes chunk meshes.
+   private static final int INBOUND_RT_NEAR_RADIUS_CHUNKS = 4;
    private static final float INBOUND_FORWARD_DOT = 0.3F;
    private static final float INBOUND_SIDE_DOT_LIMIT = 0.9848077F;
    private final AtomicIntegerImage[] gi;
@@ -83,6 +86,11 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
 
    @Override
    public void onChunkLoad() {
+      this.cachedInboundCenterX = Integer.MIN_VALUE;
+      this.cachedInboundCenterY = Integer.MIN_VALUE;
+      this.cachedInboundCenterZ = Integer.MIN_VALUE;
+      this.cachedInboundRenderRadius = Integer.MIN_VALUE;
+      this.inboundChunks.clear();
    }
 
    @Override
@@ -114,6 +122,7 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
       this.cachedInboundCenterZ = centerZ;
       this.cachedInboundRenderRadius = renderRadius;
       this.inboundChunks.clear();
+      this.collectNearbyRtChunks(centerX, centerY, centerZ, renderRadius);
 
       if (this.collectVisibleSodiumChunks()) {
          return this.inboundChunks;
@@ -134,6 +143,19 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
          }
       }
       return this.inboundChunks;
+   }
+
+   private void collectNearbyRtChunks(int centerX, int centerY, int centerZ, int renderRadius) {
+      int horizontalRadius = Math.min(renderRadius, INBOUND_RT_NEAR_RADIUS_CHUNKS);
+      int minY = Math.max(-INBOUND_VERTICAL_KEEP_CHUNKS, -renderRadius);
+      int maxY = Math.min(INBOUND_VERTICAL_KEEP_CHUNKS, renderRadius);
+      for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
+         for (int y = minY; y <= maxY; y++) {
+            for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
+               this.inboundChunks.add(new PChunkPos(centerX + x, centerY + y, centerZ + z));
+            }
+         }
+      }
    }
 
    private boolean collectVisibleSodiumChunks() {

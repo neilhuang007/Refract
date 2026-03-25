@@ -117,11 +117,21 @@ void main() {
     bool selectedPreviousSample = false;
     float previousM = 0.0;
     DirectSurface temporalSurface = lt_empty_surface();
+    float temporalNeighborDebug = 0.0;
+    float temporalRemapDebug = 0.0;
+    float temporalWeightDebug = 0.0;
 
-    // RTXDI: temporal resampling always executes — no engine-specific history gate.
-    // When the light list changes, RAB_TranslateLightIndex returns -1 for invalid lights,
-    // which kills stale reservoirs through the standard remap path (lines 216-234).
-    {
+    // ENGINE-SPECIFIC EXTENSION (Fix #11): if the light list / world offset has just
+    // been reloaded, previous-frame reservoir replay data is not trustworthy in this port.
+    // RTXDI assumes the bridge has already made previous-frame light/sample state stable
+    // enough for RAB_TranslateLightIndex to be meaningful across frames. During a full
+    // Photonics light reload, discarding temporal history here is the correct equivalent.
+    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
+
+    // RTXDI temporal resampling executes unconditionally on stable frames. The only history
+    // gate here is the engine-side reload guard above; otherwise previous-frame remapping
+    // follows TemporalResampling.hlsli line-for-line.
+    if (!lightReloadActive) {
         // Step 4: Backproject using per-pixel motion vectors (RTXDI lines 57-67).
         vec3 motion = texelFetch(radiosity_motion, pixelPosition, 0).xyz;
 
@@ -227,6 +237,7 @@ void main() {
 
         // Step 6: Load and combine previous sample (RTXDI lines 114-171)
         if (foundNeighbor) {
+            temporalNeighborDebug = 1.0;
             // RTXDI lines 118-120: convert prevPos through RTXDI_PixelPosToReservoirPos
             // and load from sourceBufferIndex. Our "sourceBufferIndex" is always the
             // previous frame's reservoir textures (prev_radiosity_*).
@@ -277,6 +288,9 @@ void main() {
                     // sampleUv stays unchanged — it is the immutable stored sample point.
                 }
             }
+            if (RTXDI_IsValidDIReservoir(prevSample)) {
+                temporalRemapDebug = 1.0;
+            }
 
             // RTXDI line 150
             previousM = prevSample.M;
@@ -287,6 +301,9 @@ void main() {
                 // RTXDI: RAB_SamplePolymorphicLight with stored UV.
                 // Photonics: stored world position (point lights, no UV parameterization).
                 weightAtCurrent = rtxdi_target_pdf_at_surface(prevSample, currentSurface);
+            }
+            if (weightAtCurrent > 0.0) {
+                temporalWeightDebug = 1.0;
             }
 
             // RTXDI line 164: combine
@@ -381,5 +398,6 @@ void main() {
     // Output
     reservoir_frag_out = rtxdi_pack_reservoir(state);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(state);
+    reservoir_sample_frag_out.yzw = vec3(temporalNeighborDebug, temporalRemapDebug, temporalWeightDebug);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(state);
 }

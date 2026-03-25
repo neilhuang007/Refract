@@ -551,9 +551,11 @@ public class LightRegistry implements Destructable {
    }
 
    private void storeIdentityLightMappings() {
-      IntBuffer buffer = this.lightMappingMemory.getMemory().getBuffer().asIntBuffer();
+      IntBuffer forwardBuffer = this.lightMappingMemory.getMemory().getBuffer().asIntBuffer();
+      IntBuffer reverseBuffer = this.lightReverseMappingMemory.getMemory().getBuffer().asIntBuffer();
       for (int i = 0; i < this.maxLights; i++) {
-         buffer.put(i, i);
+         forwardBuffer.put(i, i);
+         reverseBuffer.put(i, i);
       }
    }
 
@@ -793,6 +795,7 @@ public class LightRegistry implements Destructable {
       }
       this.storeIdentityLightMappings();
       this.lightMappingMemoryManager.queueUpload(this.lightMappingMemory);
+      this.lightReverseMappingMemoryManager.queueUpload(this.lightReverseMappingMemory);
       this.identityLightMappingPending = false;
       return true;
    }

@@ -98,6 +98,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private boolean fullLightBlendActive = false;
    private boolean dirty = true;
    private boolean rootDataValid = false;
+   private int firstBuildFrame = -1;
    private final boolean blockLightEnabled;
    private volatile boolean chunkSyncNeeded = true;
    private int deferredLightRebuilds = 0;
@@ -181,6 +182,9 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          if (this.closeChunkUpdate) {
             this.renderDispatcher.onChunkLoad();
             this.closeChunkUpdate = false;
+         }
+         if (this.firstBuildFrame < 0) {
+            this.firstBuildFrame = Math.max(1, SystemTimeUniforms.COUNTER.getAsInt());
          }
          this.changeBuildStage(WorldRegistry.BuildStage.IDLE);
          if (!this.buildQueue.isEmpty()) {
@@ -895,7 +899,13 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       if (this.pendingBuildChunks.add(chunkPos)) {
          this.buildQueue.add(() -> {
             this.pendingBuildChunks.remove(chunkPos);
-            this.loadChunk(chunkPos);
+            if (!this.shouldKeepChunkForRt(chunkPos) || this.chunks.containsKey(chunkPos) || this.pendingChunkSet.contains(chunkPos)) {
+               return;
+            }
+
+            this.pendingChunkLoads.add(chunkPos);
+            this.pendingChunkSet.add(chunkPos);
+            this.chunkSyncNeeded = true;
          });
       }
    }
@@ -999,6 +1009,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
    public boolean fetchLightReload() {
       return isGlobalLightReloadActive(this.lightBlendAge, this.fullLightBlendActive);
+   }
+
+   public float getFirstBuildTime() {
+      return this.firstBuildFrame > 0 ? (float) this.firstBuildFrame : 0.0F;
    }
 
    public boolean hasActiveLightBlend() {

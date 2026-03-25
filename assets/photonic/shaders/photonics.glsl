@@ -58,11 +58,13 @@ uniform vec3 world_offset;
 /*
     -- SAMPLERS/IMAGES --
 */
+#ifdef PH_DECLARE_GI_IMAGES
 uniform layout(r32ui) uimage3D gi_x;
 uniform layout(r32ui) uimage3D gi_y;
 uniform layout(r32ui) uimage3D gi_z;
 uniform layout(r32ui) uimage3D gi_w;
 uniform layout(r32ui) uimage3D gi_d;
+#endif
 
 #include "/photonics/ph_samplers.glsl"
 
@@ -98,7 +100,9 @@ struct Light {
 ivec2 ires = textureSize(radiosity_position, 0);
 // ivec2 half_res = res / ivec2(2, 1);
 
+#ifdef PH_DECLARE_GI_IMAGES
 ivec2 indirect_res = imageSize(gi_x).xy;
+#endif
 const vec3 NULL = vec3(424242.424242);
 
 #include "ph_core.glsl"

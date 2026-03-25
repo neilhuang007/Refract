@@ -291,10 +291,15 @@ vec3 gi_stage_secondary_radiance(DirectSurface primarySurface, ivec2 stageUv, Di
     Reservoir stageReservoir = rtxdi_empty_reservoir();
     if (gi_load_stage_direct_reservoir(stageUv, stageSurface, stageReservoir)) {
         bool visible = true;
+        vec3 visibility = vec3(1.0f);
         LightSample stageLightSample = light_sample_new_at(
             load_light(rtxdi_get_light_index(stageReservoir)), stageSurface);
         if (rtxdi_has_reusable_visibility(stageReservoir)) {
-            visible = rtxdi_is_visible(stageReservoir);
+            visibility = rtxdi_get_visibility(stageReservoir);
+            visible = ph_luminance(visibility) > 1e-6f;
+            if (visible) {
+                stageLightSample.color *= visibility;
+            }
         } else {
             light_sample_trace_hit_surface(stageLightSample, false, stageSurface);
             visible = ph_luminance(stageLightSample.color) > 1e-6f;

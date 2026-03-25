@@ -90,10 +90,11 @@ public class Raytracer implements Destructable {
          properties.isBlockLightEnabled().orElse(true)
       );
       Photonic.info(
-         "[Startup] photonics: lightingPipeline=REGIR_RESTIR multithreading={} blockLight={} gi={}",
+         "[Startup] photonics: lightingPipeline=REGIR_RESTIR multithreading={} blockLight={} gi={} alphaMode={}",
          PhotonicsStorage.DO_MULTITHREADING.value,
          properties.isBlockLightEnabled().orElse(true),
-         properties.isGiEnabled().orElse(true)
+         properties.isGiEnabled().orElse(true),
+         properties.getAlphaMode()
       );
       this.mainRenderer = new LightTreeRenderer(this.worldRegistry, properties.getRenderScale(), properties);
       this.worldRegistry.startWorldBuilder();
@@ -341,8 +342,28 @@ public class Raytracer implements Destructable {
       if (source == null) {
          throw new IllegalStateException("Couldn't read file " + path);
       } else {
+         source = applyShaderSourceFixes(path, source);
          return ShaderUtil.preprocessForward(source);
       }
+   }
+
+   private static String applyShaderSourceFixes(ShaderPackPath path, String source) {
+      if (!path.isPhotonicsPath()) {
+         return source;
+      }
+
+      String relativePath = path.getRelativeToPhotonics();
+      if ("shader_interface.glsl".equals(relativePath)) {
+         String biasedSurfacePosition = "world_pos = load_world_position() - 0.01f * world_normal;";
+         if (source.contains(biasedSurfacePosition)) {
+            source = source.replace(
+               biasedSurfacePosition,
+               "// RTXDI expects the reconstructed surface position here; visibility offsets happen later.\n    world_pos = load_world_position();"
+            );
+         }
+      }
+
+      return source;
    }
 
    private static String readShaderAndPreprocess(ShaderPackPath path) throws IOException {

@@ -104,7 +104,8 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
       } catch (IOException e) {
          return;
       }
-      if (Raytracer.SHADERPACK_PROPERTIES != null) {
+      if (Raytracer.SHADERPACK_PROPERTIES != null
+            && !Raytracer.SHADERPACK_PROPERTIES.containsKey("photonics.enabled")) {
          for (String key : Raytracer.SHADERPACK_PROPERTIES.stringPropertyNames()) {
             if (key.startsWith("photonics.") && !props.containsKey(key)) {
                props.setProperty(key, Raytracer.SHADERPACK_PROPERTIES.getProperty(key));
@@ -116,6 +117,9 @@ public abstract class ShaderPropertiesMixin implements PhotonicsProperties {
       for (String key : props.stringPropertyNames()) {
          String value = props.getProperty(key);
          photonics$handleDirective(key, value);
+      }
+      if (this.isBlockLightEnabled == OptionalBoolean.FALSE && this.maxLights > 0) {
+         this.isBlockLightEnabled = OptionalBoolean.DEFAULT;
       }
    }
 

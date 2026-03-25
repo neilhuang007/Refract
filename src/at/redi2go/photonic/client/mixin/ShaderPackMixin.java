@@ -160,6 +160,8 @@ public abstract class ShaderPackMixin {
       }
 
       envDefines1.add(new StringPair("PHOTONICS_VERSION", versionString));
+      envDefines1.add(new StringPair("PHOTONICS_LIGHTING_MODE", "2"));
+      envDefines1.add(new StringPair("PHOTONICS_MAX_LIGHTS", Integer.toString(PhotonicsProperties.DEFAULT_MAX_LIGHTS)));
    }
 
    @Inject(

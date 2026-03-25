@@ -120,14 +120,13 @@ void main() {
             LightSample traceSample = light_sample_decode(reservoir, currentSurface, false);
             if (traceSample.index >= 0) {
                 // RTXDI GetFinalVisibility uses a 0.01 ray offset for final shading.
-                float hitDist = light_sample_trace_hit_surface_with_offset(traceSample, false, currentSurface, 0.01f);
-                bool isVisible = hitDist > 0.0f && traceSample.index >= 0;
+                float hitDist = 0.0f;
+                vec3 visRgb = lt_trace_final_visibility_with_offset(traceSample, currentSurface, 0.01f, hitDist);
+                bool isVisible = ph_luminance(visRgb) > 0.0f && traceSample.index >= 0;
                 // Wire discardIfInvisible from enableVisibilityShortcut (ShadeSamples.hlsl line 64).
                 // When discardIfInvisible=true and invisible: lightData+weightSum are cleared (RTXDI lines 93-96).
-                RTXDI_StoreVisibilityInDIReservoir(reservoir, isVisible ? vec3(1.0f) : vec3(0.0f), discardIfInvisible);
+                RTXDI_StoreVisibilityInDIReservoir(reservoir, visRgb, discardIfInvisible);
                 if (isVisible && traceSample.solidAnglePdf > 0.0f) {
-                    // Use RGB visibility from the freshly traced result (binary: vec3(1) when hit).
-                    vec3 visRgb = rtxdi_get_visibility(reservoir);
                     traceSample.color *= visRgb * (RTXDI_GetDIReservoirInvPdf(reservoir) / traceSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(currentSurface, traceSample);
                     shadedDiffuse = splitShade.diffuse;

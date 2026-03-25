@@ -24,8 +24,27 @@ float ph_compute_specular_confidence(float roughness, vec3 directSpecularRadianc
 }
 
 vec4 ph_extract_direct_confidence(vec2 uv, vec4 material) {
-    vec3 directDiffuseRadiance = nrd_unpack_direct_signal(texture(stage_radiosity_direct, uv)).radiance;
-    vec3 directSpecularRadiance = nrd_unpack_direct_signal(texture(stage_radiosity_direct_specular, uv)).radiance;
+    ivec2 pixelCoord = ivec2(uv * vec2(viewWidth, viewHeight));
+    vec4 directDiffuseSignal = texture(stage_radiosity_direct, uv);
+    vec4 directSpecularSignal = texture(stage_radiosity_direct_specular, uv);
+    if (ph_restir_active_checkerboard_field != 0
+        && !nrd_is_active_checkerboard_pixel(pixelCoord, false, ph_restir_active_checkerboard_field)) {
+        directDiffuseSignal = nrd_reconstruct_checkerboard_signal(
+            stage_radiosity_direct,
+            pixelCoord,
+            stage_radiosity_position,
+            stage_radiosity_normal
+        );
+        directSpecularSignal = nrd_reconstruct_checkerboard_signal(
+            stage_radiosity_direct_specular,
+            pixelCoord,
+            stage_radiosity_position,
+            stage_radiosity_normal
+        );
+    }
+
+    vec3 directDiffuseRadiance = nrd_unpack_direct_signal(directDiffuseSignal).radiance;
+    vec3 directSpecularRadiance = nrd_unpack_direct_signal(directSpecularSignal).radiance;
     float roughness = clamp(material.r, 0.0, 1.0);
     float diffuseSignalStrength = nrd_luminance(max(directDiffuseRadiance, vec3(0.0)));
     float diffuseConfidence = clamp(diffuseSignalStrength / (diffuseSignalStrength + 0.1), 0.2, 1.0);

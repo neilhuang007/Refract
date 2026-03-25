@@ -82,7 +82,9 @@ void trace_ray(inout RayJob job, bool transparency) {
     vec3 previous_tint = vec3(-1f);
 
     for (int i = RAY_ITERATION_COUNT; !(ray_iteration_bound_reached = i < 0); i--) {
-        ivec3 w = ivec3(position); // TODO: maybe use uvec3, no negative check neccessary
+        // GLSL integer casts truncate toward zero, which misindexes negative voxel
+        // coordinates. The ray tracer operates in a signed RT space, so use floor().
+        ivec3 w = ivec3(floor(position));
         ivec3 block_position = w >> 4;
 
         if (!ph_is_inside(position)) // outside of world?
@@ -213,7 +215,7 @@ void trace_ray(inout RayJob job, bool transparency) {
         // without consuming main loop iterations
         if (scale == 13 && entries.x >= 0) {  // scale 13 = root level (8+4+1)
             for (int skip = 0; skip < 8; skip++) {
-                ivec3 skip_w = ivec3(position);
+                ivec3 skip_w = ivec3(floor(position));
                 if (!ph_is_inside(position)) break;
 
                 ivec3 skip_chunk = (skip_w >> 8) & 31;
@@ -244,7 +246,7 @@ void trace_ray(inout RayJob job, bool transparency) {
         // within the same chunk without consuming main loop iterations
         if (scale == 8 && entries.y >= 0 && entries.x < 0) {  // scale 8 = block level (4+4)
             for (int bskip = 0; bskip < 6; bskip++) {
-                ivec3 bskip_w = ivec3(position);
+                ivec3 bskip_w = ivec3(floor(position));
                 if (!ph_is_inside(position)) break;
 
                 ivec3 bskip_chunk = (bskip_w >> 8) & 31;
@@ -299,7 +301,7 @@ int get_block_pointer(vec3 position) {
         return -1;
     }
 
-    ivec3 w = ivec3(position);
+    ivec3 w = ivec3(floor(position));
     int index = 0;
 
     index = root_array[ph_get_world_index((w >> 4) & 31)];

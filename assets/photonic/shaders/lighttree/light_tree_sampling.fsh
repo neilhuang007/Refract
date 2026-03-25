@@ -78,7 +78,11 @@ void main() {
         vec2(viewWidth, viewHeight),
         vec2(0.0f)
     );
-    vec2 motionXY = previousPixel - pixelPosition;
+    // Match RTXDI GBufferHelpers.hlsli: motion is measured from the current pixel center,
+    // not the integer pixel index. Using the integer corner injects a constant half-pixel
+    // offset, which breaks round() in temporal reprojection and prevents DI history reuse.
+    vec2 currentPixelCenter = vec2(pixelPosition) + vec2(0.5f);
+    vec2 motionXY = previousPixel - currentPixelCenter;
     float currentLinearDepth = length(worldPos - world_camera_position);
     float expectedPrevLinearDepth = length(worldPos - previous_world_camera_position);
     float motionZ = expectedPrevLinearDepth - currentLinearDepth;

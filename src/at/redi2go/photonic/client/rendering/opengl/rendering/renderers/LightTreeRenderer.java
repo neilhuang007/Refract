@@ -563,7 +563,10 @@ public class LightTreeRenderer extends MainRenderer {
          () -> -1.0f
       );
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_num_brdf_samples", () -> 1.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_enable_visibility", () -> 1.0f);
+      // The final-visibility path now matches RTXDI's RGB throughput contract, but the
+      // conservative visibility bridge still rejects too many valid terrain samples in
+      // this backport. Keep proposal-time visibility disabled until that bridge is fixed.
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_enable_visibility", () -> -1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_brdf_cutoff", () -> 0.0001f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> 2.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> this.properties.getRestirTemporalBiasMode());
@@ -743,16 +746,24 @@ public class LightTreeRenderer extends MainRenderer {
       return Map.ofEntries(
          Map.entry("direct", this.getResolvedDirectTexture()),
          Map.entry("direct_reservoir", this.directReservoirBuffer.getWriteAttachment("data")),
+         Map.entry("direct_reservoir_resolved", this.directReservoirBuffer.getReadAttachment("data")),
          Map.entry("direct_soft", this.getCompatDirectSoftTexture()),
          Map.entry("direct_denoised", this.directDenoisedBuffer.getWriteAttachment("data")),
          Map.entry("direct_raw", this.lightingStageBuffer.getWriteAttachment("direct")),
+         Map.entry("direct_temporal_reservoir", this.directTemporalReservoirBuffer.getWriteAttachment("data")),
+         Map.entry("direct_temporal_reservoir_sample", this.directTemporalReservoirBuffer.getWriteAttachment("sample")),
          Map.entry("handheld", this.lightingBuffer.getWriteAttachment("handheld")),
          Map.entry("indirect", this.getResolvedIndirectTexture()),
          Map.entry("indirect_raw", this.lightingBuffer.getWriteAttachment("indirect")),
          Map.entry("indirect_reservoir", this.indirectReservoirBuffer.getWriteAttachment("radiance")),
          Map.entry("lighting", this.directSlowBuffer.getWriteAttachment("data")),
+         Map.entry("stage_albedo", this.lightingStageBuffer.getWriteAttachment("albedo")),
          Map.entry("stage_direct", this.lightingStageBuffer.getWriteAttachment("direct")),
+         Map.entry("stage_mapped_normal", this.lightingStageBuffer.getWriteAttachment("mapped_normal")),
+         Map.entry("stage_material", this.lightingStageBuffer.getWriteAttachment("material")),
          Map.entry("stage_lighting", this.directResponsiveBuffer.getWriteAttachment("data")),
+         Map.entry("stage_normal", this.lightingStageBuffer.getWriteAttachment("normal")),
+         Map.entry("stage_position", this.lightingStageBuffer.getWriteAttachment("position")),
          Map.entry("stage_indirect", this.lightingBuffer.getWriteAttachment("indirect")),
          Map.entry("motion", this.motionVectorBuffer.getWriteAttachment("data"))
       );

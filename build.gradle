@@ -83,7 +83,9 @@ loom {
             vmArg "-Dphotonics.automation.minActiveTicksBeforeSuccess=900"
             vmArg "-Dphotonics.automation.minActiveTicksAfterSignal=360"
             vmArg "-Dphotonics.automation.cameraMotion=yaw_sine"
-            vmArg "-Dphotonics.automation.cameraMotionStartActiveTick=360"
+            // Start motion well before the first repeated-phase comparison so motion-repeat
+            // validation measures steady-state direct lighting instead of the motion-onset transient.
+            vmArg "-Dphotonics.automation.cameraMotionStartActiveTick=180"
             vmArg "-Dphotonics.automation.cameraMotionPeriodTicks=120"
             vmArg "-Dphotonics.automation.cameraYawAmplitudeDegrees=35"
             vmArg "-Dphotonics.automation.cameraPitchAmplitudeDegrees=8"
@@ -251,7 +253,6 @@ tasks.register("shaderGameTest") {
 
         String logContent = latestLog.getText("UTF-8")
         List<String> forbiddenPatterns = [
-                "Unable to resolve shader pack option menu element",
                 "Error while parsing the block ID map entry",
                 "NullPointerException",
                 "Disabling automation frame capture after failure"

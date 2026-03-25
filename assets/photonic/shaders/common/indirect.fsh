@@ -1,6 +1,7 @@
 #version 430
 
 #define FLIP_INDIRECT_INDEX
+#define PH_DECLARE_GI_IMAGES
 #include "/photonics/common/header.glsl"
 #include "/photonics/write_indirect.glsl"
 

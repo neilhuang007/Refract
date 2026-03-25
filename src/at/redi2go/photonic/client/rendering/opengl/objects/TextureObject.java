@@ -131,6 +131,31 @@ public abstract class TextureObject implements Destructable {
       }
    }
 
+   public float[] downloadFloatData() {
+      if (this.getTextureDimensions().length > 2 || this.target != 3553 || !this.isFloatingPointTexture()) {
+         return null;
+      }
+
+      this.bind();
+      IntBuffer buffer = BufferUtils.createIntBuffer(1);
+      GL11.glGetTexLevelParameteriv(this.target, 0, 4096, buffer);
+      int width = buffer.get(0);
+      buffer.clear();
+      GL11.glGetTexLevelParameteriv(this.target, 0, 4097, buffer);
+      int height = buffer.get(0);
+      if (width <= 0 || height <= 0) {
+         this.unbind();
+         return null;
+      }
+
+      FloatBuffer pixels = BufferUtils.createFloatBuffer(width * height * 4);
+      GL11.glGetTexImage(this.target, 0, GL11.GL_RGBA, GL11.GL_FLOAT, pixels);
+      float[] out = new float[width * height * 4];
+      pixels.get(out);
+      this.unbind();
+      return out;
+   }
+
    private boolean isFloatingPointTexture() {
       return this.internalTextureFormat != null && this.internalTextureFormat.name().contains("F");
    }

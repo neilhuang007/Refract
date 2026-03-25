@@ -1,6 +1,7 @@
 package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.CompositeRendererExt;
+import at.redi2go.photonic.client.IrisRenderTargetAliases;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.ShaderAutomation;
 import at.redi2go.photonic.client.rendering.opengl.rendering.PhotonicsShader;
@@ -78,6 +79,8 @@ public abstract class IrisRenderingPipelineMixin {
 
    @Inject(method = "<init>", at = @At("HEAD"))
    private static void photonic$bootstrapRaytracer(ProgramSet programSet, CallbackInfo ci) {
+      IrisRenderTargetAliases.configure(programSet);
+
       if (!Raytracer.shouldBeEnabled()) {
          return;
       }

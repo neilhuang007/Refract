@@ -9,6 +9,7 @@
 //ph_required: uniform vec3 cameraPosition, eyePosition;
 
 #define FLIP_INDIRECT_INDEX
+#define PH_DECLARE_GI_IMAGES
 #include "/photonics/shader_interface.glsl"
 #include "/photonics/write_indirect.glsl"
 #include "/photonics/photonics.glsl"

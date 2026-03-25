@@ -1,3 +1,4 @@
+#define PH_DECLARE_GI_IMAGES
 #include "/photonics/photonics.glsl"
 #include "/photonics/common/util.glsl"
 

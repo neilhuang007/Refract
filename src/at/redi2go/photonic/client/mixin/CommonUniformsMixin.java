@@ -100,6 +100,8 @@ public class CommonUniformsMixin {
             () -> PhotonicsStorage.DEBUG_FREEZE_RNG.value ? 1.0F : 0.0F);
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_constant_albedo",
             () -> PhotonicsStorage.DEBUG_CONSTANT_ALBEDO.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "phFirstBuildTime",
+            () -> worldRegistry.get().getFirstBuildTime());
       }
    }
 
