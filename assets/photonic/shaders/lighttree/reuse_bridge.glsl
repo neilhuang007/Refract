@@ -371,10 +371,8 @@ DirectSurface lt_load_previous_surface(ivec2 uv) {
     );
 }
 
-float rtxdi_surface_linear_depth(DirectSurface surface, vec3 cameraPosition) {
-    // RTXDI's bridge allows any consistent linear-depth metric. This path stores world positions,
-    // so distance to the relevant camera is the stable depth metric used for neighbor validation.
-    return length(surface.worldPos - cameraPosition);
+float rtxdi_surface_linear_depth(DirectSurface surface, mat4 modelViewProjection) {
+    return ph_linear_view_depth(modelViewProjection, surface.worldPos);
 }
 
 bool rtxdi_compare_relative_difference(float referenceDepth, float candidateDepth, float threshold) {
@@ -395,8 +393,8 @@ bool rtxdi_is_valid_neighbor(
 }
 
 bool lt_surface_matches(DirectSurface currentSurface, DirectSurface sourceSurface, float planeThreshold, float normalThreshold) {
-    float currentDepth = rtxdi_surface_linear_depth(currentSurface, world_camera_position);
-    float sourceDepth = rtxdi_surface_linear_depth(sourceSurface, world_camera_position);
+    float currentDepth = rtxdi_surface_linear_depth(currentSurface, modelview_projection);
+    float sourceDepth = rtxdi_surface_linear_depth(sourceSurface, modelview_projection);
     return rtxdi_is_valid_neighbor(
         currentSurface.shadingNormal,
         sourceSurface.shadingNormal,
@@ -408,8 +406,8 @@ bool lt_surface_matches(DirectSurface currentSurface, DirectSurface sourceSurfac
 }
 
 bool lt_surface_matches_temporal(DirectSurface currentSurface, DirectSurface previousSurface, float planeThreshold, float normalThreshold) {
-    float expectedPreviousDepth = rtxdi_surface_linear_depth(currentSurface, previous_world_camera_position);
-    float previousDepth = rtxdi_surface_linear_depth(previousSurface, previous_world_camera_position);
+    float expectedPreviousDepth = rtxdi_surface_linear_depth(currentSurface, previous_modelview_projection);
+    float previousDepth = rtxdi_surface_linear_depth(previousSurface, previous_modelview_projection);
     return rtxdi_is_valid_neighbor(
         currentSurface.shadingNormal,
         previousSurface.shadingNormal,
@@ -429,7 +427,7 @@ bool RTXDI_IsValidTemporalNeighbor(
     float normalThreshold,
     float depthThreshold
 ) {
-    float candidateDepth = rtxdi_surface_linear_depth(candidateSurface, previous_world_camera_position);
+    float candidateDepth = rtxdi_surface_linear_depth(candidateSurface, previous_modelview_projection);
     return rtxdi_is_valid_neighbor(
         currentSurface.shadingNormal,
         candidateSurface.shadingNormal,

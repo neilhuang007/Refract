@@ -691,7 +691,7 @@ RTXDI_GIReservoir RTXDI_LoadPreviousGIReservoir(ivec2 reservoirPos, int activeCh
     return RTXDI_LoadPreviousGIReservoir(pixelPos);
 }
 
-bool GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample);
+vec3 GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample);
 bool gi_sample_requires_final_visibility(DirectSurface surface, RTXDI_GISample giSample);
 
 RTXDI_GIReservoir RTXDI_LoadInitialGIReservoir(ivec2 uv) {
@@ -705,30 +705,45 @@ RTXDI_GIReservoir RTXDI_LoadInitialGIReservoir(ivec2 uv) {
 }
 
 bool RAB_GetConservativeVisibility(DirectSurface surface, vec3 samplePosition) {
-    RTXDI_GISample giSample = gi_null_sample();
-    giSample.position = samplePosition;
-    return GetFinalVisibility(surface, giSample);
-}
-
-bool RAB_GetTemporalConservativeVisibility(DirectSurface surface, DirectSurface temporalSurface, vec3 samplePosition) {
-    return RAB_GetConservativeVisibility(surface, samplePosition)
-        && RAB_GetConservativeVisibility(temporalSurface, samplePosition);
-}
-
-bool GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample) {
-    vec3 toSample = giSample.position - surface.rtPos;
-    float distance = length(toSample);
-    if (distance <= 1e-5f) {
+    vec3 rayOrigin;
+    vec3 rayDirection;
+    float traceDistance;
+    if (!lt_setup_visibility_ray(surface, samplePosition, 0.001f, rayOrigin, rayDirection, traceDistance)) {
         return false;
     }
 
-    ray.origin = lt_surface_ray_origin(surface.rtPos, surface.geometryNormal);
-    ray.direction = toSample / distance;
+    ray.origin = rayOrigin;
+    ray.direction = rayDirection;
+    ray_target = ivec3(floor(samplePosition));
+    trace_ray(ray, true);
+    return lt_ray_reached_target_cell(samplePosition);
+}
+
+bool RAB_GetTemporalConservativeVisibility(DirectSurface surface, DirectSurface temporalSurface, vec3 samplePosition) {
+    // Match RTXDI's fallback semantics when no previous-frame acceleration structure exists:
+    // use the current surface and current scene only. Requiring visibility from both the
+    // current and temporal surfaces is stricter than RTXDI and inflates temporal instability.
+    return RAB_GetConservativeVisibility(surface, samplePosition);
+}
+
+vec3 GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample) {
+    vec3 rayOrigin;
+    vec3 rayDirection;
+    float traceDistance;
+    if (!lt_setup_visibility_ray(surface, giSample.position, 0.01f, rayOrigin, rayDirection, traceDistance)) {
+        return vec3(0.0f);
+    }
+
+    ray.origin = rayOrigin;
+    ray.direction = rayDirection;
     ray_target = ivec3(floor(giSample.position));
     trace_ray(ray, true);
-    bool reachedSampleCell = lt_ray_reached_target_cell(giSample.position);
-    bool environmentMiss = !ray.result_hit && !ray_iteration_bound_reached;
-    return reachedSampleCell || environmentMiss;
+
+    if (!lt_ray_reached_target_cell(giSample.position)) {
+        return vec3(0.0f);
+    }
+
+    return lt_trace_visibility_transmittance();
 }
 
 bool gi_sample_requires_final_visibility(DirectSurface surface, RTXDI_GISample giSample) {
@@ -894,10 +909,8 @@ void gi_shade_reservoir(DirectSurface currentSurface, RTXDI_GIReservoir reservoi
     }
 
     vec3 finalRadiance = reservoir.selected.radiance * reservoir.weight_sum;
-    if (gi_sample_requires_final_visibility(currentSurface, reservoir.selected)
-        && !GetFinalVisibility(currentSurface, reservoir.selected))
-    {
-        finalRadiance = vec3(0.0f);
+    if (gi_sample_requires_final_visibility(currentSurface, reservoir.selected)) {
+        finalRadiance *= GetFinalVisibility(currentSurface, reservoir.selected);
     }
 
     SplitBrdf finalBrdf = EvaluateBrdf(currentSurface, reservoir.selected.position, gi_surface_roughness(currentSurface));

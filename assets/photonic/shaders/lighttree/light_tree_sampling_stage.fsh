@@ -52,7 +52,7 @@ void main() {
         vec2(0.0f)
     );
     vec2 currentPixelCenter = vec2(pixelPosition) + vec2(0.5f);
-    float currentLinearDepth = length(world_pos - world_camera_position);
-    float expectedPrevLinearDepth = length(world_pos - previous_world_camera_position);
+    float currentLinearDepth = ph_linear_view_depth(modelview_projection, world_pos);
+    float expectedPrevLinearDepth = ph_linear_view_depth(previous_modelview_projection, world_pos);
     motion_frag_out = vec4(previousPixel - currentPixelCenter, expectedPrevLinearDepth - currentLinearDepth, 1.0f);
 }

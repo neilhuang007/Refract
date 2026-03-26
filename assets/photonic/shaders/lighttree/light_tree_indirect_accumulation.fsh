@@ -36,13 +36,18 @@ void main() {
 
     int activeCheckerboardField = ph_restir_active_checkerboard_field;
     ivec2 currentReservoirPos = RTXDI_PixelPosToReservoirPos(tex_coord, activeCheckerboardField);
+    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
+        uvec2(currentReservoirPos),
+        uint(frameCounter),
+        RTXDI_GI_SPATIAL_RESAMPLING_RANDOM_SEED
+    );
     RTXDI_GIReservoir currentReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, currentReservoirPos, activeCheckerboardField);
     RTXDI_GIReservoir state = RTXDI_EmptyGIReservoir();
     float selectedTargetPdf = 0.0f;
     float inputM = 0.0f;
     uint cachedResult = 0u;
     int selectedNeighborIndex = -1;
-    int neighborSampleStartIdx = int(rand_next_float() * float(lt_neighbor_offset_count - 1));
+    int neighborSampleStartIdx = int(RTXDI_GetNextRandom(rng) * float(lt_neighbor_offset_count - 1));
     int activeSpatialSampleCount = gi_runtime_spatial_sample_count();
     float spatialReuseRadius = gi_runtime_spatial_radius();
     float spatialDepthThreshold = gi_runtime_spatial_depth_threshold();
@@ -86,7 +91,7 @@ void main() {
         float targetPdf = RAB_GetGISampleTargetPdfForSurface(currentSurface, neighborReservoir.selected);
         cachedResult |= (1u << uint(i));
 
-        if (RTXDI_CombineGIReservoirs(state, neighborReservoir, rand_next_float(), targetPdf * jacobian)) {
+        if (RTXDI_CombineGIReservoirs(state, neighborReservoir, RTXDI_GetNextRandom(rng), targetPdf * jacobian)) {
             selectedTargetPdf = targetPdf;
             selectedNeighborIndex = i;
         }

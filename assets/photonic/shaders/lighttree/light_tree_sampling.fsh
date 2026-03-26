@@ -83,8 +83,8 @@ void main() {
     // offset, which breaks round() in temporal reprojection and prevents DI history reuse.
     vec2 currentPixelCenter = vec2(pixelPosition) + vec2(0.5f);
     vec2 motionXY = previousPixel - currentPixelCenter;
-    float currentLinearDepth = length(worldPos - world_camera_position);
-    float expectedPrevLinearDepth = length(worldPos - previous_world_camera_position);
+    float currentLinearDepth = ph_linear_view_depth(modelview_projection, worldPos);
+    float expectedPrevLinearDepth = ph_linear_view_depth(previous_modelview_projection, worldPos);
     float motionZ = expectedPrevLinearDepth - currentLinearDepth;
     motion_frag_out = vec4(motionXY, motionZ, 1.0);
 }

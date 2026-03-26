@@ -16,6 +16,7 @@ import net.irisshaders.iris.shaderpack.properties.PackDirectives;
 import net.irisshaders.iris.uniforms.CapturedRenderingState;
 import net.irisshaders.iris.uniforms.CommonUniforms;
 import net.irisshaders.iris.uniforms.FrameUpdateNotifier;
+import net.irisshaders.iris.uniforms.SystemTimeUniforms;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
@@ -38,6 +39,8 @@ public class CommonUniformsMixin {
    private static Vector3d previousWorldCameraPosition = new Vector3d();
    @Unique
    private static Vector3d currentWorldCameraPosition = new Vector3d();
+   @Unique
+   private static int photonic$lastSnapshotFrame = Integer.MIN_VALUE;
 
    @Inject(method = "addNonDynamicUniforms", at = @At("TAIL"))
    private static void addIrisExclusiveUniforms(
@@ -47,8 +50,10 @@ public class CommonUniformsMixin {
       if (Raytracer.shouldBeEnabled() && raytracer != null) {
          Supplier<WorldRegistry> worldRegistry = raytracer::getWorldRegistry;
          Supplier<RenderDispatcher> renderDispatcher = raytracer::getRenderDispatcher;
-         photonic$beginFrameSnapshot(renderDispatcher.get());
-         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_camera_position", CommonUniformsMixin::photonic$getWorldCameraPosition);
+         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "world_camera_position", () -> {
+            photonic$ensureFrameSnapshot(renderDispatcher.get());
+            return new Vector3d(currentWorldCameraPosition);
+         });
          uniforms.uniformMatrix(
             UniformUpdateFrequency.PER_FRAME,
             "direction_transformation_matrix_in",
@@ -65,10 +70,19 @@ public class CommonUniformsMixin {
          uniforms.uniformMatrix(
             UniformUpdateFrequency.PER_FRAME,
             "modelview_projection",
-            () -> renderDispatcher.get().getModelViewProjectionMatrix(new Vector3f(photonic$getCameraPosition()))
+            () -> {
+               photonic$ensureFrameSnapshot(renderDispatcher.get());
+               return new Matrix4f(currentModelViewProjection);
+            }
          );
-         uniforms.uniformMatrix(UniformUpdateFrequency.PER_FRAME, "previous_modelview_projection", () -> new Matrix4f(previousModelViewProjection));
-         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "previous_world_camera_position", () -> new Vector3d(previousWorldCameraPosition));
+         uniforms.uniformMatrix(UniformUpdateFrequency.PER_FRAME, "previous_modelview_projection", () -> {
+            photonic$ensureFrameSnapshot(renderDispatcher.get());
+            return new Matrix4f(previousModelViewProjection);
+         });
+         uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "previous_world_camera_position", () -> {
+            photonic$ensureFrameSnapshot(renderDispatcher.get());
+            return new Vector3d(previousWorldCameraPosition);
+         });
          uniforms.uniform3f(UniformUpdateFrequency.PER_FRAME, "handheld_color", () -> renderDispatcher.get().getHandheldColor());
          uniforms.uniform1b(UniformUpdateFrequency.PER_FRAME, "left_handed", () -> renderDispatcher.get().isLeftHanded());
          uniforms.uniform1b(UniformUpdateFrequency.PER_FRAME, "light_reload", () -> worldRegistry.get().fetchLightReload());
@@ -155,7 +169,13 @@ public class CommonUniformsMixin {
    }
 
    @Unique
-   private static void photonic$beginFrameSnapshot(RenderDispatcher renderDispatcher) {
+   private static void photonic$ensureFrameSnapshot(RenderDispatcher renderDispatcher) {
+      int frame = SystemTimeUniforms.COUNTER.getAsInt();
+      if (frame == photonic$lastSnapshotFrame) {
+         return;
+      }
+
+      photonic$lastSnapshotFrame = frame;
       Vector3f cameraPosition = photonic$getCameraPosition();
       Matrix4f nextModelViewProjection = renderDispatcher.getModelViewProjectionMatrix(new Vector3f(cameraPosition));
       Vector3d nextWorldCameraPosition = new Vector3d(cameraPosition.x, cameraPosition.y, cameraPosition.z);

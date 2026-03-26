@@ -442,6 +442,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "radiosity_temporal_reservoir_meta", () -> this.directTemporalReservoirBuffer.getWriteAttachment("meta"));
       this.addTextureSampler(samplers, "radiosity_direct_soft", this::getCompatDirectSoftTexture);
       this.addTextureSampler(samplers, "radiosity_handheld", () -> this.lightingBuffer.getWriteAttachment("handheld"));
+      this.addTextureSampler(samplers, "radiosity_lighting_variance", () -> this.lightingBuffer.getWriteAttachment("lighting_variance"));
       this.addTextureSampler(samplers, "radiosity_indirect", () -> this.lightingBuffer.getWriteAttachment("indirect"));
       this.addTextureSampler(samplers, "radiosity_indirect_variance", () -> this.lightingBuffer.getWriteAttachment("indirect_variance"));
       this.addTextureSampler(samplers, "radiosity_indirect_reservoir_position", this::getCurrentIndirectReservoirPositionTexture);
@@ -482,6 +483,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "prev_radiosity_reservoir_meta", () -> this.directReservoirBuffer.getReadAttachment("meta"));
       this.addTextureSampler(samplers, "prev_radiosity_direct_soft", this::getPreviousCompatDirectSoftTexture);
       this.addTextureSampler(samplers, "prev_radiosity_handheld", () -> this.lightingBuffer.getReadAttachment("handheld"));
+      this.addTextureSampler(samplers, "prev_radiosity_lighting_variance", () -> this.lightingBuffer.getReadAttachment("lighting_variance"));
       this.addTextureSampler(samplers, "prev_radiosity_indirect", () -> this.lightingBuffer.getReadAttachment("indirect"));
       this.addTextureSampler(samplers, "prev_radiosity_indirect_variance", () -> this.lightingBuffer.getReadAttachment("indirect_variance"));
       this.addTextureSampler(samplers, "prev_radiosity_indirect_reservoir_position", () -> this.indirectReservoirBuffer.getReadAttachment("position"));
@@ -568,7 +570,10 @@ public class LightTreeRenderer extends MainRenderer {
       // this backport. Keep proposal-time visibility disabled until that bridge is fixed.
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_enable_visibility", () -> -1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_brdf_cutoff", () -> 0.0001f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> 2.0f);
+      // Use the RTXDI default local-light sampling mode unless a validated
+      // ReGIR/RIS bridge is reinstated. Forcing ReGIR here introduces visible
+      // tile-correlated artifacts in the raw DI signal on this backport.
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> this.properties.getRestirTemporalBiasMode());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_permutation_sampling", () -> this.properties.getRestirTemporalPermutationSampling());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_temporal_permutation_sampling", () -> 0.0f);
@@ -665,6 +670,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectInitialReservoirBuffer.swap();
       this.indirectTemporalReservoirBuffer.swap();
       this.indirectReservoirBuffer.swap();
+      this.indirectDenoisedBuffer.swap();
       long t0 = System.nanoTime();
       this.dispatchRegirCompute();
       this.renderProfiled(proposalSamplingRegionIndex, this.proposalRenderer);

@@ -120,6 +120,12 @@ vec2 ph_reprojectf(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jit
     return xy * viewSize * PH_RENDER_SCALE;
 }
 
+float ph_linear_view_depth(mat4 mvp_matrix, vec3 world_position) {
+    // RTXDI's bridge compares surfaces using the G-buffer's linear view depth.
+    // For the perspective matrices used here, clip.w tracks the absolute view-space z depth.
+    return abs((mvp_matrix * vec4(world_position, 1.0f)).w);
+}
+
 int ph_hash(ivec3 v) {
     return ph_cantor(ph_hash(v.x), ph_cantor(ph_hash(v.y), ph_hash(v.z)));
 }

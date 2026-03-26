@@ -38,7 +38,7 @@ void main() {
     float temporalMaxHistory = gi_runtime_temporal_max_history();
     float temporalDepthThreshold = gi_runtime_temporal_depth_threshold();
     float temporalNormalThreshold = gi_runtime_temporal_normal_threshold();
-    float temporalMaxReservoirAge = gi_runtime_temporal_max_reservoir_age() * (0.5f + rand_next_float() * 0.5f);
+    float temporalMaxReservoirAge = gi_runtime_temporal_max_reservoir_age();
     bool enableFallbackSampling = gi_runtime_enable_fallback_sampling();
     bool enablePermutationSampling = gi_runtime_enable_permutation_sampling();
     int biasCorrectionMode = gi_runtime_bias_correction_mode(ph_restir_temporal_bias_mode);
@@ -49,13 +49,20 @@ void main() {
     }
 
     int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
+    ivec2 currentReservoirPos = RTXDI_PixelPosToReservoirPos(tex_coord, activeCheckerboardField);
+    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
+        uvec2(currentReservoirPos),
+        uint(frameCounter),
+        RTXDI_GI_TEMPORAL_RESAMPLING_RANDOM_SEED
+    );
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
     ivec2 prevPos = ivec2(round(vec2(tex_coord) + motionVector.xy));
-    float expectedPrevLinearDepth = length(currentSurface.worldPos - world_camera_position) + motionVector.z;
+    float currentLinearDepth = ph_linear_view_depth(modelview_projection, currentSurface.worldPos);
+    float expectedPrevLinearDepth = currentLinearDepth + motionVector.z;
     uint uniformRandomNumber = ph_restir_temporal_uniform_random != 0
         ? uint(ph_restir_temporal_uniform_random)
         : uint(frameCounter);
-    int temporalSampleStartIdx = int(rand_next_float() * 8.0f);
+    int temporalSampleStartIdx = int(RTXDI_GetNextRandom(rng) * 8.0f);
     float temporalSearchRadius = (activeCheckerboardField == 0) ? 1.0f : 2.0f;
 
     RTXDI_GIReservoir temporalReservoir = RTXDI_EmptyGIReservoir();
@@ -131,7 +138,7 @@ void main() {
     bool selectedPreviousSample = false;
     if (foundTemporalReservoir) {
         float targetPdf = RAB_GetGISampleTargetPdfForSurface(currentSurface, temporalReservoir.selected);
-        selectedPreviousSample = RTXDI_CombineGIReservoirs(state, temporalReservoir, rand_next_float(), targetPdf);
+        selectedPreviousSample = RTXDI_CombineGIReservoirs(state, temporalReservoir, RTXDI_GetNextRandom(rng), targetPdf);
         if (selectedPreviousSample) {
             selectedTargetPdf = targetPdf;
         }

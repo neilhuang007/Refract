@@ -149,7 +149,7 @@ void main() {
         ivec2 prevPos = ivec2(round(reprojectedSamplePosition));
 
         // RTXDI line 67: expectedPrevLinearDepth = currentLinearDepth + motion.z
-        float currentLinearDepth = length(currentSurface.worldPos - world_camera_position);
+        float currentLinearDepth = ph_linear_view_depth(modelview_projection, currentSurface.worldPos);
         float expectedPrevLinearDepth = currentLinearDepth + motion.z;
 
         // SDK defaults (ReSTIRDI.cpp lines 59-60): depthThreshold=0.1, normalThreshold=0.5.
@@ -368,11 +368,12 @@ void main() {
             if (biasCorrectionMode == RTXDI_BIAS_CORRECTION_RAY_TRACED
                     && temporalP > 0.0
                     && (!selectedPreviousSample || !enableVisibilityShortcut)) {
-                // Reuse prevLightSample already built above — same light/position/surface as temporalP.
-                // This matches RTXDI selectedSampleAtTemporal in TemporalResampling.hlsli lines 184-199.
+                // Reuse prevLightSample already built above — same light/position as temporalP.
+                // This port has no previous-frame TLAS, so match RTXDI's documented fallback:
+                // trace against the current surface in the current scene, not both surfaces.
                 LightSample visSample = prevLightSample;
                 if (visSample.index >= 0) {
-                    float hitDist = light_sample_trace_hit_surface(visSample, false, temporalSurface);
+                    float hitDist = light_sample_trace_hit_surface(visSample, false, currentSurface);
                     if (hitDist <= 0.0f) {
                         temporalP = 0.0;
                     }
