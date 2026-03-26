@@ -707,16 +707,24 @@ RTXDI_GIReservoir RTXDI_LoadInitialGIReservoir(ivec2 uv) {
 bool RAB_GetConservativeVisibility(DirectSurface surface, vec3 samplePosition) {
     vec3 rayOrigin;
     vec3 rayDirection;
-    float traceDistance;
-    if (!lt_setup_visibility_ray(surface, samplePosition, 0.001f, rayOrigin, rayDirection, traceDistance)) {
+    float traceMinDistance;
+    float traceMaxDistance;
+    if (!lt_setup_visibility_ray(surface, samplePosition, 0.001f, rayOrigin, rayDirection, traceMinDistance, traceMaxDistance)) {
         return false;
     }
 
     ray.origin = rayOrigin;
     ray.direction = rayDirection;
-    ray_target = ivec3(floor(samplePosition));
+    ray_target = ivec3(-9999);
+    ray_ignore_block_id = -1;
+    ray_min_trace_distance = traceMinDistance;
+    ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
-    return lt_visibility_trace_is_unoccluded(samplePosition, rayOrigin, traceDistance);
+    ray_target = ivec3(-9999);
+    ray_ignore_block_id = -1;
+    ray_min_trace_distance = 0.0f;
+    ray_max_trace_distance = -1.0f;
+    return lt_visibility_trace_is_unoccluded();
 }
 
 bool RAB_GetTemporalConservativeVisibility(DirectSurface surface, DirectSurface temporalSurface, vec3 samplePosition) {
@@ -729,17 +737,25 @@ bool RAB_GetTemporalConservativeVisibility(DirectSurface surface, DirectSurface 
 vec3 GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample) {
     vec3 rayOrigin;
     vec3 rayDirection;
-    float traceDistance;
-    if (!lt_setup_visibility_ray(surface, giSample.position, 0.01f, rayOrigin, rayDirection, traceDistance)) {
+    float traceMinDistance;
+    float traceMaxDistance;
+    if (!lt_setup_visibility_ray(surface, giSample.position, 0.01f, rayOrigin, rayDirection, traceMinDistance, traceMaxDistance)) {
         return vec3(0.0f);
     }
 
     ray.origin = rayOrigin;
     ray.direction = rayDirection;
-    ray_target = ivec3(floor(giSample.position));
+    ray_target = ivec3(-9999);
+    ray_ignore_block_id = -1;
+    ray_min_trace_distance = traceMinDistance;
+    ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
+    ray_target = ivec3(-9999);
+    ray_ignore_block_id = -1;
+    ray_min_trace_distance = 0.0f;
+    ray_max_trace_distance = -1.0f;
 
-    if (!lt_final_visibility_reaches_target(giSample.position)) {
+    if (!lt_visibility_trace_is_unoccluded()) {
         return vec3(0.0f);
     }
 

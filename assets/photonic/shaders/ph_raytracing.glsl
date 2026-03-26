@@ -17,6 +17,7 @@ const float tint_darken_factor = 1f / tint_darken_offset;
 
 int RAY_ITERATION_COUNT = 100;
 bool ray_iteration_bound_reached = false;
+bool ray_distance_limit_reached = false;
 
 int result_block_id = -1;
 vec3 result_tint_color = vec3(1f);
@@ -25,6 +26,9 @@ int ph_result_sky_brightness = 0;
 ivec3 ray_target = ivec3(-9999);
 ivec3 ray_constraint = ivec3(-9999);
 bool breakOnEmpty = false;
+float ray_min_trace_distance = 0.0f;
+float ray_max_trace_distance = -1.0f;
+int ray_ignore_block_id = -1;
 
 vec3 lightEmittance = vec3(0.0f);
 
@@ -80,6 +84,7 @@ void trace_ray(inout RayJob job, bool transparency) {
     ph_result_sky_brightness = 0;
 
     vec3 previous_tint = vec3(-1f);
+    ray_distance_limit_reached = false;
 
     for (int i = RAY_ITERATION_COUNT; !(ray_iteration_bound_reached = i < 0); i--) {
         // GLSL integer casts truncate toward zero, which misindexes negative voxel
@@ -90,16 +95,37 @@ void trace_ray(inout RayJob job, bool transparency) {
         if (!ph_is_inside(position)) // outside of world?
             return;
 
+        vec3 travel_delta = position - job.origin * 16.0f;
+        float travel_dist_sq = dot(travel_delta, travel_delta);
+        bool before_min_trace_distance = false;
+
+        if (ray_min_trace_distance > 0.0f) {
+            float min_trace_sq = ray_min_trace_distance * ray_min_trace_distance * 256.0f;
+            before_min_trace_distance = travel_dist_sq < min_trace_sq;
+        }
+
+        // Visibility rays emulate RTXDI's TMax with an explicit distance cap so
+        // transparent segments stop at the sampled light instead of running through
+        // geometry that lies beyond the RTXDI shadow-ray segment.
+        if (ray_max_trace_distance > 0.0f) {
+            float max_trace_sq = ray_max_trace_distance * ray_max_trace_distance * 256.0f;
+            if (travel_dist_sq > max_trace_sq) {
+                ray_distance_limit_reached = true;
+                break;
+            }
+        }
+
         // Early termination: secondary rays (GI/shadow) that travel too far
         // are unlikely to contribute useful lighting information
         if (RAY_ITERATION_COUNT <= 32) {
-            float travel_dist_sq = dot(position - job.origin * 16.0f, position - job.origin * 16.0f);
             if (travel_dist_sq > 4194304.0f) { // > 128 blocks (2048 voxels squared)
                 return;
             }
         }
 
-        if ((job.result_hit = block_position == ray_target)) { // ray target reached?
+        // RTXDI visibility rays are bounded by [TMin, TMax] only. Do not quantize them to a
+        // target voxel/block stop condition; that reintroduces cell-shaped lighting artifacts.
+        if (ray_max_trace_distance <= 0.0f && !before_min_trace_distance && (job.result_hit = block_position == ray_target)) { // ray target reached?
             break;
         }
         if (ray_constraint != ivec3(-9999) && block_position != ray_constraint)
@@ -151,8 +177,27 @@ void trace_ray(inout RayJob job, bool transparency) {
                 }
 
                 if (entries.z < 0) { // found bloxel
+                    if (before_min_trace_distance) {
+                        #ifdef PH_FULL_TRANSPARENCY
+                        scale = 0;
+                        entry = ph_to_fake_air_entry(voxel_pos);
+                        #else
+                        scale = 4;
+                        entry = ph_to_fake_air_entry(block_pos);
+                        #endif
+                    } else if (ray_max_trace_distance > 0.0f
+                        && ray_ignore_block_id >= 0
+                        && block_position == ray_target
+                        && result_block_id == ray_ignore_block_id) {
+                        // RTXDI analytic point lights have no emitter geometry. In the voxel scene the
+                        // light lives inside a host block, so ignore only that specific block as the
+                        // ray endpoint instead of treating it as an occluder or short-circuiting on the
+                        // entire target cell.
+                        ray_distance_limit_reached = true;
+                        job.result_hit = false;
+                        break;
                     #ifdef PH_USE_TRANSPARENCY
-                    if (!transparency || (-entries.z & 0x7f000000) == 0) {
+                    } else if (!transparency || (-entries.z & 0x7f000000) == 0) {
                         job.result_hit = true;
                         break;
                     } else {
@@ -187,8 +232,10 @@ void trace_ray(inout RayJob job, bool transparency) {
                         #endif
                     }
                     #else
-                    job.result_hit = true;
-                    break;
+                    } else {
+                        job.result_hit = true;
+                        break;
+                    }
                     #endif
                 } else { scale = 0; entry = entries.z; }
             } else { scale = 4; entry = entries.y; }
@@ -292,6 +339,7 @@ void trace_ray(inout RayJob job, bool transparency) {
         job.result_normal[t_min] = sign(-ray_direction_sign[t_min]);
 
     ray_target = ivec3(-1);
+    ray_ignore_block_id = -1;
 }
 
 void trace_ray(inout RayJob job) { trace_ray(job, false); }

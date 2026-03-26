@@ -45,6 +45,7 @@
   ],
   "client": [
     "BakedQuadMixin",
+    "ClientWorldMixin",
     "FaceBakeryMixin",
     "GameRendererMixin",
     "ModelElementMixin",

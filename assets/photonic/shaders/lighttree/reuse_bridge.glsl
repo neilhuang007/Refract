@@ -764,73 +764,46 @@ float light_sample_target_pdf_at_surface_with_view(int lightIndex, DirectSurface
     return lt_surface_target_pdf_with_view(surface, smple, viewPos);
 }
 
-bool lt_ray_reached_target_cell(vec3 targetPosition) {
-    ivec3 targetCell = ivec3(floor(targetPosition));
-    ivec3 hitCell = ivec3(floor(ray.result_position));
-    return ray.result_hit && all(equal(hitCell, targetCell));
-}
-
 // Mirrors RTXDI's setupVisibilityRay helper:
 //   L        = samplePosition - surface.worldPos
 //   TMin     = offset
 //   TMax     = max(offset, length(L) - offset * 2)
 //   Direction= normalize(L)
 //   Origin   = surface.worldPos
-// Our voxel tracer has no explicit TMin/TMax. The closest equivalent to RTXDI's setup is to
-// advance the origin by TMin along the shadow-ray direction while keeping the original
-// normalized direction, then compare the traced hit distance against the RTXDI-style TMax
-// returned in traceDistance below.
+// Mirror that contract exactly in the bridge: keep the original surface position as the
+// ray origin and forward TMin/TMax separately to the voxel tracer.
 bool lt_setup_visibility_ray(
     DirectSurface surface,
     vec3 targetPosition,
     float offset,
     out vec3 rayOrigin,
     out vec3 rayDirection,
-    out float traceDistance
+    out float traceMinDistance,
+    out float traceMaxDistance
 ) {
     vec3 unbiasedToTarget = targetPosition - surface.rtPos;
     float lightDistance = length(unbiasedToTarget);
     if (lightDistance <= 1e-5f) {
         rayOrigin = surface.rtPos;
         rayDirection = vec3(0.0f);
-        traceDistance = 0.0f;
+        traceMinDistance = 0.0f;
+        traceMaxDistance = 0.0f;
         return false;
     }
 
     rayDirection = unbiasedToTarget / lightDistance;
-    rayOrigin = surface.rtPos + rayDirection * offset;
-    vec3 biasedToTarget = targetPosition - rayOrigin;
-    float biasedDistance = length(biasedToTarget);
-    if (biasedDistance <= 1e-5f) {
-        rayDirection = vec3(0.0f);
-        traceDistance = 0.0f;
-        return false;
-    }
-
-    traceDistance = max(offset, lightDistance - offset * 2.0f);
-    return traceDistance > 0.0f;
+    rayOrigin = surface.rtPos;
+    traceMinDistance = offset;
+    traceMaxDistance = max(offset, lightDistance - offset * 2.0f);
+    return traceMaxDistance > 0.0f;
 }
 
-float lt_visibility_trace_distance(vec3 rayOrigin) {
-    return ray.result_hit ? length(ray.result_position - rayOrigin) : 3.402823466e+38f;
-}
-
-// Conservative visibility for RTXDI resampling should err on the side of "visible".
-// If the tracer does not report the exact target cell but the first non-transparent event
-// is beyond the RTXDI-equivalent TMax, keep the sample alive for the final visibility pass.
-bool lt_visibility_trace_is_unoccluded(vec3 targetPosition, vec3 rayOrigin, float traceDistance) {
-    if (lt_ray_reached_target_cell(targetPosition)) {
-        return true;
-    }
-
-    return lt_visibility_trace_distance(rayOrigin) + 1e-3f >= traceDistance;
-}
-
-// Final visibility is stricter than conservative bias-correction visibility because its
-// transmittance result is used directly for shading. Requiring the traced segment to reach
-// the target cell avoids integrating tint/attenuation from geometry that lies beyond the light.
-bool lt_final_visibility_reaches_target(vec3 targetPosition) {
-    return lt_ray_reached_target_cell(targetPosition);
+// Mirrors RTXDI's committed-hit test:
+// conservative visibility returns true when the shadow segment reaches TMax without
+// committing an opaque hit, and final visibility uses the same segment test plus
+// transparent transmittance stored in result_tint_color.
+bool lt_visibility_trace_is_unoccluded() {
+    return !ray.result_hit;
 }
 
 // Match RTXDI's final-visibility contract: the expensive visibility query returns an RGB
@@ -851,8 +824,9 @@ bool lt_trace_conservative_visibility(inout LightSample smple, DirectSurface sur
     vec3 targetPosition = smple.position;
     vec3 rayOrigin;
     vec3 rayDirection;
-    float traceDistance;
-    if (!lt_setup_visibility_ray(surface, targetPosition, 0.001f, rayOrigin, rayDirection, traceDistance)) {
+    float traceMinDistance;
+    float traceMaxDistance;
+    if (!lt_setup_visibility_ray(surface, targetPosition, 0.001f, rayOrigin, rayDirection, traceMinDistance, traceMaxDistance)) {
         return false;
     }
 
@@ -861,8 +835,15 @@ bool lt_trace_conservative_visibility(inout LightSample smple, DirectSurface sur
     ray.origin = smple.sample_pos;
     ray.direction = rayDirection;
     ray_target = ivec3(floor(smple.position));
+    ray_ignore_block_id = load_light(smple.index).blockId;
+    ray_min_trace_distance = traceMinDistance;
+    ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
-    return lt_visibility_trace_is_unoccluded(smple.position, rayOrigin, traceDistance);
+    ray_target = ivec3(-9999);
+    ray_ignore_block_id = -1;
+    ray_min_trace_distance = 0.0f;
+    ray_max_trace_distance = -1.0f;
+    return lt_visibility_trace_is_unoccluded();
 }
 
 // Mirrors RTXDI's GetFinalVisibility path:
@@ -882,8 +863,9 @@ vec3 lt_trace_final_visibility_with_offset(
     vec3 targetPosition = smple.position;
     vec3 rayOrigin;
     vec3 rayDirection;
-    float traceDistance;
-    if (!lt_setup_visibility_ray(surface, targetPosition, rayOffset, rayOrigin, rayDirection, traceDistance)) {
+    float traceMinDistance;
+    float traceMaxDistance;
+    if (!lt_setup_visibility_ray(surface, targetPosition, rayOffset, rayOrigin, rayDirection, traceMinDistance, traceMaxDistance)) {
         smple = lt_null_sample();
         return vec3(0.0f);
     }
@@ -894,9 +876,16 @@ vec3 lt_trace_final_visibility_with_offset(
     ray.origin = smple.sample_pos;
     ray.direction = rayDirection;
     ray_target = ivec3(floor(smple.position));
+    ray_ignore_block_id = light.blockId;
+    ray_min_trace_distance = traceMinDistance;
+    ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
+    ray_target = ivec3(-9999);
+    ray_ignore_block_id = -1;
+    ray_min_trace_distance = 0.0f;
+    ray_max_trace_distance = -1.0f;
 
-    if (!lt_final_visibility_reaches_target(smple.position)) {
+    if (!lt_visibility_trace_is_unoccluded()) {
         smple.color = vec3(0.0f);
         return vec3(0.0f);
     }
@@ -1569,11 +1558,13 @@ uint rtxdi_pack_visibility(vec3 visibility) {
 }
 
 vec4 rtxdi_pack_reservoir(Reservoir reservoir) {
+    uint packedVisibility = rtxdi_pack_visibility(reservoir.visibility);
+    uint packedM = min(uint(reservoir.M), RTXDI_PackedDIReservoir_MaxMUint);
     return vec4(
         uintBitsToFloat(reservoir.lightData),
         reservoir.weightSum,
         reservoir.targetPdf,
-        min(reservoir.M, float(RTXDI_PackedDIReservoir_MaxMUint))
+        uintBitsToFloat(packedVisibility | (packedM << RTXDI_PackedDIReservoir_MShift))
     );
 }
 
@@ -1582,12 +1573,7 @@ vec4 rtxdi_pack_reservoir_sample(Reservoir reservoir) {
         return vec4(0.0f);
     }
 
-    return vec4(
-        uintBitsToFloat(reservoir.uvData),
-        max(reservoir.age, 0.0f),
-        reservoir.spatialDistance.x,
-        reservoir.spatialDistance.y
-    );
+    return vec4(uintBitsToFloat(reservoir.uvData), 0.0f, 0.0f, 0.0f);
 }
 
 const int RTXDI_PackedDIReservoir_DistanceChannelBits = 8;
@@ -1622,10 +1608,7 @@ void rtxdi_unpack_age_distance(uint packedValue, out float age, out vec2 sd) {
 }
 
 vec4 rtxdi_pack_reservoir_meta(Reservoir reservoir) {
-    // Storage-layer adaptation for framebuffer-backed reservoirs:
-    // keep RTXDI's in-memory visibility/age semantics, but store the fields as native
-    // float channels so cached final visibility survives render-target round-trips.
-    return vec4(clamp(reservoir.visibility, vec3(0.0f), vec3(1.0f)), 0.0f);
+    return vec4(0.0f, 0.0f, 0.0f, uintBitsToFloat(rtxdi_pack_age_distance(reservoir.age, reservoir.spatialDistance)));
 }
 
 void rtxdi_unpack_reservoir_at_surface(inout Reservoir reservoir, vec4 color, vec4 sampleData, vec4 meta, DirectSurface surface, bool remap) {
@@ -1651,10 +1634,14 @@ void rtxdi_unpack_reservoir_at_surface(inout Reservoir reservoir, vec4 color, ve
     reservoir.compactLightBufferPtr = 0u;
     reservoir.weightSum = color.y;
     reservoir.targetPdf = color.z;
-    reservoir.M = min(max(color.w, 0.0f), float(RTXDI_PackedDIReservoir_MaxMUint));
-    reservoir.visibility = clamp(meta.rgb, vec3(0.0f), vec3(1.0f));
-    reservoir.age = max(sampleData.y, 0.0f);
-    reservoir.spatialDistance = round(sampleData.zw);
+    uint packedVisibilityAndM = floatBitsToUint(color.w);
+    reservoir.M = float((packedVisibilityAndM >> RTXDI_PackedDIReservoir_MShift) & RTXDI_PackedDIReservoir_MaxMUint);
+
+    // Unpack age+spatialDistance from meta.w, matching RTXDI distanceAge packing.
+    // packedVisibility lives in color.w with M, matching RTXDI_PackedDIReservoir::mVisibility.
+    uint packedDistanceAge = floatBitsToUint(meta.w);
+    reservoir.visibility = rtxdi_unpack_visibility(packedVisibilityAndM & RTXDI_PackedDIReservoir_VisibilityMask);
+    rtxdi_unpack_age_distance(packedDistanceAge, reservoir.age, reservoir.spatialDistance);
     reservoir.canonicalWeight = 0.0f;
 
     // RTXDI_UnpackDIReservoir sanitization (ReservoirStorage.hlsli lines 88-91):

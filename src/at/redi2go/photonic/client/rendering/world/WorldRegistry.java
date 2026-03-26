@@ -539,9 +539,9 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       });
       if (chunkCreated[0]) {
          this.onChunkLoad(chunkPos);
-         this.markLightBlendChunk(chunkPos);
          this.markRootEntryDirty(chunkPos);
       }
+      this.markLightBlendChunk(chunkPos);
       chunk.freeBlocks();
       ClientWorld level = MinecraftAccessor.getLevel();
       ChunkLightingView skyLightView = level != null ? level.getLightingProvider().get(LightType.SKY) : null;
@@ -900,6 +900,53 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          this.buildQueue.add(() -> {
             this.pendingBuildChunks.remove(chunkPos);
             if (!this.shouldKeepChunkForRt(chunkPos) || this.chunks.containsKey(chunkPos) || this.pendingChunkSet.contains(chunkPos)) {
+               return;
+            }
+
+            this.pendingChunkLoads.add(chunkPos);
+            this.pendingChunkSet.add(chunkPos);
+            this.chunkSyncNeeded = true;
+         });
+      }
+   }
+
+   public void queueBlockUpdate(BlockPos blockPos) {
+      PChunkPos chunkPos = new PChunkPos(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
+      this.queueChunkRefresh(chunkPos);
+
+      int localX = Math.floorMod(blockPos.getX(), 16);
+      int localY = Math.floorMod(blockPos.getY(), 16);
+      int localZ = Math.floorMod(blockPos.getZ(), 16);
+
+      if (localX == 0) {
+         this.queueChunkRefresh(new PChunkPos(chunkPos.x - 1, chunkPos.y, chunkPos.z));
+      } else if (localX == 15) {
+         this.queueChunkRefresh(new PChunkPos(chunkPos.x + 1, chunkPos.y, chunkPos.z));
+      }
+
+      if (localY == 0) {
+         this.queueChunkRefresh(new PChunkPos(chunkPos.x, chunkPos.y - 1, chunkPos.z));
+      } else if (localY == 15) {
+         this.queueChunkRefresh(new PChunkPos(chunkPos.x, chunkPos.y + 1, chunkPos.z));
+      }
+
+      if (localZ == 0) {
+         this.queueChunkRefresh(new PChunkPos(chunkPos.x, chunkPos.y, chunkPos.z - 1));
+      } else if (localZ == 15) {
+         this.queueChunkRefresh(new PChunkPos(chunkPos.x, chunkPos.y, chunkPos.z + 1));
+      }
+   }
+
+   private void queueChunkRefresh(PChunkPos chunkPos) {
+      if (this.pendingBuildChunks.add(chunkPos)) {
+         this.buildQueue.add(() -> {
+            this.pendingBuildChunks.remove(chunkPos);
+            if (!this.shouldKeepChunkForRt(chunkPos) || this.pendingChunkSet.contains(chunkPos)) {
+               return;
+            }
+
+            if (this.chunks.containsKey(chunkPos)) {
+               this.loadChunk(chunkPos);
                return;
             }
 

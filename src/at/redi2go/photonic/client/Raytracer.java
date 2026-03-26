@@ -317,23 +317,27 @@ public class Raytracer implements Destructable {
             if (patch == null && !AUTO_REPLACED_FILES.contains(relativeToPhotonics)) {
                Optional<String> content = tryReadFile(path);
                if (content.isPresent()) {
-                  return readShaderAndPreprocess(path);
+                  source = content.get();
                }
             }
 
-            Path devEnvShaderPath = DEV_ENV_SHADERS_PATH.resolve(relativeToPhotonics);
-            if (Files.exists(devEnvShaderPath)) {
-               return readShaderAndPreprocess(new ShaderPackPath(devEnvShaderPath));
+            if (source == null) {
+               Path devEnvShaderPath = DEV_ENV_SHADERS_PATH.resolve(relativeToPhotonics);
+               if (Files.exists(devEnvShaderPath)) {
+                  source = new ShaderPackPath(devEnvShaderPath).readFile();
+               }
             }
 
-            URL jarShaderUrl = IncludeGraph.class.getClassLoader().getResource("assets/photonic/shaders/" + relativeToPhotonics);
-            if (jarShaderUrl == null) {
-               return null;
-            }
+            if (source == null) {
+               URL jarShaderUrl = IncludeGraph.class.getClassLoader().getResource("assets/photonic/shaders/" + relativeToPhotonics);
+               if (jarShaderUrl == null) {
+                  return null;
+               }
 
-            Path jarShaderPath = Path.of(jarShaderUrl.toURI());
-            if (Files.exists(jarShaderPath)) {
-               return readShaderAndPreprocess(new ShaderPackPath(jarShaderPath));
+               Path jarShaderPath = Path.of(jarShaderUrl.toURI());
+               if (Files.exists(jarShaderPath)) {
+                  source = new ShaderPackPath(jarShaderPath).readFile();
+               }
             }
          } catch (Exception var7) {
          }
