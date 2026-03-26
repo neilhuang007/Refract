@@ -716,7 +716,7 @@ bool RAB_GetConservativeVisibility(DirectSurface surface, vec3 samplePosition) {
     ray.direction = rayDirection;
     ray_target = ivec3(floor(samplePosition));
     trace_ray(ray, true);
-    return lt_ray_reached_target_cell(samplePosition);
+    return lt_visibility_trace_is_unoccluded(samplePosition, rayOrigin, traceDistance);
 }
 
 bool RAB_GetTemporalConservativeVisibility(DirectSurface surface, DirectSurface temporalSurface, vec3 samplePosition) {
@@ -739,7 +739,7 @@ vec3 GetFinalVisibility(DirectSurface surface, RTXDI_GISample giSample) {
     ray_target = ivec3(floor(giSample.position));
     trace_ray(ray, true);
 
-    if (!lt_ray_reached_target_cell(giSample.position)) {
+    if (!lt_final_visibility_reaches_target(giSample.position)) {
         return vec3(0.0f);
     }
 

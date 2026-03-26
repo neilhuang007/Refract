@@ -192,6 +192,7 @@ public class LightTreeRenderer extends MainRenderer {
    private int directAtrousIteration = 0;
    private int specAtrousIteration = 0;
    private boolean compatDirectSoftDirty = true;
+   private boolean reservoirHistoryDirty = true;
    private int profilerFrameCounter = 0;
    private long lastCpuProposalSamplingNanos;
    private long lastCpuReuseResolveNanos;
@@ -570,10 +571,10 @@ public class LightTreeRenderer extends MainRenderer {
       // this backport. Keep proposal-time visibility disabled until that bridge is fixed.
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_enable_visibility", () -> -1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_brdf_cutoff", () -> 0.0001f);
-      // Use the RTXDI default local-light sampling mode unless a validated
-      // ReGIR/RIS bridge is reinstated. Forcing ReGIR here introduces visible
-      // tile-correlated artifacts in the raw DI signal on this backport.
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> 0.0f);
+      // Re-enable ReGIR/RIS local-light sampling while auditing the bridge
+      // against RTXDI; the remaining instability is easier to diagnose with
+      // the intended importance sampler active.
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> 2.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> this.properties.getRestirTemporalBiasMode());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_permutation_sampling", () -> this.properties.getRestirTemporalPermutationSampling());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_temporal_permutation_sampling", () -> 0.0f);
@@ -641,6 +642,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.resolveGpuProfile();
       this.advanceGpuProfileFrame();
       this.ensureCompatDirectSoftCleared();
+      this.ensureReservoirHistoryCleared();
       this.lightingBuffer.swap();
       this.compatDirectSoftBuffer.swap();
       this.motionVectorBuffer.swap();
@@ -820,6 +822,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.recalculateRenderer(this.specAtrousRenderer);
       this.recalculateRenderer(this.indirectInitialRenderer);
       this.recalculateRenderer(this.indirectTemporalRenderer);
+      this.recalculateRenderer(this.indirectBoilingRenderer);
       this.recalculateRenderer(this.indirectAccumulationRenderer);
       this.recalculateRenderer(this.indirectDenoisingRenderer);
       this.recalculateRenderer(this.accumulationRenderer);
@@ -827,6 +830,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.recalculateRenderer(this.shadeSamplesMonolithicRenderer);
       this.recalculateRenderer(this.shadeSamplesRenderer);
       this.compatDirectSoftDirty = true;
+      this.reservoirHistoryDirty = true;
    }
 
    @Override
@@ -848,6 +852,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.specAtrousFramebuffer.destroy();
       this.indirectInitialFramebuffer.destroy();
       this.indirectTemporalFramebuffer.destroy();
+      this.indirectBoilingFramebuffer.destroy();
       this.indirectAccumulationFramebuffer.destroy();
       this.indirectDenoisingFramebuffer.destroy();
       this.positionWriteFramebuffer.destroy();
@@ -901,6 +906,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.destroyRenderer(this.specAtrousRenderer);
       this.destroyRenderer(this.indirectInitialRenderer);
       this.destroyRenderer(this.indirectTemporalRenderer);
+      this.destroyRenderer(this.indirectBoilingRenderer);
       this.destroyRenderer(this.indirectAccumulationRenderer);
       this.destroyRenderer(this.indirectDenoisingRenderer);
       this.destroyRenderer(this.accumulationRenderer);
@@ -923,9 +929,9 @@ public class LightTreeRenderer extends MainRenderer {
       ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
       framebuffer.createAttachment("data", "RGBA32F", false);
       framebuffer.createAttachment("sample", "RGBA32F", false);
-      // RGBA32F required: RGB channels store per-channel visibility floats [0,1];
-      // alpha stores age+spatialDistance bit-packed into a single float32 integer.
-      // RGBA16F lacks the integer precision needed for the bit packing (max ~8M).
+      // RGBA32F required: the framebuffer-backed DI reservoir stores M/age/spatial
+      // distance/visibility as exact 32-bit float channels, while the light/sample IDs
+      // still use uintBitsToFloat transport in the X channels.
       framebuffer.createAttachment("meta", "RGBA32F", false);
       return framebuffer;
    }
@@ -1429,7 +1435,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void renderIndirectAccumulationProfiled() {
-      if (this.indirectInitialRenderer == null && this.indirectTemporalRenderer == null && this.indirectAccumulationRenderer == null) {
+      if (this.indirectInitialRenderer == null && this.indirectTemporalRenderer == null && this.indirectBoilingRenderer == null && this.indirectAccumulationRenderer == null) {
          return;
       }
       this.beginGpuRegion(indirectAccumRegionIndex);
@@ -1438,6 +1444,12 @@ public class LightTreeRenderer extends MainRenderer {
       }
       if (this.indirectTemporalRenderer != null) {
          this.indirectTemporalRenderer.renderAll();
+      }
+      if (this.indirectBoilingRenderer != null) {
+         this.indirectBoilingRenderer.renderAll();
+         // Spatial GI should read the freshly filtered temporal reservoir and write
+         // the frame-final GI reservoir back into the opposite side of the ping-pong buffer.
+         this.indirectReservoirBuffer.swap();
       }
       if (this.indirectAccumulationRenderer != null) {
          this.indirectAccumulationRenderer.renderAll();
@@ -1580,6 +1592,23 @@ public class LightTreeRenderer extends MainRenderer {
       }
       this.clearCompatDirectSoftAttachments();
       this.compatDirectSoftDirty = false;
+   }
+
+   private void ensureReservoirHistoryCleared() {
+      if (!this.reservoirHistoryDirty) {
+         return;
+      }
+
+      // RTXDI assumes reservoir histories start from EmptyReservoir on a reset.
+      // Our ping-pong GL textures are not zero-initialized on both sides, so
+      // explicit clears are required before reuse can safely read age/visibility.
+      Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+      this.directReservoirBuffer.clearBothSides(clearColor);
+      this.directTemporalReservoirBuffer.clearBothSides(clearColor);
+      this.indirectInitialReservoirBuffer.clearBothSides(clearColor);
+      this.indirectTemporalReservoirBuffer.clearBothSides(clearColor);
+      this.indirectReservoirBuffer.clearBothSides(clearColor);
+      this.reservoirHistoryDirty = false;
    }
 
    private void clearCompatDirectSoftAttachments() {

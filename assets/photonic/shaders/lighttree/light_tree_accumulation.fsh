@@ -20,6 +20,9 @@ layout(location = 6) out vec4 direct_soft_frag_out;
 uniform float ph_debug_disable_temporal_reset;
 uniform float ph_restir_enable_denoiser_packing;
 
+const float lt_reproject_normal_threshold = 0.99f;
+const float lt_reproject_position_threshold_sq = 0.35f;
+
 vec4 lt_extract_accumulation_material(vec2 uv) {
     vec4 spec = texture(specular, uv);
     float smoothness = clamp(spec.r, 0.0, 1.0);
@@ -36,6 +39,23 @@ bool is_valid_reprojection(ivec2 prevUv, ivec2 textureBounds) {
         && all(lessThan(prevUv, textureBounds));
 }
 
+bool lt_is_valid_direct_soft_reprojection(vec2 reprojectionUv, vec3 currentPosition, vec3 currentNormal) {
+    ivec2 prevUv = ivec2(reprojectionUv);
+    ivec2 textureBounds = textureSize(prev_radiosity_position, 0);
+    if (!is_valid_reprojection(prevUv, textureBounds)) {
+        return false;
+    }
+
+    vec3 previousNormal = texelFetch(prev_radiosity_normal, prevUv, 0).xyz;
+    if (dot(previousNormal, currentNormal) <= lt_reproject_normal_threshold) {
+        return false;
+    }
+
+    vec3 previousPosition = texelFetch(prev_radiosity_position, prevUv, 0).xyz;
+    vec3 positionDelta = previousPosition - currentPosition;
+    return dot(positionDelta, positionDelta) <= lt_reproject_position_threshold_sq;
+}
+
 vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
     vec2 reprojectionUv = ph_reprojectf(
         previous_modelview_projection,
@@ -44,14 +64,13 @@ vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
         get_taa_jitter()
     );
 
-    ivec2 prevUv = ivec2(reprojectionUv);
-    ivec2 textureBounds = textureSize(prev_radiosity_direct_soft, 0);
-    if (!is_valid_reprojection(prevUv, textureBounds)) {
+    if (!lt_is_valid_direct_soft_reprojection(reprojectionUv, stagePosition, stageNormal)) {
         return vec4(0.0f);
     }
 
+    ivec2 prevUv = ivec2(reprojectionUv);
     vec4 prevSoft = texelFetch(prev_radiosity_direct_soft, prevUv, 0);
-    return any(isnan(prevSoft)) ? vec4(0.0f) : prevSoft;
+    return (prevSoft.a > 0.0f && !any(isnan(prevSoft))) ? prevSoft : vec4(0.0f);
 }
 
 bool lt_is_active_checkerboard_pixel(ivec2 pixelPosition, int activeCheckerboardField) {

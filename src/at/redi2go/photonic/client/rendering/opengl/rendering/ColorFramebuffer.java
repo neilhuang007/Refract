@@ -125,6 +125,13 @@ public class ColorFramebuffer extends GlFramebuffer {
       this.unbind();
    }
 
+   public void clearBothSides(Vector4f clearColor) {
+      this.clear(clearColor);
+      this.swap();
+      this.clear(clearColor);
+      this.swap();
+   }
+
    public ColorFramebuffer.FramebufferAttachment getReadAttachment(String name) {
       ColorFramebuffer.FramebufferAttachment attachment = this.readAttachment.get(name);
       if (attachment == null) {

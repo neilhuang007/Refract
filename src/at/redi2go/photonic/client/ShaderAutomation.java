@@ -471,8 +471,7 @@ public final class ShaderAutomation {
          int base = i * 4;
          int lightData = Float.floatToRawIntBits(pixels[base]);
          float weight = pixels[base + 1];
-         int packedVisibilityAndM = Float.floatToRawIntBits(pixels[base + 3]);
-         int reservoirM = packedVisibilityAndM >>> 18 & 16383;
+         int reservoirM = Math.max(0, Math.round(pixels[base + 3]));
          if (lightData != 0) {
             lightValidPixels++;
          }

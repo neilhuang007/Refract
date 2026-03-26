@@ -55,6 +55,7 @@ void main() {
         uint(frameCounter),
         RTXDI_GI_TEMPORAL_RESAMPLING_RANDOM_SEED
     );
+    temporalMaxReservoirAge *= 0.5f + RTXDI_GetNextRandom(rng) * 0.5f;
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
     ivec2 prevPos = ivec2(round(vec2(tex_coord) + motionVector.xy));
     float currentLinearDepth = ph_linear_view_depth(modelview_projection, currentSurface.worldPos);

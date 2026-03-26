@@ -14,13 +14,16 @@ uniform float ph_mod_oilify_enabled;
 vec4 color = texture2D(colortex0, texCoord);
 vec4 direct = texture2D(radiosity_direct, texCoord);
 vec4 direct_soft = texture2D(radiosity_direct_soft, texCoord);
+vec3 accumulated_direct = direct_soft.w > 0.5f
+    ? (direct_soft.xyz / max(direct_soft.w, 1.0f))
+    : direct.xyz;
 color.xyz += (
     texture2D(colortex12, texCoord).xyz + // indirect
     texture2D(radiosity_handheld, texCoord).xyz +
     #if PH_LIGHTING_MODE >= 2
     direct.xyz
     #else
-    direct.xyz + direct_soft.xyz / max(direct_soft.w, 1.0f)
+    accumulated_direct
     #endif
 ) * texture2D(colortex10, texCoord).xyz; // albedo
 if (ph_mod_oilify_enabled > 0.5) {
