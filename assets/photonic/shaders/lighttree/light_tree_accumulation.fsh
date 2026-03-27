@@ -152,18 +152,20 @@ void main() {
     vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord, activeCheckerboardField);
     vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord, activeCheckerboardField);
     vec4 prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
-    vec3 N = lt_safe_normalize(stageMappedNormal.xyz, stageNormal.xyz);
-    vec3 V = lt_safe_normalize(world_camera_position - stagePosition.xyz, N);
-    float roughness = clamp(stageMaterial.x, 0.0, 1.0);
-    float metallic = clamp(stageMaterial.y, 0.0, 1.0);
-    vec3 Rf0 = mix(vec3(0.04), clamp(stageAlbedo.rgb, vec3(0.0), vec3(1.0)), metallic);
-    vec3 diffDemod;
-    vec3 specDemod;
-    nrd_material_factors(N, V, stageAlbedo.rgb, Rf0, roughness, diffDemod, specDemod);
-    vec3 directCombined =
-        lt_unpack_stage_direct_radiance(directDiffuse, diffDemod) +
-        lt_unpack_stage_direct_radiance(directSpecular, specDemod);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
+    // Match RTXDI reference: diffuse is NOT demodulated (raw Lambert*radiance),
+    // specular is demodulated by F0 only (DemodulateSpecular). Remod specular by F0
+    // to combine for the compat soft output. No material factor remodulation.
+    vec3 directCombined;
+    if (ph_restir_enable_denoiser_packing >= 0.5f) {
+        vec3 rawDiffuse = nrd_unpack_direct_signal(directDiffuse).radiance;
+        float metallic = clamp(stageMaterial.y, 0.0, 1.0);
+        vec3 Rf0 = mix(vec3(0.04), clamp(stageAlbedo.rgb, vec3(0.0), vec3(1.0)), metallic);
+        vec3 remodSpecular = nrd_unpack_direct_signal(directSpecular).radiance * max(Rf0, vec3(0.01));
+        directCombined = rawDiffuse + remodSpecular;
+    } else {
+        directCombined = directDiffuse.rgb + directSpecular.rgb;
+    }
 
     position_frag_out = stagePosition;
     normal_frag_out = stageNormal;

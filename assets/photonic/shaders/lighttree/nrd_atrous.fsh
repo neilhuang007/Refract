@@ -12,15 +12,19 @@ uniform sampler2D nrd_history_length_tex;
 uniform int direct_atrous_step_size;
 uniform float ph_nrd_depth_threshold;
 
-const float direct_phi_luminance = 2.0;
+// NRD RELAX defaults (NRDSettings.h RelaxSettings) with RTXDI override:
+// diffusePhiLuminance: RTXDI SetDefaultDenoiserSettings() overrides NRD default (2.0) to 1.0
+const float direct_phi_luminance = 1.0;
 const float direct_lobe_angle_fraction = 0.5;
 
-// NRD RELAX: max luminance relative difference cap (RELAX_Atrous.cs.hlsl:219)
-const float gDiffMaxLuminanceRelativeDifference = 10.0;
-// NRD RELAX: confidence-driven luminance edge-stopping relaxation scalar
-const float gConfidenceDrivenLuminanceRelaxation = 0.5;
-// NRD RELAX: confidence-driven normal edge-stopping relaxation scalar
-const float gConfidenceDrivenNormalRelaxation = 0.5;
+// NRD RELAX: max luminance relative difference cap.
+// Reference: -log(saturate(diffuseMinLuminanceWeight)) where minLuminanceWeight=0.0 (default) → +Inf.
+// Use a large finite value to match the uncapped behaviour (exp(-1e9) ≈ 0 for any real lumaDiff).
+const float gDiffMaxLuminanceRelativeDifference = 1e9;
+// NRD RELAX default: confidenceDrivenLuminanceEdgeStoppingRelaxation = 0.0 — relaxation disabled.
+const float gConfidenceDrivenLuminanceRelaxation = 0.0;
+// NRD RELAX default: confidenceDrivenNormalEdgeStoppingRelaxation = 0.0 — relaxation disabled.
+const float gConfidenceDrivenNormalRelaxation = 0.0;
 
 const float gaussian3x3[2] = float[](0.44198, 0.27901);
 

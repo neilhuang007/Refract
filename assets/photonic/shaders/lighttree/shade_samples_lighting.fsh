@@ -58,7 +58,10 @@ void main() {
         ? false
         : (ph_restir_temporal_visibility_shortcut >= 0.5);
 
-    bool hasValidReservoir = RTXDI_IsValidDIReservoir(reservoir) && reservoir.weightSum > 0.0f;
+    // RTXDI reference (ShadeSamples.hlsl line 56): only checks RTXDI_IsValidDIReservoir (lightData != 0).
+    // DISCREPANCY FIXED: photonics previously also guarded on weightSum > 0, which would skip
+    // RTXDI_StoreVisibilityInDIReservoir for zero-weight valid reservoirs, diverging from reference.
+    bool hasValidReservoir = RTXDI_IsValidDIReservoir(reservoir);
     if (hasValidReservoir) {
         if (!enableFinalVisibility) {
             LightSample shadeSample = light_sample_decode(reservoir, currentSurface, false);
@@ -101,15 +104,19 @@ void main() {
     }
 
     if (ph_restir_enable_denoiser_packing >= 0.5f) {
-        vec3 N = currentSurface.shadingNormal;
-        vec3 V = normalize(world_camera_position - currentSurface.worldPos);
-        float roughness = clamp(currentSurface.material.x, 0.0, 1.0);
+        // RTXDI reference (ShadeSamples.hlsl line 66-68, ShadingHelpers.hlsli line 119-122):
+        // - Diffuse:  NO demodulation. brdf.demodulatedDiffuse is Lambert(N,-L) only; albedo is
+        //             NOT divided out here (albedo is only used for the luminance gradient store).
+        // - Specular: DemodulateSpecular = specular / max(0.01, F0), channel-wise, nothing more.
+        // DISCREPANCY FIXED: photonics previously applied nrd_material_factors (full env-BRDF-based
+        // diffFactor and specFactor) to both channels, which is incorrect. The reference uses
+        // no diffuse demod and only a simple F0 division for specular.
         float metallic = clamp(currentSurface.material.y, 0.0, 1.0);
         vec3 Rf0 = mix(vec3(0.04), clamp(currentSurface.albedo, vec3(0.0), vec3(1.0)), metallic);
-        vec3 diffDemod, specDemod;
-        nrd_material_factors(N, V, currentSurface.albedo, Rf0, roughness, diffDemod, specDemod);
-        direct_diffuse_frag_out = nrd_pack_direct_signal(nrd_safe_demodulate(shadedDiffuse, diffDemod), directHitDistance);
-        direct_specular_frag_out = nrd_pack_direct_signal(nrd_safe_demodulate(shadedSpecular, specDemod), directHitDistance);
+        // Diffuse: pass through unchanged (reference stores Lambert*radiance with no albedo demod)
+        vec3 demodSpecular = shadedSpecular / max(vec3(0.01), Rf0);
+        direct_diffuse_frag_out = nrd_pack_direct_signal(shadedDiffuse, directHitDistance);
+        direct_specular_frag_out = nrd_pack_direct_signal(demodSpecular, directHitDistance);
     } else {
         direct_diffuse_frag_out = vec4(shadedDiffuse, directHitDistance);
         direct_specular_frag_out = vec4(shadedSpecular, directHitDistance);

@@ -631,8 +631,12 @@ vec3 lt_shade_surface_light_sample_with_view(DirectSurface surface, LightSample 
 }
 
 struct LtSplitRadiance {
-    vec3 diffuse;       // Demodulated diffuse (albedo divided out)
-    vec3 specular;      // Demodulated specular (F0 divided out)
+    // RTXDI reference (ShadingHelpers.hlsli line 108-109):
+    // diffuse  = brdf.demodulatedDiffuse * radiance = Lambert(N,-L) * radiance (NO albedo divided out)
+    // specular = brdf.specular           * radiance = GGX*NdotL    * radiance (F0 baked into Fresnel;
+    //            F0 demodulation happens in shade_samples.fsh via DemodulateSpecular)
+    vec3 diffuse;
+    vec3 specular;
 };
 
 // NRD-compatible split shading: returns diffuse-demodulated radiance and raw split specular radiance.

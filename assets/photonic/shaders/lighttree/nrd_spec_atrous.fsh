@@ -12,15 +12,24 @@ uniform sampler2D spec_history_length_input;
 uniform int direct_atrous_step_size;
 uniform float ph_nrd_depth_threshold;
 
-const float spec_phi_luminance = 2.0;
+// NRD RELAX defaults (NRDSettings.h RelaxSettings):
+// specularPhiLuminance default = 1.0
+const float spec_phi_luminance = 1.0;
 const float spec_lobe_angle_fraction = 0.5;
 
-// NRD RELAX constants matching reference defaults
-const float gSpecMaxLuminanceRelativeDifference = 10.0;
-const float gConfidenceDrivenLuminanceRelaxation = 0.5;
-const float gRoughnessFraction = 0.5;
-const float gSpecLobeAngleSlack = 0.15;
-const float gRoughnessEdgeStoppingRelaxation = 0.3;
+// NRD RELAX: max luminance relative difference cap.
+// Reference: -log(saturate(specularMinLuminanceWeight)) where minLuminanceWeight=0.0 (default) → +Inf.
+// Use a large finite value to match uncapped behaviour.
+const float gSpecMaxLuminanceRelativeDifference = 1e9;
+// NRD RELAX default: confidenceDrivenLuminanceEdgeStoppingRelaxation = 0.0 — disabled.
+const float gConfidenceDrivenLuminanceRelaxation = 0.0;
+// NRD RELAX default: roughnessFraction = 0.15
+const float gRoughnessFraction = 0.15;
+// NRD RELAX default: specularLobeAngleSlack = 0.15 degrees → converted to radians (Relax.cpp:141 radians())
+const float gSpecLobeAngleSlack = 0.002618;
+// NRD RELAX default: roughnessEdgeStoppingRelaxation = 1.0
+const float gRoughnessEdgeStoppingRelaxation = 1.0;
+// NRD RELAX default: normalEdgeStoppingRelaxation = 0.3
 const float gNormalEdgeStoppingRelaxation = 0.3;
 const bool gRoughnessEdgeStoppingEnabled = true;
 

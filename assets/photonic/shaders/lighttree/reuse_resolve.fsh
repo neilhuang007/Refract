@@ -64,6 +64,22 @@ bool lt_load_direct_temporal_reservoir(ivec2 reservoirPos, DirectSurface surface
     );
     // RTXDI_UnpackDIReservoir (ReservoirStorage.hlsli lines 88-91) only sanitizes weightSum, not targetPdf.
     // Match RTXDI exactly: do NOT check targetPdf for NaN here.
+
+    // RTXDI contract: RAB_LoadLightInfo reads from a fully-populated GPU buffer where every stored
+    // index is guaranteed to address valid light data. In photonics the buffer holds exactly
+    // ph_light_count entries per frame; a packed index >= ph_light_count is a stale reference
+    // from a previous frame (e.g., a block was broken and the light list shrank). Invalidate such
+    // reservoirs so they cannot (a) cause out-of-range reads in load_light() and (b) inflate M
+    // with zero-weight contributions during spatial reuse, which darkens the result for several
+    // frames after a block break.
+    if (RTXDI_IsValidDIReservoir(reservoir)) {
+        int lightIndex = RTXDI_GetDIReservoirLightIndex(reservoir);
+        if (lightIndex >= ph_light_count) {
+            reservoir = rtxdi_empty_reservoir();
+            return false;
+        }
+    }
+
     return RTXDI_IsValidDIReservoir(reservoir) && !isnan(reservoir.weightSum);
 }
 
