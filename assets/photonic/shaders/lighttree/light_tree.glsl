@@ -176,7 +176,8 @@ bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng
     flatCellIndex = -1;
 
     // RTXDI: cellJitter = (rand3 - 0.5) * jitterScale
-    // jitterScale = samplingJitter * cellSize (grid mode), samplingJitter = 1.0 default
+    // jitterScale = samplingJitter * cellSize (grid mode). RTXDI FullSample uploads
+    // 2.0 for the default UI jitter of 1.0, which yields plus/minus one cell.
     // Uses the passed coherentRng (not global rng_state) so neighboring pixels sharing the
     // same 8x8 block draw the same jitter, matching RTXDI_CalculateReGIRCellIndex(coherentRng).
     vec3 jitteredWorldPos = shadingWorldPos + (vec3(

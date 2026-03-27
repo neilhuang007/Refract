@@ -10,12 +10,17 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.irisshaders.iris.gl.sampler.SamplerHolder;
 import net.irisshaders.iris.gl.blending.BufferBlendInformation;
 import net.irisshaders.iris.shaderpack.loading.ProgramArrayId;
 import net.irisshaders.iris.shaderpack.loading.ProgramId;
+import net.irisshaders.iris.shaderpack.programs.ComputeSource;
 import net.irisshaders.iris.shaderpack.programs.ProgramSet;
 import net.irisshaders.iris.shaderpack.programs.ProgramSource;
 import net.irisshaders.iris.shaderpack.properties.PackDirectives;
@@ -32,6 +37,8 @@ public final class IrisRenderTargetAliases {
       .addAll(PackRenderTargetDirectives.BASELINE_SUPPORTED_RENDER_TARGETS)
       .addAll(EXTRA_SUPPORTED_TARGETS)
       .build();
+   private static final Pattern COLORTEX_REFERENCE_PATTERN = Pattern.compile("\\bcolortex(\\d+)\\b");
+   private static final Pattern LEGACY_RENDER_TARGET_PATTERN = Pattern.compile("\\b(gcolor|gdepth|gnormal|composite|gaux[1-4])\\b");
    private static final Int2IntOpenHashMap LOGICAL_TO_PHYSICAL = new Int2IntOpenHashMap();
 
    static {
@@ -61,6 +68,7 @@ public final class IrisRenderTargetAliases {
       }
 
       Set<Integer> usedTargets = collectUsedTargets(programSet);
+      usedTargets.addAll(collectReferencedTargets(programSet));
       List<Integer> overflowTargets = usedTargets.stream().filter(target -> target >= MAX_IRIS_TARGETS).sorted().toList();
       if (overflowTargets.isEmpty()) {
          return;
@@ -239,6 +247,26 @@ public final class IrisRenderTargetAliases {
       return usedTargets;
    }
 
+   private static Set<Integer> collectReferencedTargets(ProgramSet programSet) {
+      LinkedHashSet<Integer> referencedTargets = new LinkedHashSet<>();
+      Arrays.stream(ProgramId.values()).map(programSet::get).flatMap(Optional::stream).forEach(source -> collectReferencedTargets(source, referencedTargets));
+      Arrays.stream(ProgramArrayId.values())
+         .map(programSet::getComposite)
+         .flatMap(Arrays::stream)
+         .forEach(source -> collectReferencedTargets(source, referencedTargets));
+      Arrays.stream(programSet.getSetup()).forEach(source -> collectReferencedTargets(source, referencedTargets));
+      Arrays.stream(programSet.getShadowCompute()).forEach(source -> collectReferencedTargets(source, referencedTargets));
+      Arrays.stream(programSet.getFinalCompute()).forEach(source -> collectReferencedTargets(source, referencedTargets));
+      Arrays.stream(ProgramArrayId.values())
+         .map(programSet::getCompute)
+         .filter(Objects::nonNull)
+         .flatMap(Arrays::stream)
+         .filter(Objects::nonNull)
+         .flatMap(Arrays::stream)
+         .forEach(source -> collectReferencedTargets(source, referencedTargets));
+      return referencedTargets;
+   }
+
    private static void collectUsedTargets(ProgramSource source, Set<Integer> usedTargets) {
       if (source == null || !source.isValid()) {
          return;
@@ -249,5 +277,47 @@ public final class IrisRenderTargetAliases {
       usedTargets.addAll(directives.getExplicitFlips().keySet());
       usedTargets.addAll(directives.getMipmappedBuffers());
       directives.getBufferBlendOverrides().stream().map(BufferBlendInformation::index).forEach(usedTargets::add);
+   }
+
+   private static void collectReferencedTargets(ProgramSource source, Set<Integer> referencedTargets) {
+      if (source == null || !source.isValid()) {
+         return;
+      }
+
+      source.getVertexSource().ifPresent(shaderSource -> collectReferencedTargets(shaderSource, referencedTargets));
+      source.getGeometrySource().ifPresent(shaderSource -> collectReferencedTargets(shaderSource, referencedTargets));
+      source.getTessControlSource().ifPresent(shaderSource -> collectReferencedTargets(shaderSource, referencedTargets));
+      source.getTessEvalSource().ifPresent(shaderSource -> collectReferencedTargets(shaderSource, referencedTargets));
+      source.getFragmentSource().ifPresent(shaderSource -> collectReferencedTargets(shaderSource, referencedTargets));
+   }
+
+   private static void collectReferencedTargets(ComputeSource source, Set<Integer> referencedTargets) {
+      if (source == null || !source.isValid()) {
+         return;
+      }
+
+      source.getSource().ifPresent(shaderSource -> collectReferencedTargets(shaderSource, referencedTargets));
+   }
+
+   private static void collectReferencedTargets(String shaderSource, Set<Integer> referencedTargets) {
+      Matcher colortexMatcher = COLORTEX_REFERENCE_PATTERN.matcher(shaderSource);
+      while (colortexMatcher.find()) {
+         referencedTargets.add(Integer.parseInt(colortexMatcher.group(1)));
+      }
+
+      Matcher legacyMatcher = LEGACY_RENDER_TARGET_PATTERN.matcher(shaderSource);
+      while (legacyMatcher.find()) {
+         referencedTargets.add(switch (legacyMatcher.group(1)) {
+            case "gcolor" -> 0;
+            case "gdepth" -> 1;
+            case "gnormal" -> 2;
+            case "composite" -> 3;
+            case "gaux1" -> 4;
+            case "gaux2" -> 5;
+            case "gaux3" -> 6;
+            case "gaux4" -> 7;
+            default -> throw new IllegalStateException("Unexpected legacy render target: " + legacyMatcher.group(1));
+         });
+      }
    }
 }

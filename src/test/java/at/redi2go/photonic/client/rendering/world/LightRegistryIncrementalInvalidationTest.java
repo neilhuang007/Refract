@@ -174,6 +174,36 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
+   void createTracedLightsRetainsInactivePlaceholderForTemporaryDisappearances() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
+      @SuppressWarnings("unchecked")
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      BlockLightInfo info = createTestLightInfo();
+      Vector3f lightA = new Vector3f(2.5F, 1.5F, 7.5F);
+      Vector3f lightB = new Vector3f(8.5F, 3.5F, 9.5F);
+
+      positions.put(lightA, new TracedLightPosition(1, info));
+      positions.put(lightB, new TracedLightPosition(2, info));
+      assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
+
+      positions.clear();
+      positions.put(lightB, new TracedLightPosition(2, info));
+
+      assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
+
+      LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
+      assertEquals(2, tracedLights.length);
+      assertEquals(lightA, tracedLights[0].position());
+      assertFalse(tracedLights[0].active(), "Removed light should be retained as an inactive placeholder");
+      assertEquals(lightB, tracedLights[1].position());
+      assertTrue(tracedLights[1].active());
+
+      short[] newLightIndices = (short[]) getField(registry, "newLightIndices");
+      assertEquals(0, newLightIndices[0], "Previous light A index should map to its inactive placeholder");
+      assertEquals(1, newLightIndices[1], "Unchanged light B index should remain stable");
+   }
+
+   @Test
    void createTracedLightsKeepsStableIndicesForUnchangedCappedSelection() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
@@ -430,6 +460,47 @@ class LightRegistryIncrementalInvalidationTest {
       MemoryOwner lightIndexMemory = (MemoryOwner) getField(registry, "regirLightIndexMemory");
       IntBuffer lightIndexBuffer = lightIndexMemory.getMemory().getBuffer().asIntBuffer();
       assertTrue(lightIndexBuffer.get(0) >= 0, "First populated ReGIR slot should point at a traced light index");
+   }
+
+   @Test
+   void buildSpatialGridSkipsInactivePlaceholderLights() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
+      BlockLightInfo info = createTestLightInfo(100.0F);
+      LightInstance[] lights = new LightInstance[] {
+         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info, true),
+         new LightInstance(2, new Vector3f(36.5F, 1.5F, 1.5F), info, false)
+      };
+
+      invokeBuildSpatialGrid(registry, lights);
+
+      @SuppressWarnings("unchecked")
+      Map<Long, java.util.List<Integer>> lightGrid = (Map<Long, java.util.List<Integer>>) getField(registry, "lightGrid");
+      assertFalse(lightGrid.isEmpty(), "Active lights should still populate the grid");
+      assertTrue(lightGrid.values().stream().allMatch(indices -> indices.stream().allMatch(index -> index == 0)));
+   }
+
+   @Test
+   void storeGlobalLightCdfGivesInactivePlaceholderZeroWeight() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
+      BlockLightInfo info = createTestLightInfo(100.0F);
+      LightInstance[] lights = new LightInstance[] {
+         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info, true),
+         new LightInstance(2, new Vector3f(36.5F, 1.5F, 1.5F), info, false)
+      };
+      setField(registry, "tracedLights", lights);
+
+      Method method = LightRegistry.class.getDeclaredMethod("storeGlobalLightCdf");
+      method.setAccessible(true);
+      method.invoke(registry);
+
+      float[] lightPowers = registry.getLightPowers();
+      assertTrue(lightPowers[0] > 0.0F);
+      assertEquals(0.0F, lightPowers[1], 1.0e-6F);
+
+      MemoryOwner cdfMemory = (MemoryOwner) getField(registry, "globalLightCdfMemory");
+      java.nio.FloatBuffer cdf = cdfMemory.getMemory().getBuffer().asFloatBuffer();
+      assertTrue(cdf.get(0) > 0.0F);
+      assertEquals(cdf.get(0), cdf.get(1), 1.0e-6F, "Inactive placeholders must not increase the global CDF");
    }
 
    private static LightInstance[] invokeToLightInstanceArray(LightRegistry registry) throws Exception {

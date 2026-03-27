@@ -4,10 +4,12 @@ import at.redi2go.photonic.client.rendering.opengl.objects.GlTarget;
 import at.redi2go.photonic.client.rendering.schematics.AirEntry;
 import at.redi2go.photonic.client.rendering.schematics.Schematic;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
+import java.lang.reflect.Field;
 import java.nio.IntBuffer;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BrickChunkTest {
@@ -64,5 +66,47 @@ class BrickChunkTest {
       block.free(blockMemory);
       chunkMemory.free();
       blockMemory.free();
+   }
+
+   @Test
+   void setDoesNotLeakReferencesOnNoopWrites() throws Exception {
+      GlMemoryManager blockMemory = new GlMemoryManager(GlTarget.SSBO, "test_block", PBlock.BYTE_SIZE * 4, true);
+      BrickChunk chunk = new BrickChunk();
+      PBlock block = new PBlock(9, () -> new Schematic(16, 16, 16));
+
+      blockMemory.allocate(PBlock.BYTE_SIZE);
+      block.allocate(blockMemory);
+
+      assertTrue(chunk.set(1, 2, 3, block, 4));
+      assertFalse(chunk.set(1, 2, 3, block, 4));
+      assertEquals(1, chunk.getTrackedBlockReferenceCount());
+      assertEquals(1, getTimesUsed(block));
+
+      block.free(blockMemory);
+      blockMemory.free();
+   }
+
+   @Test
+   void setPreservesReferenceCountsWhenOnlySkyLightChanges() throws Exception {
+      GlMemoryManager blockMemory = new GlMemoryManager(GlTarget.SSBO, "test_block", PBlock.BYTE_SIZE * 4, true);
+      BrickChunk chunk = new BrickChunk();
+      PBlock block = new PBlock(9, () -> new Schematic(16, 16, 16));
+
+      blockMemory.allocate(PBlock.BYTE_SIZE);
+      block.allocate(blockMemory);
+
+      assertTrue(chunk.set(1, 2, 3, block, 4));
+      assertTrue(chunk.set(1, 2, 3, block, 5));
+      assertEquals(1, chunk.getTrackedBlockReferenceCount());
+      assertEquals(1, getTimesUsed(block));
+
+      block.free(blockMemory);
+      blockMemory.free();
+   }
+
+   private static int getTimesUsed(PBlock block) throws Exception {
+      Field field = PBlock.class.getDeclaredField("timesUsed");
+      field.setAccessible(true);
+      return (int) field.get(block);
    }
 }

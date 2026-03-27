@@ -7,6 +7,7 @@ import at.redi2go.photonic.client.rendering.world.buffer.MemoryOwner;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryRegion;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
@@ -16,6 +17,7 @@ public class PChunk implements WorldChunk {
    private static final int DEBUG_LOG_LIMIT = 16;
    private static int blockPointerOverflowLogs = 0;
    private final Schematic schematic;
+   private final PBlock[] blockRefs = new PBlock[16 * 16 * 16];
    private MemoryRegion chunkMemory;
    private boolean dirty = true;
    private final Object2IntMap<PBlock> blocks = new Object2IntOpenHashMap<>();
@@ -31,14 +33,13 @@ public class PChunk implements WorldChunk {
          e.getKey().changeTimesUsed(-e.getIntValue());
       }
       this.blocks.clear();
+      Arrays.fill(this.blockRefs, null);
    }
 
-   public void set(int x, int y, int z, PBlock block, int skyBrightness) {
+   public boolean set(int x, int y, int z, PBlock block, int skyBrightness) {
       int value;
       if (block != null) {
          value = block.getMemory().begin >> 2;
-         block.changeTimesUsed(1);
-         this.blocks.mergeInt(block, 1, Integer::sum);
       } else {
          value = 0;
       }
@@ -59,8 +60,19 @@ public class PChunk implements WorldChunk {
          value |= skyBrightness << 13;
       }
 
+      int index = Schematic.toSchematicIndex(x, y, z);
+      if (this.schematic.getEntry(x, y, z) == value) {
+         return false;
+      }
+      PBlock previousBlock = this.blockRefs[index];
+      if (previousBlock != block) {
+         this.releaseTrackedBlock(previousBlock);
+         this.trackBlock(block);
+         this.blockRefs[index] = block;
+      }
       this.schematic.setEntry(x, y, z, value);
       this.dirty = true;
+      return true;
    }
 
    @Override
@@ -142,5 +154,26 @@ public class PChunk implements WorldChunk {
    @Override
    public MemoryRegion getMemory() {
       return this.chunkMemory;
+   }
+
+   private void trackBlock(PBlock block) {
+      if (block == null) {
+         return;
+      }
+      block.changeTimesUsed(1);
+      this.blocks.mergeInt(block, 1, Integer::sum);
+   }
+
+   private void releaseTrackedBlock(PBlock block) {
+      if (block == null) {
+         return;
+      }
+      block.changeTimesUsed(-1);
+      int remaining = this.blocks.getInt(block) - 1;
+      if (remaining <= 0) {
+         this.blocks.removeInt(block);
+      } else {
+         this.blocks.put(block, remaining);
+      }
    }
 }

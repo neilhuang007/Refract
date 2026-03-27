@@ -123,25 +123,9 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
       this.cachedInboundRenderRadius = renderRadius;
       this.inboundChunks.clear();
       this.collectNearbyRtChunks(centerX, centerY, centerZ, renderRadius);
-
-      if (this.collectVisibleSodiumChunks()) {
-         return this.inboundChunks;
-      }
-
-      Vec3d cameraPos = cameraEntity.getPos();
-      Vector3f forward = this.resolveCameraForward();
-      int minY = Math.max(-INBOUND_VERTICAL_KEEP_CHUNKS, -renderRadius);
-      int maxY = Math.min(INBOUND_VERTICAL_KEEP_CHUNKS, renderRadius);
-      for (int x = -renderRadius; x <= renderRadius; x++) {
-         for (int y = minY; y <= maxY; y++) {
-            for (int z = -renderRadius; z <= renderRadius; z++) {
-               PChunkPos candidate = new PChunkPos(centerX + x, centerY + y, centerZ + z);
-               if (this.isChunkRelevantToCamera(candidate, cameraPos, forward)) {
-                  this.inboundChunks.add(candidate);
-               }
-            }
-         }
-      }
+      // Keep RT chunk discovery deterministic and camera-translation-driven.
+      // Raster visibility and Sodium mesh completion order are too unstable to drive
+      // traced-light residency for temporal ReSTIR reuse.
       return this.inboundChunks;
    }
 

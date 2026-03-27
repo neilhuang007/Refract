@@ -28,8 +28,6 @@
     "ProgramBuilderMixin",
     "ProgramDirectivesMixin",
     "ProgramIdMixin",
-    "ProgramSetMixin",
-    "ProgramSourceMixin",
     "ReloadableResourceManagerAccessor",
     "ShaderPackAccessor",
     "ShaderPackMixin",

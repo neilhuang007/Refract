@@ -8,6 +8,7 @@ import at.redi2go.photonic.client.rendering.world.buffer.MemoryRegion;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import java.nio.IntBuffer;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 
 public class BrickChunk implements WorldChunk {
@@ -18,6 +19,7 @@ public class BrickChunk implements WorldChunk {
    private static final int debugLogLimit = 16;
    private static int blockPointerOverflowLogs = 0;
    private final int[] brickData = new int[brickIntCount];
+   private final PBlock[] blockRefs = new PBlock[brickIntCount];
    private final Object2IntMap<PBlock> blocks = new Object2IntOpenHashMap<>();
    private MemoryRegion chunkMemory;
    private boolean dirty = true;
@@ -33,24 +35,33 @@ public class BrickChunk implements WorldChunk {
          entry.getKey().changeTimesUsed(-entry.getIntValue());
       }
       this.blocks.clear();
+      Arrays.fill(this.blockRefs, null);
       this.resetBrickData();
       this.dirtyVoxelWrites = brickIntCount;
       this.dirty = true;
    }
 
    @Override
-   public void set(int x, int y, int z, PBlock block, int skyBrightness) {
+   public boolean set(int x, int y, int z, PBlock block, int skyBrightness) {
       int encodedValue = this.encodeBlockValue(block, skyBrightness);
       int index = Schematic.toSchematicIndex(x, y, z);
       int newValue = encodedValue == 0
          ? AirEntry.toAirEntry(x, y, z, x + 1, y + 1, z + 1)
          : -encodedValue;
       if (this.brickData[index] == newValue) {
-         return;
+         return false;
+      }
+
+      PBlock previousBlock = this.blockRefs[index];
+      if (previousBlock != block) {
+         this.releaseTrackedBlock(previousBlock);
+         this.trackBlock(block);
+         this.blockRefs[index] = block;
       }
       this.brickData[index] = newValue;
       this.dirtyVoxelWrites++;
       this.dirty = true;
+      return true;
    }
 
    @Override
@@ -134,8 +145,6 @@ public class BrickChunk implements WorldChunk {
       int value;
       if (block != null) {
          value = block.getMemory().begin >> 2;
-         block.changeTimesUsed(1);
-         this.blocks.mergeInt(block, 1, Integer::sum);
       } else {
          value = 0;
       }
@@ -165,6 +174,27 @@ public class BrickChunk implements WorldChunk {
                this.brickData[Schematic.toSchematicIndex(x, y, z)] = AirEntry.toAirEntry(x, y, z, x + 1, y + 1, z + 1);
             }
          }
+      }
+   }
+
+   private void trackBlock(PBlock block) {
+      if (block == null) {
+         return;
+      }
+      block.changeTimesUsed(1);
+      this.blocks.mergeInt(block, 1, Integer::sum);
+   }
+
+   private void releaseTrackedBlock(PBlock block) {
+      if (block == null) {
+         return;
+      }
+      block.changeTimesUsed(-1);
+      int remaining = this.blocks.getInt(block) - 1;
+      if (remaining <= 0) {
+         this.blocks.removeInt(block);
+      } else {
+         this.blocks.put(block, remaining);
       }
    }
 }

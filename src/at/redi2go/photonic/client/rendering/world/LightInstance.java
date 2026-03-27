@@ -8,12 +8,18 @@ public final class LightInstance {
    private final int blockId;
    private final Vector3f position;
    private final BlockLightInfo type;
+   private final boolean active;
    private int index = -1;
 
    public LightInstance(int blockId, Vector3f position, BlockLightInfo type) {
+      this(blockId, position, type, true);
+   }
+
+   public LightInstance(int blockId, Vector3f position, BlockLightInfo type, boolean active) {
       this.blockId = blockId;
       this.position = position;
       this.type = type;
+      this.active = active;
    }
 
    public int blockId() {
@@ -26,6 +32,10 @@ public final class LightInstance {
 
    public BlockLightInfo type() {
       return this.type;
+   }
+
+   public boolean active() {
+      return this.active;
    }
 
    public int index() {
@@ -55,6 +65,6 @@ public final class LightInstance {
 
    @Override
    public String toString() {
-      return "LightInstance[position=" + this.position + ", type=" + this.type + "]";
+      return "LightInstance[position=" + this.position + ", type=" + this.type + ", active=" + this.active + "]";
    }
 }

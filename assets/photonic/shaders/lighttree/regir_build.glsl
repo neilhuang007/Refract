@@ -110,7 +110,7 @@ uniform uint  ph_ris_frame_index;              // RTXDI: g_Const.runtimeParams.f
 uniform int   ph_ris_tile_size;                // RTXDI: risBufferSegmentParams.tileSize
 uniform int   ph_ris_tile_count;               // RTXDI: risBufferSegmentParams.tileCount
 uniform uint  ph_regir_build_samples;          // RTXDI: ReGIR.h:141 default = 8
-uniform float ph_regir_sampling_jitter;        // RTXDI: commonParams.samplingJitter (default 1.0)
+uniform float ph_regir_sampling_jitter;        // RTXDI FullSample uploads 2.0 for the default UI jitter of 1.0
 uniform uint  ph_ris_tile_buffer_offset;       // RTXDI: risBufferSegmentParams.bufferOffset (typically 0)
 uniform uint  ph_regir_ris_buffer_offset;      // RTXDI: offset into unified RIS buffer where ReGIR data starts
 

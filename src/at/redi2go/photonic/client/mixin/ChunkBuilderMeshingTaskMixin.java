@@ -41,19 +41,9 @@ public class ChunkBuilderMeshingTaskMixin {
       @Local(ordinal = 4) int maxY,
       @Local(ordinal = 5) int maxZ
    ) {
-      if (!Raytracer.isDisabled()) {
-         BlockPos lowerCorner = new BlockPos(minX, minY, minZ);
-         BlockPos upperCorner = new BlockPos(maxX, maxY, maxZ);
-         Raytracer.INSTANCE
-            .getWorldRegistry()
-            .queueChunkLoad(new PChunkPos(
-               Math.floorDiv(lowerCorner.getX(), 16),
-               Math.floorDiv(lowerCorner.getY(), 16),
-               Math.floorDiv(lowerCorner.getZ(), 16)
-            ));
-
-         Raytracer.INSTANCE.getWorldRegistry().wakeUpWorldBuilder();
-      }
+      // Sodium meshing is camera- and visibility-driven. Letting those tasks enqueue RT
+      // chunk loads causes traced-light residency to churn as the camera yaws or as meshes
+      // finish asynchronously. WorldRegistry now discovers RT chunks from stable bounds.
    }
 
    @Redirect(

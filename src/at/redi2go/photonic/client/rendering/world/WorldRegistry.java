@@ -28,6 +28,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -45,8 +46,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private static final int LIGHT_BLEND_EXPANSION_BLOCKS = 16;
    static final int MAX_LIGHT_BLEND_REGIONS = 8;
    private static final int MAX_INCREMENTAL_LIGHT_REBUILDS_PER_FRAME = 1;
-   private static final int MAX_DEFERRED_LIGHT_REBUILD_QUEUE = 3;
    private static final int MAX_PENDING_TRACED_LIGHT_MUTATIONS_BEFORE_FORCE_REBUILD = 128;
+   private static final int LIGHT_REBUILD_QUIET_RENDER_FRAMES = 1;
+   private static final long LIGHT_REBUILD_QUIET_WORLD_TICKS = 1L;
+   private static final long MAX_INCREMENTAL_LIGHT_REBUILD_STALE_WORLD_TICKS = 4L;
    private static final int RT_VISIBILITY_KEEP_ALIVE_FRAMES = 24;
    private static final float RT_ALWAYS_KEEP_DISTANCE_BLOCKS = 48.0F;
    private static final float RT_MAX_RESIDENT_DISTANCE_BLOCKS = 64.0F;
@@ -103,12 +106,18 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private volatile boolean chunkSyncNeeded = true;
    private int deferredLightRebuilds = 0;
    private int incrementalLightRebuildsThisFrame = 0;
+   private boolean pendingStableLightCompile = false;
+   private int lastPendingLightMutationFrame = -1;
+   private long lastPendingLightMutationWorldTick = Long.MIN_VALUE;
+   private long lastIncrementalLightCompileWorldTick = Long.MIN_VALUE;
    private long lastRebuildRateLogNanos = 0;
    private int rebuildsSinceLastLog = 0;
    private final PriorityQueue<PChunkPos> pendingChunkLoads = new PriorityQueue<>(
       Comparator.comparingDouble(this::chunkDistanceToCamera)
    );
    private final Set<PChunkPos> pendingChunkSet = new HashSet<>();
+   private final Set<BlockPos> pendingBlockUpdates = ConcurrentHashMap.newKeySet();
+   private final AtomicBoolean blockUpdateFlushQueued = new AtomicBoolean(false);
    private final Map<PChunkPos, Integer> recentlyVisibleRtChunks = new HashMap<>();
    private static final int CHUNK_LOAD_BUDGET = 256;
 
@@ -235,6 +244,9 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          long t1 = profiling ? System.nanoTime() : 0;
 
          this.checkCameraJump(new Vector3f(MinecraftAccessor.getCameraPosition()));
+         ClientWorld level = MinecraftAccessor.getLevel();
+         int currentRenderFrame = SystemTimeUniforms.COUNTER.getAsInt();
+         long currentWorldTick = level != null ? level.getTime() : Long.MIN_VALUE;
          Vector3f worldOffset = new Vector3f(MinecraftAccessor.getCameraPosition());
          worldOffset.floor();
          worldOffset.add(-this.worldBlockSize / 2.0F, -this.worldBlockSize / 2.0F, -this.worldBlockSize / 2.0F);
@@ -268,12 +280,42 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          boolean chunkContentChanged = this.update(this.rootMemoryManager, rootUploadNeeded, fullRootRebuild);
          boolean tracedLightSetDirty = this.blockLightEnabled && this.lightRegistry.consumeTracedLightSetDirty();
          int pendingTracedLightMutations = this.blockLightEnabled ? this.lightRegistry.consumePendingTracedLightMutations() : 0;
-         boolean wantsLightWork = this.blockLightEnabled && (chunkTopologyChanged || tracedLightSetDirty);
-         boolean forceLightCompile = chunkTopologyChanged
-            || this.deferredLightRebuilds >= MAX_DEFERRED_LIGHT_REBUILD_QUEUE
-            || pendingTracedLightMutations >= MAX_PENDING_TRACED_LIGHT_MUTATIONS_BEFORE_FORCE_REBUILD;
+         boolean newLightWork = this.blockLightEnabled && (chunkTopologyChanged || tracedLightSetDirty);
+         if (newLightWork) {
+            this.pendingStableLightCompile = true;
+            this.markPendingLightMutation(currentRenderFrame, currentWorldTick);
+         }
+         boolean pendingSceneMutationBurst = this.blockLightEnabled
+            && this.pendingStableLightCompile
+            && (pendingTracedLightMutations > 0
+               || chunkContentChanged
+               || this.blockUpdateFlushQueued.get()
+               || !this.pendingBlockUpdates.isEmpty()
+               || !this.buildQueue.isEmpty());
+         if (pendingSceneMutationBurst) {
+            this.markPendingLightMutation(currentRenderFrame, currentWorldTick);
+         }
+         boolean wantsLightWork = this.blockLightEnabled && (chunkTopologyChanged || this.pendingStableLightCompile);
+         boolean immediateLightCompile = chunkTopologyChanged
+            || worldOffsetChanged
+            || !this.rootDataValid
+            || this.chunks.isEmpty();
+         boolean quietLightCompileReady = this.pendingStableLightCompile
+            && this.hasReachedLightCompileQuietWindow(currentRenderFrame, currentWorldTick);
+         boolean staleLightCompileReady = this.pendingStableLightCompile
+            && this.hasExceededLightCompileStaleness(currentWorldTick);
+         boolean forceLightCompile = immediateLightCompile
+            || (pendingTracedLightMutations >= MAX_PENDING_TRACED_LIGHT_MUTATIONS_BEFORE_FORCE_REBUILD
+               && (quietLightCompileReady || staleLightCompileReady));
          boolean allowIncrementalLightCompile = this.incrementalLightRebuildsThisFrame < MAX_INCREMENTAL_LIGHT_REBUILDS_PER_FRAME;
-         boolean lightWorkNeeded = wantsLightWork && (forceLightCompile || allowIncrementalLightCompile);
+         boolean lightWorkNeeded = false;
+         if (wantsLightWork) {
+            if (forceLightCompile) {
+               lightWorkNeeded = true;
+            } else {
+               lightWorkNeeded = allowIncrementalLightCompile && (quietLightCompileReady || staleLightCompileReady);
+            }
+         }
          String pendingResetReason = null;
          if (worldOffsetChanged) {
             pendingResetReason = "world_offset";
@@ -297,12 +339,18 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             lightCompiled = true;
             this.incrementalLightRebuildsThisFrame++;
             this.deferredLightRebuilds = 0;
+            this.pendingStableLightCompile = false;
+            this.lastIncrementalLightCompileWorldTick = currentWorldTick;
+            this.resetPendingLightMutationWindow();
             if (chunkTopologyChanged && this.lightRegistry.consumeLastCompileTopologyResetRecommended()) {
                this.requestFullLightBlendReset(pendingResetReason != null ? pendingResetReason + "+topology" : "topology");
             }
          } else if (wantsLightWork) {
-            this.deferredLightRebuilds = Math.min(this.deferredLightRebuilds + 1, MAX_DEFERRED_LIGHT_REBUILD_QUEUE);
+            this.deferredLightRebuilds++;
             this.wakeUpWorldBuilder();
+         } else {
+            this.pendingStableLightCompile = false;
+            this.resetPendingLightMutationWindow();
          }
          if (lightCompiled && profiling) {
             this.rebuildsSinceLastLog++;
@@ -349,15 +397,21 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             this.logRootUploadDiagnostics(rootUploadNeeded);
             this.logBrickUploadDiagnostics();
             Photonic.info(
-               "[Profiler] lightScheduling: wantsWork={} executed={} deferred={} incrementalThisFrame={} pendingMutations={} forceCompile={} topology={} tracedDirty={}",
+               "[Profiler] lightScheduling: wantsWork={} executed={} deferred={} incrementalThisFrame={} pendingMutations={} forceCompile={} immediate={} quietReady={} staleReady={} topology={} tracedDirty={} pendingCompile={} mutationFrameAge={} mutationTickAge={}",
                wantsLightWork,
                lightCompiled,
                this.deferredLightRebuilds,
                this.incrementalLightRebuildsThisFrame,
                pendingTracedLightMutations,
                forceLightCompile,
+               immediateLightCompile,
+               quietLightCompileReady,
+               staleLightCompileReady,
                chunkTopologyChanged,
-               tracedLightSetDirty
+               tracedLightSetDirty,
+               this.pendingStableLightCompile,
+               this.framesSinceLastPendingLightMutation(currentRenderFrame),
+               this.worldTicksSinceLastPendingLightMutation(currentWorldTick)
             );
          }
       }
@@ -436,11 +490,18 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       }
 
       for (PChunkPos chunkPosxx : this.chunks.keySet().toArray(new PChunkPos[0])) {
-         if (!inboundNonEmptyChunks.contains(chunkPosxx)) {
-            this.unloadChunk(chunkPosxx);
-            this.profUnloadedChunkCount++;
-            changed = true;
+         if (inboundNonEmptyChunks.contains(chunkPosxx)) {
+            continue;
          }
+
+         Integer lastVisibleFrame = this.recentlyVisibleRtChunks.get(chunkPosxx);
+         if (lastVisibleFrame != null && frame - lastVisibleFrame <= RT_VISIBILITY_KEEP_ALIVE_FRAMES) {
+            continue;
+         }
+
+         this.unloadChunk(chunkPosxx);
+         this.profUnloadedChunkCount++;
+         changed = true;
       }
 
       this.worldMinVoxel = new PBlockPos(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE);
@@ -569,15 +630,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
                if (block == null) {
                   chunk.set(x, y, z, null, -1);
                } else {
-                  int skyBrightness = 0;
-                  if (level != null) {
-                     int brightness = skyLightView.getLightLevel(mutableBlockPos) / 2;
-
-                     for (int i = 5; i >= 0; i--) {
-                        skyBrightness = skyBrightness << 3 | Math.max(skyLightView.getLightLevel(mutableBlockPos.offset(FACES[i])) / 2, brightness);
-                     }
-                  }
-
+                  int skyBrightness = this.computeSkyBrightness(skyLightView, mutableBlockPos);
                   chunk.set(x, y, z, block, skyBrightness);
                }
             }
@@ -911,29 +964,38 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    public void queueBlockUpdate(BlockPos blockPos) {
-      PChunkPos chunkPos = new PChunkPos(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
-      this.queueChunkRefresh(chunkPos);
+      this.queueSingleBlockUpdate(blockPos);
+      for (Direction face : FACES) {
+         this.queueSingleBlockUpdate(blockPos.offset(face));
+      }
+   }
 
-      int localX = Math.floorMod(blockPos.getX(), 16);
-      int localY = Math.floorMod(blockPos.getY(), 16);
-      int localZ = Math.floorMod(blockPos.getZ(), 16);
+   private void queueSingleBlockUpdate(BlockPos blockPos) {
+      this.pendingBlockUpdates.add(blockPos.toImmutable());
+      if (this.blockUpdateFlushQueued.compareAndSet(false, true)) {
+         this.buildQueue.add(this::flushPendingBlockUpdates);
+         this.wakeUpWorldBuilder();
+      }
+   }
 
-      if (localX == 0) {
-         this.queueChunkRefresh(new PChunkPos(chunkPos.x - 1, chunkPos.y, chunkPos.z));
-      } else if (localX == 15) {
-         this.queueChunkRefresh(new PChunkPos(chunkPos.x + 1, chunkPos.y, chunkPos.z));
+   private void flushPendingBlockUpdates() {
+      List<BlockPos> pendingUpdates = new ArrayList<>(this.pendingBlockUpdates);
+      if (pendingUpdates.isEmpty()) {
+         this.blockUpdateFlushQueued.set(false);
+         return;
       }
 
-      if (localY == 0) {
-         this.queueChunkRefresh(new PChunkPos(chunkPos.x, chunkPos.y - 1, chunkPos.z));
-      } else if (localY == 15) {
-         this.queueChunkRefresh(new PChunkPos(chunkPos.x, chunkPos.y + 1, chunkPos.z));
+      this.pendingBlockUpdates.removeAll(pendingUpdates);
+      pendingUpdates.sort(Comparator
+         .comparingInt(BlockPos::getX)
+         .thenComparingInt(BlockPos::getY)
+         .thenComparingInt(BlockPos::getZ));
+      this.blockUpdateFlushQueued.set(false);
+      for (BlockPos blockPos : pendingUpdates) {
+         this.refreshBlock(blockPos);
       }
-
-      if (localZ == 0) {
-         this.queueChunkRefresh(new PChunkPos(chunkPos.x, chunkPos.y, chunkPos.z - 1));
-      } else if (localZ == 15) {
-         this.queueChunkRefresh(new PChunkPos(chunkPos.x, chunkPos.y, chunkPos.z + 1));
+      if (!this.pendingBlockUpdates.isEmpty() && this.blockUpdateFlushQueued.compareAndSet(false, true)) {
+         this.buildQueue.add(this::flushPendingBlockUpdates);
       }
    }
 
@@ -955,6 +1017,83 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             this.chunkSyncNeeded = true;
          });
       }
+   }
+
+   private void refreshBlock(BlockPos blockPos) {
+      ClientWorld level = MinecraftAccessor.getLevel();
+      if (level == null) {
+         return;
+      }
+
+      PChunkPos chunkPos = new PChunkPos(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
+      if (!this.shouldKeepChunkForRt(chunkPos)) {
+         return;
+      }
+
+      WorldChunk chunk = this.chunks.get(chunkPos);
+      if (chunk == null) {
+         if (!this.renderDispatcher.isChunkEmpty(chunkPos) && this.pendingChunkSet.add(chunkPos)) {
+            this.pendingChunkLoads.add(chunkPos);
+            this.chunkSyncNeeded = true;
+         }
+         return;
+      }
+
+      if (this.refreshChunkBlock(level, chunkPos, chunk, blockPos)) {
+         this.markLightBlendBlock(blockPos);
+      }
+      if (this.blockLightEnabled) {
+         this.lightRegistry.onBlockUpdate(blockPos);
+      }
+   }
+
+   private boolean refreshChunkBlock(ClientWorld level, PChunkPos chunkPos, WorldChunk chunk, BlockPos blockPos) {
+      int localX = Math.floorMod(blockPos.getX(), 16);
+      int localY = Math.floorMod(blockPos.getY(), 16);
+      int localZ = Math.floorMod(blockPos.getZ(), 16);
+      PBlockPos rtBlockPos = new PBlockPos(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+      PBlock block = this.blockRegistry.getBlock(rtBlockPos);
+      if (block != null && (!block.isUsed() || !block.isAllocated())) {
+         synchronized (block) {
+            this.blockRegistry.ensureAllocated(block);
+            if (block.getMemory() == null) {
+               block = null;
+            }
+         }
+      }
+
+      ChunkLightingView skyLightView = level.getLightingProvider().get(LightType.SKY);
+      int skyBrightness = block == null ? -1 : this.computeSkyBrightness(skyLightView, blockPos);
+      return chunk.set(localX, localY, localZ, block, skyBrightness);
+   }
+
+   private int computeSkyBrightness(ChunkLightingView skyLightView, BlockPos blockPos) {
+      if (skyLightView == null) {
+         return 0;
+      }
+
+      BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
+      mutableBlockPos.set(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+      int brightness = skyLightView.getLightLevel(mutableBlockPos) / 2;
+      int skyBrightness = 0;
+      for (Direction face : FACES) {
+         mutableBlockPos.set(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+         mutableBlockPos.move(face);
+         skyBrightness = skyBrightness << 3 | Math.max(skyLightView.getLightLevel(mutableBlockPos) / 2, brightness);
+      }
+      return skyBrightness;
+   }
+
+   private void markLightBlendBlock(BlockPos blockPos) {
+      int expand = LIGHT_BLEND_EXPANSION_BLOCKS;
+      this.markLightBlendRegion(
+         blockPos.getX() - expand,
+         blockPos.getY() - expand,
+         blockPos.getZ() - expand,
+         blockPos.getX() + 1 + expand,
+         blockPos.getY() + 1 + expand,
+         blockPos.getZ() + 1 + expand
+      );
    }
 
    private void markLightBlendChunk(PChunkPos chunkPos) {
@@ -1164,6 +1303,47 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             this.liveLightBlendRegionCount,
             this.pendingLightBlendRegionCount);
       }
+   }
+
+   private void markPendingLightMutation(int currentRenderFrame, long currentWorldTick) {
+      this.lastPendingLightMutationFrame = currentRenderFrame;
+      if (currentWorldTick != Long.MIN_VALUE) {
+         this.lastPendingLightMutationWorldTick = currentWorldTick;
+      }
+   }
+
+   private boolean hasReachedLightCompileQuietWindow(int currentRenderFrame, long currentWorldTick) {
+      return this.framesSinceLastPendingLightMutation(currentRenderFrame) >= LIGHT_REBUILD_QUIET_RENDER_FRAMES
+         && this.worldTicksSinceLastPendingLightMutation(currentWorldTick) >= LIGHT_REBUILD_QUIET_WORLD_TICKS;
+   }
+
+   private boolean hasExceededLightCompileStaleness(long currentWorldTick) {
+      if (currentWorldTick == Long.MIN_VALUE || this.lastIncrementalLightCompileWorldTick == Long.MIN_VALUE) {
+         return false;
+      }
+
+      return Math.max(0L, currentWorldTick - this.lastIncrementalLightCompileWorldTick) >= MAX_INCREMENTAL_LIGHT_REBUILD_STALE_WORLD_TICKS;
+   }
+
+   private int framesSinceLastPendingLightMutation(int currentRenderFrame) {
+      if (this.lastPendingLightMutationFrame < 0) {
+         return Integer.MAX_VALUE;
+      }
+
+      return Math.max(0, currentRenderFrame - this.lastPendingLightMutationFrame);
+   }
+
+   private long worldTicksSinceLastPendingLightMutation(long currentWorldTick) {
+      if (currentWorldTick == Long.MIN_VALUE || this.lastPendingLightMutationWorldTick == Long.MIN_VALUE) {
+         return Long.MAX_VALUE;
+      }
+
+      return Math.max(0L, currentWorldTick - this.lastPendingLightMutationWorldTick);
+   }
+
+   private void resetPendingLightMutationWindow() {
+      this.lastPendingLightMutationFrame = -1;
+      this.lastPendingLightMutationWorldTick = Long.MIN_VALUE;
    }
 
    private void logPendingBlendRegionTransition(int previousCount, long previousVolume, long previousLargest, String reason) {

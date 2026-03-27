@@ -1,7 +1,7 @@
 $stdout = Join-Path (Get-Location) 'run/shaderGameTest.stdout.log'
 $stderr = Join-Path (Get-Location) 'run/shaderGameTest.stderr.log'
 $latestLog = Join-Path (Get-Location) 'run/logs/latest.log'
-$fatalPatterns = @('Failed to create shader rendering pipeline', 'Shader compilation log for', 'The shaderpack failed to load!')
+$fatalPatterns = @('Failed to create shader rendering pipeline', 'The shaderpack failed to load!')
 
 function Stop-ProcessTree {
   param([int[]]$ProcessIds)
@@ -42,6 +42,25 @@ function Read-NewContent {
   } finally {
     $stream.Dispose()
   }
+}
+
+function Get-FatalReason {
+  param(
+    [string]$Content,
+    [string]$ChunkName
+  )
+
+  foreach ($pattern in $fatalPatterns) {
+    if ($Content.Contains($pattern)) {
+      return "fatal:${pattern}:$ChunkName"
+    }
+  }
+
+  if ($Content.Contains('Shader compilation log for') -and $Content -match '(?is)Shader compilation log for.*?\berror\b') {
+    return "fatal:Shader compilation log for:$ChunkName"
+  }
+
+  return $null
 }
 
 foreach ($path in @($stdout, $stderr)) {
@@ -96,15 +115,10 @@ while (-not $proc.HasExited) {
       Write-Output $line.Line
     }
 
-    foreach ($pattern in $fatalPatterns) {
-      if ($chunk.Content.Contains($pattern)) {
-        $reason = "fatal:${pattern}:$($chunk.Name)"
-        Stop-ProcessTree -ProcessIds $processIds
-        break
-      }
-    }
-
-    if ($reason -ne 'completed') {
+    $fatalReason = Get-FatalReason -Content $chunk.Content -ChunkName $chunk.Name
+    if ($null -ne $fatalReason) {
+      $reason = $fatalReason
+      Stop-ProcessTree -ProcessIds $processIds
       break
     }
   }

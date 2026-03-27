@@ -141,10 +141,13 @@ public class CommonUniformsMixin {
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_lights_per_cell", () -> worldRegistry.get().getLightRegistry().getRegirLightsPerCell());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_cell_size", () -> 32.0F);
          // ph_regir_build_samples is compute-only (set by RegirComputeProgram.dispatch()).
-         // ph_regir_sampling_jitter is needed by BOTH compute and fragment shaders:
-         // compute build uses it for cell radius expansion, per-pixel light_tree.glsl
-         // uses it for jitterScale = samplingJitter * cellSize (RTXDI_ReGIR_GetJitterScale).
-         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_sampling_jitter", () -> 1.0F);
+         // RTXDI FullSample multiplies the dynamic ReGIR jitter by 2.0 before uploading
+         // constants, so the shader-side default is 2.0 (= plus/minus one cell of jitter).
+         uniforms.uniform1f(
+            UniformUpdateFrequency.PER_FRAME,
+            "ph_regir_sampling_jitter",
+            () -> worldRegistry.get().getLightRegistry().getRegirSamplingJitter()
+         );
          // Unified RIS buffer offsets for fragment shaders (light_tree.glsl, reuse_bridge.glsl).
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_ris_tile_size", () -> RegirComputeProgram.tileSize);
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_ris_tile_count", () -> RegirComputeProgram.tileCount);

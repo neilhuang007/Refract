@@ -9,6 +9,8 @@ public class LightInvalidation {
    public BlockLightInfo after;
    public int beforeBlockId = -1;
    public int afterBlockId = -1;
+   public boolean beforeActive;
+   public boolean afterActive;
    public int beforeIndex;
    public int afterIndex;
 

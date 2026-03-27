@@ -1391,7 +1391,8 @@ public class LightTreeRenderer extends MainRenderer {
          this.regirComputeProgram.updatePdfTexture(powers, lightRegistry.lightCount());
       }
 
-      // RTXDI defaults: numBuildSamples = 8 (ReGIR.h:141), samplingJitter = 1.0.
+      // RTXDI defaults: numBuildSamples = 8 (ReGIR.h:141). The FullSample uploads
+      // samplingJitter as 2.0 after doubling the user-facing default of 1.0.
       // getRegirLightIndexMemoryManager() is the unified uvec2 ReGIR output buffer,
       // allocated at 8 bytes/slot (cellCount * lightsPerCell * 8) to hold uvec2 entries.
       int gridRes = lightRegistry.getRegirGridResolution();
@@ -1407,7 +1408,7 @@ public class LightTreeRenderer extends MainRenderer {
          lightRegistry.lightCount(),
          SystemTimeUniforms.COUNTER.getAsInt(),
          8,    // numBuildSamples — RTXDI default from ReGIR.h:141
-         1.0f  // samplingJitter — RTXDI default
+         lightRegistry.getRegirSamplingJitter()
       );
    }
 

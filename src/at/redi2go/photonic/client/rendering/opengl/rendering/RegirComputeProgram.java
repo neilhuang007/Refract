@@ -273,7 +273,7 @@ public class RegirComputeProgram {
      *                      Must be sized: (tileCount*tileSize + gridRes^3*lightsPerCell) * 8 bytes.
      * @param gridCenter    world-space center of the ReGIR grid (= camera position)
      * @param numBuildSamples RTXDI default = 8 (ReGIR.h:141)
-     * @param samplingJitter  RTXDI default = 1.0
+     * @param samplingJitter  RTXDI FullSample uploads 2.0 here for the default UI jitter of 1.0
      */
     public void dispatch(
             GlMemoryManager lightList,
