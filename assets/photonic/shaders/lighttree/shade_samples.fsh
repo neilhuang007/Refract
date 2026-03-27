@@ -138,8 +138,8 @@ void main() {
     }
 
     if (ph_restir_enable_denoiser_packing >= 0.5f) {
-        // NRD expects demodulated signals using full view-dependent material factors.
-        // NRD.hlsli:733 NRD_MaterialFactors with proper N, V, Rf0, roughness.
+        // NRD material factor demodulation reduces dynamic range for effective denoising.
+        // The A-trous luminance edge-stopping is calibrated for the demodulated signal range.
         vec3 N = currentSurface.shadingNormal;
         vec3 V = normalize(world_camera_position - currentSurface.worldPos);
         float roughness = clamp(currentSurface.material.x, 0.0, 1.0);

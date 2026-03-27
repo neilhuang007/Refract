@@ -59,11 +59,14 @@ bool lt_is_valid_direct_soft_reprojection(vec2 reprojectionUv, vec3 currentPosit
 }
 
 vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
+    // Soft reprojection uses zero jitter (not TAA jitter) for stable pixel mapping.
+    // TAA jitter changes every frame and can cause ivec2 truncation to hit adjacent
+    // pixels, failing the tight validation thresholds and resetting the accumulation.
     vec2 reprojectionUv = ph_reprojectf(
         previous_modelview_projection,
         stagePosition + stageNormal * 0.01f,
         vec2(viewWidth, viewHeight),
-        get_taa_jitter()
+        vec2(0.0f)
     );
 
     if (!lt_is_valid_direct_soft_reprojection(reprojectionUv, stagePosition, stageNormal)) {
@@ -157,20 +160,10 @@ void main() {
     vec3 diffDemod;
     vec3 specDemod;
     nrd_material_factors(N, V, stageAlbedo.rgb, Rf0, roughness, diffDemod, specDemod);
+    vec3 directCombined =
+        lt_unpack_stage_direct_radiance(directDiffuse, diffDemod) +
+        lt_unpack_stage_direct_radiance(directSpecular, specDemod);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
-    // When the NRD denoiser is active, use denoised diffuse (stable, from A-trous)
-    // combined with raw specular (specular denoiser needs separate stability work).
-    // Both are remodulated here so the shaderpack receives view-dependent radiance.
-    vec3 directCombined;
-    if (ph_restir_enable_denoiser_packing >= 0.5f) {
-        vec3 denoisedDiffuse = nrd_safe_remodulate(texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb, diffDemod);
-        vec3 rawSpecular = lt_unpack_stage_direct_radiance(directSpecular, specDemod);
-        directCombined = denoisedDiffuse + rawSpecular;
-    } else {
-        directCombined =
-            lt_unpack_stage_direct_radiance(directDiffuse, diffDemod) +
-            lt_unpack_stage_direct_radiance(directSpecular, specDemod);
-    }
 
     position_frag_out = stagePosition;
     normal_frag_out = stageNormal;

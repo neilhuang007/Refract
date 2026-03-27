@@ -106,10 +106,8 @@ void main() {
         float roughness = clamp(currentSurface.material.x, 0.0, 1.0);
         float metallic = clamp(currentSurface.material.y, 0.0, 1.0);
         vec3 Rf0 = mix(vec3(0.04), clamp(currentSurface.albedo, vec3(0.0), vec3(1.0)), metallic);
-        vec3 diffDemod;
-        vec3 specDemod;
+        vec3 diffDemod, specDemod;
         nrd_material_factors(N, V, currentSurface.albedo, Rf0, roughness, diffDemod, specDemod);
-
         direct_diffuse_frag_out = nrd_pack_direct_signal(nrd_safe_demodulate(shadedDiffuse, diffDemod), directHitDistance);
         direct_specular_frag_out = nrd_pack_direct_signal(nrd_safe_demodulate(shadedSpecular, specDemod), directHitDistance);
     } else {
