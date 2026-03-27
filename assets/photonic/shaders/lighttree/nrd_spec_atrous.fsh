@@ -80,7 +80,9 @@ void main() {
 
     float centerWeight = gaussian3x3[0] * gaussian3x3[0];
     vec3 sumColor = centerColor * centerWeight;
-    float centerVariance = max(centerData.a, 0.0);
+    // NRD RELAX: .a channel is the temporally accumulated second moment of luminance (E[luma²]).
+    // Variance = E[luma²] - E[luma]² (standard variance formula).
+    float centerVariance = max(centerData.a - centerLuma * centerLuma, 0.0);
     float sumVariance = centerVariance * centerWeight * centerWeight;
     float sumWeight = centerWeight;
     float lumaSigma = spec_phi_luminance * sqrt(max(centerVariance, 1e-6));
@@ -152,7 +154,7 @@ void main() {
             float cappedLumaDiff = min(lumaDiff, gSpecMaxLuminanceRelativeDifference);
             wSpecular *= exp(-cappedLumaDiff * specLuminanceWeightRelaxation);
 
-            float sampleVariance = max(sampleData.a, 0.0);
+            float sampleVariance = max(sampleData.a - sampleLuma * sampleLuma, 0.0);
             sumColor += sampleRadiance * wSpecular;
             sumVariance += sampleVariance * wSpecular * wSpecular;
             sumWeight += wSpecular;

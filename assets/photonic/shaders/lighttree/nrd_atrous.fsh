@@ -69,8 +69,10 @@ void main() {
 
     float centerWeight = gaussian3x3[0] * gaussian3x3[0];
     vec3 sumColor = centerColor * centerWeight;
-    // NRD RELAX: .a channel is variance, not raw second moment
-    float centerVariance = max(centerData.a, 0.0);
+    // NRD RELAX: .a channel is the temporally accumulated second moment of luminance (E[luma²]).
+    // Variance = E[luma²] - E[luma]² (standard variance formula). The reference computes this
+    // inline in the A-trous filter (RELAX_Atrous.cs.hlsl).
+    float centerVariance = max(centerData.a - centerLuma * centerLuma, 0.0);
     float sumVariance = centerVariance * centerWeight * centerWeight;
     float sumWeight = centerWeight;
     float normalWeightParam = direct_normal_weight_param(historyLength, diffuseConfidence);
@@ -136,7 +138,7 @@ void main() {
                 continue;
             }
 
-            float sampleVariance = max(sampleData.a, 0.0);
+            float sampleVariance = max(sampleData.a - sampleLuma * sampleLuma, 0.0);
             sumColor += sampleRadiance * weight;
             sumVariance += sampleVariance * weight * weight;
             sumWeight += weight;

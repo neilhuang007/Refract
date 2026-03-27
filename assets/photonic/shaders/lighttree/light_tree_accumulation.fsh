@@ -15,6 +15,8 @@ layout(location = 6) out vec4 direct_soft_frag_out;
 #include "/photonics/lighttree/nrd_common.glsl"
 
 // Samplers NOT already declared in lighttree/samplers.glsl — declare only the extras here
+uniform sampler2D denoised_direct_diffuse;
+uniform sampler2D denoised_direct_specular;
 
 // Debug: when enabled, light_reload is ignored and temporal history is never wiped
 uniform float ph_debug_disable_temporal_reset;
@@ -155,10 +157,20 @@ void main() {
     vec3 diffDemod;
     vec3 specDemod;
     nrd_material_factors(N, V, stageAlbedo.rgb, Rf0, roughness, diffDemod, specDemod);
-    vec3 directCombined =
+    // Raw per-frame signal (noisy, for soft temporal accumulation)
+    vec3 rawCombined =
         lt_unpack_stage_direct_radiance(directDiffuse, diffDemod) +
         lt_unpack_stage_direct_radiance(directSpecular, specDemod);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
+    // Resolved direct: denoised when NRD active, raw otherwise
+    vec3 directCombined;
+    if (ph_restir_enable_denoiser_packing >= 0.5f) {
+        vec3 denoisedDiffuse = nrd_safe_remodulate(texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb, diffDemod);
+        vec3 denoisedSpecular = nrd_safe_remodulate(texelFetch(denoised_direct_specular, tex_coord, 0).rgb, specDemod);
+        directCombined = denoisedDiffuse + denoisedSpecular;
+    } else {
+        directCombined = rawCombined;
+    }
 
     position_frag_out = stagePosition;
     normal_frag_out = stageNormal;
@@ -166,5 +178,6 @@ void main() {
     albedo_frag_out = stageAlbedo;
     material_frag_out = stageMaterial;
     direct_frag_out = vec4(directCombined, directHitDistance);
-    direct_soft_frag_out = vec4(prevSoft.rgb + directCombined, prevSoft.a + 1.0f);
+    // Soft accumulation always uses the raw per-frame signal for correct temporal averaging
+    direct_soft_frag_out = vec4(prevSoft.rgb + rawCombined, prevSoft.a + 1.0f);
 }

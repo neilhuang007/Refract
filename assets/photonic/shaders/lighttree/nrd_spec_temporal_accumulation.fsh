@@ -166,9 +166,11 @@ void main() {
     // -------------------------------------------------------------------------
     // Surface motion based (SMB) reprojection UV (in pixel coords)
     // -------------------------------------------------------------------------
+    // Motion vector convention: .xy = previousPixel - currentPixelCenter (see light_tree_sampling_stage.fsh).
+    // To recover previousPixel: currentPixelCenter + motion.xy. Must ADD, not subtract.
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
     vec2 reprojectionPx = motionVector.a > 0.5
-        ? (vec2(tex_coord) + vec2(0.5) - motionVector.xy) * PH_RENDER_SCALE
+        ? (vec2(tex_coord) + vec2(0.5) + motionVector.xy) * PH_RENDER_SCALE
         : spec_project_to_prev_pixels(currentPosition + currentNormal * 0.01);
 
     // -------------------------------------------------------------------------

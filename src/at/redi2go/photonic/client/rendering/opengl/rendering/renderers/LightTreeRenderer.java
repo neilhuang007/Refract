@@ -544,6 +544,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "spec_clamped_slow_input", () -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "spec_clamped_fast_input", () -> this.specularClampedFastBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "spec_atrous_input", this::getCurrentSpecAtrousInputTexture);
+      this.addTextureSampler(samplers, "denoised_direct_diffuse", this::getResolvedDiffuseAtrousTexture);
+      this.addTextureSampler(samplers, "denoised_direct_specular", this::getResolvedSpecularAtrousTexture);
    }
 
    @Override
@@ -1323,7 +1325,11 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int getCurrentDirectAtrousStepSize() {
-      int iterationIndex = Math.max(0, Math.min(this.directAtrousIteration, this.directAtrousStepSizes.length - 1));
+      // During specular A-trous, use specAtrousIteration — directAtrousIteration is past-the-end.
+      int iteration = this.isCurrentPhotonicsFragment(specAtrousFragment)
+         ? this.specAtrousIteration
+         : this.directAtrousIteration;
+      int iterationIndex = Math.max(0, Math.min(iteration, this.directAtrousStepSizes.length - 1));
       return this.directAtrousStepSizes[iterationIndex];
    }
 
@@ -1350,7 +1356,10 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int getCurrentDirectAtrousIsLastPass() {
-      return this.directAtrousIteration == this.directAtrousStepSizes.length - 1 ? 1 : 0;
+      int iteration = this.isCurrentPhotonicsFragment(specAtrousFragment)
+         ? this.specAtrousIteration
+         : this.directAtrousIteration;
+      return iteration == this.directAtrousStepSizes.length - 1 ? 1 : 0;
    }
 
    private static int[] resolveDirectAtrousStepSizes(PhotonicsProperties properties) {
@@ -1488,21 +1497,48 @@ public class LightTreeRenderer extends MainRenderer {
       this.gpuTimerQuery.destroy();
    }
 
+   private boolean directAtrousFinalWroteToPing() {
+      // After the A-trous loop, determine which buffer holds the final output.
+      // The final iteration index is (length - 1). When that index is > 0 and even,
+      // the output texture function routes to atrousPingBuffer (because it reads from
+      // denoisedBuffer and must write elsewhere). Otherwise it writes to denoisedBuffer.
+      int lastIteration = this.directAtrousStepSizes.length - 1;
+      return lastIteration > 0 && (lastIteration & 1) == 0;
+   }
+
+   private boolean specAtrousFinalWroteToPing() {
+      int lastIteration = this.directAtrousStepSizes.length - 1;
+      return lastIteration > 0 && (lastIteration & 1) == 0;
+   }
+
+   private TextureObject getResolvedDiffuseAtrousTexture() {
+      if (this.directAtrousFinalWroteToPing()) {
+         return this.directAtrousPingBuffer.getWriteAttachment("data");
+      }
+      return this.directDenoisedBuffer.getWriteAttachment("data");
+   }
+
+   private TextureObject getResolvedSpecularAtrousTexture() {
+      if (this.specAtrousFinalWroteToPing()) {
+         return this.specularAtrousPingBuffer.getWriteAttachment("data");
+      }
+      return this.specularDenoisedBuffer.getWriteAttachment("data");
+   }
+
    private TextureObject getResolvedDirectTexture() {
       if (PhotonicsStorage.DEBUG_DISABLE_DENOISER.value) {
          return this.lightingBuffer.getWriteAttachment("direct");
       }
-      if (this.isFinalDirectAtrousIteration() && (this.directAtrousIteration & 1) == 0 && this.directAtrousIteration > 0) {
-         return this.directAtrousPingBuffer.getWriteAttachment("data");
-      }
-      return this.directDenoisedBuffer.getWriteAttachment("data");
+      // When the denoiser is enabled, the accumulation shader combines denoised
+      // diffuse + denoised specular into lightingBuffer.direct. Return that.
+      return this.lightingBuffer.getWriteAttachment("direct");
    }
 
    private TextureObject getPreviousResolvedDirectTexture() {
       if (PhotonicsStorage.DEBUG_DISABLE_DENOISER.value) {
          return this.lightingBuffer.getReadAttachment("direct");
       }
-      return this.directDenoisedBuffer.getReadAttachment("data");
+      return this.lightingBuffer.getReadAttachment("direct");
    }
 
    private TextureObject getResolvedIndirectTexture() {

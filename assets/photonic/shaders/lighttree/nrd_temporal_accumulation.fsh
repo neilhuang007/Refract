@@ -143,9 +143,11 @@ void main() {
     float smbParallaxInPixelsMin = min(smbParallaxInPixels1, smbParallaxInPixels2);
 
     // --- Reprojection UV (keep as float; do NOT truncate yet) ---
+    // Motion vector convention: .xy = previousPixel - currentPixelCenter (see light_tree_sampling_stage.fsh).
+    // To recover previousPixel: currentPixelCenter + motion.xy. Must ADD, not subtract.
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
     vec2 reprojectionUv = motionVector.a > 0.5
-        ? (vec2(tex_coord) + vec2(0.5) - motionVector.xy)
+        ? (vec2(tex_coord) + vec2(0.5) + motionVector.xy)
         : ph_reprojectf(
             previous_modelview_projection,
             currentPosition + currentNormal * 0.01,

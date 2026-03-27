@@ -399,6 +399,8 @@ void main() {
     // Output
     reservoir_frag_out = rtxdi_pack_reservoir(state);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(state);
+    // Debug diagnostics in unused yzw channels (only .x is consumed by unpack).
+    // Written here so the automation can track temporal resampling quality.
     reservoir_sample_frag_out.yzw = vec3(temporalNeighborDebug, temporalRemapDebug, temporalWeightDebug);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(state);
 }
