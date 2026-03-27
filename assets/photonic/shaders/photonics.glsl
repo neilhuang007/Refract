@@ -45,15 +45,41 @@ uniform int light_time;
 uniform int mask;
 uniform int ph_light_count;
 uniform mat4 direction_transformation_matrix_in;
-uniform mat4 modelview_projection; // TODO: just use Iris'
-uniform mat4 previous_modelview_projection;
 uniform vec3 rt_camera_position;
 uniform vec3 handheld_color;
-uniform vec3 previous_world_camera_position;
-uniform vec3 world_camera_position;
 uniform vec3 world_max_voxel;
 uniform vec3 world_min_voxel;
 uniform vec3 world_offset;
+
+// Reprojection must use Iris' real current/previous view state, not a custom Java-side
+// snapshot. Our surfaces are stored in absolute world space, while Iris' gbuffer model-view
+// transforms operate on camera-relative positions, so we explicitly subtract the matching
+// camera position before projection.
+mat4 ph_translation_matrix(vec3 delta) {
+    return mat4(
+        vec4(1.0f, 0.0f, 0.0f, 0.0f),
+        vec4(0.0f, 1.0f, 0.0f, 0.0f),
+        vec4(0.0f, 0.0f, 1.0f, 0.0f),
+        vec4(delta, 1.0f)
+    );
+}
+
+mat4 ph_modelview_projection_matrix(mat4 projectionMatrix, mat4 modelViewMatrix, vec3 worldCameraPosition) {
+    return projectionMatrix * modelViewMatrix * ph_translation_matrix(-worldCameraPosition);
+}
+
+mat4 ph_current_modelview_projection() {
+    return ph_modelview_projection_matrix(gbufferProjection, gbufferModelView, cameraPosition);
+}
+
+mat4 ph_previous_modelview_projection() {
+    return ph_modelview_projection_matrix(gbufferPreviousProjection, gbufferPreviousModelView, previousCameraPosition);
+}
+
+#define modelview_projection ph_current_modelview_projection()
+#define previous_modelview_projection ph_previous_modelview_projection()
+#define world_camera_position cameraPosition
+#define previous_world_camera_position previousCameraPosition
 
 /*
     -- SAMPLERS/IMAGES --
