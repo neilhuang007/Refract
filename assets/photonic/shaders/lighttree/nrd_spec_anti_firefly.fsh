@@ -23,11 +23,14 @@ void main() {
         return;
     }
 
-    // Center pixel validity: NRD reference gIn_ViewZ > gDenoisingRange early-out.
-    // Uses viewZ = length(worldPos - cameraPos) vs gDenoisingRange (NRD Common.hlsli:244).
+    // Center pixel validity: NRD reference early-out is upper-bound only.
+    // Reference (RELAX_AntiFirefly.cs.hlsl:186-187):
+    //   float centerViewZ = UnpackViewZ(gIn_ViewZ[pixelPos]);
+    //   if (centerViewZ > gDenoisingRange) return;
+    // No lower-bound check exists in the reference.
     vec3 centerPos = texelFetch(radiosity_position, tex_coord, 0).xyz;
     float centerViewZ = nrd_compute_view_z(centerPos);
-    if (centerViewZ > ph_nrd_denoising_range || centerViewZ < 0.001) {
+    if (centerViewZ > ph_nrd_denoising_range) {
         spec_firefly_out = texelFetch(spec_firefly_input, tex_coord, 0);
         return;
     }
@@ -60,14 +63,10 @@ void main() {
             if (any(lessThan(sampleCoord, ivec2(0))) || any(greaterThanEqual(sampleCoord, texSize))) continue;
 
             // NRD CompareMaterials with gSpecMinMaterial — gated per-sample.
+            // Reference has NO per-sample viewZ check inside the RCRS loop.
+            // (RELAX_AntiFirefly.cs.hlsl:115-148 — only material gate, no viewZ per tap.)
             vec4 sampleMaterial = texelFetch(stage_radiosity_material, sampleCoord, 0);
             if (nrd_material_weight(centerMaterial, sampleMaterial) <= 0.0) continue;
-
-            // NRD per-sample validity: viewZ > gDenoisingRange skips the tap.
-            // Uses viewZ = length(worldPos - cameraPos) (NRD Common.hlsli:244).
-            vec3 samplePos = texelFetch(radiosity_position, sampleCoord, 0).xyz;
-            float sampleViewZ = nrd_compute_view_z(samplePos);
-            if (sampleViewZ > ph_nrd_denoising_range || sampleViewZ < 0.001) continue;
 
             float sampleLuma = nrd_luminance(texelFetch(spec_firefly_input, sampleCoord, 0).rgb);
 
