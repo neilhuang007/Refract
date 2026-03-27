@@ -1529,15 +1529,13 @@ public class LightTreeRenderer extends MainRenderer {
       if (PhotonicsStorage.DEBUG_DISABLE_DENOISER.value) {
          return this.lightingBuffer.getWriteAttachment("direct");
       }
-      // When the denoiser is enabled, the accumulation shader combines denoised
-      // diffuse + denoised specular into lightingBuffer.direct. Return that.
+      // Accumulation shader combines denoised diffuse + raw specular with proper
+      // remodulation. Return the accumulation output so the shaderpack receives
+      // view-dependent remodulated radiance.
       return this.lightingBuffer.getWriteAttachment("direct");
    }
 
    private TextureObject getPreviousResolvedDirectTexture() {
-      if (PhotonicsStorage.DEBUG_DISABLE_DENOISER.value) {
-         return this.lightingBuffer.getReadAttachment("direct");
-      }
       return this.lightingBuffer.getReadAttachment("direct");
    }
 

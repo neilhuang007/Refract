@@ -157,19 +157,19 @@ void main() {
     vec3 diffDemod;
     vec3 specDemod;
     nrd_material_factors(N, V, stageAlbedo.rgb, Rf0, roughness, diffDemod, specDemod);
-    // Raw per-frame signal (noisy, for soft temporal accumulation)
-    vec3 rawCombined =
-        lt_unpack_stage_direct_radiance(directDiffuse, diffDemod) +
-        lt_unpack_stage_direct_radiance(directSpecular, specDemod);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
-    // Resolved direct: denoised when NRD active, raw otherwise
+    // When the NRD denoiser is active, use denoised diffuse (stable, from A-trous)
+    // combined with raw specular (specular denoiser needs separate stability work).
+    // Both are remodulated here so the shaderpack receives view-dependent radiance.
     vec3 directCombined;
     if (ph_restir_enable_denoiser_packing >= 0.5f) {
         vec3 denoisedDiffuse = nrd_safe_remodulate(texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb, diffDemod);
-        vec3 denoisedSpecular = nrd_safe_remodulate(texelFetch(denoised_direct_specular, tex_coord, 0).rgb, specDemod);
-        directCombined = denoisedDiffuse + denoisedSpecular;
+        vec3 rawSpecular = lt_unpack_stage_direct_radiance(directSpecular, specDemod);
+        directCombined = denoisedDiffuse + rawSpecular;
     } else {
-        directCombined = rawCombined;
+        directCombined =
+            lt_unpack_stage_direct_radiance(directDiffuse, diffDemod) +
+            lt_unpack_stage_direct_radiance(directSpecular, specDemod);
     }
 
     position_frag_out = stagePosition;
@@ -178,6 +178,5 @@ void main() {
     albedo_frag_out = stageAlbedo;
     material_frag_out = stageMaterial;
     direct_frag_out = vec4(directCombined, directHitDistance);
-    // Soft accumulation always uses the raw per-frame signal for correct temporal averaging
-    direct_soft_frag_out = vec4(prevSoft.rgb + rawCombined, prevSoft.a + 1.0f);
+    direct_soft_frag_out = vec4(prevSoft.rgb + directCombined, prevSoft.a + 1.0f);
 }
