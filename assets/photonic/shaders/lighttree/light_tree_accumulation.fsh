@@ -11,6 +11,7 @@ layout(location = 5) out vec4 direct_frag_out;
 layout(location = 6) out vec4 direct_soft_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/common/light_blend_regions.glsl"
 #include "/photonics/lighttree/nrd_material_id.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
@@ -62,6 +63,10 @@ vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
     // Soft reprojection uses zero jitter (not TAA jitter) for stable pixel mapping.
     // TAA jitter changes every frame and can cause ivec2 truncation to hit adjacent
     // pixels, failing the tight validation thresholds and resetting the accumulation.
+    if (ph_dirty_region_factor(stagePosition) > 0.0f) {
+        return vec4(0.0f);
+    }
+
     vec2 reprojectionUv = ph_reprojectf(
         previous_modelview_projection,
         stagePosition + stageNormal * 0.01f,
@@ -153,12 +158,17 @@ void main() {
     vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord, activeCheckerboardField);
     vec4 prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
-    // The compat soft path uses the denoised diffuse from the A-trous filter for stability.
-    // Raw per-frame specular is too noisy for the running average and causes visible jitter.
-    // When denoiser is off, use the raw combined signal as before.
+    // The compat direct/direct_soft path must remodulate the denoised specular
+    // signal back into radiance space before combining it with the denoised
+    // diffuse result. Dropping denoised specular here leaves the downstream
+    // lighting path stuck on raw sparkly specular energy.
     vec3 directCombined;
     if (ph_restir_enable_denoiser_packing >= 0.5f) {
-        directCombined = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
+        vec3 denoisedDiffuse = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
+        vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
+        vec3 specularRemodulation = nrd_compute_specular_demodulation(stageAlbedo.rgb, stageMaterial.g);
+        vec3 denoisedSpecular = nrd_safe_remodulate(denoisedSpecularDemodulated, specularRemodulation);
+        directCombined = denoisedDiffuse + denoisedSpecular;
     } else {
         directCombined = directDiffuse.rgb + directSpecular.rgb;
     }

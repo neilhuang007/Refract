@@ -12,6 +12,7 @@ uniform sampler2D direct_historyfix_output;
 uniform sampler2D nrd_diff_fast_input;
 uniform sampler2D nrd_diff_noisy_input;
 uniform sampler2D direct_history_length_clamp_input;
+uniform float ph_debug_enable_direct_history_clamping;
 uniform float ph_nrd_max_accumulated_frame_num;
 uniform float ph_nrd_max_fast_accumulated_frame_num;
 uniform float ph_nrd_denoising_range;
@@ -102,6 +103,12 @@ void main() {
     if (!is_in_world()) {
         nrd_clamped_slow_out = vec4(0.0);
         nrd_clamped_fast_out = vec4(0.0);
+        return;
+    }
+
+    if (ph_debug_enable_direct_history_clamping < 0.5) {
+        nrd_clamped_slow_out = texelFetch(direct_historyfix_output, tex_coord, 0);
+        nrd_clamped_fast_out = texelFetch(nrd_diff_fast_input, tex_coord, 0);
         return;
     }
 

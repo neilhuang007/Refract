@@ -230,7 +230,8 @@ public class BlockBuilder {
    }
 
    static int repackShaderVoxelWord(int color) {
-      int alpha = color & 127;
-      return color >> 7 | alpha << 24;
+      int alpha = color >>> 24 & 127;
+      int rgb = color & 16777215;
+      return rgb | ((127 - alpha) << 24);
    }
 }

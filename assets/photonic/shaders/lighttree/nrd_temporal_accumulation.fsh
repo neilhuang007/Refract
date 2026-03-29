@@ -12,6 +12,7 @@ layout(location = 4) out vec4 direct_history_length_out;
 #include "/photonics/lighttree/nrd_common.glsl"
 
 uniform float ph_debug_disable_temporal_reset;
+uniform float ph_debug_enable_direct_temporal_accumulation;
 uniform float ph_nrd_max_accumulated_frame_num;
 uniform float ph_nrd_max_fast_accumulated_frame_num;
 uniform float ph_nrd_depth_threshold;
@@ -162,10 +163,8 @@ void main() {
     ivec2 texSize = textureSize(prev_radiosity_position, 0);
 
     // --- Per-tap disocclusion threshold as vec4 (reference lines 112-117) ---
-    // pixelSize = PixelRadiusToWorld(1, viewZ) ~= viewDistance * (2*tan(fov/2) / viewHeight)
-    // frustumSize = pixelSize * min(rectSize.x, rectSize.y)
-    // For perspective: using ph_nrd_depth_threshold * viewDistance as frustumSize approximation,
-    // matching the existing scalar approach but structured as the reference requires.
+    // The diffuse path still uses the legacy frustum-size approximation because it
+    // is materially more stable in this integration than the looser spec-style one.
     float disocclusionThresholdSlopeScale =
         1.0 / max(mix(mix(0.05, 1.0, NoV), 1.0, clamp(smbParallaxInPixelsMax / 30.0, 0.0, 1.0)), 0.05);
     float frustumSize = ph_nrd_depth_threshold * viewDistance;
@@ -185,6 +184,8 @@ void main() {
     ivec2 tap11 = bilinearOrigin + ivec2(1, 1);
 
     // --- Per-tap validity using per-tap threshold (reference line 125-134) ---
+    // The reference uses the averaged reprojection normal here, but in this
+    // integration the center-pixel surface normal is materially more stable.
     vec4 bilinearTapsValid;
     bilinearTapsValid.x = direct_check_tap(tap00, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.x);
     bilinearTapsValid.y = direct_check_tap(tap10, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.y);
@@ -193,7 +194,7 @@ void main() {
 
     // --- NRD RELAX backface rejection: bilinear sample of previous normal at reprojection center ---
     // NRD samples one bilinearly filtered previous normal at the footprint center.
-    vec2 prevNormalUv = (prevPixelPosFloat + 0.5) / vec2(textureSize(prev_radiosity_normal, 0));
+    vec2 prevNormalUv = prevPixelPosFloat / vec2(textureSize(prev_radiosity_normal, 0));
     vec3 prevNormalBilinear = texture(prev_radiosity_normal, prevNormalUv).xyz;
     vec3 prevMappedNormalBilinear = texture(prev_radiosity_mapped_normal, prevNormalUv).xyz;
     vec3 prevNormalFiltered = nrd_select_surface_normal(prevNormalBilinear, prevMappedNormalBilinear);
@@ -203,7 +204,8 @@ void main() {
     }
 
     // --- Bilinear custom weights (reference line 155) ---
-    // GetBilinearCustomWeights: standardWeights * tapValid, then normalized.
+    // NRD keeps the masked bilinear weights unnormalized here and lets the sampling
+    // helpers normalize later. Footprint quality depends on the pre-normalized sum.
     float fx = bilinearWeights.x;
     float fy = bilinearWeights.y;
     vec4 standardWeights = vec4(
@@ -215,16 +217,20 @@ void main() {
     vec4 bilinearCustomWeights = standardWeights * bilinearTapsValid;
     float sumCustomWeights = dot(bilinearCustomWeights, vec4(1.0));
     bool canReproject = sumCustomWeights > 1e-4;
-    if (canReproject) bilinearCustomWeights /= sumCustomWeights;
+    if (ph_debug_enable_direct_temporal_accumulation < 0.5) {
+        canReproject = false;
+    }
 
     // --- Footprint quality (reference line 223) ---
     // bicubicValid = all 4 bilinear taps valid (bicubic equivalent without bicubic infrastructure).
     // footprintQuality = bicubicValid ? 1.0 : dot(bilinearCustomWeights, 1.0)
     // When no taps valid, reprojectionFound = 0 and footprintQuality = 0.
-    bool bicubicEquivalentValid = (bilinearTapsValid == vec4(1.0));
-    float footprintQuality = 0.0;
+    bool bicubicEquivalentValid = all(equal(bilinearTapsValid, vec4(1.0)));
+    float footprintQuality = canReproject
+        ? (bicubicEquivalentValid ? 1.0 : sumCustomWeights)
+        : 0.0;
     if (canReproject) {
-        footprintQuality = bicubicEquivalentValid ? 1.0 : dot(bilinearCustomWeights, vec4(1.0));
+        bilinearCustomWeights /= sumCustomWeights;
     }
 
     // --- NRD RELAX footprint stretching detection (reference lines 558-563) ---
@@ -287,8 +293,8 @@ void main() {
         }
 
         // NRD RELAX reference (RELAX_TemporalAccumulation.cs.hlsl:595-600):
-        // Sample diffuse confidence at current pixel (prev UV is ideal but current is acceptable approximation).
-        float diffConfidence = clamp(texelFetch(diffuse_confidence_input, tex_coord, 0).r, 0.0, 1.0);
+        // Sample diffuse history confidence at the reprojected SMB location.
+        float diffConfidence = clamp(texture(diffuse_confidence_input, prevNormalUv).r, 0.0, 1.0);
         slowMaxAccumulatedFrameNum *= diffConfidence;
         fastMaxAccumulatedFrameNum *= diffConfidence;
 

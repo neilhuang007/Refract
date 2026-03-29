@@ -40,7 +40,30 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_DISABLE_TEMPORAL_RESET = boolParam("debug_disable_temporal_reset", false);
    public static final Parameter<Boolean> DEBUG_DISABLE_TAA_JITTER = boolParam("debug_disable_taa_jitter", false);
    public static final Parameter<Boolean> DEBUG_FREEZE_RNG = boolParam("debug_freeze_rng", false);
+   public static final Parameter<String> DEBUG_DIRECT_STAGE_VIEW = stringParam("debug_direct_stage_view", "resolved");
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_PROPOSAL_RESERVOIR = boolParam("debug_enable_direct_proposal_reservoir", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE = boolParam("debug_enable_direct_temporal_reuse", false);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_SPATIAL_REUSE = boolParam("debug_enable_direct_spatial_reuse", false);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_SHADE_SAMPLES = boolParam("debug_enable_direct_shade_samples", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_FINAL_VISIBILITY = boolParam("debug_enable_direct_final_visibility", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_VISIBILITY_TRANSMITTANCE = boolParam("debug_enable_direct_visibility_transmittance", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_TEMPORAL_ACCUMULATION = boolParam("debug_enable_direct_temporal_accumulation", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_HISTORY_FIX = boolParam("debug_enable_direct_history_fix", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_HISTORY_CLAMPING = boolParam("debug_enable_direct_history_clamping", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ANTI_FIREFLY = boolParam("debug_enable_direct_anti_firefly", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
+   // Performance tuning — Quality profile and per-parameter overrides.
+   // A value of -1 means "use shaderpack default" (auto).  Any positive
+   // value overrides the shaderpack setting at runtime.
+   public static final Parameter<String> QUALITY_PROFILE = stringParam("quality_profile", "custom");
+   public static final Parameter<Float> RENDER_SCALE = floatParam("render_scale", -1.0F);
+   public static final Parameter<Float> NRD_ATROUS_PASSES = floatParam("nrd_atrous_passes", -1.0F);
+   public static final Parameter<Float> RESTIR_INITIAL_SAMPLES = floatParam("restir_initial_samples", -1.0F);
+   public static final Parameter<Float> RESTIR_SPATIAL_SAMPLES = floatParam("restir_spatial_samples", -1.0F);
+   public static final Parameter<Float> RESTIR_GI_SPATIAL_SAMPLES = floatParam("restir_gi_spatial_samples", -1.0F);
+   public static final Parameter<Float> RESTIR_SPATIAL_RADIUS = floatParam("restir_spatial_radius", -1.0F);
+   public static final Parameter<Float> RESTIR_SPATIAL_BIAS_MODE = floatParam("restir_spatial_bias_mode", -1.0F);
    public static final Parameter<Boolean> DEBUG_CONSTANT_ALBEDO = boolParam("debug_constant_albedo", false);
    public static final Parameter<Boolean> OILIFY_ENABLED = boolParam("oilify_enabled", false);
    public static final Parameter<Float> OILIFY_SIZE = floatParam("oilify_size", 7.0F);

@@ -9,6 +9,7 @@ layout(location = 3) out vec4 indirect_frag_out;
 layout(location = 4) out vec4 indirect_variance_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/common/light_blend_regions.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
 
@@ -82,7 +83,9 @@ void lt_accumulate_direct(
         get_taa_jitter()
     );
 
-    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
+    float localLightBlend = ph_dirty_region_factor(currentPosition);
+    bool lightReloadActive = (light_reload && (ph_debug_disable_temporal_reset < 0.5f))
+        || localLightBlend > 0.0f;
     bool canReproject = lt_is_valid_reprojection(reprojectionUv, currentPosition, currentNormal);
     if (lightReloadActive || !canReproject) {
         vec2 currentMoments = lt_compute_moments(currentDirect);

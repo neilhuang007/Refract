@@ -1,5 +1,6 @@
 package at.redi2go.photonic.client.mixin;
 
+import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.UniformPatcher;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
@@ -181,7 +182,7 @@ public abstract class ShaderPackMixin {
       @Local(name = "newEnvDefines") List<StringPair> newEnvDefines
    ) {
       PhotonicsProperties properties = (PhotonicsProperties)this.shaderProperties;
-      floatDefine(newEnvDefines, "PH_RENDER_SCALE", properties.getRenderScale());
+      floatDefine(newEnvDefines, "PH_RENDER_SCALE", PhotonicsStorage.RENDER_SCALE.value >= 0 ? PhotonicsStorage.RENDER_SCALE.value : properties.getRenderScale());
       intDefine(newEnvDefines, "PH_MAX_LIGHTS", properties.getMaxLights());
       properties.getAlphaMode().registerDefines(newEnvDefines);
       if (properties.isGiEnabled().orElse(true)) {
@@ -199,15 +200,15 @@ public abstract class ShaderPackMixin {
       intDefine(newEnvDefines, "PH_LIGHTING_MODE", 2);
       intDefine(newEnvDefines, "PH_LIGHTTREE_INITIAL_SAMPLES", properties.getLightTreeInitialSamples());
       intDefine(newEnvDefines, "PH_RESTIR_INITIAL_SAMPLES", properties.getLightTreeInitialSamples());
-      intDefine(newEnvDefines, "PH_LIGHTTREE_SPATIAL_REUSE_SAMPLES", properties.getLightTreeSpatialReuseSamples());
-      intDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_SAMPLES", properties.getLightTreeSpatialReuseSamples());
-      floatDefine(newEnvDefines, "PH_LIGHTTREE_SPATIAL_REUSE_RADIUS", properties.getLightTreeSpatialReuseRadius());
-      floatDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_RADIUS", properties.getLightTreeSpatialReuseRadius());
+      intDefine(newEnvDefines, "PH_LIGHTTREE_SPATIAL_REUSE_SAMPLES", PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value >= 0 ? (int) PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value.floatValue() : properties.getLightTreeSpatialReuseSamples());
+      intDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_SAMPLES", PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value >= 0 ? (int) PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value.floatValue() : properties.getLightTreeSpatialReuseSamples());
+      floatDefine(newEnvDefines, "PH_LIGHTTREE_SPATIAL_REUSE_RADIUS", PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value >= 0 ? PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value : properties.getLightTreeSpatialReuseRadius());
+      floatDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_RADIUS", PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value >= 0 ? PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value : properties.getLightTreeSpatialReuseRadius());
       intDefine(newEnvDefines, "PH_LIGHTTREE_ACCUMULATION_FRAMES", properties.getLightTreeAccumulationFrames());
       intDefine(newEnvDefines, "PH_RESTIR_ACCUMULATION_FRAMES", properties.getLightTreeAccumulationFrames());
       intDefine(newEnvDefines, "PH_LIGHTTREE_DENOISER_PASSES", properties.getLightTreeDenoiserPasses());
       intDefine(newEnvDefines, "PH_RESTIR_DENOISER_PASSES", properties.getLightTreeDenoiserPasses());
-      intDefine(newEnvDefines, "PH_NRD_ATROUS_PASSES", properties.getNrdAtrousPasses());
+      intDefine(newEnvDefines, "PH_NRD_ATROUS_PASSES", PhotonicsStorage.NRD_ATROUS_PASSES.value >= 0 ? Math.max(1, (int) PhotonicsStorage.NRD_ATROUS_PASSES.value.floatValue()) : properties.getNrdAtrousPasses());
       if (properties.useLightTreeSoftShadows().orElse(false)) {
          stringDefine(newEnvDefines, "PH_LIGHTTREE_SOFT_SHADOWS", "");
          stringDefine(newEnvDefines, "PH_RESTIR_SOFT_SHADOWS", "");

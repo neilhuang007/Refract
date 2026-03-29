@@ -7,9 +7,11 @@ layout(location = 1) out vec4 reservoir_sample_frag_out;
 layout(location = 2) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/common/light_blend_regions.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 
 uniform float ph_debug_disable_temporal_reset;
+uniform float ph_debug_enable_direct_temporal_reuse;
 
 // Runtime bias correction mode — matches RTXDI TemporalResampling.hlsli lines 173-212.
 // Corresponds to RTXDI_DITemporalResamplingParameters::biasCorrectionMode (ReSTIRDIParameters.h line 96).
@@ -123,15 +125,16 @@ void main() {
 
     // ENGINE-SPECIFIC EXTENSION (Fix #11): if the light list / world offset has just
     // been reloaded, previous-frame reservoir replay data is not trustworthy in this port.
-    // RTXDI assumes the bridge has already made previous-frame light/sample state stable
-    // enough for RAB_TranslateLightIndex to be meaningful across frames. During a full
-    // Photonics light reload, discarding temporal history here is the correct equivalent.
-    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
+    // Regional light-blend invalidation must also block temporal reuse for affected pixels,
+    // otherwise direct reservoirs mix stale light selections from the previous light set.
+    float localLightBlend = ph_dirty_region_factor(currentSurface.worldPos);
+    bool lightReloadActive = (light_reload && (ph_debug_disable_temporal_reset < 0.5f))
+        || localLightBlend > 0.0f;
 
     // RTXDI temporal resampling executes unconditionally on stable frames. The only history
     // gate here is the engine-side reload guard above; otherwise previous-frame remapping
     // follows TemporalResampling.hlsli line-for-line.
-    if (!lightReloadActive) {
+    if (!lightReloadActive && ph_debug_enable_direct_temporal_reuse >= 0.5) {
         // Step 4: Backproject using per-pixel motion vectors (RTXDI lines 57-67).
         vec3 motion = texelFetch(radiosity_motion, pixelPosition, 0).xyz;
 

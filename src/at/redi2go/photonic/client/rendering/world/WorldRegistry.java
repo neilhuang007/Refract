@@ -3,6 +3,7 @@ package at.redi2go.photonic.client.rendering.world;
 import at.redi2go.photonic.client.BlockRegistry;
 import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.PhotonicsStorage;
+import at.redi2go.photonic.client.config.lights.BlockLightInfo;
 import at.redi2go.photonic.client.rendering.MinecraftAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.opengl.rendering.IRenderDispatcher;
@@ -29,6 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -117,6 +120,8 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    );
    private final Set<PChunkPos> pendingChunkSet = new HashSet<>();
    private final Set<BlockPos> pendingBlockUpdates = ConcurrentHashMap.newKeySet();
+   private final Map<BlockPos, BlockUpdateSnapshot> pendingBlockSnapshots = new ConcurrentHashMap<>();
+   private final Set<BlockPos> pendingLightBlockUpdates = ConcurrentHashMap.newKeySet();
    private final AtomicBoolean blockUpdateFlushQueued = new AtomicBoolean(false);
    private final Map<PChunkPos, Integer> recentlyVisibleRtChunks = new HashMap<>();
    private static final int CHUNK_LOAD_BUDGET = 256;
@@ -964,14 +969,27 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    public void queueBlockUpdate(BlockPos blockPos) {
-      this.queueSingleBlockUpdate(blockPos);
+      ClientWorld level = MinecraftAccessor.getLevel();
+      this.queueBlockUpdate(blockPos, this.captureBlockStateSnapshot(level, blockPos));
+   }
+
+   public void queueBlockUpdate(BlockPos blockPos, BlockState blockState) {
+      ClientWorld level = MinecraftAccessor.getLevel();
+      this.queueSingleBlockUpdate(this.captureBlockUpdateSnapshot(level, blockPos, blockState, true), true);
       for (Direction face : FACES) {
-         this.queueSingleBlockUpdate(blockPos.offset(face));
+         BlockPos neighborPos = blockPos.offset(face);
+         BlockState neighborState = this.captureBlockStateSnapshot(level, neighborPos);
+         this.queueSingleBlockUpdate(this.captureBlockUpdateSnapshot(level, neighborPos, neighborState, false), false);
       }
    }
 
-   private void queueSingleBlockUpdate(BlockPos blockPos) {
-      this.pendingBlockUpdates.add(blockPos.toImmutable());
+   private void queueSingleBlockUpdate(BlockUpdateSnapshot snapshot, boolean refreshLight) {
+      BlockPos blockPos = snapshot.blockPos();
+      this.pendingBlockUpdates.add(blockPos);
+      this.pendingBlockSnapshots.put(blockPos, snapshot);
+      if (refreshLight) {
+         this.pendingLightBlockUpdates.add(blockPos);
+      }
       if (this.blockUpdateFlushQueued.compareAndSet(false, true)) {
          this.buildQueue.add(this::flushPendingBlockUpdates);
          this.wakeUpWorldBuilder();
@@ -986,13 +1004,21 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       }
 
       this.pendingBlockUpdates.removeAll(pendingUpdates);
+      Set<BlockPos> lightUpdates = new HashSet<>(this.pendingLightBlockUpdates);
+      this.pendingLightBlockUpdates.removeAll(lightUpdates);
       pendingUpdates.sort(Comparator
          .comparingInt(BlockPos::getX)
          .thenComparingInt(BlockPos::getY)
          .thenComparingInt(BlockPos::getZ));
       this.blockUpdateFlushQueued.set(false);
       for (BlockPos blockPos : pendingUpdates) {
-         this.refreshBlock(blockPos);
+         boolean refreshLight = lightUpdates.contains(blockPos);
+         BlockUpdateSnapshot snapshot = this.pendingBlockSnapshots.remove(blockPos);
+         if (snapshot == null) {
+            ClientWorld level = MinecraftAccessor.getLevel();
+            snapshot = this.captureBlockUpdateSnapshot(level, blockPos, this.captureBlockStateSnapshot(level, blockPos), refreshLight);
+         }
+         this.refreshBlock(snapshot, refreshLight);
       }
       if (!this.pendingBlockUpdates.isEmpty() && this.blockUpdateFlushQueued.compareAndSet(false, true)) {
          this.buildQueue.add(this::flushPendingBlockUpdates);
@@ -1019,12 +1045,13 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       }
    }
 
-   private void refreshBlock(BlockPos blockPos) {
+   private void refreshBlock(BlockUpdateSnapshot snapshot, boolean refreshLight) {
       ClientWorld level = MinecraftAccessor.getLevel();
       if (level == null) {
          return;
       }
 
+      BlockPos blockPos = snapshot.blockPos();
       PChunkPos chunkPos = new PChunkPos(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
       if (!this.shouldKeepChunkForRt(chunkPos)) {
          return;
@@ -1039,20 +1066,19 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return;
       }
 
-      if (this.refreshChunkBlock(level, chunkPos, chunk, blockPos)) {
+      if (this.refreshChunkBlock(level, chunkPos, chunk, blockPos, snapshot.blockState())) {
          this.markLightBlendBlock(blockPos);
       }
-      if (this.blockLightEnabled) {
-         this.lightRegistry.onBlockUpdate(blockPos);
+      if (refreshLight && this.blockLightEnabled) {
+         this.lightRegistry.onBlockUpdate(blockPos, snapshot.blockState(), snapshot.lightInfo());
       }
    }
 
-   private boolean refreshChunkBlock(ClientWorld level, PChunkPos chunkPos, WorldChunk chunk, BlockPos blockPos) {
+   private boolean refreshChunkBlock(ClientWorld level, PChunkPos chunkPos, WorldChunk chunk, BlockPos blockPos, BlockState blockState) {
       int localX = Math.floorMod(blockPos.getX(), 16);
       int localY = Math.floorMod(blockPos.getY(), 16);
       int localZ = Math.floorMod(blockPos.getZ(), 16);
-      PBlockPos rtBlockPos = new PBlockPos(blockPos.getX(), blockPos.getY(), blockPos.getZ());
-      PBlock block = this.blockRegistry.getBlock(rtBlockPos);
+      PBlock block = this.blockRegistry.getBlock(blockState);
       if (block != null && (!block.isUsed() || !block.isAllocated())) {
          synchronized (block) {
             this.blockRegistry.ensureAllocated(block);
@@ -1065,6 +1091,27 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       ChunkLightingView skyLightView = level.getLightingProvider().get(LightType.SKY);
       int skyBrightness = block == null ? -1 : this.computeSkyBrightness(skyLightView, blockPos);
       return chunk.set(localX, localY, localZ, block, skyBrightness);
+   }
+
+   private BlockUpdateSnapshot captureBlockUpdateSnapshot(ClientWorld level, BlockPos blockPos, BlockState blockState, boolean refreshLight) {
+      BlockPos immutablePos = blockPos.toImmutable();
+      BlockLightInfo lightInfo = null;
+      if (refreshLight && this.blockLightEnabled) {
+         lightInfo = this.lightRegistry.resolveLightInfo(immutablePos, blockState, level);
+      }
+      return new BlockUpdateSnapshot(immutablePos, blockState, lightInfo);
+   }
+
+   private BlockState captureBlockStateSnapshot(ClientWorld level, BlockPos blockPos) {
+      if (level == null || !level.isChunkLoaded(blockPos)) {
+         return Blocks.AIR.getDefaultState();
+      }
+
+      try {
+         return level.getBlockState(blockPos);
+      } catch (Exception ignored) {
+         return Blocks.AIR.getDefaultState();
+      }
    }
 
    private int computeSkyBrightness(ChunkLightingView skyLightView, BlockPos blockPos) {
@@ -1555,6 +1602,9 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       int z = direction.getVector().getZ();
       int index = (int)(Math.abs(x) * (x * 0.5 + 0.5) + Math.abs(y) * (y * 0.5 + 2.5) + Math.abs(z) * (z * 0.5 + 4.5) + 0.5);
       return Math.max(0, Math.min(5, index));
+   }
+
+   private record BlockUpdateSnapshot(BlockPos blockPos, BlockState blockState, BlockLightInfo lightInfo) {
    }
 
    static {

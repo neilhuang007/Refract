@@ -19,6 +19,7 @@ layout(location = 2) out vec4 reservoir_meta_frag_out;
 // SDK default (ReSTIRDI.cpp line 79): BASIC (1). When unbound (0.0), use BASIC.
 // Use sentinel: -1.0 to explicitly request OFF; 0.0 (unbound) falls back to SDK default BASIC.
 uniform float ph_restir_spatial_bias_mode;
+uniform float ph_debug_enable_direct_spatial_reuse;
 
 // SDK defaults from GetDefaultReSTIRDISpatialResamplingParams() (ReSTIRDI.cpp lines 74-87):
 //   discountNaiveSamples        = true   (SDK default; prevents over-weighting fresh samples)
@@ -121,6 +122,12 @@ void main() {
     // or the non-pairwise path can still produce a valid merged result.
     Reservoir centerSample = rtxdi_empty_reservoir();
     lt_load_direct_temporal_reservoir(centerReservoirPos, centerSurface, centerSample);
+    if (ph_debug_enable_direct_spatial_reuse < 0.5) {
+        reservoir_frag_out = rtxdi_pack_reservoir(centerSample);
+        reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(centerSample);
+        reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(centerSample);
+        return;
+    }
 
     // Spatial bias correction mode from runtime uniform.
     // SDK default (ReSTIRDI.cpp line 79): BASIC (1).

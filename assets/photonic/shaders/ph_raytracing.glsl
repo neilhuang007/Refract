@@ -29,6 +29,7 @@ bool breakOnEmpty = false;
 float ray_min_trace_distance = 0.0f;
 float ray_max_trace_distance = -1.0f;
 int ray_ignore_block_id = -1;
+bool ray_stop_on_target = false;
 
 vec3 lightEmittance = vec3(0.0f);
 
@@ -123,9 +124,12 @@ void trace_ray(inout RayJob job, bool transparency) {
             }
         }
 
-        // RTXDI visibility rays are bounded by [TMin, TMax] only. Do not quantize them to a
-        // target voxel/block stop condition; that reintroduces cell-shaped lighting artifacts.
-        if (ray_max_trace_distance <= 0.0f && !before_min_trace_distance && (job.result_hit = block_position == ray_target)) { // ray target reached?
+        bool targetReached = !before_min_trace_distance
+            && all(equal(block_position, ray_target))
+            && (ray_max_trace_distance <= 0.0f || ray_stop_on_target);
+        if (targetReached) { // ray target reached?
+            job.result_hit = true;
+            result_block_id = -1;
             break;
         }
         if (ray_constraint != ivec3(-9999) && block_position != ray_constraint)
@@ -163,81 +167,92 @@ void trace_ray(inout RayJob job, bool transparency) {
             }
 
             if (block_index != -1) { // found block
-                ivec3 voxel_pos = w & 15;
-                new_index.z = voxel_index + ph_get_index(voxel_pos);
-                if (new_index.z != old_index.z) {
-                    entries.z = cb_array[new_index.z];
+                bool ignoreTargetHostBlock = ray_ignore_block_id >= 0
+                    && ray_max_trace_distance > 0.0f
+                    && all(equal(block_position, ray_target))
+                    && result_block_id == ray_ignore_block_id;
 
-                    if (breakOnEmpty && entries.z == 519536640) {
-                        job.result_hit = false;
-                        entries.z = -0;
+                if (ignoreTargetHostBlock) {
+                    scale = 4;
+                    entry = ph_to_fake_air_entry(block_pos);
+                } else {
+                    ivec3 voxel_pos = w & 15;
+                    new_index.z = voxel_index + ph_get_index(voxel_pos);
+                    if (new_index.z != old_index.z) {
+                        entries.z = cb_array[new_index.z];
 
-                        break;
-                    }
-                }
+                        if (breakOnEmpty && entries.z == 519536640) {
+                            job.result_hit = false;
+                            entries.z = -0;
 
-                if (entries.z < 0) { // found bloxel
-                    if (before_min_trace_distance) {
-                        #ifdef PH_FULL_TRANSPARENCY
-                        scale = 0;
-                        entry = ph_to_fake_air_entry(voxel_pos);
-                        #else
-                        scale = 4;
-                        entry = ph_to_fake_air_entry(block_pos);
-                        #endif
-                    } else if (ray_max_trace_distance > 0.0f
-                        && ray_ignore_block_id >= 0
-                        && block_position == ray_target
-                        && result_block_id == ray_ignore_block_id) {
-                        // RTXDI analytic point lights have no emitter geometry. In the voxel scene the
-                        // light lives inside a host block, so ignore only that specific block as the
-                        // ray endpoint instead of treating it as an occluder or short-circuiting on the
-                        // entire target cell.
-                        ray_distance_limit_reached = true;
-                        job.result_hit = false;
-                        break;
-                    #ifdef PH_USE_TRANSPARENCY
-                    } else if (!transparency || (-entries.z & 0x7f000000) == 0) {
-                        job.result_hit = true;
-                        break;
-                    } else {
-                        vec4 color = ph_unpack_color(-entries.z);
-                        if (previous_tint != color.rgb) {
-                            #if defined PH_USE_CUSTOM_ALPHA
-                            result_tint_color*= PH_ALPHA_FUNC(color);
-                            #else
-                            if (color.a > tint_darken_cutoff) {
-                                result_tint_color*= color.rgb *
-                                    (tint_darken_offset - (color.a - tint_darken_cutoff)) * tint_darken_factor;
-                            } else if (color.a > 0.5f) {
-                                result_tint_color*= color.rgb;
-                            } else {
-                                result_tint_color*= mix(
-                                    color.rgb,
-                                    vec3(1f),
-                                    1f - (color.a * 2f)
-                                );
-                            }
-                            #endif
-
-                            previous_tint = color.rgb;
+                            break;
                         }
+                    }
 
-                        #ifdef PH_FULL_TRANSPARENCY
-                        scale = 0;
-                        entry = ph_to_fake_air_entry(voxel_pos);
+                    if (entries.z < 0) { // found bloxel
+                        if (before_min_trace_distance) {
+                            #ifdef PH_FULL_TRANSPARENCY
+                            scale = 0;
+                            entry = ph_to_fake_air_entry(voxel_pos);
+                            #else
+                            scale = 4;
+                            entry = ph_to_fake_air_entry(block_pos);
+                            #endif
+                        #ifdef PH_USE_TRANSPARENCY
+                        } else if (!transparency) {
+                            job.result_hit = true;
+                            break;
+                        } else {
+                            int packedColor = -entries.z;
+                            int packedTransparencySteps = (packedColor >> 24) & 0x7f;
+
+                            // The block voxelizer stores alpha in 7 bits. Treat voxels that land one
+                            // quantization step away from fully opaque as opaque here so tiny alpha loss
+                            // from filtering / blended model layers doesn't leak tinted background light
+                            // through walls and other nearly-opaque surfaces.
+                            if (packedTransparencySteps <= 1) {
+                                job.result_hit = true;
+                                break;
+                            }
+
+                            vec4 color = ph_unpack_color(packedColor);
+                            if (previous_tint != color.rgb) {
+                                #if defined PH_USE_CUSTOM_ALPHA
+                                result_tint_color*= PH_ALPHA_FUNC(color);
+                                #else
+                                if (color.a > tint_darken_cutoff) {
+                                    result_tint_color*= color.rgb *
+                                        (tint_darken_offset - (color.a - tint_darken_cutoff)) * tint_darken_factor;
+                                } else if (color.a > 0.5f) {
+                                    result_tint_color*= color.rgb;
+                                } else {
+                                    result_tint_color*= mix(
+                                        color.rgb,
+                                        vec3(1f),
+                                        1f - (color.a * 2f)
+                                    );
+                                }
+                                #endif
+
+                                previous_tint = color.rgb;
+                            }
+
+                            #ifdef PH_FULL_TRANSPARENCY
+                            scale = 0;
+                            entry = ph_to_fake_air_entry(voxel_pos);
+                            #else
+                            scale = 4;
+                            entry = ph_to_fake_air_entry(block_pos);
+                            #endif
+                        }
                         #else
-                        scale = 4;
-                        entry = ph_to_fake_air_entry(block_pos);
+                        } else {
+                            job.result_hit = true;
+                            break;
+                        }
                         #endif
-                    }
-                    #else
-                    } else {
-                        job.result_hit = true;
-                        break;
-                    }
-                    #endif
-                } else { scale = 0; entry = entries.z; }
+                    } else { scale = 0; entry = entries.z; }
+                }
             } else { scale = 4; entry = entries.y; }
         } else { scale = 8; entry = entries.x; }
 
@@ -340,6 +355,7 @@ void trace_ray(inout RayJob job, bool transparency) {
 
     ray_target = ivec3(-1);
     ray_ignore_block_id = -1;
+    ray_stop_on_target = false;
 }
 
 void trace_ray(inout RayJob job) { trace_ray(job, false); }

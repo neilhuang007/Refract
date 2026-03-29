@@ -59,8 +59,8 @@ void main() {
     vec3 centerGeometryNormal = nrd_safe_normal(texelFetch(radiosity_normal, tex_coord, 0).xyz);
     vec3 centerMappedNormal = nrd_select_surface_normal(centerGeometryNormal, texelFetch(radiosity_mapped_normal, tex_coord, 0).xyz);
 
-    // NRD RELAX: specular confidence from channel G
-    float specConfidence = texelFetch(spec_confidence_input, tex_coord, 0).g;
+    // NRD RELAX uses the temporal reprojection confidence to tune specular edge stopping.
+    float specReprojectionConfidence = clamp(texelFetch(spec_reprojection_confidence_input, tex_coord, 0).r, 0.0, 1.0);
 
     // NRD RELAX: view vector for specular normal weight (RELAX_Atrous.cs.hlsl:132)
     vec3 centerV = -normalize(centerPosition - world_camera_position);
@@ -73,7 +73,7 @@ void main() {
     // NRD RELAX: full specular normal weight params with roughness-aware cone (RELAX_Atrous.cs.hlsl:83-90)
     float specLobeAngleFraction = spec_lobe_angle_fraction;
     vec2 specNormalWeightParams = nrd_spec_normal_weight_params_atrous(
-        centerRoughness, historyLength, specConfidence,
+        centerRoughness, historyLength, specReprojectionConfidence,
         gNormalEdgeStoppingRelaxation, specLobeAngleFraction, gSpecLobeAngleSlack
     );
 
@@ -85,7 +85,7 @@ void main() {
     // Low confidence → relaxation closer to 1.0 → stricter; high confidence → closer to specConfidence
     float specLuminanceWeightRelaxation = 1.0;
     if (direct_atrous_step_size <= 4)
-        specLuminanceWeightRelaxation = mix(1.0, specConfidence, gConfidenceDrivenLuminanceRelaxation);
+        specLuminanceWeightRelaxation = mix(1.0, specReprojectionConfidence, gConfidenceDrivenLuminanceRelaxation);
 
     float centerWeight = gaussian3x3[0] * gaussian3x3[0];
     vec3 sumColor = centerColor * centerWeight;

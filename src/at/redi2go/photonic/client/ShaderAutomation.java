@@ -28,6 +28,11 @@ import org.lwjgl.opengl.GL30;
 
 public final class ShaderAutomation {
    private static final int MAX_REPEAT_DIAGNOSTICS = 5;
+   private static final int RTXDI_PACKED_DI_RESERVOIR_M_SHIFT = 18;
+   private static final int RTXDI_PACKED_DI_RESERVOIR_MAX_M_UINT = 0x3fff;
+   private static final double FIREFLY_LUMA_THRESHOLD = 16.0;
+   private static final double SEVERE_FIREFLY_LUMA_THRESHOLD = 64.0;
+   private static final float FP16_SATURATION_CHANNEL_THRESHOLD = 65500.0f;
    private static final AtomicBoolean FATAL_SHADER_FAILURE_SCHEDULED = new AtomicBoolean(false);
    private static final ShaderAutomation INSTANCE = Photonic.automationEnabled() ? new ShaderAutomation() : null;
    private final String worldName;
@@ -93,6 +98,22 @@ public final class ShaderAutomation {
    private double latestDirectMeanLuma = 0.0;
    private double latestDirectDenoisedMeanLuma = 0.0;
    private double latestDirectRawMeanLuma = 0.0;
+   private double latestDirectRawLinearMeanLuma = 0.0;
+   private double latestDirectRawLinearMaxLuma = 0.0;
+   private double latestDirectRawLinearOverbrightFraction = 0.0;
+   private double latestDirectRawLinearFireflyFraction = 0.0;
+   private double latestDirectRawLinearSevereFireflyFraction = 0.0;
+   private double latestDirectRawLinearFireflyLumaShare = 0.0;
+   private double latestDirectRawLinearSaturatedPixelFraction = 0.0;
+   private double latestDirectRawLinearNonFiniteFraction = 0.0;
+   private double latestDirectDenoisedLinearMeanLuma = 0.0;
+   private double latestDirectDenoisedLinearMaxLuma = 0.0;
+   private double latestDirectDenoisedLinearOverbrightFraction = 0.0;
+   private double latestDirectDenoisedLinearFireflyFraction = 0.0;
+   private double latestDirectDenoisedLinearSevereFireflyFraction = 0.0;
+   private double latestDirectDenoisedLinearFireflyLumaShare = 0.0;
+   private double latestDirectDenoisedLinearSaturatedPixelFraction = 0.0;
+   private double latestDirectDenoisedLinearNonFiniteFraction = 0.0;
    private double latestLightingMeanLuma = 0.0;
    private double latestStageLightingMeanLuma = 0.0;
    private double latestStageIndirectMeanLuma = 0.0;
@@ -101,9 +122,38 @@ public final class ShaderAutomation {
    private double latestIndirectRawLinearMeanLuma = 0.0;
    private double latestIndirectRawLinearMaxLuma = 0.0;
    private double latestIndirectRawLinearOverbrightFraction = 0.0;
+   private double latestIndirectRawLinearFireflyFraction = 0.0;
+   private double latestIndirectRawLinearSevereFireflyFraction = 0.0;
+   private double latestIndirectRawLinearFireflyLumaShare = 0.0;
+   private double latestIndirectRawLinearSaturatedPixelFraction = 0.0;
+   private double latestIndirectRawLinearNonFiniteFraction = 0.0;
    private double latestStageIndirectLinearMeanLuma = 0.0;
    private double latestStageIndirectLinearMaxLuma = 0.0;
    private double latestStageIndirectLinearOverbrightFraction = 0.0;
+   private double latestIndirectLinearMeanLuma = 0.0;
+   private double latestIndirectLinearMaxLuma = 0.0;
+   private double latestIndirectLinearOverbrightFraction = 0.0;
+   private double latestIndirectLinearFireflyFraction = 0.0;
+   private double latestIndirectLinearSevereFireflyFraction = 0.0;
+   private double latestIndirectLinearFireflyLumaShare = 0.0;
+   private double latestIndirectLinearSaturatedPixelFraction = 0.0;
+   private double latestIndirectLinearNonFiniteFraction = 0.0;
+   private double latestSpecRawLinearMeanLuma = 0.0;
+   private double latestSpecRawLinearMaxLuma = 0.0;
+   private double latestSpecRawLinearOverbrightFraction = 0.0;
+   private double latestSpecRawLinearFireflyFraction = 0.0;
+   private double latestSpecRawLinearSevereFireflyFraction = 0.0;
+   private double latestSpecRawLinearFireflyLumaShare = 0.0;
+   private double latestSpecRawLinearSaturatedPixelFraction = 0.0;
+   private double latestSpecRawLinearNonFiniteFraction = 0.0;
+   private double latestSpecDenoisedLinearMeanLuma = 0.0;
+   private double latestSpecDenoisedLinearMaxLuma = 0.0;
+   private double latestSpecDenoisedLinearOverbrightFraction = 0.0;
+   private double latestSpecDenoisedLinearFireflyFraction = 0.0;
+   private double latestSpecDenoisedLinearSevereFireflyFraction = 0.0;
+   private double latestSpecDenoisedLinearFireflyLumaShare = 0.0;
+   private double latestSpecDenoisedLinearSaturatedPixelFraction = 0.0;
+   private double latestSpecDenoisedLinearNonFiniteFraction = 0.0;
    private double latestDirectMeanRed = 0.0;
    private double latestDirectMeanGreen = 0.0;
    private double latestDirectMeanBlue = 0.0;
@@ -180,10 +230,14 @@ public final class ShaderAutomation {
    private double directDenoiserGainSum = 0.0;
    private double directDenoiserGainMax = 0.0;
    private int directDenoiserGainSamples = 0;
+   private double specDenoiserGainSum = 0.0;
+   private double specDenoiserGainMax = 0.0;
+   private int specDenoiserGainSamples = 0;
    private double indirectResolveGainSum = 0.0;
    private double indirectResolveGainMax = 0.0;
    private int indirectResolveGainSamples = 0;
    private double latestDirectDenoiserGain = 0.0;
+   private double latestSpecDenoiserGain = 0.0;
    private double latestIndirectResolveGain = 0.0;
    private int cameraMotionStopActiveTick = -1;
    private int postMotionDropSamples = 0;
@@ -471,7 +525,7 @@ public final class ShaderAutomation {
          int base = i * 4;
          int lightData = Float.floatToRawIntBits(pixels[base]);
          float weight = pixels[base + 1];
-         int reservoirM = Math.max(0, Math.round(pixels[base + 3]));
+         int reservoirM = decodePackedReservoirM(pixels[base + 3]);
          if (lightData != 0) {
             lightValidPixels++;
          }
@@ -487,6 +541,71 @@ public final class ShaderAutomation {
          strictValidPixels / (double)pixelCount,
          weightSum / pixelCount,
          mSum / pixelCount
+      );
+   }
+
+   static int decodePackedReservoirM(float packedVisibilityAndM) {
+      int packed = Float.floatToRawIntBits(packedVisibilityAndM);
+      return (packed >>> RTXDI_PACKED_DI_RESERVOIR_M_SHIFT) & RTXDI_PACKED_DI_RESERVOIR_MAX_M_UINT;
+   }
+
+   private static FireflyStats computeFireflyStats(TextureObject texture) {
+      if (texture == null) {
+         return FireflyStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      return computeFireflyStats(texture.downloadFloatData());
+   }
+
+   static FireflyStats computeFireflyStats(float[] pixels) {
+      if (pixels == null || pixels.length < 4) {
+         return FireflyStats.EMPTY;
+      }
+
+      int pixelCount = pixels.length / 4;
+      int fireflyPixels = 0;
+      int severeFireflyPixels = 0;
+      int saturatedPixels = 0;
+      int nonFinitePixels = 0;
+      double totalLuma = 0.0;
+      double fireflyLuma = 0.0;
+      for (int i = 0; i < pixelCount; i++) {
+         int base = i * 4;
+         float r = pixels[base];
+         float g = pixels[base + 1];
+         float b = pixels[base + 2];
+         if (!Float.isFinite(r) || !Float.isFinite(g) || !Float.isFinite(b)) {
+            nonFinitePixels++;
+            continue;
+         }
+
+         double clampedR = Math.max(r, 0.0f);
+         double clampedG = Math.max(g, 0.0f);
+         double clampedB = Math.max(b, 0.0f);
+         double luma = 0.2126 * clampedR + 0.7152 * clampedG + 0.0722 * clampedB;
+         totalLuma += luma;
+         if (luma >= FIREFLY_LUMA_THRESHOLD) {
+            fireflyPixels++;
+            fireflyLuma += luma;
+         }
+         if (luma >= SEVERE_FIREFLY_LUMA_THRESHOLD) {
+            severeFireflyPixels++;
+         }
+         if (r >= FP16_SATURATION_CHANNEL_THRESHOLD
+            || g >= FP16_SATURATION_CHANNEL_THRESHOLD
+            || b >= FP16_SATURATION_CHANNEL_THRESHOLD) {
+            saturatedPixels++;
+         }
+      }
+
+      double pixelCountDouble = Math.max(1, pixelCount);
+      return new FireflyStats(
+         fireflyPixels / pixelCountDouble,
+         severeFireflyPixels / pixelCountDouble,
+         totalLuma <= 1.0e-12 ? 0.0 : fireflyLuma / totalLuma,
+         saturatedPixels / pixelCountDouble,
+         nonFinitePixels / pixelCountDouble
       );
    }
 
@@ -778,6 +897,8 @@ public final class ShaderAutomation {
          TextureObject directSoftTexture = textures.get("direct_soft");
          TextureObject directDenoisedTexture = textures.get("direct_denoised");
          TextureObject directRawTexture = textures.get("direct_raw");
+         TextureObject specDenoisedTexture = textures.get("spec_denoised");
+         TextureObject specRawTexture = textures.get("spec_raw");
          TextureObject directTemporalReservoirTexture = textures.get("direct_temporal_reservoir");
          TextureObject directTemporalReservoirSampleTexture = textures.get("direct_temporal_reservoir_sample");
          TextureObject lightingTexture = textures.get("lighting");
@@ -795,6 +916,8 @@ public final class ShaderAutomation {
          BufferedImage directSoftImage = this.captureTexture("direct_soft", directSoftTexture, captureIndex);
          BufferedImage directDenoisedImage = this.captureTexture("direct_denoised", directDenoisedTexture, captureIndex);
          BufferedImage directRawImage = this.captureTexture("direct_raw", directRawTexture, captureIndex);
+         this.captureTexture("spec_denoised", specDenoisedTexture, captureIndex);
+         this.captureTexture("spec_raw", specRawTexture, captureIndex);
          this.captureTexture("direct_temporal_reservoir_sample", directTemporalReservoirSampleTexture, captureIndex);
          BufferedImage lightingImage = this.captureTexture("lighting", lightingTexture, captureIndex);
          this.captureTexture("stage_albedo", stageAlbedoTexture, captureIndex);
@@ -807,10 +930,26 @@ public final class ShaderAutomation {
          BufferedImage handheldImage = this.captureTexture("handheld", handheldTexture, captureIndex);
          BufferedImage indirectRawImage = this.captureTexture("indirect_raw", indirectRawTexture, captureIndex);
          BufferedImage indirectImage = this.captureTexture("indirect", indirectTexture, captureIndex);
+         TextureObject.TextureStats specRawLinearStats =
+            specRawTexture == null ? TextureObject.TextureStats.EMPTY : specRawTexture.readStats();
+         TextureObject.TextureStats specDenoisedLinearStats =
+            specDenoisedTexture == null ? TextureObject.TextureStats.EMPTY : specDenoisedTexture.readStats();
+         TextureObject.TextureStats directRawLinearStats =
+            directRawTexture == null ? TextureObject.TextureStats.EMPTY : directRawTexture.readStats();
+         TextureObject.TextureStats directDenoisedLinearStats =
+            directDenoisedTexture == null ? TextureObject.TextureStats.EMPTY : directDenoisedTexture.readStats();
          TextureObject.TextureStats indirectRawLinearStats =
             indirectRawTexture == null ? TextureObject.TextureStats.EMPTY : indirectRawTexture.readStats();
+         TextureObject.TextureStats indirectLinearStats =
+            indirectTexture == null ? TextureObject.TextureStats.EMPTY : indirectTexture.readStats();
          TextureObject.TextureStats stageIndirectLinearStats =
             stageIndirectTexture == null ? TextureObject.TextureStats.EMPTY : stageIndirectTexture.readStats();
+         FireflyStats directRawFireflyStats = computeFireflyStats(directRawTexture);
+         FireflyStats directDenoisedFireflyStats = computeFireflyStats(directDenoisedTexture);
+         FireflyStats specRawFireflyStats = computeFireflyStats(specRawTexture);
+         FireflyStats specDenoisedFireflyStats = computeFireflyStats(specDenoisedTexture);
+         FireflyStats indirectRawFireflyStats = computeFireflyStats(indirectRawTexture);
+         FireflyStats indirectFireflyStats = computeFireflyStats(indirectTexture);
          ReservoirDebugStats temporalReservoirStats = computeReservoirDebugStats(directTemporalReservoirTexture);
          DirectTemporalDebugStats temporalDebugStats = computeDirectTemporalDebugStats(directTemporalReservoirSampleTexture);
          ReservoirDebugStats resolvedReservoirStats = computeReservoirDebugStats(directResolvedReservoirTexture);
@@ -852,14 +991,59 @@ public final class ShaderAutomation {
          this.latestDirectMeanLuma = directStats[1];
          this.latestDirectDenoisedMeanLuma = directDenoisedStats[1];
          this.latestDirectRawMeanLuma = directRawStats[1];
+         this.latestDirectRawLinearMeanLuma = directRawLinearStats.meanLuma();
+         this.latestDirectRawLinearMaxLuma = directRawLinearStats.maxLuma();
+         this.latestDirectRawLinearOverbrightFraction = directRawLinearStats.overbrightFraction();
+         this.latestDirectRawLinearFireflyFraction = directRawFireflyStats.fireflyFraction();
+         this.latestDirectRawLinearSevereFireflyFraction = directRawFireflyStats.severeFireflyFraction();
+         this.latestDirectRawLinearFireflyLumaShare = directRawFireflyStats.fireflyLumaShare();
+         this.latestDirectRawLinearSaturatedPixelFraction = directRawFireflyStats.saturatedPixelFraction();
+         this.latestDirectRawLinearNonFiniteFraction = directRawFireflyStats.nonFiniteFraction();
+         this.latestDirectDenoisedLinearMeanLuma = directDenoisedLinearStats.meanLuma();
+         this.latestDirectDenoisedLinearMaxLuma = directDenoisedLinearStats.maxLuma();
+         this.latestDirectDenoisedLinearOverbrightFraction = directDenoisedLinearStats.overbrightFraction();
+         this.latestDirectDenoisedLinearFireflyFraction = directDenoisedFireflyStats.fireflyFraction();
+         this.latestDirectDenoisedLinearSevereFireflyFraction = directDenoisedFireflyStats.severeFireflyFraction();
+         this.latestDirectDenoisedLinearFireflyLumaShare = directDenoisedFireflyStats.fireflyLumaShare();
+         this.latestDirectDenoisedLinearSaturatedPixelFraction = directDenoisedFireflyStats.saturatedPixelFraction();
+         this.latestDirectDenoisedLinearNonFiniteFraction = directDenoisedFireflyStats.nonFiniteFraction();
          this.latestLightingMeanLuma = lightingStats[1];
          this.latestStageLightingMeanLuma = stageLightingStats[1];
          this.latestStageIndirectMeanLuma = stageIndirectStats[1];
          this.latestIndirectRawMeanLuma = indirectRawStats[1];
          this.latestIndirectMeanLuma = indirectStats[1];
+         this.latestSpecRawLinearMeanLuma = specRawLinearStats.meanLuma();
+         this.latestSpecRawLinearMaxLuma = specRawLinearStats.maxLuma();
+         this.latestSpecRawLinearOverbrightFraction = specRawLinearStats.overbrightFraction();
+         this.latestSpecRawLinearFireflyFraction = specRawFireflyStats.fireflyFraction();
+         this.latestSpecRawLinearSevereFireflyFraction = specRawFireflyStats.severeFireflyFraction();
+         this.latestSpecRawLinearFireflyLumaShare = specRawFireflyStats.fireflyLumaShare();
+         this.latestSpecRawLinearSaturatedPixelFraction = specRawFireflyStats.saturatedPixelFraction();
+         this.latestSpecRawLinearNonFiniteFraction = specRawFireflyStats.nonFiniteFraction();
+         this.latestSpecDenoisedLinearMeanLuma = specDenoisedLinearStats.meanLuma();
+         this.latestSpecDenoisedLinearMaxLuma = specDenoisedLinearStats.maxLuma();
+         this.latestSpecDenoisedLinearOverbrightFraction = specDenoisedLinearStats.overbrightFraction();
+         this.latestSpecDenoisedLinearFireflyFraction = specDenoisedFireflyStats.fireflyFraction();
+         this.latestSpecDenoisedLinearSevereFireflyFraction = specDenoisedFireflyStats.severeFireflyFraction();
+         this.latestSpecDenoisedLinearFireflyLumaShare = specDenoisedFireflyStats.fireflyLumaShare();
+         this.latestSpecDenoisedLinearSaturatedPixelFraction = specDenoisedFireflyStats.saturatedPixelFraction();
+         this.latestSpecDenoisedLinearNonFiniteFraction = specDenoisedFireflyStats.nonFiniteFraction();
          this.latestIndirectRawLinearMeanLuma = indirectRawLinearStats.meanLuma();
          this.latestIndirectRawLinearMaxLuma = indirectRawLinearStats.maxLuma();
          this.latestIndirectRawLinearOverbrightFraction = indirectRawLinearStats.overbrightFraction();
+         this.latestIndirectRawLinearFireflyFraction = indirectRawFireflyStats.fireflyFraction();
+         this.latestIndirectRawLinearSevereFireflyFraction = indirectRawFireflyStats.severeFireflyFraction();
+         this.latestIndirectRawLinearFireflyLumaShare = indirectRawFireflyStats.fireflyLumaShare();
+         this.latestIndirectRawLinearSaturatedPixelFraction = indirectRawFireflyStats.saturatedPixelFraction();
+         this.latestIndirectRawLinearNonFiniteFraction = indirectRawFireflyStats.nonFiniteFraction();
+         this.latestIndirectLinearMeanLuma = indirectLinearStats.meanLuma();
+         this.latestIndirectLinearMaxLuma = indirectLinearStats.maxLuma();
+         this.latestIndirectLinearOverbrightFraction = indirectLinearStats.overbrightFraction();
+         this.latestIndirectLinearFireflyFraction = indirectFireflyStats.fireflyFraction();
+         this.latestIndirectLinearSevereFireflyFraction = indirectFireflyStats.severeFireflyFraction();
+         this.latestIndirectLinearFireflyLumaShare = indirectFireflyStats.fireflyLumaShare();
+         this.latestIndirectLinearSaturatedPixelFraction = indirectFireflyStats.saturatedPixelFraction();
+         this.latestIndirectLinearNonFiniteFraction = indirectFireflyStats.nonFiniteFraction();
          this.latestStageIndirectLinearMeanLuma = stageIndirectLinearStats.meanLuma();
          this.latestStageIndirectLinearMaxLuma = stageIndirectLinearStats.maxLuma();
          this.latestStageIndirectLinearOverbrightFraction = stageIndirectLinearStats.overbrightFraction();
@@ -922,10 +1106,14 @@ public final class ShaderAutomation {
          }
          this.updatePostMotionDropMetrics();
          this.latestDirectDenoiserGain = computeRelativeImprovement(directRawStats[1], directDenoisedStats[1]);
+         this.latestSpecDenoiserGain = computeRelativeImprovement(this.latestSpecRawLinearMeanLuma, this.latestSpecDenoisedLinearMeanLuma);
          this.latestIndirectResolveGain = computeRelativeImprovement(stageIndirectStats[1], indirectStats[1]);
          this.directDenoiserGainSum += this.latestDirectDenoiserGain;
          this.directDenoiserGainMax = Math.max(this.directDenoiserGainMax, this.latestDirectDenoiserGain);
          this.directDenoiserGainSamples++;
+         this.specDenoiserGainSum += this.latestSpecDenoiserGain;
+         this.specDenoiserGainMax = Math.max(this.specDenoiserGainMax, this.latestSpecDenoiserGain);
+         this.specDenoiserGainSamples++;
          this.indirectResolveGainSum += this.latestIndirectResolveGain;
          this.indirectResolveGainMax = Math.max(this.indirectResolveGainMax, this.latestIndirectResolveGain);
          this.indirectResolveGainSamples++;
@@ -1049,11 +1237,65 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", temporalDebugStats.remapValidFraction()),
             String.format(Locale.ROOT, "%.5f", temporalDebugStats.positiveWeightFraction())
          );
-         Photonic.info("[Automation] denoise gain capture={} direct(latest={}, avg={}, max={}) indirect(latest={}, avg={}, max={})",
+         Photonic.info("[Automation] fireflies capture={} directRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) directDenoised(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) specRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) specDenoised(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) indirectRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) indirect(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={})",
+            this.capturesTaken,
+            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearNonFiniteFraction)
+         );
+         Photonic.info("[Automation] denoise gain capture={} direct(latest={}, avg={}, max={}) spec(latest={}, avg={}, max={}) indirect(latest={}, avg={}, max={})",
             this.capturesTaken,
             String.format(Locale.ROOT, "%.5f", this.latestDirectDenoiserGain),
             String.format(Locale.ROOT, "%.5f", this.directDenoiserGainSamples == 0 ? 0.0 : this.directDenoiserGainSum / this.directDenoiserGainSamples),
             String.format(Locale.ROOT, "%.5f", this.directDenoiserGainMax),
+            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoiserGain),
+            String.format(Locale.ROOT, "%.5f", this.specDenoiserGainSamples == 0 ? 0.0 : this.specDenoiserGainSum / this.specDenoiserGainSamples),
+            String.format(Locale.ROOT, "%.5f", this.specDenoiserGainMax),
             String.format(Locale.ROOT, "%.5f", this.latestIndirectResolveGain),
             String.format(Locale.ROOT, "%.5f", this.indirectResolveGainSamples == 0 ? 0.0 : this.indirectResolveGainSum / this.indirectResolveGainSamples),
             String.format(Locale.ROOT, "%.5f", this.indirectResolveGainMax));
@@ -1849,14 +2091,59 @@ public final class ShaderAutomation {
          props.setProperty("latestDirectMeanLuma", Double.toString(this.latestDirectMeanLuma));
          props.setProperty("latestDirectDenoisedMeanLuma", Double.toString(this.latestDirectDenoisedMeanLuma));
          props.setProperty("latestDirectRawMeanLuma", Double.toString(this.latestDirectRawMeanLuma));
+         props.setProperty("latestDirectRawLinearMeanLuma", Double.toString(this.latestDirectRawLinearMeanLuma));
+         props.setProperty("latestDirectRawLinearMaxLuma", Double.toString(this.latestDirectRawLinearMaxLuma));
+         props.setProperty("latestDirectRawLinearOverbrightFraction", Double.toString(this.latestDirectRawLinearOverbrightFraction));
+         props.setProperty("latestDirectRawLinearFireflyFraction", Double.toString(this.latestDirectRawLinearFireflyFraction));
+         props.setProperty("latestDirectRawLinearSevereFireflyFraction", Double.toString(this.latestDirectRawLinearSevereFireflyFraction));
+         props.setProperty("latestDirectRawLinearFireflyLumaShare", Double.toString(this.latestDirectRawLinearFireflyLumaShare));
+         props.setProperty("latestDirectRawLinearSaturatedPixelFraction", Double.toString(this.latestDirectRawLinearSaturatedPixelFraction));
+         props.setProperty("latestDirectRawLinearNonFiniteFraction", Double.toString(this.latestDirectRawLinearNonFiniteFraction));
+         props.setProperty("latestDirectDenoisedLinearMeanLuma", Double.toString(this.latestDirectDenoisedLinearMeanLuma));
+         props.setProperty("latestDirectDenoisedLinearMaxLuma", Double.toString(this.latestDirectDenoisedLinearMaxLuma));
+         props.setProperty("latestDirectDenoisedLinearOverbrightFraction", Double.toString(this.latestDirectDenoisedLinearOverbrightFraction));
+         props.setProperty("latestDirectDenoisedLinearFireflyFraction", Double.toString(this.latestDirectDenoisedLinearFireflyFraction));
+         props.setProperty("latestDirectDenoisedLinearSevereFireflyFraction", Double.toString(this.latestDirectDenoisedLinearSevereFireflyFraction));
+         props.setProperty("latestDirectDenoisedLinearFireflyLumaShare", Double.toString(this.latestDirectDenoisedLinearFireflyLumaShare));
+         props.setProperty("latestDirectDenoisedLinearSaturatedPixelFraction", Double.toString(this.latestDirectDenoisedLinearSaturatedPixelFraction));
+         props.setProperty("latestDirectDenoisedLinearNonFiniteFraction", Double.toString(this.latestDirectDenoisedLinearNonFiniteFraction));
          props.setProperty("latestLightingMeanLuma", Double.toString(this.latestLightingMeanLuma));
          props.setProperty("latestStageLightingMeanLuma", Double.toString(this.latestStageLightingMeanLuma));
          props.setProperty("latestStageIndirectMeanLuma", Double.toString(this.latestStageIndirectMeanLuma));
          props.setProperty("latestIndirectRawMeanLuma", Double.toString(this.latestIndirectRawMeanLuma));
          props.setProperty("latestIndirectMeanLuma", Double.toString(this.latestIndirectMeanLuma));
+         props.setProperty("latestSpecRawLinearMeanLuma", Double.toString(this.latestSpecRawLinearMeanLuma));
+         props.setProperty("latestSpecRawLinearMaxLuma", Double.toString(this.latestSpecRawLinearMaxLuma));
+         props.setProperty("latestSpecRawLinearOverbrightFraction", Double.toString(this.latestSpecRawLinearOverbrightFraction));
+         props.setProperty("latestSpecRawLinearFireflyFraction", Double.toString(this.latestSpecRawLinearFireflyFraction));
+         props.setProperty("latestSpecRawLinearSevereFireflyFraction", Double.toString(this.latestSpecRawLinearSevereFireflyFraction));
+         props.setProperty("latestSpecRawLinearFireflyLumaShare", Double.toString(this.latestSpecRawLinearFireflyLumaShare));
+         props.setProperty("latestSpecRawLinearSaturatedPixelFraction", Double.toString(this.latestSpecRawLinearSaturatedPixelFraction));
+         props.setProperty("latestSpecRawLinearNonFiniteFraction", Double.toString(this.latestSpecRawLinearNonFiniteFraction));
+         props.setProperty("latestSpecDenoisedLinearMeanLuma", Double.toString(this.latestSpecDenoisedLinearMeanLuma));
+         props.setProperty("latestSpecDenoisedLinearMaxLuma", Double.toString(this.latestSpecDenoisedLinearMaxLuma));
+         props.setProperty("latestSpecDenoisedLinearOverbrightFraction", Double.toString(this.latestSpecDenoisedLinearOverbrightFraction));
+         props.setProperty("latestSpecDenoisedLinearFireflyFraction", Double.toString(this.latestSpecDenoisedLinearFireflyFraction));
+         props.setProperty("latestSpecDenoisedLinearSevereFireflyFraction", Double.toString(this.latestSpecDenoisedLinearSevereFireflyFraction));
+         props.setProperty("latestSpecDenoisedLinearFireflyLumaShare", Double.toString(this.latestSpecDenoisedLinearFireflyLumaShare));
+         props.setProperty("latestSpecDenoisedLinearSaturatedPixelFraction", Double.toString(this.latestSpecDenoisedLinearSaturatedPixelFraction));
+         props.setProperty("latestSpecDenoisedLinearNonFiniteFraction", Double.toString(this.latestSpecDenoisedLinearNonFiniteFraction));
          props.setProperty("latestIndirectRawLinearMeanLuma", Double.toString(this.latestIndirectRawLinearMeanLuma));
          props.setProperty("latestIndirectRawLinearMaxLuma", Double.toString(this.latestIndirectRawLinearMaxLuma));
          props.setProperty("latestIndirectRawLinearOverbrightFraction", Double.toString(this.latestIndirectRawLinearOverbrightFraction));
+         props.setProperty("latestIndirectRawLinearFireflyFraction", Double.toString(this.latestIndirectRawLinearFireflyFraction));
+         props.setProperty("latestIndirectRawLinearSevereFireflyFraction", Double.toString(this.latestIndirectRawLinearSevereFireflyFraction));
+         props.setProperty("latestIndirectRawLinearFireflyLumaShare", Double.toString(this.latestIndirectRawLinearFireflyLumaShare));
+         props.setProperty("latestIndirectRawLinearSaturatedPixelFraction", Double.toString(this.latestIndirectRawLinearSaturatedPixelFraction));
+         props.setProperty("latestIndirectRawLinearNonFiniteFraction", Double.toString(this.latestIndirectRawLinearNonFiniteFraction));
+         props.setProperty("latestIndirectLinearMeanLuma", Double.toString(this.latestIndirectLinearMeanLuma));
+         props.setProperty("latestIndirectLinearMaxLuma", Double.toString(this.latestIndirectLinearMaxLuma));
+         props.setProperty("latestIndirectLinearOverbrightFraction", Double.toString(this.latestIndirectLinearOverbrightFraction));
+         props.setProperty("latestIndirectLinearFireflyFraction", Double.toString(this.latestIndirectLinearFireflyFraction));
+         props.setProperty("latestIndirectLinearSevereFireflyFraction", Double.toString(this.latestIndirectLinearSevereFireflyFraction));
+         props.setProperty("latestIndirectLinearFireflyLumaShare", Double.toString(this.latestIndirectLinearFireflyLumaShare));
+         props.setProperty("latestIndirectLinearSaturatedPixelFraction", Double.toString(this.latestIndirectLinearSaturatedPixelFraction));
+         props.setProperty("latestIndirectLinearNonFiniteFraction", Double.toString(this.latestIndirectLinearNonFiniteFraction));
          props.setProperty("latestStageIndirectLinearMeanLuma", Double.toString(this.latestStageIndirectLinearMeanLuma));
          props.setProperty("latestStageIndirectLinearMaxLuma", Double.toString(this.latestStageIndirectLinearMaxLuma));
          props.setProperty("latestStageIndirectLinearOverbrightFraction", Double.toString(this.latestStageIndirectLinearOverbrightFraction));
@@ -1918,9 +2205,12 @@ public final class ShaderAutomation {
          props.setProperty("indirectTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(false, true)));
          props.setProperty("indirectTemporalDeltaMax", Double.toString(this.indirectTemporalDeltaMax));
          props.setProperty("latestDirectDenoiserGain", Double.toString(this.latestDirectDenoiserGain));
+         props.setProperty("latestSpecDenoiserGain", Double.toString(this.latestSpecDenoiserGain));
          props.setProperty("latestIndirectResolveGain", Double.toString(this.latestIndirectResolveGain));
          props.setProperty("directDenoiserGainAvg", Double.toString(this.directDenoiserGainSamples == 0 ? 0.0 : this.directDenoiserGainSum / this.directDenoiserGainSamples));
          props.setProperty("directDenoiserGainMax", Double.toString(this.directDenoiserGainMax));
+         props.setProperty("specDenoiserGainAvg", Double.toString(this.specDenoiserGainSamples == 0 ? 0.0 : this.specDenoiserGainSum / this.specDenoiserGainSamples));
+         props.setProperty("specDenoiserGainMax", Double.toString(this.specDenoiserGainMax));
          props.setProperty("indirectResolveGainAvg", Double.toString(this.indirectResolveGainSamples == 0 ? 0.0 : this.indirectResolveGainSum / this.indirectResolveGainSamples));
          props.setProperty("indirectResolveGainMax", Double.toString(this.indirectResolveGainMax));
          props.setProperty("postMotionDropSamples", Integer.toString(this.postMotionDropSamples));
@@ -2196,6 +2486,16 @@ public final class ShaderAutomation {
       double maxZ
    ) {
       private static final PositionDebugStats EMPTY = new PositionDebugStats(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+   }
+
+   record FireflyStats(
+      double fireflyFraction,
+      double severeFireflyFraction,
+      double fireflyLumaShare,
+      double saturatedPixelFraction,
+      double nonFiniteFraction
+   ) {
+      private static final FireflyStats EMPTY = new FireflyStats(0.0, 0.0, 0.0, 0.0, 0.0);
    }
 }
 

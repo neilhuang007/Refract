@@ -8,6 +8,7 @@ layout(location = 0) out vec4 direct_firefly_out;
 #include "/photonics/lighttree/nrd_common.glsl"
 
 uniform sampler2D direct_firefly_input;
+uniform float ph_debug_enable_direct_anti_firefly;
 uniform float ph_nrd_denoising_range;
 
 void main() {
@@ -19,6 +20,11 @@ void main() {
     //      and will read as a near-zero vector from radiosity_normal.
     // Either condition failing is sufficient to treat the pixel as out-of-world.
     if (!is_in_world()) {
+        direct_firefly_out = texelFetch(direct_firefly_input, tex_coord, 0);
+        return;
+    }
+
+    if (ph_debug_enable_direct_anti_firefly < 0.5) {
         direct_firefly_out = texelFetch(direct_firefly_input, tex_coord, 0);
         return;
     }

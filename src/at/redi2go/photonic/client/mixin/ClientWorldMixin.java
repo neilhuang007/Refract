@@ -17,6 +17,6 @@ public class ClientWorldMixin {
          return;
       }
 
-      Raytracer.INSTANCE.getWorldRegistry().queueBlockUpdate(pos);
+      Raytracer.INSTANCE.getWorldRegistry().queueBlockUpdate(pos, state);
    }
 }

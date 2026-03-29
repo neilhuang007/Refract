@@ -4,7 +4,8 @@
 // ReGIR output buffer — each cell has lightsPerCell fixed-position slots.
 // Stored as uvec2 matching the RIS tile buffer format:
 //   .x = lightIndex & RTXDI_LIGHT_INDEX_MASK  (bit 31 = RTXDI_LIGHT_COMPACT_BIT when set by build pass)
-//   .y = floatBitsToUint(invSourcePdf / weight)
+//   .y = floatBitsToUint(weight), which the selection path reuses as the slot's invSourcePdf
+//        exactly like RTXDI's ReGIR RIS mini-tile readback.
 // Invalid entries: .x = RTXDI_LIGHT_INDEX_MASK (all lower bits set), .y = 0.
 // Per-pixel code reads this exactly like a tile entry (same unpack path).
 

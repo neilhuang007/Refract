@@ -12,6 +12,8 @@ layout(location = 2) out vec4 reservoir_meta_frag_out;
 uniform float ph_restir_enable_final_visibility;
 uniform float ph_restir_reuse_final_visibility;
 uniform float ph_restir_temporal_visibility_shortcut;
+uniform float ph_debug_enable_direct_final_visibility;
+uniform float ph_debug_enable_direct_visibility_transmittance;
 
 void storeReservoirOutputs(Reservoir reservoir) {
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
@@ -49,19 +51,27 @@ void main() {
     );
 
     bool enableFinalVisibility = (ph_restir_enable_final_visibility < -1.5) ? false : true;
+    if (ph_debug_enable_direct_final_visibility < 0.5) {
+        enableFinalVisibility = false;
+    }
     bool reuseFinalVisibility = (ph_restir_reuse_final_visibility < -1.5) ? false : true;
     bool discardIfInvisible = (ph_restir_temporal_visibility_shortcut < -0.5)
         ? false
         : (ph_restir_temporal_visibility_shortcut >= 0.5);
+    bool enableVisibilityTransmittance = ph_debug_enable_direct_visibility_transmittance >= 0.5;
 
-    bool hasValidReservoir = RTXDI_IsValidDIReservoir(reservoir) && reservoir.weightSum > 0.0f;
+    // Match RTXDI ShadeSamples.hlsl: valid shading / visibility storage is gated
+    // only by lightData, not by weightSum.
+    bool hasValidReservoir = RTXDI_IsValidDIReservoir(reservoir);
     if (hasValidReservoir && enableFinalVisibility && (!reuseFinalVisibility || !rtxdi_has_reusable_visibility(reservoir))) {
         LightSample traceSample = light_sample_decode(reservoir, currentSurface, false);
         if (traceSample.index >= 0) {
             // RTXDI GetFinalVisibility uses a 0.01 ray offset for final shading.
             float hitDist = 0.0f;
             vec3 visRgb = lt_trace_final_visibility_with_offset(traceSample, currentSurface, 0.01f, hitDist);
-            RTXDI_StoreVisibilityInDIReservoir(reservoir, visRgb, discardIfInvisible);
+            bool isVisible = ph_luminance(visRgb) > 0.0f && traceSample.index >= 0;
+            vec3 storedVisRgb = enableVisibilityTransmittance ? visRgb : (isVisible ? vec3(1.0f) : vec3(0.0f));
+            RTXDI_StoreVisibilityInDIReservoir(reservoir, storedVisRgb, discardIfInvisible);
         }
     }
 

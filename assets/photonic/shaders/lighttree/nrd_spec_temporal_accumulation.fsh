@@ -35,7 +35,7 @@ float spec_compute_parallax_in_pixels(vec3 currentPosition, vec3 cameraDelta) {
         vec2(viewWidth, viewHeight),
         get_taa_jitter()
     );
-    vec2 currentPx = (vec2(tex_coord) + 0.5) * PH_RENDER_SCALE;
+    vec2 currentPx = vec2(tex_coord) + 0.5;
     return length(shiftedPx - currentPx);
 }
 
@@ -80,6 +80,83 @@ float spec_check_tap(ivec2 tapCoord, ivec2 bufTexSize,
     return nrd_is_reprojection_tap_valid(currentPosition, prevPosition, currentNormal, disocclusionThreshold);
 }
 
+vec4 spec_load_stage_spec_signal(ivec2 pixelCoord) {
+    vec4 encodedSignal = texelFetch(stage_radiosity_direct_specular, pixelCoord, 0);
+    if (ph_restir_active_checkerboard_field != 0
+        && !nrd_is_active_checkerboard_pixel(pixelCoord, false, ph_restir_active_checkerboard_field)) {
+        encodedSignal = nrd_reconstruct_checkerboard_signal(
+            stage_radiosity_direct_specular,
+            pixelCoord,
+            stage_radiosity_position,
+            stage_radiosity_normal
+        );
+    }
+    return encodedSignal;
+}
+
+vec3 spec_stabilize_current_radiance(ivec2 pixelCoord, vec4 centerMaterial, vec3 centerRadiance) {
+    if (any(isnan(centerRadiance)) || any(isinf(centerRadiance))) {
+        return vec3(0.0);
+    }
+
+    centerRadiance = max(centerRadiance, vec3(0.0));
+    float centerLuma = nrd_luminance(centerRadiance);
+    ivec2 texSize = textureSize(stage_radiosity_direct_specular, 0);
+
+    int compatibleSamples = 0;
+    float maxNeighborLuma = -1.0;
+    float minNeighborLuma = 1e30;
+    vec3 maxNeighborRadiance = centerRadiance;
+    vec3 minNeighborRadiance = centerRadiance;
+
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+
+            ivec2 sampleCoord = pixelCoord + ivec2(dx, dy);
+            if (any(lessThan(sampleCoord, ivec2(0))) || any(greaterThanEqual(sampleCoord, texSize))) {
+                continue;
+            }
+
+            vec4 sampleMaterial = texelFetch(stage_radiosity_material, sampleCoord, 0);
+            if (nrd_material_weight(centerMaterial, sampleMaterial) <= 0.0) {
+                continue;
+            }
+
+            vec3 sampleRadiance = nrd_unpack_direct_signal(spec_load_stage_spec_signal(sampleCoord)).radiance;
+            if (any(isnan(sampleRadiance)) || any(isinf(sampleRadiance))) {
+                continue;
+            }
+
+            sampleRadiance = max(sampleRadiance, vec3(0.0));
+            float sampleLuma = nrd_luminance(sampleRadiance);
+            compatibleSamples++;
+
+            if (sampleLuma > maxNeighborLuma) {
+                maxNeighborLuma = sampleLuma;
+                maxNeighborRadiance = sampleRadiance;
+            }
+            if (sampleLuma < minNeighborLuma) {
+                minNeighborLuma = sampleLuma;
+                minNeighborRadiance = sampleRadiance;
+            }
+        }
+    }
+
+    vec3 stabilizedRadiance = centerRadiance;
+    if (compatibleSamples > 0) {
+        if (centerLuma > maxNeighborLuma) {
+            stabilizedRadiance = maxNeighborRadiance;
+        } else if (centerLuma < minNeighborLuma) {
+            stabilizedRadiance = minNeighborRadiance;
+        }
+    }
+
+    return max(stabilizedRadiance, vec3(0.0));
+}
+
 void spec_reset_outputs() {
     spec_noisy_out          = vec4(0.0);
     spec_responsive_out     = vec4(0.0);
@@ -99,13 +176,7 @@ void main() {
     // -------------------------------------------------------------------------
     // Checkerboard reconstruction: inactive pixels have zero radiance from shade_samples.
     // Reconstruct from geometry-aware neighbors before temporal accumulation.
-    vec4 rawSpec = texelFetch(stage_radiosity_direct_specular, tex_coord, 0);
-    if (ph_restir_active_checkerboard_field != 0
-        && !nrd_is_active_checkerboard_pixel(tex_coord, false, ph_restir_active_checkerboard_field)) {
-        rawSpec = nrd_reconstruct_checkerboard_signal(
-            stage_radiosity_direct_specular, tex_coord,
-            stage_radiosity_position, stage_radiosity_normal);
-    }
+    vec4 rawSpec = spec_load_stage_spec_signal(tex_coord);
     NrdDirectSignal currentSpec     = nrd_unpack_direct_signal(rawSpec);
     vec4  currentMaterial           = texelFetch(stage_radiosity_material,      tex_coord, 0);
     vec3  currentPosition           = texelFetch(stage_radiosity_position,       tex_coord, 0).xyz;
@@ -115,6 +186,8 @@ void main() {
         texelFetch(stage_radiosity_mapped_normal, tex_coord, 0).xyz
     );
     float currentRoughness = currentMaterial.r; // roughness packed in .r
+
+    currentSpec.radiance = spec_stabilize_current_radiance(tex_coord, currentMaterial, currentSpec.radiance);
 
     NrdDirectHistorySample currentHistory = nrd_direct_history_from_radiance(currentSpec.radiance);
 
@@ -170,7 +243,7 @@ void main() {
     // To recover previousPixel: currentPixelCenter + motion.xy. Must ADD, not subtract.
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
     vec2 reprojectionPx = motionVector.a > 0.5
-        ? (vec2(tex_coord) + vec2(0.5) + motionVector.xy) * PH_RENDER_SCALE
+        ? (vec2(tex_coord) + vec2(0.5) + motionVector.xy)
         : spec_project_to_prev_pixels(currentPosition + currentNormal * 0.01);
 
     // -------------------------------------------------------------------------
@@ -189,6 +262,7 @@ void main() {
     // SMB bilinear footprint
     // -------------------------------------------------------------------------
     vec2  smbPixelPosFloat = reprojectionPx;
+    vec2  prevUVSMB = spec_pixels_to_uv(reprojectionPx);
     ivec2 smbBilinearOrigin = ivec2(floor(smbPixelPosFloat - 0.5));
     vec2  smbBilinearWeights = fract(smbPixelPosFloat - 0.5);
     ivec2 texSize = textureSize(prev_radiosity_position, 0);
@@ -243,7 +317,7 @@ void main() {
     smbFootprintQuality *= mix(0.1, 1.0, clamp(sizeQuality, 0.0, 1.0));
 
     // -------------------------------------------------------------------------
-    // SMB history sampling — slow + fast + history length + prev hit distance
+    // SMB history sampling — slow + fast + history length + accumulated hit distance
     // -------------------------------------------------------------------------
     vec4  smbPrevSlow       = vec4(0.0);
     vec4  smbPrevFast       = vec4(0.0);
@@ -271,9 +345,15 @@ void main() {
             smbPrevFast       += texelFetch(prev_spec_fast_input,           smbTap11, 0) * smbCustomWeights.w;
             smbPrevHistoryVec += texelFetch(prev_spec_history_length_input,  smbTap11, 0) * smbCustomWeights.w;
         }
-        // SMB prev hit distance: from slow history alpha (packed as secondMoment in slow, hitT in fast alpha)
-        // Use fast history alpha as hit distance (NRD stores accumulatedReflectionHitT in SpecFast.a)
-        smbPrevHitT = smbPrevFast.a;
+
+        // NRD keeps the accumulated reflection hit distance in a separate history
+        // buffer. This integration stores it in spec history confidence .g.
+        smbPrevHitT =
+            texelFetch(spec_history_confidence_input, smbTap00, 0).g * smbCustomWeights.x +
+            texelFetch(spec_history_confidence_input, smbTap10, 0).g * smbCustomWeights.y +
+            texelFetch(spec_history_confidence_input, smbTap01, 0).g * smbCustomWeights.z +
+            texelFetch(spec_history_confidence_input, smbTap11, 0).g * smbCustomWeights.w;
+        smbPrevHitT = max(0.001, smbPrevHitT);
     }
 
     // -------------------------------------------------------------------------
@@ -298,11 +378,9 @@ void main() {
     // -------------------------------------------------------------------------
     // Confidence-scaled max accumulated frame nums
     // -------------------------------------------------------------------------
-    float specConfidence        = texelFetch(spec_confidence_input,         tex_coord, 0).g;
-    float historyConfidence     = texelFetch(spec_history_confidence_input,  tex_coord, 0).b;
-    float combinedConfidence    = clamp(min(specConfidence, historyConfidence), 0.0, 1.0);
-    float specMaxAccumFrameNum  = ph_nrd_max_accumulated_frame_num  * combinedConfidence;
-    float specMaxFastAccumFrame = ph_nrd_max_fast_accumulated_frame_num * combinedConfidence;
+    float specConfidence        = clamp(texture(spec_confidence_input, prevUVSMB).g, 0.0, 1.0);
+    float specMaxAccumFrameNum  = ph_nrd_max_accumulated_frame_num  * specConfidence;
+    float specMaxFastAccumFrame = ph_nrd_max_fast_accumulated_frame_num * specConfidence;
 
     float specHistoryFrames          = min(specMaxAccumFrameNum,  historyLength);
     float specHistoryResponsiveFrames = min(specMaxFastAccumFrame, historyLength);
@@ -408,7 +486,7 @@ void main() {
         deltaUvLenFixed        *= 1.0 + edgeFix;
 
         if (deltaUvLenFixed > 1.0) {
-            vec2  motionPxHigh = (vec2(tex_coord) + 0.5 + deltaUvLenFixed * deltaUvNorm) * PH_RENDER_SCALE;
+            vec2  motionPxHigh = vec2(tex_coord) + 0.5 + deltaUvLenFixed * deltaUvNorm;
             ivec2 motionCoord  = ivec2(floor(motionPxHigh));
             ivec2 localSize    = textureSize(stage_radiosity_normal, 0);
             if (all(greaterThanEqual(motionCoord, ivec2(0))) && all(lessThan(motionCoord, localSize))) {
@@ -522,7 +600,7 @@ void main() {
         prevNormalVMB     = nrd_select_surface_normal(vmbPrevGeoN, vmbPrevMapN);
         vec4 vmbPrevMat   = texture(prev_radiosity_material,       vmbNormalUv);
         prevRoughnessVMB  = vmbPrevMat.r;
-        prevHitTVMB       = max(0.001, vmbPrevFast.a);
+        prevHitTVMB       = max(0.001, texture(spec_history_confidence_input, prevUVVMB).g);
     }
 
     // -------------------------------------------------------------------------
@@ -535,7 +613,6 @@ void main() {
     virtualHistoryAmount *= (dot(prevNormalVMB, normalize(currentNormalAveraged)) > 0.0) ? 1.0 : 0.0;
 
     // Curvature angle and normal weight (NRD ref lines 784-794)
-    vec2  prevUVSMB           = spec_pixels_to_uv(reprojectionPx);
     vec2  uvDiff              = prevUVVMB - prevUVSMB;
     float uvDiffLengthInPixels = length(uvDiff * vec2(viewWidth, viewHeight) * PH_RENDER_SCALE);
 
@@ -615,7 +692,9 @@ void main() {
 
     // Virtual UV discrepancy confidence (NRD ref lines 833-849)
     {
-        float hitDistForTrackingPrev = vmbPrevFast.a; // prev fast history alpha holds hitT
+        // gHistory_SpecFast.a tracks the previous frame's local hit distance, not
+        // the accumulated reflection hit distance.
+        float hitDistForTrackingPrev = max(vmbPrevFast.a, 0.001);
         vec3  prevVirtualWorldPos = nrd_get_xvirtual(
             hitDistForTrackingPrev, curvature,
             currentPosition, prevWorldPosSMB,
@@ -714,20 +793,21 @@ void main() {
 
     // -------------------------------------------------------------------------
     // Pack outputs
-    // NRD RELAX output layout (spec only, no diffuse):
-    //   spec_noisy_out          = current noisy signal (radiance + secondMoment)
-    //   spec_responsive_out.rgb = fast (responsive) accumulated radiance
-    //   spec_responsive_out.a   = specularHistoryConfidence  (encoded for atrous)
-    //   spec_slow_out           = slow accumulated radiance + secondMoment
-    //   spec_fast_out.rgb       = fast accumulated radiance
-    //   spec_fast_out.a         = accumulated reflection hit distance
-    //   spec_history_length_out = encoded history length
+    // NRD RELAX output layout in this integration:
+    //   spec_noisy_out              = current noisy signal (radiance + secondMoment)
+    //   spec_responsive_out.r       = specularHistoryConfidence for A-trous
+    //   spec_responsive_out.g       = accumulated reflection hit distance for next-frame temporal reuse
+    //   spec_responsive_out.a       = 1.0 sentinel
+    //   spec_slow_out               = slow accumulated radiance + secondMoment
+    //   spec_fast_out.rgb           = fast accumulated radiance
+    //   spec_fast_out.a             = current-frame local hit distance (NRD SpecFast contract)
+    //   spec_history_length_out     = encoded history length
     // -------------------------------------------------------------------------
     vec4 noisySignal = nrd_pack_direct_history(currentHistory.radiance, currentHistory.secondMoment);
 
     spec_noisy_out          = noisySignal;
-    spec_responsive_out     = vec4(accumulatedSpecRadianceFast, specularHistoryConfidence);
+    spec_responsive_out     = vec4(specularHistoryConfidence, accumulatedReflectionHitT, 0.0, 1.0);
     spec_slow_out           = vec4(accumulatedSpecRadiance, accumulatedSpec2ndMoment);
-    spec_fast_out           = vec4(accumulatedSpecRadianceFast, accumulatedReflectionHitT);
+    spec_fast_out           = vec4(accumulatedSpecRadianceFast, hitDist);
     spec_history_length_out = vec4(nrd_encoded_history(historyLength), 0.0, 0.0, 1.0);
 }

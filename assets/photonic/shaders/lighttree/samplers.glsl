@@ -64,6 +64,7 @@ uniform sampler2D prev_spec_history_length_input;
 uniform sampler2D diffuse_confidence_input;
 uniform sampler2D spec_confidence_input;
 uniform sampler2D spec_history_confidence_input;
+uniform sampler2D spec_reprojection_confidence_input;
 
 // Raw stage buffers are declared here because several LIGHT_TREE passes include
 // this sampler header and still read the per-frame stage direct signal.

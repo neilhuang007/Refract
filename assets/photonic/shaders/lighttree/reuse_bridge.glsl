@@ -305,6 +305,7 @@ struct DirectSurface {
 };
 
 DirectSurface lt_load_surface(ivec2 uv);
+bool lt_materials_similar(DirectSurface a, DirectSurface b);
 
 vec4 lt_extract_material_at_uv(vec2 uv) {
     vec4 spec = texture(specular, uv);
@@ -661,6 +662,8 @@ void light_sample_compute_weight(inout LightSample smple, DirectSurface surface)
     smple.weight = lt_surface_target_pdf(surface, smple);
 }
 
+vec3 lt_sample_light_position_from_uv(Light light, vec2 sampleUv, vec3 shadowRayOrigin);
+
 LightSample light_sample_new_at_position(Light light, vec3 lightPosition, DirectSurface surface) {
     vec3 origin = lt_surface_ray_origin(surface.rtPos, surface.geometryNormal);
     vec3 toLight = lightPosition - surface.rtPos;
@@ -768,14 +771,10 @@ float light_sample_target_pdf_at_surface_with_view(int lightIndex, DirectSurface
     return lt_surface_target_pdf_with_view(surface, smple, viewPos);
 }
 
-// Mirrors RTXDI's setupVisibilityRay helper:
-//   L        = samplePosition - surface.worldPos
-//   TMin     = offset
-//   TMax     = max(offset, length(L) - offset * 2)
-//   Direction= normalize(L)
-//   Origin   = surface.worldPos
-// Mirror that contract exactly in the bridge: keep the original surface position as the
-// ray origin and forward TMin/TMax separately to the voxel tracer.
+// RTXDI FullSample RAB_VisibilityTest.hlsli keeps the ray origin at the surface point
+// and uses TMin/TMax to trim the segment along the light direction. The voxel bridge
+// mirrors that contract, but still marks the target emitter cell as a successful
+// terminal hit so emissive host blocks don't self-occlude.
 bool lt_setup_visibility_ray(
     DirectSurface surface,
     vec3 targetPosition,
@@ -785,29 +784,48 @@ bool lt_setup_visibility_ray(
     out float traceMinDistance,
     out float traceMaxDistance
 ) {
-    vec3 unbiasedToTarget = targetPosition - surface.rtPos;
-    float lightDistance = length(unbiasedToTarget);
+    float rayOffset = max(offset, 0.001f);
+    rayOrigin = surface.rtPos;
+
+    vec3 offsetToTarget = targetPosition - rayOrigin;
+    float lightDistance = length(offsetToTarget);
     if (lightDistance <= 1e-5f) {
-        rayOrigin = surface.rtPos;
         rayDirection = vec3(0.0f);
         traceMinDistance = 0.0f;
         traceMaxDistance = 0.0f;
         return false;
     }
 
-    rayDirection = unbiasedToTarget / lightDistance;
-    rayOrigin = surface.rtPos;
-    traceMinDistance = offset;
-    traceMaxDistance = max(offset, lightDistance - offset * 2.0f);
-    return traceMaxDistance > 0.0f;
+    rayDirection = offsetToTarget / lightDistance;
+    traceMinDistance = rayOffset;
+    traceMaxDistance = max(rayOffset, lightDistance - rayOffset * 2.0f);
+    return true;
 }
 
-// Mirrors RTXDI's committed-hit test:
-// conservative visibility returns true when the shadow segment reaches TMax without
-// committing an opaque hit, and final visibility uses the same segment test plus
-// transparent transmittance stored in result_tint_color.
+// When the bounded segment does hit before TMax, the hit is only accepted if it lands in
+// the sampled emitter cell and matches the selected emitter host block.
+bool lt_visibility_trace_hit_matches_light(Light light, vec3 targetPosition) {
+    if (!ray.result_hit) {
+        return false;
+    }
+
+    ivec3 targetCell = ivec3(floor(targetPosition));
+    ivec3 hitCell = ivec3(floor(ray.result_position));
+    if (any(notEqual(hitCell, targetCell))) {
+        return false;
+    }
+
+    return light.blockId < 0 || result_block_id < 0 || light.blockId == result_block_id;
+}
+
+// RTXDI visibility succeeds when the bounded segment reaches TMax without committing a hit.
+// In the voxel tracer that means the distance cap was reached and no blocker was reported.
 bool lt_visibility_trace_is_unoccluded() {
-    return !ray.result_hit;
+    return !ray.result_hit && ray_distance_limit_reached;
+}
+
+bool lt_visibility_trace_is_unoccluded(Light light, vec3 targetPosition) {
+    return lt_visibility_trace_hit_matches_light(light, targetPosition);
 }
 
 // Match RTXDI's final-visibility contract: the expensive visibility query returns an RGB
@@ -817,14 +835,16 @@ vec3 lt_trace_visibility_transmittance() {
     return clamp(result_tint_color, vec3(0.0f), vec3(1.0f));
 }
 
-// Mirrors RTXDI's GetConservativeVisibility / RAB_GetConservativeVisibility path:
-// trace a cheap visibility ray, treat translucent surfaces conservatively as visible,
-// and return a boolean visible/invisible result for resampling.
+// Match RTXDI's conservative visibility semantics: trace a bounded shadow segment and treat
+// any committed hit before TMax as occlusion. Minecraft local lights are bridged as analytic
+// point lights at block centers, so the selected light's own host block must be ignored when
+// the bounded segment reaches the target cell.
 bool lt_trace_conservative_visibility(inout LightSample smple, DirectSurface surface) {
     if (smple.index < 0) {
         return false;
     }
 
+    Light light = load_light(smple.index);
     vec3 targetPosition = smple.position;
     vec3 rayOrigin;
     vec3 rayDirection;
@@ -839,19 +859,22 @@ bool lt_trace_conservative_visibility(inout LightSample smple, DirectSurface sur
     ray.origin = smple.sample_pos;
     ray.direction = rayDirection;
     ray_target = ivec3(floor(smple.position));
-    ray_ignore_block_id = load_light(smple.index).blockId;
+    ray_ignore_block_id = light.blockId;
+    ray_stop_on_target = false;
     ray_min_trace_distance = traceMinDistance;
     ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
     ray_target = ivec3(-9999);
     ray_ignore_block_id = -1;
+    ray_stop_on_target = false;
     ray_min_trace_distance = 0.0f;
     ray_max_trace_distance = -1.0f;
     return lt_visibility_trace_is_unoccluded();
 }
 
-// Mirrors RTXDI's GetFinalVisibility path:
-// trace the expensive final-visibility ray with a 0.01 offset and return RGB throughput.
+// Match RTXDI's final-visibility contract: trace the bounded segment to the sampled point,
+// return zero when anything blocks before TMax, and otherwise preserve RGB transmittance
+// accumulated through transparent voxels along the way.
 vec3 lt_trace_final_visibility_with_offset(
     inout LightSample smple,
     DirectSurface surface,
@@ -881,11 +904,13 @@ vec3 lt_trace_final_visibility_with_offset(
     ray.direction = rayDirection;
     ray_target = ivec3(floor(smple.position));
     ray_ignore_block_id = light.blockId;
+    ray_stop_on_target = false;
     ray_min_trace_distance = traceMinDistance;
     ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
     ray_target = ivec3(-9999);
     ray_ignore_block_id = -1;
+    ray_stop_on_target = false;
     ray_min_trace_distance = 0.0f;
     ray_max_trace_distance = -1.0f;
 
@@ -1816,6 +1841,22 @@ float rtxdi_surface_evaluate_brdf_pdf(DirectSurface surface, vec3 lightDir) {
     return mix(pdfGgx, pdfCosine, diffuseProbability);
 }
 
+bool lt_bridge_supports_brdf_local_light_replay() {
+    // This bridge currently replays local lights with the same analytic point-light
+    // contract used by the rest of the RTXDI port, so BRDF local-light sampling stays on.
+    return true;
+}
+
+int lt_resolve_initial_num_brdf_samples() {
+    if (!lt_bridge_supports_brdf_local_light_replay()) {
+        return 0;
+    }
+
+    return (ph_restir_initial_num_brdf_samples > 0.0)
+        ? int(ph_restir_initial_num_brdf_samples)
+        : (ph_restir_initial_num_brdf_samples < -0.5 ? 0 : 1);
+}
+
 // RTXDI: RTXDI_LightBrdfMisWeight (InitialSampling.hlsli:66-96)
 // Computes the blended source PDF that mixes the light-selection PDF with the BRDF PDF
 // using a balance-heuristic MIS weight.
@@ -2116,9 +2157,7 @@ Reservoir RTXDI_SampleLocalLights(inout RTXDI_RandomSamplerState rng, inout RTXD
     int numEnvironmentSamples = (ph_restir_initial_num_environment_samples > 0.0)
         ? int(ph_restir_initial_num_environment_samples)
         : (ph_restir_initial_num_environment_samples < -0.5 ? 0 : 1);
-    int numBrdfSamples = (ph_restir_initial_num_brdf_samples > 0.0)
-        ? int(ph_restir_initial_num_brdf_samples)
-        : (ph_restir_initial_num_brdf_samples < -0.5 ? 0 : 1);
+    int numBrdfSamples = lt_resolve_initial_num_brdf_samples();
     RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(numLocalSamples, numEnvironmentSamples, numBrdfSamples);
 
     float brdfCutoff = (ph_restir_initial_brdf_cutoff > 0.0) ? ph_restir_initial_brdf_cutoff : 0.0001f;
@@ -2272,7 +2311,7 @@ Reservoir RTXDI_SampleEnvironmentMap(DirectSurface surface, int numSamples) {
 Reservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, DirectSurface surface, int numSamples, RTXDI_InitialSamplingMisData misData, float brdfCutoff, out LightSample o_selectedSample) {
     Reservoir state = RTXDI_EmptyDIReservoir();
     o_selectedSample = lt_null_sample();
-    if (numSamples <= 0 || ph_light_count <= 0) {
+    if (numSamples <= 0 || ph_light_count <= 0 || !lt_bridge_supports_brdf_local_light_replay()) {
         return state;
     }
 
@@ -2329,14 +2368,21 @@ Reservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, DirectSurface sur
         // Step 4: identify the exact emitter cell that was hit.
         // RTXDI's bridge receives the exact hit light from RAB_TraceRayForLocalLight.
         // For Minecraft block lights, the bridge equivalent is: require the traced hit
-        // cell to match the candidate light's block cell exactly. Do not fall back to a
-        // nearest-light heuristic across neighboring cells.
+        // cell to match the candidate light's block cell exactly, and when the voxel
+        // tracer resolved a host block id, require that to match the light's host block
+        // too. Without the block-id guard, a BRDF hit can be rebound to a different
+        // light proxy occupying the same cell, which leaks unrelated emitter color into
+        // the direct pass.
         int lightIndex = -1;
         float bestDistSq = 3.402823466e+38f;
         ivec3 hitCell = ivec3(floor(ray.result_position));
         for (int j = 0; j < ph_light_count; j++) {
             Light candidate = load_light(j);
             if (any(notEqual(ivec3(floor(candidate.position)), hitCell))) {
+                continue;
+            }
+
+            if (candidate.blockId >= 0 && result_block_id >= 0 && candidate.blockId != result_block_id) {
                 continue;
             }
 
@@ -2353,9 +2399,6 @@ Reservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, DirectSurface sur
         }
 
         // Step 5: evaluate target PDF and blended source PDF, then stream.
-        // Preserve the hit-derived sample point when reconstructing the candidate so the
-        // reservoir UV and the sampled emitter point stay aligned, matching RTXDI's use of
-        // the hit-derived randXY in RAB_SamplePolymorphicLight.
         Light hitLight = load_light(lightIndex);
         vec3 sampledPosition = hitLight.position;
         vec2 sampleUv = vec2(0.0f);
@@ -2446,9 +2489,7 @@ Reservoir RTXDI_SampleLightsForSurface(DirectSurface surface) {
     int numEnvironmentSamples = (ph_restir_initial_num_environment_samples > 0.0)
         ? int(ph_restir_initial_num_environment_samples)
         : (ph_restir_initial_num_environment_samples < -0.5 ? 0 : 1);
-    int numBrdfSamples = (ph_restir_initial_num_brdf_samples > 0.0)
-        ? int(ph_restir_initial_num_brdf_samples)
-        : (ph_restir_initial_num_brdf_samples < -0.5 ? 0 : 1);
+    int numBrdfSamples = lt_resolve_initial_num_brdf_samples();
     RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(numLocalSamples, numEnvironmentSamples, numBrdfSamples);
     float brdfCutoff = (ph_restir_initial_brdf_cutoff > 0.0) ? ph_restir_initial_brdf_cutoff : 0.0001f;
 
@@ -2659,7 +2700,9 @@ bool lt_materials_similar(DirectSurface a, DirectSurface b) {
         return false;
     }
 
-    if (abs(ph_luminance(a.albedo) - ph_luminance(b.albedo)) > 0.25f) {
+    vec3 albedoA = clamp(a.albedo, vec3(0.0f), vec3(1.0f));
+    vec3 albedoB = clamp(b.albedo, vec3(0.0f), vec3(1.0f));
+    if (abs(ph_luminance(albedoA) - ph_luminance(albedoB)) > 0.25f) {
         return false;
     }
 

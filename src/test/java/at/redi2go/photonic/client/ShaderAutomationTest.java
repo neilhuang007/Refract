@@ -155,6 +155,35 @@ class ShaderAutomationTest {
       assertEquals(0.5, ShaderAutomation.computeAlphaDelta(previousImage, currentImage), EPSILON);
    }
 
+   @Test
+   void decodePackedReservoirMReadsBitPackedCountFromFloatBits() {
+      int packedVisibility = 0x3ffff;
+      int reservoirM = 3210;
+      int packed = packedVisibility | (reservoirM << 18);
+
+      assertEquals(reservoirM, ShaderAutomation.decodePackedReservoirM(Float.intBitsToFloat(packed)));
+   }
+
+   @Test
+   void fireflyStatsTrackHotPixelsEnergySaturationAndNonFiniteValues() {
+      float[] pixels = {
+         1.0f, 1.0f, 1.0f, 1.0f,
+         32.0f, 32.0f, 32.0f, 1.0f,
+         128.0f, 128.0f, 128.0f, 1.0f,
+         65504.0f, 0.0f, 0.0f, 1.0f,
+         Float.NaN, 2.0f, 3.0f, 1.0f
+      };
+
+      ShaderAutomation.FireflyStats stats = ShaderAutomation.computeFireflyStats(pixels);
+      double saturatedRedLuma = 65504.0 * 0.2126;
+
+      assertEquals(0.6, stats.fireflyFraction(), EPSILON);
+      assertEquals(0.4, stats.severeFireflyFraction(), EPSILON);
+      assertEquals(1.0 / 5.0, stats.saturatedPixelFraction(), EPSILON);
+      assertEquals(1.0 / 5.0, stats.nonFiniteFraction(), EPSILON);
+      assertEquals((32.0 + 128.0 + saturatedRedLuma) / (1.0 + 32.0 + 128.0 + saturatedRedLuma), stats.fireflyLumaShare(), 1.0e-9);
+   }
+
    private static BufferedImage solidImage(int width, int height, Color color) {
       BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
       for (int y = 0; y < height; y++) {

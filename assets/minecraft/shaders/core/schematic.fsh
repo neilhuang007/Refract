@@ -45,14 +45,20 @@ void main() {
     ivec3 icolor = ivec3(color * 0xff);
     icolor = max(icolor, ivec3(1, 1, 1));
 
-    // Use 7 bits to store alpha
-    int alpha = int((color.a * 127));
+    // Use 7 bits to store alpha and round to the nearest representable value so
+    // nearly-opaque texels do not lose the voxel to a brighter translucent layer.
+    int alpha = min(int(color.a * 127.0 + 0.5), 127);
+    if (alpha >= 126) {
+        alpha = 127;
+    }
 
-    // use atomic max so result is not dependent on vertex order
-    // alpha is reversed so that built in schematics are opaque
+    // Use atomic max so the result is not dependent on vertex order.
+    // The build-time packing is intentionally different from the runtime format:
+    // store opacity in the most significant bits so opaque wall fragments win the
+    // per-voxel selection before the CPU repacks the word into the tracer format.
     atomicMax(
         world_array[get_index(clamp(ivec3(pos), ivec3(0), ivec3(15)))],
-        (127 - alpha) | (icolor.x << 7) | (icolor.y << 15) | (icolor.z << 23)
+        (alpha << 24) | (icolor.x << 16) | (icolor.y << 8) | icolor.z
     );
 
     discard;

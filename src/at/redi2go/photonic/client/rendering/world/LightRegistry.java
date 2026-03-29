@@ -66,7 +66,6 @@ public class LightRegistry implements Destructable {
    private static final int INCREMENTAL_PARALLEL_THRESHOLD = 32;
    private static final float MIN_TRACED_LIGHT_SELECTION_LUMA = 0.0025F;
    private static final float PREVIOUS_SELECTION_CAMERA_BIAS = 1.2F;
-   private static final int RETAINED_INACTIVE_LIGHT_TTL_COMPILES = 12;
    private static final Comparator<LightInstance> STABLE_LIGHT_ORDER = (a, b) -> {
       Vector3f pa = a.position();
       Vector3f pb = b.position();
@@ -134,25 +133,7 @@ public class LightRegistry implements Destructable {
          .toArray(LightInstance[]::new);
    }
 
-   private static int compareRetainedInactiveOrder(RetainedInactiveLightCandidate a, RetainedInactiveLightCandidate b) {
-      int cmp = Integer.compare(a.previousIndex(), b.previousIndex());
-      if (cmp != 0) {
-         return cmp;
-      }
-      cmp = Integer.compare(b.remainingCompiles(), a.remainingCompiles());
-      if (cmp != 0) {
-         return cmp;
-      }
-      return STABLE_LIGHT_ORDER.compare(a.light(), b.light());
-   }
-
    private record LightSelectionCandidate(LightInstance light, float cameraScore, float sourceScore, boolean previouslySelected) {
-   }
-
-   private record RetainedInactiveLight(int blockId, BlockLightInfo lightInfo, int remainingCompiles) {
-   }
-
-   private record RetainedInactiveLightCandidate(LightInstance light, int previousIndex, int remainingCompiles) {
    }
 
    private static Vector3f getLightSelectionCameraPosition() {
@@ -221,8 +202,6 @@ public class LightRegistry implements Destructable {
    private volatile boolean gpuRegirBuildEnabled = false;
    private float[] lightPowers = new float[0];
    private int mutationDebugLogsRemaining = 48;
-   private final Object2ObjectOpenHashMap<Vector3f, RetainedInactiveLight> retainedInactiveLights = new Object2ObjectOpenHashMap<>();
-
    public LightRegistry(int maxLights, int maxLightsPerNode, float minTracedLightSelectionLuma, int nodeSize, int worldSize) {
       if (16 % nodeSize != 0) {
          throw new IllegalArgumentException();
@@ -865,7 +844,6 @@ public class LightRegistry implements Destructable {
             lights = selectTracedLights(candidates, this.maxLights);
          }
       }
-      lights = this.withRetainedInactiveLights(lights, prevLights);
       Object2ObjectOpenHashMap<Vector3f, LightInvalidation> differences = new Object2ObjectOpenHashMap<>(
          Math.max(lights.length, prevLights.length)
       );
@@ -924,87 +902,6 @@ public class LightRegistry implements Destructable {
          ? frameStats.additions + frameStats.removals + frameStats.blockIdChanges + frameStats.lightInfoChanges + frameStats.activityChanges
          : 0;
       return anyDirty;
-   }
-
-   private LightInstance[] withRetainedInactiveLights(LightInstance[] activeLights, LightInstance[] prevLights) {
-      if (activeLights.length >= this.maxLights) {
-         this.retainedInactiveLights.clear();
-         return activeLights;
-      }
-
-      Map<Vector3f, Integer> previousIndices = new HashMap<>(Math.max(prevLights.length * 2, 1));
-      Object2ObjectOpenHashMap<Vector3f, LightInstance> activeByPosition = new Object2ObjectOpenHashMap<>(Math.max(activeLights.length, 1));
-      for (int i = 0; i < prevLights.length; i++) {
-         previousIndices.put(prevLights[i].position(), i);
-      }
-      for (LightInstance activeLight : activeLights) {
-         activeByPosition.put(activeLight.position(), activeLight);
-      }
-
-      Object2ObjectOpenHashMap<Vector3f, RetainedInactiveLight> nextRetained = new Object2ObjectOpenHashMap<>(
-         Math.max(this.retainedInactiveLights.size() + prevLights.length, 1)
-      );
-      for (Entry<Vector3f, RetainedInactiveLight> entry : this.retainedInactiveLights.entrySet()) {
-         if (activeByPosition.containsKey(entry.getKey())) {
-            continue;
-         }
-         int remainingCompiles = entry.getValue().remainingCompiles() - 1;
-         if (remainingCompiles <= 0) {
-            continue;
-         }
-         nextRetained.put(
-            new Vector3f(entry.getKey()),
-            new RetainedInactiveLight(entry.getValue().blockId(), entry.getValue().lightInfo(), remainingCompiles)
-         );
-      }
-
-      for (LightInstance prevLight : prevLights) {
-         if (activeByPosition.containsKey(prevLight.position())) {
-            continue;
-         }
-         nextRetained.put(
-            new Vector3f(prevLight.position()),
-            new RetainedInactiveLight(prevLight.blockId(), prevLight.type(), RETAINED_INACTIVE_LIGHT_TTL_COMPILES)
-         );
-      }
-
-      int availableRetainedSlots = Math.max(0, this.maxLights - activeLights.length);
-      if (availableRetainedSlots <= 0 || nextRetained.isEmpty()) {
-         this.retainedInactiveLights.clear();
-         return activeLights;
-      }
-
-      List<RetainedInactiveLightCandidate> retainedCandidates = new ArrayList<>(nextRetained.size());
-      for (Entry<Vector3f, RetainedInactiveLight> entry : nextRetained.entrySet()) {
-         RetainedInactiveLight retainedLight = entry.getValue();
-         LightInstance light = new LightInstance(
-            retainedLight.blockId(),
-            new Vector3f(entry.getKey()),
-            retainedLight.lightInfo(),
-            false
-         );
-         retainedCandidates.add(new RetainedInactiveLightCandidate(
-            light,
-            previousIndices.getOrDefault(entry.getKey(), Integer.MAX_VALUE),
-            retainedLight.remainingCompiles()
-         ));
-      }
-      retainedCandidates.sort(LightRegistry::compareRetainedInactiveOrder);
-
-      List<LightInstance> mergedLights = new ArrayList<>(activeLights.length + Math.min(availableRetainedSlots, retainedCandidates.size()));
-      mergedLights.addAll(Arrays.asList(activeLights));
-      this.retainedInactiveLights.clear();
-      for (int i = 0; i < retainedCandidates.size() && i < availableRetainedSlots; i++) {
-         RetainedInactiveLightCandidate candidate = retainedCandidates.get(i);
-         mergedLights.add(candidate.light());
-         this.retainedInactiveLights.put(
-            new Vector3f(candidate.light().position()),
-            new RetainedInactiveLight(candidate.light().blockId(), candidate.light().type(), candidate.remainingCompiles())
-         );
-      }
-
-      mergedLights.sort(STABLE_LIGHT_ORDER);
-      return mergedLights.toArray(LightInstance[]::new);
    }
 
    /**
@@ -1097,6 +994,13 @@ public class LightRegistry implements Destructable {
       }
    }
 
+   public BlockLightInfo resolveLightInfo(BlockPos blockPos, BlockState blockState, ClientWorld level) {
+      if (level != null && level.isChunkLoaded(blockPos)) {
+         return this.lightList.get(blockPos, level);
+      }
+      return this.lightList.get(blockState);
+   }
+
    public void onBlockUpdate(BlockPos blockPos) {
       this.lock.writeLock().lock();
       try {
@@ -1105,6 +1009,15 @@ public class LightRegistry implements Destructable {
             return;
          }
          this.syncTracedLight(level, blockPos, level.getBlockState(blockPos));
+      } finally {
+         this.lock.writeLock().unlock();
+      }
+   }
+
+   public void onBlockUpdate(BlockPos blockPos, BlockState blockState, BlockLightInfo lightInfo) {
+      this.lock.writeLock().lock();
+      try {
+         this.syncTracedLight(blockPos, blockState, lightInfo);
       } finally {
          this.lock.writeLock().unlock();
       }
@@ -1276,7 +1189,10 @@ public class LightRegistry implements Destructable {
          Vector3f pos = e.getKey();
          TracedLightPosition tracedPos = e.getValue();
          BlockPos blockPos = new BlockPos((int) pos.x, (int) pos.y, (int) pos.z);
-         if (!this.isTrackedChunkLoaded(blockPos) || !level.isChunkLoaded(blockPos)) {
+         // WorldRegistry.clearChunkLights already removes lights when an RT-owned chunk is
+         // evicted. Do not also purge lights on transient ClientWorld chunk-read gaps here,
+         // or the traced-light set churns while the same RT chunk is still resident.
+         if (!this.isTrackedChunkLoaded(blockPos)) {
             itr.remove();
             this.tracedLightSetDirty = true;
          } else {
@@ -1317,7 +1233,15 @@ public class LightRegistry implements Destructable {
    }
 
    private void syncTracedLight(ClientWorld level, BlockPos blockPos, BlockState blockState) {
-      BlockLightInfo lightInfo = this.lightList.get(blockPos, level);
+      if (!level.isChunkLoaded(blockPos)) {
+         return;
+      }
+
+      BlockLightInfo lightInfo = this.resolveLightInfo(blockPos, blockState, level);
+      this.syncTracedLight(blockPos, blockState, lightInfo);
+   }
+
+   private void syncTracedLight(BlockPos blockPos, BlockState blockState, BlockLightInfo lightInfo) {
       Vector3f lightPos = new Vector3f(blockPos.getX() + 0.5F, blockPos.getY() + 0.5F, blockPos.getZ() + 0.5F);
       TracedLightPosition previous = this.tracedLightPositions.get(lightPos);
       if (lightInfo == null) {
@@ -1328,7 +1252,10 @@ public class LightRegistry implements Destructable {
          return;
       }
 
-      boolean tracedVisible = lightInfo.isTraced() && !shouldCull(level, blockPos);
+      // Keep traced-light activity stable. RTXDI and the original local implementation do
+      // not toggle emitters active/inactive based on enclosure culling, and doing so here
+      // churns the light buffer and ReGIR state during pure camera motion.
+      boolean tracedVisible = lightInfo.isTraced();
       if (!tracedVisible) {
          if (previous != null && this.tracedLightPositions.remove(lightPos, previous)) {
             DirtyReason reason = lightInfo.isTraced() ? DirtyReason.CULLED : DirtyReason.REMOVED_NO_LIGHT;

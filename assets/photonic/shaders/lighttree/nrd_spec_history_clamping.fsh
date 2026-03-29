@@ -42,8 +42,7 @@ void spec_accumulate_fast_history_stats(ivec2 centerCoord, out vec3 meanYcocg, o
             vec3 samplePos = texelFetch(radiosity_position, sampleCoord, 0).xyz;
             float sampleViewZ = nrd_compute_view_z(samplePos);
             if (sampleViewZ > ph_nrd_denoising_range || sampleViewZ < 0.001) continue;
-            NrdDirectHistorySample s = nrd_unpack_direct_history(texelFetch(spec_fast_input, sampleCoord, 0));
-            vec3 ycocg = nrd_rgb_to_ycocg(s.radiance);
+            vec3 ycocg = nrd_rgb_to_ycocg(texelFetch(spec_fast_input, sampleCoord, 0).rgb);
             sumFirst  += ycocg;
             sumSecond += ycocg * ycocg;
             sampleCount += 1.0;
@@ -111,11 +110,11 @@ void main() {
 
     // --- Fetch inputs ---
     NrdDirectHistorySample slowInput = nrd_unpack_direct_history(texelFetch(spec_historyfix_output, tex_coord, 0));
-    NrdDirectHistorySample fastInput = nrd_unpack_direct_history(texelFetch(spec_fast_input, tex_coord, 0));
+    vec4 fastInput = texelFetch(spec_fast_input, tex_coord, 0);
     float historyLength = nrd_decoded_history(texelFetch(spec_history_length_clamp_input, tex_coord, 0));
 
     vec3 slowYcocg = nrd_rgb_to_ycocg(slowInput.radiance);
-    vec3 fastYcocg = nrd_rgb_to_ycocg(fastInput.radiance);
+    vec3 fastYcocg = nrd_rgb_to_ycocg(fastInput.rgb);
 
     // --- Spatial stats (5x5) ---
     vec3 fastMeanYcocg;
@@ -140,11 +139,11 @@ void main() {
 
     vec3 outSlowRgb = clampedSlowRgb;
     float outSlowSecondMoment = slowInput.secondMoment;
-    vec3 outFastRgb = fastInput.radiance;
+    vec3 outFastRgb = fastInput.rgb;
 
     bool isYoungHistory = historyLength <= spec_history_fix_frame_num;
     if (isYoungHistory) {
-        outSlowRgb = fastInput.radiance;
+        outSlowRgb = fastInput.rgb;
     }
 
     // --- Clamping factor ---
@@ -159,12 +158,12 @@ void main() {
     // already has rejection heuristics that diffuse does not have
     float historyDifferenceL = 0.33 * RELAX_ANTILAG_ACCELERATION_AMOUNT_SCALE
         * spec_history_acceleration_amount
-        * nrd_luminance(abs(fastInput.radiance - slowInput.radiance));
+        * nrd_luminance(abs(fastInput.rgb - slowInput.radiance));
     historyDifferenceL *= clampFactor;
     if (isYoungHistory) historyDifferenceL = 0.0;
 
     // --- Acceleration direction ---
-    vec3 colorDistanceToNoisyInput = noisyMean - fastInput.radiance;
+    vec3 colorDistanceToNoisyInput = noisyMean - fastInput.rgb;
     float colorDistanceToNoisyInputL = nrd_luminance(abs(colorDistanceToNoisyInput));
     vec3 colorAcceleration = (colorDistanceToNoisyInputL == 0.0)
         ? vec3(0.0)
@@ -200,7 +199,6 @@ void main() {
     outSlowSecondMoment = max(0.0, outSlowSecondMoment + momentCorrection);
 
     spec_clamped_slow_out = nrd_pack_direct_history(outSlowRgb, outSlowSecondMoment);
-    // NRD reference (line 178): specular responsive output preserves 2nd moment in .a
-    // (diffuse zeros it, but specular carries it forward)
-    spec_clamped_fast_out = vec4(max(outFastRgb, vec3(0.0)), fastInput.secondMoment);
+    // SpecFast carries responsive radiance in rgb and the local specular hit distance in .a.
+    spec_clamped_fast_out = vec4(max(outFastRgb, vec3(0.0)), fastInput.a);
 }

@@ -9,6 +9,7 @@ layout(location = 0) out vec4 direct_historyfix_out;
 
 uniform sampler2D direct_historyfix_input;
 uniform sampler2D nrd_history_length_tex;
+uniform float ph_debug_enable_direct_history_fix;
 uniform float ph_nrd_depth_threshold;
 uniform float ph_nrd_denoising_range;
 
@@ -25,6 +26,11 @@ vec2 nrd_mirror_uv(vec2 uv) {
 void main() {
     if (!is_in_world()) {
         direct_historyfix_out = vec4(0.0);
+        return;
+    }
+
+    if (ph_debug_enable_direct_history_fix < 0.5) {
+        direct_historyfix_out = texelFetch(direct_historyfix_input, tex_coord, 0);
         return;
     }
 

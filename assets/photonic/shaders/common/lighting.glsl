@@ -2,55 +2,8 @@
 #include "/photonics/photonics.glsl"
 #include "/photonics/common/util.glsl"
 
-// Dirty-region invalidation support for GI path.
-// When restir.glsl is included first it already defines this guard + function;
-// when common/lighting.glsl is used standalone (basic path) we need our own copy.
-#ifndef PH_DIRTY_REGION_DEFINED
-#define PH_DIRTY_REGION_DEFINED
-uniform float light_blend_factor;
-uniform int light_blend_region_count;
-uniform vec3 light_blend_min;
-uniform vec3 light_blend_max;
-uniform vec3 light_blend_min_1;
-uniform vec3 light_blend_max_1;
-uniform vec3 light_blend_min_2;
-uniform vec3 light_blend_max_2;
-uniform vec3 light_blend_min_3;
-uniform vec3 light_blend_max_3;
-uniform vec3 light_blend_min_4;
-uniform vec3 light_blend_max_4;
-uniform vec3 light_blend_min_5;
-uniform vec3 light_blend_max_5;
-uniform vec3 light_blend_min_6;
-uniform vec3 light_blend_max_6;
-uniform vec3 light_blend_min_7;
-uniform vec3 light_blend_max_7;
-
-bool ph_dirty_region_contains(vec3 worldPosition, vec3 regionMin, vec3 regionMax) {
-    bvec3 insideMin = greaterThanEqual(worldPosition, regionMin);
-    bvec3 insideMax = lessThan(worldPosition, regionMax);
-    return all(insideMin) && all(insideMax);
-}
-
-float ph_dirty_region_factor(vec3 worldPosition) {
-    if (light_blend_factor <= 0.0f || light_blend_region_count <= 0) return 0.0f;
-    if (ph_dirty_region_contains(worldPosition, light_blend_min, light_blend_max)) return light_blend_factor;
-    if (light_blend_region_count <= 1) return 0.0f;
-    if (ph_dirty_region_contains(worldPosition, light_blend_min_1, light_blend_max_1)) return light_blend_factor;
-    if (light_blend_region_count <= 2) return 0.0f;
-    if (ph_dirty_region_contains(worldPosition, light_blend_min_2, light_blend_max_2)) return light_blend_factor;
-    if (light_blend_region_count <= 3) return 0.0f;
-    if (ph_dirty_region_contains(worldPosition, light_blend_min_3, light_blend_max_3)) return light_blend_factor;
-    if (light_blend_region_count <= 4) return 0.0f;
-    if (ph_dirty_region_contains(worldPosition, light_blend_min_4, light_blend_max_4)) return light_blend_factor;
-    if (light_blend_region_count <= 5) return 0.0f;
-    if (ph_dirty_region_contains(worldPosition, light_blend_min_5, light_blend_max_5)) return light_blend_factor;
-    if (light_blend_region_count <= 6) return 0.0f;
-    if (ph_dirty_region_contains(worldPosition, light_blend_min_6, light_blend_max_6)) return light_blend_factor;
-    if (light_blend_region_count <= 7) return 0.0f;
-    return ph_dirty_region_contains(worldPosition, light_blend_min_7, light_blend_max_7) ? light_blend_factor : 0.0f;
-}
-#endif
+// Dirty-region invalidation support shared with the direct-light temporal passes.
+#include "/photonics/common/light_blend_regions.glsl"
 
 void sample_handheld(out vec4 color) {
     if (any(notEqual(handheld_color, vec3(0.0f)))) {
