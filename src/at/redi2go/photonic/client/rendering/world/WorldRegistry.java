@@ -285,7 +285,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          boolean chunkContentChanged = this.update(this.rootMemoryManager, rootUploadNeeded, fullRootRebuild);
          boolean tracedLightSetDirty = this.blockLightEnabled && this.lightRegistry.consumeTracedLightSetDirty();
          int pendingTracedLightMutations = this.blockLightEnabled ? this.lightRegistry.consumePendingTracedLightMutations() : 0;
-         boolean newLightWork = this.blockLightEnabled && (chunkTopologyChanged || tracedLightSetDirty);
+         // Treat geometry edits like light mutations so direct-light history and
+         // traced-light state do not lag behind block updates that change the
+         // occlusion field without changing chunk residency.
+         boolean newLightWork = this.blockLightEnabled && (chunkTopologyChanged || tracedLightSetDirty || chunkContentChanged);
          if (newLightWork) {
             this.pendingStableLightCompile = true;
             this.markPendingLightMutation(currentRenderFrame, currentWorldTick);

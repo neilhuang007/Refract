@@ -86,6 +86,15 @@ void trace_ray(inout RayJob job, bool transparency) {
 
     vec3 previous_tint = vec3(-1f);
     ray_distance_limit_reached = false;
+    #ifdef PH_FULL_TRANSPARENCY
+    bool usePerVoxelTransparency = true;
+    #else
+    // RTXDI visibility rays need exact segment occlusion against the voxelized
+    // scene, even if the shaderpack's global transparency mode is the cheaper
+    // per-block variant. Restrict the more exact stepping to bounded rays so
+    // long-path GI/secondary traces keep the pack's intended performance mode.
+    bool usePerVoxelTransparency = transparency && ray_max_trace_distance > 0.0f;
+    #endif
 
     for (int i = RAY_ITERATION_COUNT; !(ray_iteration_bound_reached = i < 0); i--) {
         // GLSL integer casts truncate toward zero, which misindexes negative voxel
@@ -191,13 +200,13 @@ void trace_ray(inout RayJob job, bool transparency) {
 
                     if (entries.z < 0) { // found bloxel
                         if (before_min_trace_distance) {
-                            #ifdef PH_FULL_TRANSPARENCY
-                            scale = 0;
-                            entry = ph_to_fake_air_entry(voxel_pos);
-                            #else
-                            scale = 4;
-                            entry = ph_to_fake_air_entry(block_pos);
-                            #endif
+                            if (usePerVoxelTransparency) {
+                                scale = 0;
+                                entry = ph_to_fake_air_entry(voxel_pos);
+                            } else {
+                                scale = 4;
+                                entry = ph_to_fake_air_entry(block_pos);
+                            }
                         #ifdef PH_USE_TRANSPARENCY
                         } else if (!transparency) {
                             job.result_hit = true;
@@ -237,13 +246,13 @@ void trace_ray(inout RayJob job, bool transparency) {
                                 previous_tint = color.rgb;
                             }
 
-                            #ifdef PH_FULL_TRANSPARENCY
-                            scale = 0;
-                            entry = ph_to_fake_air_entry(voxel_pos);
-                            #else
-                            scale = 4;
-                            entry = ph_to_fake_air_entry(block_pos);
-                            #endif
+                            if (usePerVoxelTransparency) {
+                                scale = 0;
+                                entry = ph_to_fake_air_entry(voxel_pos);
+                            } else {
+                                scale = 4;
+                                entry = ph_to_fake_air_entry(block_pos);
+                            }
                         }
                         #else
                         } else {
