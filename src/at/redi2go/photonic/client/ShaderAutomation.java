@@ -622,21 +622,73 @@ public final class ShaderAutomation {
 
       int pixelCount = pixels.length / 4;
       double neighborMatchSum = 0.0;
+      double failReasonSum = 0.0;
       double remapValidSum = 0.0;
-      double positiveWeightSum = 0.0;
+      int lightReloadCount = 0;
+      int emptyMotionCount = 0;
+      int oobCount = 0;
+      int invalidSurfCount = 0;
+      int depthFailCount = 0;
+      int normalFailCount = 0;
+      int mixedCount = 0;
       for (int i = 0; i < pixelCount; i++) {
          int base = i * 4;
-         neighborMatchSum += Math.clamp(pixels[base + 1], 0.0f, 1.0f);
-         remapValidSum += Math.clamp(pixels[base + 2], 0.0f, 1.0f);
-         positiveWeightSum += Math.clamp(pixels[base + 3], 0.0f, 1.0f);
+         float neighborMatch = Math.clamp(pixels[base + 1], 0.0f, 1.0f);
+         float failReason = pixels[base + 2];
+         float remapValid = Math.clamp(pixels[base + 3], 0.0f, 1.0f);
+         neighborMatchSum += neighborMatch;
+         failReasonSum += failReason;
+         remapValidSum += remapValid;
+         // Classify failure reason (encoded as 0.1-0.7 with 0.05 tolerance)
+         if (neighborMatch < 0.5f && failReason > 0.05f) {
+            if (failReason < 0.15f) lightReloadCount++;
+            else if (failReason < 0.25f) emptyMotionCount++;
+            else if (failReason < 0.35f) oobCount++;
+            else if (failReason < 0.45f) invalidSurfCount++;
+            else if (failReason < 0.55f) depthFailCount++;
+            else if (failReason < 0.65f) normalFailCount++;
+            else mixedCount++;
+         }
       }
 
       double pixelCountDouble = Math.max(1, pixelCount);
       return new DirectTemporalDebugStats(
          neighborMatchSum / pixelCountDouble,
+         failReasonSum / pixelCountDouble,
          remapValidSum / pixelCountDouble,
-         positiveWeightSum / pixelCountDouble
+         lightReloadCount / pixelCountDouble,
+         emptyMotionCount / pixelCountDouble,
+         oobCount / pixelCountDouble,
+         invalidSurfCount / pixelCountDouble,
+         depthFailCount / pixelCountDouble,
+         normalFailCount / pixelCountDouble,
+         mixedCount / pixelCountDouble
       );
+   }
+
+   // Returns [avgDepthRatio, avgExpectedDepth, avgCandidateDepth, validPixelCount]
+   private static float[] computeDepthDebugStats(TextureObject texture) {
+      if (texture == null) return new float[]{0, 0, 0, 0};
+      texture.updatePerFrame();
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null || pixels.length < 4) return new float[]{0, 0, 0, 0};
+      int pixelCount = pixels.length / 4;
+      double ratioSum = 0, expectedSum = 0, candidateSum = 0;
+      int validCount = 0;
+      for (int i = 0; i < pixelCount; i++) {
+         int base = i * 4;
+         float depthRatio = pixels[base + 1]; // .y = depthRatio
+         float expected = pixels[base + 2];   // .z = expectedPrevLinearDepth
+         float candidate = pixels[base + 3];  // .w = candidateDepth
+         if (expected > 0.001f && candidate > 0.001f) {
+            ratioSum += depthRatio;
+            expectedSum += expected;
+            candidateSum += candidate;
+            validCount++;
+         }
+      }
+      double vc = Math.max(1, validCount);
+      return new float[]{(float)(ratioSum / vc), (float)(expectedSum / vc), (float)(candidateSum / vc), validCount};
    }
 
    private static PositionDebugStats computePositionDebugStats(TextureObject texture) {
@@ -901,6 +953,7 @@ public final class ShaderAutomation {
          TextureObject specRawTexture = textures.get("spec_raw");
          TextureObject directTemporalReservoirTexture = textures.get("direct_temporal_reservoir");
          TextureObject directTemporalReservoirSampleTexture = textures.get("direct_temporal_reservoir_sample");
+         TextureObject directTemporalReservoirMetaTexture = textures.get("direct_temporal_reservoir_meta");
          TextureObject lightingTexture = textures.get("lighting");
          TextureObject stageAlbedoTexture = textures.get("stage_albedo");
          TextureObject stageLightingTexture = textures.get("stage_lighting");
@@ -919,6 +972,7 @@ public final class ShaderAutomation {
          this.captureTexture("spec_denoised", specDenoisedTexture, captureIndex);
          this.captureTexture("spec_raw", specRawTexture, captureIndex);
          this.captureTexture("direct_temporal_reservoir_sample", directTemporalReservoirSampleTexture, captureIndex);
+         this.captureTexture("direct_temporal_reservoir_meta", directTemporalReservoirMetaTexture, captureIndex);
          BufferedImage lightingImage = this.captureTexture("lighting", lightingTexture, captureIndex);
          this.captureTexture("stage_albedo", stageAlbedoTexture, captureIndex);
          BufferedImage stageLightingImage = this.captureTexture("stage_lighting", stageLightingTexture, captureIndex);
@@ -952,6 +1006,7 @@ public final class ShaderAutomation {
          FireflyStats indirectFireflyStats = computeFireflyStats(indirectTexture);
          ReservoirDebugStats temporalReservoirStats = computeReservoirDebugStats(directTemporalReservoirTexture);
          DirectTemporalDebugStats temporalDebugStats = computeDirectTemporalDebugStats(directTemporalReservoirSampleTexture);
+         float[] depthDebug = computeDepthDebugStats(directTemporalReservoirMetaTexture);
          ReservoirDebugStats resolvedReservoirStats = computeReservoirDebugStats(directResolvedReservoirTexture);
          ReservoirDebugStats shadedReservoirStats = computeReservoirDebugStats(directReservoirTexture);
          PositionDebugStats stagePositionStats = computePositionDebugStats(stagePositionTexture);
@@ -1231,11 +1286,26 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.3f", stagePositionStats.maxZ())
          );
          Photonic.info(
-            "[Automation] temporal debug capture={} neighborMatch={} remapValid={} positiveWeight={}",
+            "[Automation] temporal debug capture={} neighborMatch={} failReasonAvg={} remapValid={} failures(lightReload={}, emptyMotion={}, oob={}, invalidSurf={}, depthFail={}, normalFail={}, mixed={})",
             this.capturesTaken,
             String.format(Locale.ROOT, "%.5f", temporalDebugStats.neighborMatchFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.failReasonAvg()),
             String.format(Locale.ROOT, "%.5f", temporalDebugStats.remapValidFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.positiveWeightFraction())
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.lightReloadFrac()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.emptyMotionFrac()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.oobFrac()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.invalidSurfFrac()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.depthFailFrac()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.normalFailFrac()),
+            String.format(Locale.ROOT, "%.5f", temporalDebugStats.mixedFrac())
+         );
+         Photonic.info(
+            "[Automation] depth debug capture={} avgRatio={} viewWidth={} prevTexWidth={} validPixels={}",
+            this.capturesTaken,
+            String.format(Locale.ROOT, "%.5f", depthDebug[0]),
+            String.format(Locale.ROOT, "%.0f", depthDebug[1]),
+            String.format(Locale.ROOT, "%.0f", depthDebug[2]),
+            (int) depthDebug[3]
          );
          Photonic.info("[Automation] fireflies capture={} directRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) directDenoised(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) specRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) specDenoised(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) indirectRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) indirect(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={})",
             this.capturesTaken,
@@ -2468,10 +2538,17 @@ public final class ShaderAutomation {
 
    private record DirectTemporalDebugStats(
       double neighborMatchFraction,
+      double failReasonAvg,
       double remapValidFraction,
-      double positiveWeightFraction
+      double lightReloadFrac,
+      double emptyMotionFrac,
+      double oobFrac,
+      double invalidSurfFrac,
+      double depthFailFrac,
+      double normalFailFrac,
+      double mixedFrac
    ) {
-      private static final DirectTemporalDebugStats EMPTY = new DirectTemporalDebugStats(0.0, 0.0, 0.0);
+      private static final DirectTemporalDebugStats EMPTY = new DirectTemporalDebugStats(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
    }
 
    private record PositionDebugStats(

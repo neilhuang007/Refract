@@ -54,7 +54,7 @@ void main() {
     vec3 shadingNormal = currentSurface.shadingNormal;
     vec3 surfaceAlbedo = currentSurface.albedo;
 
-    position_frag_out = vec4(worldPos, 1.0f);
+    position_frag_out = vec4(worldPos, ph_linear_view_depth(modelview_projection, worldPos));
     normal_frag_out = vec4(geometryNormal, 1.0f);
     mapped_normal_frag_out = vec4(shadingNormal, 1.0f);
     albedo_frag_out = vec4(surfaceAlbedo, 1.0f);

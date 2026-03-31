@@ -579,8 +579,9 @@ public class LightTreeRenderer extends MainRenderer {
       // RTXDI's default behavior instead of carrying occluded samples into reuse.
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_enable_visibility", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_brdf_cutoff", () -> 0.0001f);
-      // Keep the intended importance sampler active by default; uniform sampling
-      // is only used as a temporary isolation baseline while debugging.
+      // Keep the proposal path on Power_RIS while the ReGIR renderer path is still under audit.
+      // The recent ReGIR_RIS runtime switch introduced a new bottom-screen / tiled sampling
+      // regression that was not present on the established baseline.
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> this.properties.getRestirTemporalBiasMode());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_permutation_sampling", () -> this.properties.getRestirTemporalPermutationSampling());
@@ -588,11 +589,6 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_visibility_shortcut", () -> this.properties.getRestirTemporalVisibilityShortcut());
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_uniform_random", () -> this.getTemporalUniformRandom());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_fallback_sampling_mode", () -> 1.0f);
-      uniforms.uniform1f(
-         UniformUpdateFrequency.PER_FRAME,
-         "ph_debug_enable_direct_temporal_reuse",
-         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE.value ? 1.0f : 0.0f
-      );
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_bias_mode", () -> {
          float override = PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value;
          return override >= 0 ? override : this.properties.getRestirSpatialBiasMode();
@@ -611,11 +607,6 @@ public class LightTreeRenderer extends MainRenderer {
       });
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_depth_threshold", () -> this.properties.getRestirSpatialDepthThreshold());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_normal_threshold", () -> this.properties.getRestirSpatialNormalThreshold());
-      uniforms.uniform1f(
-         UniformUpdateFrequency.PER_FRAME,
-         "ph_debug_enable_direct_spatial_reuse",
-         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_SPATIAL_REUSE.value ? 1.0f : 0.0f
-      );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_debug_enable_direct_final_visibility",
@@ -818,6 +809,7 @@ public class LightTreeRenderer extends MainRenderer {
          Map.entry("spec_raw", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
          Map.entry("direct_temporal_reservoir", this.directTemporalReservoirBuffer.getWriteAttachment("data")),
          Map.entry("direct_temporal_reservoir_sample", this.directTemporalReservoirBuffer.getWriteAttachment("sample")),
+         Map.entry("direct_temporal_reservoir_meta", this.directTemporalReservoirBuffer.getWriteAttachment("meta")),
          Map.entry("handheld", this.lightingBuffer.getWriteAttachment("handheld")),
          Map.entry("indirect", this.getResolvedIndirectTexture()),
          Map.entry("indirect_raw", this.lightingBuffer.getWriteAttachment("indirect")),

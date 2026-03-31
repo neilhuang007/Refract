@@ -7,11 +7,9 @@ layout(location = 1) out vec4 reservoir_sample_frag_out;
 layout(location = 2) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/common/light_blend_regions.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 
 uniform float ph_debug_disable_temporal_reset;
-uniform float ph_debug_enable_direct_temporal_reuse;
 
 // Runtime bias correction mode — matches RTXDI TemporalResampling.hlsli lines 173-212.
 // Corresponds to RTXDI_DITemporalResamplingParameters::biasCorrectionMode (ReSTIRDIParameters.h line 96).
@@ -123,25 +121,43 @@ void main() {
     float temporalRemapDebug = 0.0;
     float temporalWeightDebug = 0.0;
 
-    // ENGINE-SPECIFIC EXTENSION (Fix #11): if the light list / world offset has just
-    // been reloaded, previous-frame reservoir replay data is not trustworthy in this port.
-    // Regional light-blend invalidation must also block temporal reuse for affected pixels,
-    // otherwise direct reservoirs mix stale light selections from the previous light set.
-    float localLightBlend = ph_dirty_region_factor(currentSurface.worldPos);
-    bool lightReloadActive = (light_reload && (ph_debug_disable_temporal_reset < 0.5f))
-        || localLightBlend > 0.0f;
+    // Granular temporal debug: encode failure step for automation analysis.
+    // Packed into temporalWeightDebug when neighbor is NOT found:
+    //   0.1 = lightReload blocked temporal
+    //   0.2 = motion w==0 (empty motion vector)
+    //   0.3 = all 9 taps out of bounds
+    //   0.4 = all 9 taps had invalid surface (zero normals)
+    //   0.5 = all 9 taps failed depth check
+    //   0.6 = all 9 taps failed normal check
+    //   0.7 = mixed failures
+    float debugFailReason = 0.0;
+    float debugDepthRatio = 0.0;
+    float debugExpectedDepth = 0.0;
+    float debugCandidateDepth = 0.0;
+    int debugOobCount = 0;
+    int debugInvalidSurfCount = 0;
+    int debugDepthFailCount = 0;
+    int debugNormalFailCount = 0;
+
+    // ENGINE-SPECIFIC EXTENSION: full light-list / world-offset reloads still invalidate
+    // temporal history in this port, but regional light-blend masks are not part of RTXDI's
+    // temporal reservoir algorithm. Keeping the regional gate here collapses temporal direct
+    // reuse across large screen areas even when light-index remapping remains valid.
+    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
 
     // RTXDI temporal resampling executes unconditionally on stable frames. The only history
     // gate here is the engine-side reload guard above; otherwise previous-frame remapping
     // follows TemporalResampling.hlsli line-for-line.
-    if (!lightReloadActive && ph_debug_enable_direct_temporal_reuse >= 0.5) {
+    vec4 motionRaw = vec4(0.0);
+    if (lightReloadActive) {
+        debugFailReason = 0.1;  // light reload blocked temporal
+    }
+    if (!lightReloadActive) {
         // Step 4: Backproject using per-pixel motion vectors (RTXDI lines 57-67).
-        vec3 motion = texelFetch(radiosity_motion, pixelPosition, 0).xyz;
+        motionRaw = texelFetch(radiosity_motion, pixelPosition, 0);
+        vec3 motion = motionRaw.xyz;
 
         // RTXDI lines 59-62: sub-pixel jitter when permutation sampling is disabled.
-        // SDK default (ReSTIRDI.cpp line 61): enablePermutationSampling = true.
-        // Sentinel pattern (SDK-default-true): unbound (0.0) or -1.0 → true (SDK default).
-        // Explicit false: pass -2.0 (< -1.5) to force disabled.
         bool enablePermutationSampling = (ph_restir_temporal_permutation_sampling < -1.5) ? false : true;
         if (!enablePermutationSampling) {
             motion.xy += vec2(RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng)) - 0.5;
@@ -152,11 +168,13 @@ void main() {
         ivec2 prevPos = ivec2(round(reprojectedSamplePosition));
 
         // RTXDI line 67: expectedPrevLinearDepth = currentLinearDepth + motion.z
-        float currentLinearDepth = ph_linear_view_depth(modelview_projection, currentSurface.worldPos);
+        // Use stored linear depth from the position buffer's .w channel (set by the stage shader)
+        // instead of recomputing via MVP projection. This matches RTXDI's RAB_GetSurfaceLinearDepth
+        // which loads depth directly from the G-buffer, avoiding the unproject→reproject precision error.
+        float currentLinearDepth = texelFetch(radiosity_position, pixelPosition, 0).w;
         float expectedPrevLinearDepth = currentLinearDepth + motion.z;
 
         // SDK defaults (ReSTIRDI.cpp lines 59-60): depthThreshold=0.1, normalThreshold=0.5.
-        // Sentinel: 0.0 (unbound) → SDK default; -1.0 → SDK default (explicit); > 0 → explicit value.
         float temporalDepthThreshold = (ph_restir_temporal_depth_threshold > 0.0)
             ? ph_restir_temporal_depth_threshold
             : 0.1;
@@ -208,7 +226,10 @@ void main() {
 
             // Platform safety: texelFetch with out-of-bounds UV is undefined in GLSL.
             // RTXDI does not need this check because buffer loads handle OOB internally.
-            if (!lt_is_viewport_uv_in_bounds(idx)) {
+            // Use textureSize for bounds instead of viewWidth/viewHeight to avoid render-scale mismatch.
+            ivec2 prevTexSize = textureSize(prev_radiosity_position, 0);
+            if (any(lessThan(idx, ivec2(0))) || any(greaterThanEqual(idx, prevTexSize))) {
+                debugOobCount++;
                 continue;
             }
 
@@ -217,17 +238,28 @@ void main() {
 
             // RTXDI line 94: RAB_IsSurfaceValid — skip sky/empty pixels (zero normals)
             if (!lt_is_valid_surface(temporalSurfaceCandidate)) {
+                debugInvalidSurfCount++;
                 continue;
             }
 
-            // RTXDI lines 98-101: neighbor validation
-            if (!RTXDI_IsValidTemporalNeighbor(
-                currentSurface,
-                temporalSurfaceCandidate,
-                expectedPrevLinearDepth,
-                temporalNormalThreshold,
-                temporalDepthThreshold
-            )) {
+            // RTXDI lines 98-101: neighbor validation using stored linear depth.
+            // Read candidate's stored linear depth from the previous frame's position.w channel,
+            // matching RTXDI's RAB_GetSurfaceLinearDepth(temporalSurface) semantics.
+            float candidateDepth = texelFetch(prev_radiosity_position, idx, 0).w;
+            bool depthOk = rtxdi_compare_relative_difference(expectedPrevLinearDepth, candidateDepth, temporalDepthThreshold);
+            bool normalOk = dot(temporalSurfaceCandidate.geometryNormal, currentSurface.geometryNormal) >= temporalNormalThreshold;
+            // Debug
+            if (i == 0) {
+                debugDepthRatio = (candidateDepth > 0.001) ? (expectedPrevLinearDepth / candidateDepth) : -1.0;
+                debugExpectedDepth = expectedPrevLinearDepth;
+                debugCandidateDepth = candidateDepth;
+            }
+            if (!depthOk) {
+                debugDepthFailCount++;
+                continue;
+            }
+            if (!normalOk) {
+                debugNormalFailCount++;
                 continue;
             }
 
@@ -236,6 +268,23 @@ void main() {
             temporalSurface = temporalSurfaceCandidate;
             foundNeighbor = true;
             break;
+        }
+
+        // Encode failure reason when no neighbor found
+        if (!foundNeighbor) {
+            if (motionRaw.w == 0.0) {
+                debugFailReason = 0.2;  // empty motion vector
+            } else if (debugOobCount == 9) {
+                debugFailReason = 0.3;  // all out of bounds
+            } else if (debugInvalidSurfCount > 0 && debugDepthFailCount == 0 && debugNormalFailCount == 0) {
+                debugFailReason = 0.4;  // all invalid surfaces
+            } else if (debugDepthFailCount > 0 && debugNormalFailCount == 0) {
+                debugFailReason = 0.5;  // depth failures dominate
+            } else if (debugNormalFailCount > 0 && debugDepthFailCount == 0) {
+                debugFailReason = 0.6;  // normal failures dominate
+            } else {
+                debugFailReason = 0.7;  // mixed
+            }
         }
 
         // Step 6: Load and combine previous sample (RTXDI lines 114-171)
@@ -404,6 +453,15 @@ void main() {
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(state);
     // Debug diagnostics in unused yzw channels (only .x is consumed by unpack).
     // Written here so the automation can track temporal resampling quality.
-    reservoir_sample_frag_out.yzw = vec3(temporalNeighborDebug, temporalRemapDebug, temporalWeightDebug);
+    // .y = neighborDebug (1.0=found), .z = failReason when not found, .w = remapDebug (1.0=valid)
+    reservoir_sample_frag_out.yzw = vec3(temporalNeighborDebug, debugFailReason, temporalRemapDebug);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(state);
+
+    // Encode debug in meta.yzw (unused by unpack):
+    // .y = depth ratio at center tap (expected/candidate, ~1.0 = match)
+    // .z = viewWidth (to verify viewport matches FBO)
+    // .w = prev_radiosity_position texture width
+    reservoir_meta_frag_out.y = debugDepthRatio;
+    reservoir_meta_frag_out.z = viewWidth;
+    reservoir_meta_frag_out.w = float(textureSize(prev_radiosity_position, 0).x);
 }
