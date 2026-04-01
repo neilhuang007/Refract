@@ -65,7 +65,7 @@ public class ChunkBuilderMeshingTaskMixin {
    ) {
       if (!Raytracer.isDisabled() && PhotonicsConfig.isVoxelized(instance.getBlock())) {
          PBlock block = Raytracer.INSTANCE.getBlockRegistry().getBlock(instance);
-         BlockState blockState = block != null && block.canOcclude ? Blocks.STONE.getDefaultState() : Blocks.GLASS.getDefaultState();
+         BlockState blockState = block != null && block.canOcclude ? Blocks.STONE.getDefaultState() : Blocks.OAK_LEAVES.getDefaultState();
          BakedModel model = cache.getBlockModels().getModelManager().getMissingModel();
          ((BlockRendererExt)cache.getBlockRenderer()).photonic$setRenderingVoxelBlock(true);
          cache.getBlockRenderer().renderModel(model, blockState, blockPos, modelOffset);

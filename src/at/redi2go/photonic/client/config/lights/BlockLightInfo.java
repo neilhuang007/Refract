@@ -12,6 +12,7 @@ import org.joml.Vector2f;
 import org.joml.Vector3f;
 
 public final class BlockLightInfo implements Comparable<BlockLightInfo> {
+   private static final float FOUR_PI = (float) (Math.PI * 4.0);
    private final LightPredicate predicate;
    private final LightColor color;
    private final float intensity;
@@ -27,6 +28,7 @@ public final class BlockLightInfo implements Comparable<BlockLightInfo> {
    private final Vector3f emissionAxis;
    private final float orientationSpread;
    private final float emissionSpread;
+   private final float sourcePower;
 
    public BlockLightInfo(LightPredicate predicate, LightColor color, float intensity, float radius, float falloff, boolean isTraced, boolean requestedTrace, LightOrientation orientation) {
       Objects.requireNonNull(predicate, "predicate was null");
@@ -48,6 +50,12 @@ public final class BlockLightInfo implements Comparable<BlockLightInfo> {
       this.radiusRcp = 1.0F / radius;
       float radiusSquared = Math.max((this.luminanceDotColor / 0.001F - 0.9F) / this.radiusRcp / falloff, 0.0F);
       this.blockRadius = (float) Math.sqrt(radiusSquared);
+      this.sourcePower = computeSourcePower(
+         this.luminanceDotColor,
+         this.radius,
+         this.falloff,
+         this.orientationSpread + this.emissionSpread
+      );
    }
 
    public Block block() {
@@ -94,6 +102,10 @@ public final class BlockLightInfo implements Comparable<BlockLightInfo> {
       return this.adjustedIntensity;
    }
 
+   public float sourcePower() {
+      return this.sourcePower;
+   }
+
    public Vector3f getRawColorAsVector() {
       return new Vector3f(this.rawColor);
    }
@@ -116,6 +128,34 @@ public final class BlockLightInfo implements Comparable<BlockLightInfo> {
 
    public float emissionSpread() {
       return this.emissionSpread;
+   }
+
+   private static float computeSourcePower(float luminanceDotColor, float radius, float falloff, float spread) {
+      if (luminanceDotColor <= 0.0F || radius <= 0.0F || falloff <= 1.0e-6F) {
+         return 0.0F;
+      }
+
+      // Match RTXDI's local-light PDF semantics: the presampling texture stores a per-light
+      // power/flux term rather than a receiver-space evaluation. The shader attenuation model is
+      // asymptotically color*intensity*(radius/falloff)/distance^2, so the equivalent isotropic
+      // flux term is luminance(color*intensity) * radius / falloff.
+      float fluxLuminance = luminanceDotColor * radius / falloff;
+      return FOUR_PI * fluxLuminance * computeEmissionFluxFactor(spread);
+   }
+
+   private static float computeEmissionFluxFactor(float spread) {
+      float clampedSpread = Math.max(0.0F, Math.min(spread, (float) Math.PI));
+      if (clampedSpread >= Math.PI) {
+         return 1.0F;
+      }
+
+      float sinSpread = (float) Math.sin(clampedSpread);
+      float cosSpread = (float) Math.cos(clampedSpread);
+      if (clampedSpread <= (float) (Math.PI * 0.5)) {
+         return 0.5F - 0.25F * cosSpread + (float) (Math.PI * 0.125) * sinSpread;
+      }
+
+      return 0.5F * (1.0F - cosSpread) + 0.25F * sinSpread * ((float) Math.PI - clampedSpread);
    }
 
 

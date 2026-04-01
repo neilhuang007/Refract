@@ -339,6 +339,30 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
+   void queueIdentityLightMappingsIfNeededRefreshesPreviousLights() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
+      MemoryOwner lightsMemory = (MemoryOwner) getField(registry, "lightsMemory");
+      MemoryOwner previousLightsMemory = (MemoryOwner) getField(registry, "previousLightsMemory");
+      IntBuffer lightsBuffer = lightsMemory.getMemory().getBuffer().asIntBuffer();
+      IntBuffer previousBuffer = previousLightsMemory.getMemory().getBuffer().asIntBuffer();
+
+      lightsBuffer.put(0, 0x12345678);
+      lightsBuffer.put(1, 0x0BADF00D);
+      previousBuffer.put(0, -1);
+      previousBuffer.put(1, -1);
+
+      setField(registry, "identityLightMappingPending", true);
+
+      assertTrue(registry.queueIdentityLightMappingsIfNeeded());
+      assertEquals(0x12345678, previousBuffer.get(0));
+      assertEquals(0x0BADF00D, previousBuffer.get(1));
+
+      @SuppressWarnings("unchecked")
+      Deque<MemoryOwner> previousUploadQueue = (Deque<MemoryOwner>) getField(getField(registry, "previousLightsMemoryManager"), "uploadQueue");
+      assertEquals(1, previousUploadQueue.size());
+   }
+
+   @Test
    void clearChunkLightsRemovesOnlyLightsInsideTheChunk() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")

@@ -609,6 +609,16 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_normal_threshold", () -> this.properties.getRestirSpatialNormalThreshold());
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
+         "ph_debug_enable_direct_temporal_reuse",
+         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE.value ? 1.0f : 0.0f
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_debug_enable_direct_spatial_reuse",
+         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_SPATIAL_REUSE.value ? 1.0f : 0.0f
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
          "ph_debug_enable_direct_final_visibility",
          () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_FINAL_VISIBILITY.value ? 1.0f : 0.0f
       );

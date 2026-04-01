@@ -263,7 +263,7 @@ public class ModSettingsScreen extends Screen {
             PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 2.0F;
             PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 1.0F;
             PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 10.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 1.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 2.0F;
          }
          case "medium" -> {
             PhotonicsStorage.RENDER_SCALE.value = 0.75F;
@@ -272,7 +272,7 @@ public class ModSettingsScreen extends Screen {
             PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 3.0F;
             PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 2.0F;
             PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 10.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 1.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 2.0F;
          }
          case "high" -> {
             PhotonicsStorage.RENDER_SCALE.value = 1.0F;
@@ -281,7 +281,7 @@ public class ModSettingsScreen extends Screen {
             PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 5.0F;
             PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 2.0F;
             PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 10.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 1.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 2.0F;
          }
          case "ultra" -> {
             PhotonicsStorage.RENDER_SCALE.value = 1.0F;
@@ -290,7 +290,7 @@ public class ModSettingsScreen extends Screen {
             PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 5.0F;
             PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 2.0F;
             PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 10.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 1.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 2.0F;
          }
          default -> {
             // "custom" — leave individual settings as-is, set all to auto
