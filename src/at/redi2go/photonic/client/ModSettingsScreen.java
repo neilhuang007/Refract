@@ -127,14 +127,18 @@ public class ModSettingsScreen extends Screen {
          w.setMessage(Text.of("ReSTIR Checkerboard: " + formatCheckerboardMode(checkerboardMode.value)));
          this.reloadShaders();
       }, "Cycles ReSTIR checkerboard sampling between Off, Black, and White\nso ph_restir_active_checkerboard_field matches RTXDI runtime modes.", () -> true));
-      PhotonicsStorage.Parameter<String> qualityProfile = PhotonicsStorage.QUALITY_PROFILE;
-      buttons.add(new ModSettingsScreen.PButton("Quality: " + formatQualityProfile(qualityProfile.value), w -> {
-         qualityProfile.value = getNextQualityProfile(qualityProfile.value);
-         qualityProfile.modified();
-         applyQualityProfile(qualityProfile.value);
-         w.setMessage(Text.of("Quality: " + formatQualityProfile(qualityProfile.value)));
-         this.reloadShaders();
-      }, "Quality preset: Potato (fastest), Low, Medium, High, Ultra (best).\nSets render scale, sample counts, denoiser passes, and bias correction.\nCustom = use shaderpack defaults.", () -> true));
+      PhotonicsStorage.Parameter<String> localLightSamplingMode = PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE;
+      buttons.add(new ModSettingsScreen.PButton("Local Light Sampling: " + formatRestirLocalLightSamplingMode(localLightSamplingMode.value), w -> {
+         localLightSamplingMode.value = getNextRestirLocalLightSamplingMode(localLightSamplingMode.value);
+         localLightSamplingMode.modified();
+         w.setMessage(Text.of("Local Light Sampling: " + formatRestirLocalLightSamplingMode(localLightSamplingMode.value)));
+      }, "Cycles the RTXDI/ReSTIR DI local-light proposal mode:\nUniform, Power RIS, and ReGIR RIS.", () -> true));
+      PhotonicsStorage.Parameter<Float> debugViewMode = PhotonicsStorage.DEBUG_VIEW_MODE;
+      buttons.add(new ModSettingsScreen.PButton("Debug View: " + formatDebugViewMode(debugViewMode.value), w -> {
+         debugViewMode.value = getNextDebugViewMode(debugViewMode.value);
+         debugViewMode.modified();
+         w.setMessage(Text.of("Debug View: " + formatDebugViewMode(debugViewMode.value)));
+      }, "Cycles debug visualization overlays:\nOff, Distance Heatmap, ReGIR Grid Hit/Miss, ReGIR Cell Index,\nReGIR Coverage, Initial Sampling Reason, Final Visibility Class, Selected Light Distance,\nReservoir Inv PDF, Reservoir Target PDF, Selected Solid Angle PDF,\nIncident Radiance, BRDF Response.", () -> true));
       OilifySlider oilifySizeSlider = new OilifySlider(PhotonicsStorage.OILIFY_SIZE, 3.0f, 15.0f, "OILIFY_SIZE", true);
       OilifySlider oilifySharpnessSlider = new OilifySlider(PhotonicsStorage.OILIFY_SHARPNESS, 0.0f, 1.0f, "Sharpness", false);
       OilifySlider oilifyScaleSlider = new OilifySlider(PhotonicsStorage.OILIFY_SCALE, 1.0f, 4.0f, "Scale", false);
@@ -142,18 +146,6 @@ public class ModSettingsScreen extends Screen {
       OilifySlider oilifyIterationsSlider = new OilifySlider(PhotonicsStorage.OILIFY_ITERATIONS, 1.0f, 8.0f, "OILIFY_ITERATIONS", true);
       OilifySlider oilifyDepthScalingSlider = new OilifySlider(PhotonicsStorage.OILIFY_DEPTH_SCALING, 0.0f, 2.0f, "Depth Scaling", false);
       OilifySlider oilifyStrokeStrengthSlider = new OilifySlider(PhotonicsStorage.OILIFY_STROKE_STRENGTH, 0.0f, 1.0f, "Stroke Strength", false);
-      OilifySlider renderScaleSlider = new OilifySlider(PhotonicsStorage.RENDER_SCALE, -1.0f, 1.0f, "Render Scale", false);
-      OilifySlider atrousPassesSlider = new OilifySlider(PhotonicsStorage.NRD_ATROUS_PASSES, -1.0f, 7.0f, "Atrous Passes", true);
-      OilifySlider initialSamplesSlider = new OilifySlider(PhotonicsStorage.RESTIR_INITIAL_SAMPLES, -1.0f, 32.0f, "Initial Samples", true);
-      OilifySlider spatialSamplesSlider = new OilifySlider(PhotonicsStorage.RESTIR_SPATIAL_SAMPLES, -1.0f, 8.0f, "DI Spatial Samples", true);
-      OilifySlider giSpatialSamplesSlider = new OilifySlider(PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES, -1.0f, 4.0f, "GI Spatial Samples", true);
-      OilifySlider spatialRadiusSlider = new OilifySlider(PhotonicsStorage.RESTIR_SPATIAL_RADIUS, -1.0f, 64.0f, "Spatial Radius", true);
-      PhotonicsStorage.Parameter<Float> biasMode = PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE;
-      buttons.add(new ModSettingsScreen.PButton("Bias Correction: " + formatBiasMode(biasMode.value), w -> {
-         biasMode.value = getNextBiasMode(biasMode.value);
-         biasMode.modified();
-         w.setMessage(Text.of("Bias Correction: " + formatBiasMode(biasMode.value)));
-      }, "Bias correction mode for spatial resampling.\nAuto = use the active quality-profile or shaderpack setting,\nBasic = RTXDI FullSample medium-style MIS,\nPairwise = legacy O(N) MIS path,\nRay Traced = visibility rays (slowest).", () -> true));
       List<OilifySlider> oilifySliders = List.of(oilifySizeSlider, oilifySharpnessSlider, oilifyScaleSlider, oilifyTuningSlider, oilifyIterationsSlider, oilifyDepthScalingSlider, oilifyStrokeStrengthSlider);
       oilifySliders.forEach(s -> s.active = PhotonicsStorage.OILIFY_ENABLED.value);
       PhotonicsStorage.Parameter<Boolean> oilify = PhotonicsStorage.OILIFY_ENABLED;
@@ -209,12 +201,6 @@ public class ModSettingsScreen extends Screen {
       rowHelper.add(oilifyIterationsSlider, 2);
       rowHelper.add(oilifyDepthScalingSlider, 2);
       rowHelper.add(oilifyStrokeStrengthSlider, 2);
-      rowHelper.add(renderScaleSlider, 2);
-      rowHelper.add(atrousPassesSlider, 2);
-      rowHelper.add(initialSamplesSlider, 2);
-      rowHelper.add(spatialSamplesSlider, 2);
-      rowHelper.add(giSpatialSamplesSlider, 2);
-      rowHelper.add(spatialRadiusSlider, 2);
 
       this.layout.addBody(gridLayout);
       this.layout.addFooter(ButtonWidget.builder(ScreenTexts.DONE, buttonx -> this.close()).width(200).build());
@@ -275,113 +261,6 @@ public class ModSettingsScreen extends Screen {
       });
    }
 
-   private static void applyQualityProfile(String profile) {
-      switch (profile.toLowerCase()) {
-         case "potato" -> {
-            PhotonicsStorage.RENDER_SCALE.value = 0.50F;
-            PhotonicsStorage.NRD_ATROUS_PASSES.value = 2.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 4.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 1.0F;
-            PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 1.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 8.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = -1.0F;
-         }
-         case "low" -> {
-            PhotonicsStorage.RENDER_SCALE.value = 0.65F;
-            PhotonicsStorage.NRD_ATROUS_PASSES.value = 3.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 4.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 1.0F;
-            PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 1.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 32.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 0.0F;
-         }
-         case "medium" -> {
-            PhotonicsStorage.RENDER_SCALE.value = 0.75F;
-            PhotonicsStorage.NRD_ATROUS_PASSES.value = 3.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 8.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 1.0F;
-            PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 1.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 32.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 1.0F;
-         }
-         case "high" -> {
-            PhotonicsStorage.RENDER_SCALE.value = 1.0F;
-            PhotonicsStorage.NRD_ATROUS_PASSES.value = 5.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 8.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 1.0F;
-            PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 2.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 32.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 3.0F;
-         }
-         case "ultra" -> {
-            PhotonicsStorage.RENDER_SCALE.value = 1.0F;
-            PhotonicsStorage.NRD_ATROUS_PASSES.value = 5.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 16.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 4.0F;
-            PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 2.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 32.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 3.0F;
-         }
-         default -> {
-            // "custom" — leave individual settings as-is, set all to auto
-            PhotonicsStorage.RENDER_SCALE.value = -1.0F;
-            PhotonicsStorage.NRD_ATROUS_PASSES.value = -1.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = -1.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = -1.0F;
-            PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = -1.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = -1.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = -1.0F;
-         }
-      }
-      PhotonicsStorage.RENDER_SCALE.modified();
-      PhotonicsStorage.NRD_ATROUS_PASSES.modified();
-      PhotonicsStorage.RESTIR_INITIAL_SAMPLES.modified();
-      PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.modified();
-      PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.modified();
-      PhotonicsStorage.RESTIR_SPATIAL_RADIUS.modified();
-      PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.modified();
-   }
-
-   private static String getNextQualityProfile(String current) {
-      return switch (current.toLowerCase()) {
-         case "custom" -> "potato";
-         case "potato" -> "low";
-         case "low" -> "medium";
-         case "medium" -> "high";
-         case "high" -> "ultra";
-         case "ultra" -> "custom";
-         default -> "custom";
-      };
-   }
-
-   private static String formatQualityProfile(String profile) {
-      return switch (profile.toLowerCase()) {
-         case "potato" -> "Potato";
-         case "low" -> "Low";
-         case "medium" -> "Medium";
-         case "high" -> "High";
-         case "ultra" -> "Ultra";
-         default -> "Custom";
-      };
-   }
-
-   private static String formatBiasMode(float value) {
-      if (value < 0) return "Auto";
-      if (value < 0.5f) return "Off";
-      if (value < 1.5f) return "Basic";
-      if (value < 2.5f) return "Pairwise";
-      if (value < 3.5f) return "Ray Traced";
-      return "Custom";
-   }
-
-   private static float getNextBiasMode(float value) {
-      if (value < 0) return 0.0F;
-      if (value < 0.5f) return 1.0F;
-      if (value < 1.5f) return 2.0F;
-      if (value < 2.5f) return 3.0F;
-      return -1.0F;
-   }
-
    private static String getNextCheckerboardMode(String checkerboardMode) {
       if ("off".equalsIgnoreCase(checkerboardMode)) {
          return "black";
@@ -400,6 +279,46 @@ public class ModSettingsScreen extends Screen {
          return "White";
       }
       return "Off";
+   }
+
+   private static String getNextRestirLocalLightSamplingMode(String samplingMode) {
+      return switch (PhotonicsStorage.normalizeRestirLocalLightSamplingMode(samplingMode)) {
+         case "uniform" -> "power_ris";
+         case "power_ris" -> "regir_ris";
+         default -> "uniform";
+      };
+   }
+
+   private static String formatRestirLocalLightSamplingMode(String samplingMode) {
+      return switch (PhotonicsStorage.normalizeRestirLocalLightSamplingMode(samplingMode)) {
+         case "uniform" -> "Uniform";
+         case "power_ris" -> "Power RIS";
+         default -> "ReGIR RIS";
+      };
+   }
+
+   private static String formatDebugViewMode(float mode) {
+      int m = Math.round(mode);
+      return switch (m) {
+         case 1 -> "Distance";
+         case 2 -> "ReGIR Grid";
+         case 3 -> "ReGIR Cell";
+         case 4 -> "ReGIR Coverage";
+         case 5 -> "Initial Reason";
+         case 6 -> "Visibility Class";
+         case 7 -> "Light Distance";
+         case 8 -> "Inv PDF";
+         case 9 -> "Target PDF";
+         case 10 -> "Solid Angle PDF";
+         case 11 -> "Incident Radiance";
+         case 12 -> "BRDF Response";
+         default -> "Off";
+      };
+   }
+
+   private static float getNextDebugViewMode(float current) {
+      int m = Math.round(current);
+      return (float) ((m + 1) % 13);
    }
 
    private static String getNextDirectStageView(String current) {

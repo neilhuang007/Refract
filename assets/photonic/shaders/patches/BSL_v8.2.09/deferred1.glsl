@@ -8,12 +8,17 @@ uniform sampler2D radiosity_direct_soft;
 uniform sampler2D colortex10;
 uniform sampler2D colortex12;
 uniform float ph_debug_direct_stage_override;
+uniform float ph_debug_view_mode;
 uniform float ph_mod_oilify_enabled;
 #endreplace
 
 #replace "vec4 color = texture2D(colortex0, texCoord);"
 vec4 color = texture2D(colortex0, texCoord);
 vec4 direct = texture2D(radiosity_direct, texCoord);
+// Debug view mode: display debug color directly, no albedo multiply or mixing
+if (ph_debug_view_mode > 0.5f) {
+    color.xyz = direct.xyz;
+} else {
 vec4 direct_soft = texture2D(radiosity_direct_soft, texCoord);
 vec3 accumulated_direct = direct_soft.w > 0.5f
     ? (direct_soft.xyz / max(direct_soft.w, 1.0f))
@@ -70,4 +75,5 @@ if (ph_mod_oilify_enabled > 0.5) {
         color.rgb = oilWeightedSum / oilWeightSum;
     }
 }
+} // end else (normal lighting path, skipped in debug view mode)
 #endreplace

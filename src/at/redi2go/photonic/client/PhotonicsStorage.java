@@ -6,7 +6,6 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -53,10 +52,10 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ANTI_FIREFLY = boolParam("debug_enable_direct_anti_firefly", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
-   // Performance tuning — Quality profile and per-parameter overrides.
+   public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "regir_ris");
+   // Performance tuning — individual per-parameter overrides.
    // A value of -1 means "use shaderpack default" (auto).  Any positive
    // value overrides the shaderpack setting at runtime.
-   public static final Parameter<String> QUALITY_PROFILE = stringParam("quality_profile", "custom");
    public static final Parameter<Float> RENDER_SCALE = floatParam("render_scale", -1.0F);
    public static final Parameter<Float> NRD_ATROUS_PASSES = floatParam("nrd_atrous_passes", -1.0F);
    public static final Parameter<Float> RESTIR_INITIAL_SAMPLES = floatParam("restir_initial_samples", -1.0F);
@@ -65,6 +64,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Float> RESTIR_SPATIAL_RADIUS = floatParam("restir_spatial_radius", -1.0F);
    public static final Parameter<Float> RESTIR_SPATIAL_BIAS_MODE = floatParam("restir_spatial_bias_mode", -1.0F);
    public static final Parameter<Boolean> DEBUG_CONSTANT_ALBEDO = boolParam("debug_constant_albedo", false);
+   public static final Parameter<Float> DEBUG_VIEW_MODE = floatParam("debug_view_mode", 0.0F);
    public static final Parameter<Boolean> OILIFY_ENABLED = boolParam("oilify_enabled", false);
    public static final Parameter<Float> OILIFY_SIZE = floatParam("oilify_size", 7.0F);
    public static final Parameter<Float> OILIFY_SHARPNESS = floatParam("oilify_sharpness", 1.0F);
@@ -83,12 +83,6 @@ public final class PhotonicsStorage {
       lightBlocksString -> new HashSet<>(StorageIO.readLightBlocks(lightBlocksString, Set.of())),
       StorageIO::writeLightBlocks
    );
-
-   static {
-      if (normalizeLoadedQualityProfile()) {
-         StorageIO.writeConfig(CONFIG_VALUES);
-      }
-   }
 
    public static class Parameter<T> {
       private final List<Consumer<T>> observers = new LinkedList<>();
@@ -166,53 +160,17 @@ public final class PhotonicsStorage {
       return "final".equals(normalizeDirectStageView(stageView));
    }
 
-   private static boolean normalizeLoadedQualityProfile() {
-      String profile = QUALITY_PROFILE.value == null ? "custom" : QUALITY_PROFILE.value.trim().toLowerCase(Locale.ROOT);
-      boolean changed = false;
-
-      switch (profile) {
-         case "low" -> {
-            changed |= setLoadedParam(RESTIR_INITIAL_SAMPLES, 4.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_SAMPLES, 1.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_RADIUS, 32.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 0.0F);
-         }
-         case "medium" -> {
-            changed |= setLoadedParam(RESTIR_INITIAL_SAMPLES, 8.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_SAMPLES, 1.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_RADIUS, 32.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 1.0F);
-         }
-         case "high" -> {
-            changed |= setLoadedParam(RESTIR_INITIAL_SAMPLES, 8.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_SAMPLES, 1.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_RADIUS, 32.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 3.0F);
-         }
-         case "ultra" -> {
-            changed |= setLoadedParam(RESTIR_INITIAL_SAMPLES, 16.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_SAMPLES, 4.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_RADIUS, 32.0F);
-            changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 3.0F);
-         }
-         default -> {
-            if (RESTIR_SPATIAL_BIAS_MODE.value != null && Math.abs(RESTIR_SPATIAL_BIAS_MODE.value - 2.0F) < 0.25F) {
-               changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 1.0F);
-            }
-         }
+   public static String normalizeRestirLocalLightSamplingMode(String samplingMode) {
+      if (samplingMode == null) {
+         return "regir_ris";
       }
 
-      return changed;
-   }
-
-   private static <T> boolean setLoadedParam(Parameter<T> parameter, T value) {
-      if (Objects.equals(parameter.value, value)) {
-         return false;
-      }
-
-      parameter.value = value;
-      CONFIG_VALUES.put(parameter.configKey, parameter.serializer.apply(value));
-      return true;
+      return switch (samplingMode.trim().toLowerCase(Locale.ROOT)) {
+         case "", "auto", "default", "-1", "2", "regir", "regir_ris", "regir-ris", "regir ris" -> "regir_ris";
+         case "0", "uniform" -> "uniform";
+         case "1", "power", "power_ris", "power-ris", "power ris" -> "power_ris";
+         default -> "regir_ris";
+      };
    }
 
 }

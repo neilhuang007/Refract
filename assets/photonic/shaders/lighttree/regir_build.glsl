@@ -183,6 +183,15 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0;
 }
 
+// The CPU-side ReGIR builder snaps its origin to the fixed world-cell lattice
+// before assigning lights to cells. The GPU build pass must derive cell
+// centers from that same snapped origin or it will generate RIS PDFs for a
+// different grid than the one the CPU actually populated.
+vec3 regir_grid_origin() {
+    vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
+    return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
+}
+
 // ---------------------------------------------------------------------------
 // RTXDI_RandomlySelectRISTile — picks ONE tile using the coherent RNG.
 // Called ONCE per thread, outside the RIS loop.
@@ -350,7 +359,7 @@ void main() {
         return;
     }
 
-    vec3 gridOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
+    vec3 gridOrigin = regir_grid_origin();
 
     vec3  cellCenter = gridOrigin
                      + (vec3(float(cx), float(cy), float(cz)) + 0.5) * ph_regir_cell_size;

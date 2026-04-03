@@ -1,6 +1,9 @@
 package at.redi2go.photonic.client.mixin;
 
 import at.redi2go.photonic.client.rendering.opengl.rendering.ShaderUtil;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import net.irisshaders.iris.gl.program.ProgramBuilder;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -17,8 +20,26 @@ public class ProgramBuilderMixin {
       )
    )
    private static void initGlShader(Args args) {
-      if (((String)args.get(1)).contains("ph_")) {
-         args.set(2, ShaderUtil.preprocessAutoUniforms((String)args.get(2)));
+      String shaderName = (String) args.get(1);
+      String shaderSource = (String) args.get(2);
+
+      if (shaderName.contains("ph_")) {
+         shaderSource = ShaderUtil.preprocessAutoUniforms(shaderSource);
+         args.set(2, shaderSource);
+      }
+
+      if (shaderName.contains("ShadeSamplesLighting")) {
+         photonics$dumpShaderSource(shaderName, shaderSource);
+      }
+   }
+
+   private static void photonics$dumpShaderSource(String shaderName, String shaderSource) {
+      try {
+         Path outDir = Path.of("build", "shader-debug");
+         Files.createDirectories(outDir);
+         String fileName = shaderName.replace('/', '_').replace('\\', '_').replace(':', '_');
+         Files.writeString(outDir.resolve(fileName + ".dump.glsl"), shaderSource);
+      } catch (IOException ignored) {
       }
    }
 }

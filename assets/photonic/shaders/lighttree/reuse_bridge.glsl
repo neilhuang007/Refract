@@ -142,6 +142,9 @@ uniform float ph_restir_initial_num_environment_samples;
 uniform float ph_restir_initial_num_brdf_samples;        // RTXDI: numBrdfSamples; SDK default=1. -1.0=disable, 0.0(unbound)=SDK default(1), >0=explicit count
 uniform float ph_restir_initial_enable_visibility;  // RTXDI: enableInitialVisibility; SDK default true. Sentinel: -1.0=disabled, 0.0(unbound)=enabled, 1.0=enabled
 uniform float ph_restir_initial_brdf_cutoff;        // RTXDI: brdfCutoff (MIS cutoff for BRDF-length shortening)
+uniform float ph_restir_debug_force_target_pdf_one;       // Hidden debug override: force targetPdf = 1 during DI proposal weighting.
+uniform float ph_restir_debug_force_shading_inv_pdf_one;  // Hidden debug override: force reservoir invPdf = 1 during shading.
+uniform float ph_restir_debug_force_solid_angle_pdf_one;  // Hidden debug override: force light sample solidAnglePdf = 1 during shading.
 
 // Local light sampling mode — matches RTXDI_DIInitialSamplingParameters::localLightSamplingMode
 // (ReSTIRDI_LocalLightSamplingMode enum in RtxdiParameters.h lines 44-48):
@@ -152,6 +155,18 @@ uniform float ph_restir_initial_brdf_cutoff;        // RTXDI: brdfCutoff (MIS cu
 //    2 = ReSTIRDI_LocalLightSamplingMode_REGIR_RIS — ReGIR cell-based RIS (with Power_RIS fallback)
 // SDK default (ReSTIRDI.cpp line 45): Uniform (0).
 uniform float ph_restir_local_light_sampling_mode;
+
+float lt_debug_resolve_target_pdf(float targetPdf) {
+    return (ph_restir_debug_force_target_pdf_one >= 0.5f) ? 1.0f : targetPdf;
+}
+
+float lt_debug_resolve_shading_inv_pdf(float invPdf) {
+    return (ph_restir_debug_force_shading_inv_pdf_one >= 0.5f) ? 1.0f : invPdf;
+}
+
+float lt_debug_resolve_solid_angle_pdf(float solidAnglePdf) {
+    return (ph_restir_debug_force_solid_angle_pdf_one >= 0.5f) ? 1.0f : solidAnglePdf;
+}
 
 // GLSL requires declarations before first use; these helpers are defined later in the file.
 ivec2 RTXDI_PixelPosToReservoirPos(ivec2 pixelPosition, int activeCheckerboardField);
@@ -3554,6 +3569,18 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
 
         vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
         RAB_LightSample candidateSample = RAB_SamplePolymorphicLight(lightInfo, surface, uv);
+        if (candidateSample.index < 0 || candidateSample.solidAnglePdf <= 0.0f
+            || isnan(candidateSample.solidAnglePdf) || isinf(candidateSample.solidAnglePdf))
+        {
+            continue;
+        }
+
+        float radianceLuma = ph_luminance(max(candidateSample.color, vec3(0.0f)));
+        if (radianceLuma <= 1e-6f)
+        {
+            continue;
+        }
+
         float blendedSourcePdf = RTXDI_LightBrdfMisWeight(
             surface,
             candidateSample,
@@ -3562,14 +3589,27 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
             misData.brdfMisWeight,
             initialSamplingParams.brdfCutoff);
 
-        if (blendedSourcePdf == 0.0f)
+        if (blendedSourcePdf <= 0.0f || isnan(blendedSourcePdf) || isinf(blendedSourcePdf))
         {
             continue;
         }
 
-        float targetPdf = RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface);
+        // float targetPdf = RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface);
+        float targetPdf = lt_debug_resolve_target_pdf(RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface));
+        if (targetPdf <= 0.0f || isnan(targetPdf) || isinf(targetPdf))
+        {
+            continue;
+        }
+
+        float invBlendedSourcePdf = 1.0f / blendedSourcePdf;
+        float risWeight = targetPdf * invBlendedSourcePdf;
+        if (risWeight <= 0.0f || isnan(risWeight) || isinf(risWeight))
+        {
+            continue;
+        }
+
         float risRnd = RTXDI_GetNextRandom(rng);
-        bool selected = RTXDI_StreamSample(state, int(lightIndex), uv, risRnd, targetPdf, 1.0f / blendedSourcePdf);
+        bool selected = RTXDI_StreamSample(state, int(lightIndex), uv, risRnd, targetPdf, invBlendedSourcePdf);
         if (selected)
         {
             o_selectedSample = candidateSample;

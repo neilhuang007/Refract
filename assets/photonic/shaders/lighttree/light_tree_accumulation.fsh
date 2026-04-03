@@ -21,6 +21,8 @@ uniform sampler2D denoised_direct_specular;
 
 // Debug: when enabled, light_reload is ignored and temporal history is never wiped
 uniform float ph_debug_disable_temporal_reset;
+// uniform float ph_debug_view_mode;
+// Declared upstream via /photonics/lighttree/samplers.glsl included from common/header.glsl.
 uniform float ph_restir_enable_denoiser_packing;
 
 const float lt_reproject_normal_threshold = 0.99f;
@@ -156,21 +158,31 @@ void main() {
     int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
     vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord, activeCheckerboardField);
     vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord, activeCheckerboardField);
-    vec4 prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
     // The compat direct/direct_soft path must remodulate the denoised specular
     // signal back into radiance space before combining it with the denoised
     // diffuse result. Dropping denoised specular here leaves the downstream
     // lighting path stuck on raw sparkly specular energy.
     vec3 directCombined;
-    if (ph_restir_enable_denoiser_packing >= 0.5f) {
-        vec3 denoisedDiffuse = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
-        vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
-        vec3 specularRemodulation = nrd_compute_specular_demodulation(stageAlbedo.rgb, stageMaterial.g);
-        vec3 denoisedSpecular = nrd_safe_remodulate(denoisedSpecularDemodulated, specularRemodulation);
-        directCombined = denoisedDiffuse + denoisedSpecular;
+    vec4 prevSoft = vec4(0.0f);
+    if (ph_debug_view_mode > 0.5f) {
+        // Keep debug views in raw display space. The normal denoiser/remodulation path
+        // interprets debug colors as packed radiance and turns the overlay pink/white.
+        directCombined = directDiffuse.rgb;
+        prevSoft = vec4(directCombined, 0.0f);
     } else {
-        directCombined = directDiffuse.rgb + directSpecular.rgb;
+        prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
+        // if (ph_restir_enable_denoiser_packing >= 0.5f) {
+        if (ph_restir_enable_denoiser_packing >= 0.5f) {
+            vec3 denoisedDiffuse = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
+            vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
+            vec3 specularRemodulation = nrd_compute_specular_demodulation(stageAlbedo.rgb, stageMaterial.g);
+            vec3 denoisedSpecular = nrd_safe_remodulate(denoisedSpecularDemodulated, specularRemodulation);
+            directCombined = denoisedDiffuse + denoisedSpecular;
+        // } else {
+        } else {
+            directCombined = directDiffuse.rgb + directSpecular.rgb;
+        }
     }
 
     position_frag_out = stagePosition;

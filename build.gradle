@@ -108,6 +108,14 @@ if (shaderGameTestRegirBuildFrameSeed == null || shaderGameTestRegirBuildFrameSe
     shaderGameTestRegirBuildFrameSeed = System.getenv("PHOTONICS_REGIR_BUILD_FRAME_SEED")
 }
 
+def shaderGameTestRestirInitialLocalSamples = System.getProperty("photonics.restirInitialLocalSamples")
+def shaderGameTestRestirInitialEnableVisibility = System.getProperty("photonics.restirInitialEnableVisibility")
+def shaderGameTestRestirInitialBrdfSamples = System.getProperty("photonics.restirInitialBrdfSamples")
+def shaderGameTestRestirLocalLightSamplingMode = System.getProperty("photonics.restirLocalLightSamplingMode")
+def shaderGameTestRestirDebugForceTargetPdfOne = System.getProperty("photonics.restirDebugForceTargetPdfOne")
+def shaderGameTestRestirDebugForceShadingInvPdfOne = System.getProperty("photonics.restirDebugForceShadingInvPdfOne")
+def shaderGameTestRestirDebugForceSolidAnglePdfOne = System.getProperty("photonics.restirDebugForceSolidAnglePdfOne")
+
 def mainClasspathGroup = "${layout.buildDirectory.dir('classes/java/main').get().asFile.absolutePath}${File.pathSeparator}${layout.buildDirectory.dir('resources/main').get().asFile.absolutePath}"
 
 loom {
@@ -146,6 +154,27 @@ loom {
             }
             if (shaderGameTestRegirBuildFrameSeed != null && !shaderGameTestRegirBuildFrameSeed.isBlank()) {
                 vmArg "-Dphotonics.regirBuildFrameSeed=${shaderGameTestRegirBuildFrameSeed}"
+            }
+            if (shaderGameTestRestirInitialLocalSamples != null && !shaderGameTestRestirInitialLocalSamples.isBlank()) {
+                vmArg "-Dphotonics.restirInitialLocalSamples=${shaderGameTestRestirInitialLocalSamples}"
+            }
+            if (shaderGameTestRestirInitialEnableVisibility != null && !shaderGameTestRestirInitialEnableVisibility.isBlank()) {
+                vmArg "-Dphotonics.restirInitialEnableVisibility=${shaderGameTestRestirInitialEnableVisibility}"
+            }
+            if (shaderGameTestRestirInitialBrdfSamples != null && !shaderGameTestRestirInitialBrdfSamples.isBlank()) {
+                vmArg "-Dphotonics.restirInitialBrdfSamples=${shaderGameTestRestirInitialBrdfSamples}"
+            }
+            if (shaderGameTestRestirLocalLightSamplingMode != null && !shaderGameTestRestirLocalLightSamplingMode.isBlank()) {
+                vmArg "-Dphotonics.restirLocalLightSamplingMode=${shaderGameTestRestirLocalLightSamplingMode}"
+            }
+            if (shaderGameTestRestirDebugForceTargetPdfOne != null && !shaderGameTestRestirDebugForceTargetPdfOne.isBlank()) {
+                vmArg "-Dphotonics.restirDebugForceTargetPdfOne=${shaderGameTestRestirDebugForceTargetPdfOne}"
+            }
+            if (shaderGameTestRestirDebugForceShadingInvPdfOne != null && !shaderGameTestRestirDebugForceShadingInvPdfOne.isBlank()) {
+                vmArg "-Dphotonics.restirDebugForceShadingInvPdfOne=${shaderGameTestRestirDebugForceShadingInvPdfOne}"
+            }
+            if (shaderGameTestRestirDebugForceSolidAnglePdfOne != null && !shaderGameTestRestirDebugForceSolidAnglePdfOne.isBlank()) {
+                vmArg "-Dphotonics.restirDebugForceSolidAnglePdfOne=${shaderGameTestRestirDebugForceSolidAnglePdfOne}"
             }
             vmArg "-Dphotonics.automation.worldName=backup"
             vmArg "-Dphotonics.automation.autoStartWorld=false"

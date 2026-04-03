@@ -133,9 +133,19 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0f;
 }
 
-// RTXDI: RTXDI_ReGIR_WorldPosToCellIndex — center-based origin derivation
+// The CPU-side ReGIR builder buckets lights into a fixed world-cell lattice and
+// snaps the grid origin to that lattice before filling per-cell RIS slots.
+// Query-time lookup must use the same snapped origin; the previous continuous
+// center-based origin selected different cells than the build populated, which
+// showed up as large stable lighting partitions and quadrant-like flicker.
+vec3 regir_grid_origin() {
+    vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
+    return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
+}
+
+// RTXDI: RTXDI_ReGIR_WorldPosToCellIndex — adapted to match the snapped CPU build origin
 bool regir_world_to_cell(vec3 shadingWorldPos, out ivec3 cellCoord) {
-    vec3 gridOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
+    vec3 gridOrigin = regir_grid_origin();
     vec3 relative   = shadingWorldPos - gridOrigin;
     cellCoord       = ivec3(floor(relative / ph_regir_cell_size));
     return all(greaterThanEqual(cellCoord, ivec3(0)))

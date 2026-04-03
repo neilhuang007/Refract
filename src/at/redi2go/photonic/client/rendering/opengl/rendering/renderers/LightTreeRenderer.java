@@ -454,6 +454,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "radiosity_reservoirs", this::getCurrentDirectReservoirDataTexture);
       this.addTextureSampler(samplers, "radiosity_reservoir_samples", this::getCurrentDirectReservoirSampleTexture);
       this.addTextureSampler(samplers, "radiosity_reservoir_meta", this::getCurrentDirectReservoirMetaTexture);
+      this.addTextureSampler(samplers, "direct_initial_debug_input", () -> this.directInitialDebugBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "radiosity_temporal_reservoirs", () -> this.directTemporalReservoirBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "radiosity_temporal_reservoir_samples", () -> this.directTemporalReservoirBuffer.getWriteAttachment("sample"));
       this.addTextureSampler(samplers, "radiosity_temporal_reservoir_meta", () -> this.directTemporalReservoirBuffer.getWriteAttachment("meta"));
@@ -632,42 +633,32 @@ public class LightTreeRenderer extends MainRenderer {
             }
          }
 
-         String profile = PhotonicsStorage.QUALITY_PROFILE.value;
-         if (profile == null) {
-            return 2.0f;
-         }
-
-         return switch (profile.trim().toLowerCase(Locale.ROOT)) {
-            case "low" -> 1.0f;
+         String configuredMode = PhotonicsStorage.normalizeRestirLocalLightSamplingMode(PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.value);
+         return switch (configuredMode) {
+            case "uniform" -> 0.0f;
+            case "power_ris" -> 1.0f;
             default -> 2.0f;
          };
       });
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> {
-         String profile = PhotonicsStorage.QUALITY_PROFILE.value;
-         if (profile == null) {
-            return this.properties.getRestirTemporalBiasMode();
-         }
-
-         return switch (profile.trim().toLowerCase(Locale.ROOT)) {
-            case "low" -> 0.0f;
-            case "medium", "high", "ultra" -> 3.0f;
-            default -> this.properties.getRestirTemporalBiasMode();
-         };
-      });
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_restir_debug_force_target_pdf_one",
+         () -> this.getOptionalFloatSystemProperty("photonics.restirDebugForceTargetPdfOne", 0.0f)
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_restir_debug_force_shading_inv_pdf_one",
+         () -> this.getOptionalFloatSystemProperty("photonics.restirDebugForceShadingInvPdfOne", 0.0f)
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_restir_debug_force_solid_angle_pdf_one",
+         () -> this.getOptionalFloatSystemProperty("photonics.restirDebugForceSolidAnglePdfOne", 0.0f)
+      );
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> this.properties.getRestirTemporalBiasMode());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_permutation_sampling", () -> this.properties.getRestirTemporalPermutationSampling());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_temporal_permutation_sampling", () -> 0.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_visibility_shortcut", () -> {
-         String profile = PhotonicsStorage.QUALITY_PROFILE.value;
-         if (profile == null) {
-            return this.properties.getRestirTemporalVisibilityShortcut();
-         }
-
-         return switch (profile.trim().toLowerCase(Locale.ROOT)) {
-            case "low", "medium" -> 1.0f;
-            case "high", "ultra" -> 0.0f;
-            default -> this.properties.getRestirTemporalVisibilityShortcut();
-         };
-      });
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_visibility_shortcut", () -> this.properties.getRestirTemporalVisibilityShortcut());
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_uniform_random", () -> this.getTemporalUniformRandom());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_fallback_sampling_mode", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_bias_mode", () -> {
@@ -736,10 +727,26 @@ public class LightTreeRenderer extends MainRenderer {
          "ph_debug_enable_direct_anti_firefly",
          () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_ANTI_FIREFLY.value ? 1.0f : 0.0f
       );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_debug_view_mode",
+         () -> PhotonicsStorage.DEBUG_VIEW_MODE.value
+      );
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_accumulated_frame_num", () -> 30.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_fast_accumulated_frame_num", () -> 6.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_depth_threshold", () -> 0.003f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_denoising_range", () -> 500.0f);
+   }
+
+   private float getOptionalFloatSystemProperty(String key, float fallback) {
+      String override = System.getProperty(key);
+      if (override != null && !override.isBlank()) {
+         try {
+            return Float.parseFloat(override.trim());
+         } catch (NumberFormatException ignored) {
+         }
+      }
+      return fallback;
    }
 
    private int getTemporalUniformRandom() {
@@ -1789,6 +1796,9 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private TextureObject getResolvedDirectTexture() {
+      if (PhotonicsStorage.DEBUG_VIEW_MODE.value > 0.5f) {
+         return this.lightingStageBuffer.getWriteAttachment("direct");
+      }
       TextureObject debugStageTexture = this.getDebugDirectStageTexture();
       if (debugStageTexture != null) {
          return debugStageTexture;

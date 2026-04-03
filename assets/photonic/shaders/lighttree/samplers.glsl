@@ -81,13 +81,19 @@ uniform sampler2D stage_radiosity_indirect;
 uniform float ph_debug_show_direct;
 uniform float ph_debug_show_indirect;
 uniform float ph_debug_show_handheld;
+uniform float ph_debug_view_mode;
 
 vec3 sample_photonics_direct(vec2 tex_coord) {
+    if (ph_debug_view_mode > 0.5) {
+        // Debug overlay: return bright debug color so it survives albedo multiply
+        return texture2D(radiosity_direct, tex_coord).rgb * 10.0;
+    }
     if (ph_debug_show_direct < 0.5) return vec3(0.0);
     return texture2D(radiosity_direct, tex_coord).rgb;
 }
 
 vec3 sample_photonics_handheld(vec2 tex_coord) {
+    if (ph_debug_view_mode > 0.5) return vec3(0.0);
     if (ph_debug_show_handheld < 0.5) return vec3(0.0);
     #ifdef PH_ENABLE_HANDHELD_LIGHT
     return texture2D(radiosity_handheld, tex_coord).rgb;
@@ -97,6 +103,7 @@ vec3 sample_photonics_handheld(vec2 tex_coord) {
 }
 
 vec3 sample_photonics_indirect(vec2 tex_coord) {
+    if (ph_debug_view_mode > 0.5) return vec3(0.0);
     if (ph_debug_show_indirect < 0.5) return vec3(0.0);
     return texture2D(radiosity_indirect_resolved, tex_coord).rgb;
 }
