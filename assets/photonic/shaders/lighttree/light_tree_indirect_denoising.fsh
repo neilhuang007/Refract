@@ -23,10 +23,6 @@ void main() {
     }
 
     vec4 centerData = texelFetch(radiosity_indirect, tex_coord, 0);
-    if (ph_debug_disable_denoiser > 0.5) {
-        indirect_denoised_out = centerData;
-        return;
-    }
     vec3 centerColor = centerData.rgb;
     float centerHistory = centerData.a;
 

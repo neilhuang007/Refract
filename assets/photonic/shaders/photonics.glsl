@@ -107,7 +107,7 @@ struct RayJob {
     bool result_hit;
 };
 
-struct Light {
+struct RAB_LightInfo {
     int index;
     int blockId;
     vec3 position;
@@ -119,6 +119,9 @@ struct Light {
     vec3 emissionAxis;
     float orientationSpread;
 };
+
+// Keep the existing helper code readable while exposing the exact RTXDI bridge type.
+#define Light RAB_LightInfo
 
 /*
     -- CONSTANTS --

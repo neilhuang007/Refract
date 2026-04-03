@@ -62,7 +62,7 @@ const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
 // Returns true so the caller sets RTXDI_LIGHT_COMPACT_BIT on the stored index.
 // ---------------------------------------------------------------------------
 bool RAB_StoreCompactLightInfo(uint risBufferPtr, int lightIndex) {
-    if (lightIndex < 0) return false;
+    if (lightIndex < 0 || lightIndex * light_size + 3 >= ph_lights_array.length()) return false;
     int base = lightIndex * light_size;
     uint dst = risBufferPtr * ph_compact_light_stride;
     ph_compact_light_data[dst + 0u] = floatBitsToUint(ph_lights_array[base + 0]);
@@ -87,12 +87,12 @@ void RAB_LoadCompactLightData(uint risBufferPtr,
     vec4 ld2 = uintBitsToFloat(ph_compact_light_data[src + 2u]);
     vec4 ld3 = uintBitsToFloat(ph_compact_light_data[src + 3u]);
     lightPos = ld0.xyz;
-    blockIdBits = uint(floatBitsToInt(ld0.w));
+    blockIdBits = floatBitsToUint(ld0.w);
     lightColor = ld1.xyz;
     intensity = ld1.w;
     attenuation = ld2.xy;
     falloff = ld2.z;
-    emissionAxis = ld3.xyz;
+    emissionAxis = normalize(ld3.xyz + vec3(1e-6));
     orientationSpread = ld3.w;
 }
 
@@ -280,7 +280,7 @@ float RAB_GetLightTargetPdfForVolume(int lightIndex, bool hasCompact, uint risBu
         intensity         = ld1.w;
         attenuation       = ld2.xy;
         falloff           = ld2.z;
-        emissionAxis      = ld3.xyz;
+        emissionAxis      = normalize(ld3.xyz + vec3(1e-6));
         orientationSpread = ld3.w;
     }
 
@@ -298,7 +298,7 @@ float RAB_GetLightTargetPdfForVolume(int lightIndex, bool hasCompact, uint risBu
     float attenuationDenom = dot(vec2(1.0, averageDistSq * falloff), attenuation);
     attenuationDenom = max(attenuationDenom, 1e-4);
     vec3  attenuatedColor = lightColor * intensity / attenuationDenom;
-    float luminance = max(dot(attenuatedColor, vec3(0.299, 0.587, 0.114)), 0.0);
+    float luminance = max(dot(attenuatedColor, vec3(0.2126, 0.7152, 0.0722)), 0.0);
 
     // Directional emission shaping (attenuation.glsl)
     float shaping = 1.0;

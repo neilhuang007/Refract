@@ -132,6 +132,16 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
 // at each level proportional to their weight.
 // Child sampling order: (0,0), (0,1), (1,0), (1,1) — y increments before x.
 // ---------------------------------------------------------------------------
+float RTXDI_LoadPdfTexel(sampler2D pdfTexture, ivec2 texelPosition, int mipLevel) {
+    ivec2 mipSize = textureSize(pdfTexture, mipLevel);
+    if (texelPosition.x < 0 || texelPosition.y < 0
+        || texelPosition.x >= mipSize.x || texelPosition.y >= mipSize.y) {
+        return 0.0;
+    }
+
+    return max(0.0, texelFetch(pdfTexture, texelPosition, mipLevel).x);
+}
+
 void RTXDI_SamplePdfMipmap(
     inout RTXDI_RandomSamplerState rng,
     sampler2D pdfTexture,
@@ -148,10 +158,16 @@ void RTXDI_SamplePdfMipmap(
         position *= 2u;
 
         vec4 samples;
+        /*
         samples.x = max(0.0, texelFetch(pdfTexture, ivec2(position.x + 0u, position.y + 0u), mipLevel).x);
         samples.y = max(0.0, texelFetch(pdfTexture, ivec2(position.x + 0u, position.y + 1u), mipLevel).x);
         samples.z = max(0.0, texelFetch(pdfTexture, ivec2(position.x + 1u, position.y + 0u), mipLevel).x);
         samples.w = max(0.0, texelFetch(pdfTexture, ivec2(position.x + 1u, position.y + 1u), mipLevel).x);
+        */
+        samples.x = RTXDI_LoadPdfTexel(pdfTexture, ivec2(position.x + 0u, position.y + 0u), mipLevel);
+        samples.y = RTXDI_LoadPdfTexel(pdfTexture, ivec2(position.x + 0u, position.y + 1u), mipLevel);
+        samples.z = RTXDI_LoadPdfTexel(pdfTexture, ivec2(position.x + 1u, position.y + 0u), mipLevel);
+        samples.w = RTXDI_LoadPdfTexel(pdfTexture, ivec2(position.x + 1u, position.y + 1u), mipLevel);
 
         float weightSum = samples.x + samples.y + samples.z + samples.w;
         if (weightSum <= 0.0) {
@@ -196,7 +212,7 @@ const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
 // Returns true on success (compact bit should be set on the RIS entry).
 // ---------------------------------------------------------------------------
 bool RAB_StoreCompactLightInfo(uint risBufferPtr, int lightIndex) {
-    if (lightIndex < 0) return false;
+    if (lightIndex < 0 || lightIndex * 4 + 3 >= ph_lights_array_presample.length()) return false;
     int base = lightIndex * 4; // light_size = 4
     uint dst = risBufferPtr * ph_compact_light_stride;
     ph_compact_light_data[dst + 0u] = floatBitsToUint(ph_lights_array_presample[base + 0]);
@@ -238,14 +254,18 @@ void main() {
     // RTXDI: lightIndex = RTXDI_ZCurveToLinearIndex(texelPosition)
     uint lightIndex = RTXDI_ZCurveToLinearIndex(texelPosition);
 
-    float invSourcePdf = (pdf > 0.0) ? (1.0 / pdf) : 0.0;
+    bool compact = false;
+    float invSourcePdf = 0.0;
+    if (pdf > 0.0 && lightIndex < uint(ph_light_count)) {
+        invSourcePdf = 1.0 / pdf;
+        compact = RAB_StoreCompactLightInfo(ph_ris_tile_buffer_offset + sampleInTile + tileIndex * tileSize, int(lightIndex));
+    }
 
     // RTXDI: RIS_BUFFER[risBufferPtr] = uint2(lightIndex, asuint(invSourcePdf))
     // Attempt compact storage; if successful, set COMPACT_BIT on the stored index.
     uint risBufferPtr = ph_ris_tile_buffer_offset + sampleInTile + tileIndex * tileSize;
-    int signedLightIndex = int(lightIndex);
     uint packedIndex = lightIndex & RTXDI_LIGHT_INDEX_MASK;
-    if (RAB_StoreCompactLightInfo(risBufferPtr, signedLightIndex)) {
+    if (compact) {
         packedIndex |= RTXDI_LIGHT_COMPACT_BIT;
     }
     ph_ris_data[risBufferPtr] = uvec2(packedIndex, floatBitsToUint(invSourcePdf));

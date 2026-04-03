@@ -34,14 +34,14 @@ Light load_compact_light(uint risBufferPtr, int lightIndex) {
     vec4 ld3 = uintBitsToFloat(ph_compact_light_data[src + 3u]);
     return Light(
         lightIndex,
-        int(floatBitsToUint(ld0.w)),
+        floatBitsToInt(ld0.w),
         ld0.xyz - world_offset,
         ld1.xyz,
         ld1.w,
         ld2.xy,
         ld2.z,
         ld2.w,
-        ld3.xyz,
+        normalize(ld3.xyz + vec3(1e-6f)),
         ld3.w
     );
 }
@@ -176,16 +176,18 @@ bool regir_unpack_slot(int flatCellIndex, int cellSlot,
 bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng, out int flatCellIndex) {
     flatCellIndex = -1;
 
-    // RTXDI: cellJitter = (rand3 - 0.5) * jitterScale
-    // jitterScale = samplingJitter * cellSize (grid mode). RTXDI FullSample uploads
-    // 2.0 for the default UI jitter of 1.0, which yields plus/minus one cell.
-    // Uses the passed coherentRng (not global rng_state) so neighboring pixels sharing the
-    // same 8x8 block draw the same jitter, matching RTXDI_CalculateReGIRCellIndex(coherentRng).
+    vec3 jitteredWorldPos = shadingWorldPos;
+    /*
+    // Original RTXDI-style query path:
+    // cellJitter = (rand3 - 0.5) * (samplingJitter * cellSize).
+    // This is left commented for isolation because the tile-coherent query jitter
+    // is what produces the visible 16x16 ReGIR grid flicker under camera motion.
     vec3 jitteredWorldPos = shadingWorldPos + (vec3(
         RTXDI_GetNextRandom(rng),
         RTXDI_GetNextRandom(rng),
         RTXDI_GetNextRandom(rng)
     ) - 0.5f) * ph_regir_sampling_jitter * ph_regir_cell_size;
+    */
 
     ivec3 cellCoord;
     if (!regir_world_to_cell(jitteredWorldPos, cellCoord)) {

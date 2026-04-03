@@ -4,7 +4,9 @@ import at.redi2go.photonic.client.rendering.world.LightBlock;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -33,14 +35,12 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_SHOW_INDIRECT = boolParam("debug_show_indirect", true);
    public static final Parameter<Boolean> DEBUG_SHOW_HANDHELD = boolParam("debug_show_handheld", true);
    public static final Parameter<Boolean> DEBUG_SHOW_SCENE = boolParam("debug_show_scene", true);
-   public static final Parameter<Boolean> DEBUG_SHOW_DENOISER = boolParam("debug_show_denoiser", true);
-   public static final Parameter<Boolean> DEBUG_DISABLE_DENOISER = boolParam("debug_disable_denoiser", false);
    public static final Parameter<Boolean> DEBUG_DISABLE_SHADOW_RAYS = boolParam("debug_disable_shadow_rays", false);
    public static final Parameter<Boolean> DEBUG_LOCK_TRAVERSAL_RNG = boolParam("debug_lock_traversal_rng", false);
    public static final Parameter<Boolean> DEBUG_DISABLE_TEMPORAL_RESET = boolParam("debug_disable_temporal_reset", false);
    public static final Parameter<Boolean> DEBUG_DISABLE_TAA_JITTER = boolParam("debug_disable_taa_jitter", false);
    public static final Parameter<Boolean> DEBUG_FREEZE_RNG = boolParam("debug_freeze_rng", false);
-   public static final Parameter<String> DEBUG_DIRECT_STAGE_VIEW = stringParam("debug_direct_stage_view", "resolved");
+   public static final Parameter<String> DEBUG_DIRECT_STAGE_VIEW = stringParam("debug_direct_stage_view", "final");
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_PROPOSAL_RESERVOIR = boolParam("debug_enable_direct_proposal_reservoir", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE = boolParam("debug_enable_direct_temporal_reuse", false);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_SPATIAL_REUSE = boolParam("debug_enable_direct_spatial_reuse", false);
@@ -84,6 +84,12 @@ public final class PhotonicsStorage {
       StorageIO::writeLightBlocks
    );
 
+   static {
+      if (normalizeLoadedQualityProfile()) {
+         StorageIO.writeConfig(CONFIG_VALUES);
+      }
+   }
+
    public static class Parameter<T> {
       private final List<Consumer<T>> observers = new LinkedList<>();
       public final String configKey;
@@ -113,7 +119,17 @@ public final class PhotonicsStorage {
 
    public static void applySystemPropertyOverrides() {
       applyBooleanSystemPropertyOverride("photonics.profilerEnabled", PROFILER_ENABLED);
-      applyBooleanSystemPropertyOverride("photonics.debugDisableDenoiser", DEBUG_DISABLE_DENOISER);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectProposalReservoir", DEBUG_ENABLE_DIRECT_PROPOSAL_RESERVOIR);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectTemporalReuse", DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectSpatialReuse", DEBUG_ENABLE_DIRECT_SPATIAL_REUSE);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectShadeSamples", DEBUG_ENABLE_DIRECT_SHADE_SAMPLES);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectFinalVisibility", DEBUG_ENABLE_DIRECT_FINAL_VISIBILITY);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectVisibilityTransmittance", DEBUG_ENABLE_DIRECT_VISIBILITY_TRANSMITTANCE);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectTemporalAccumulation", DEBUG_ENABLE_DIRECT_TEMPORAL_ACCUMULATION);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectHistoryFix", DEBUG_ENABLE_DIRECT_HISTORY_FIX);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectHistoryClamping", DEBUG_ENABLE_DIRECT_HISTORY_CLAMPING);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectAntiFirefly", DEBUG_ENABLE_DIRECT_ANTI_FIREFLY);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectAtrous", DEBUG_ENABLE_DIRECT_ATROUS);
    }
 
    private static void applyBooleanSystemPropertyOverride(String key, Parameter<Boolean> parameter) {
@@ -123,6 +139,80 @@ public final class PhotonicsStorage {
       }
 
       parameter.value = Boolean.parseBoolean(value);
+   }
+
+   public static String normalizeDirectStageView(String stageView) {
+      if (stageView == null) {
+         return "final";
+      }
+
+      return switch (stageView.trim().toLowerCase(Locale.ROOT)) {
+         case "", "none", "resolved", "final" -> "final";
+         case "stage_direct", "direct_raw", "raw", "rt", "rt_raw" -> "stage_direct";
+         case "direct_noisy", "noisy", "temporal", "temporal_raw" -> "direct_noisy";
+         case "direct_responsive", "responsive" -> "direct_responsive";
+         case "direct_slow", "slow" -> "direct_slow";
+         case "direct_fast", "fast" -> "direct_fast";
+         case "direct_historyfix", "historyfix", "history_fix" -> "direct_historyfix";
+         case "direct_clamped_fast", "clamped_fast" -> "direct_clamped_fast";
+         case "direct_anti_firefly", "anti_firefly", "firefly" -> "direct_anti_firefly";
+         case "direct_denoised", "denoised" -> "direct_denoised";
+         case "direct_atrous", "atrous" -> "direct_atrous";
+         default -> "final";
+      };
+   }
+
+   public static boolean isFinalDirectStageView(String stageView) {
+      return "final".equals(normalizeDirectStageView(stageView));
+   }
+
+   private static boolean normalizeLoadedQualityProfile() {
+      String profile = QUALITY_PROFILE.value == null ? "custom" : QUALITY_PROFILE.value.trim().toLowerCase(Locale.ROOT);
+      boolean changed = false;
+
+      switch (profile) {
+         case "low" -> {
+            changed |= setLoadedParam(RESTIR_INITIAL_SAMPLES, 4.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_SAMPLES, 1.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_RADIUS, 32.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 0.0F);
+         }
+         case "medium" -> {
+            changed |= setLoadedParam(RESTIR_INITIAL_SAMPLES, 8.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_SAMPLES, 1.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_RADIUS, 32.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 1.0F);
+         }
+         case "high" -> {
+            changed |= setLoadedParam(RESTIR_INITIAL_SAMPLES, 8.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_SAMPLES, 1.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_RADIUS, 32.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 3.0F);
+         }
+         case "ultra" -> {
+            changed |= setLoadedParam(RESTIR_INITIAL_SAMPLES, 16.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_SAMPLES, 4.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_RADIUS, 32.0F);
+            changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 3.0F);
+         }
+         default -> {
+            if (RESTIR_SPATIAL_BIAS_MODE.value != null && Math.abs(RESTIR_SPATIAL_BIAS_MODE.value - 2.0F) < 0.25F) {
+               changed |= setLoadedParam(RESTIR_SPATIAL_BIAS_MODE, 1.0F);
+            }
+         }
+      }
+
+      return changed;
+   }
+
+   private static <T> boolean setLoadedParam(Parameter<T> parameter, T value) {
+      if (Objects.equals(parameter.value, value)) {
+         return false;
+      }
+
+      parameter.value = value;
+      CONFIG_VALUES.put(parameter.configKey, parameter.serializer.apply(value));
+      return true;
    }
 
 }

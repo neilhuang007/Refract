@@ -39,6 +39,19 @@ import net.minecraft.client.gui.widget.SliderWidget;
 import org.jetbrains.annotations.NotNull;
 
 public class ModSettingsScreen extends Screen {
+   private static final String[] DIRECT_STAGE_VIEW_ORDER = new String[]{
+      "stage_direct",
+      "direct_noisy",
+      "direct_responsive",
+      "direct_slow",
+      "direct_fast",
+      "direct_historyfix",
+      "direct_clamped_fast",
+      "direct_anti_firefly",
+      "direct_denoised",
+      "direct_atrous",
+      "final"
+   };
    private static final ToggleableListScreen.Model BLOCKS_3D_MODEL = new ToggleableListScreen.Model(Registries.BLOCK.stream().filter(block -> {
       Set<Block> blacklistedBlocks = Set.of(Blocks.AIR, Blocks.WATER, Blocks.LAVA);
       return !blacklistedBlocks.contains(block);
@@ -83,13 +96,30 @@ public class ModSettingsScreen extends Screen {
          profilerEnabled.modified();
          w.setMessage(Text.of("Performance Profiler: " + (profilerEnabled.value ? "On" : "Off")));
       }, "Logs per-frame timing data (world update, render dispatch,\nshader passes) to latest.log for performance diagnostics.", () -> true));
-      PhotonicsStorage.Parameter<Boolean> disableDenoiser = PhotonicsStorage.DEBUG_DISABLE_DENOISER;
-      buttons.add(new ModSettingsScreen.PButton("Disable Denoiser: " + (disableDenoiser.value ? "On" : "Off"), w -> {
-         disableDenoiser.value = !disableDenoiser.value;
-         disableDenoiser.modified();
-         w.setMessage(Text.of("Disable Denoiser: " + (disableDenoiser.value ? "On" : "Off")));
-         this.reloadShaders();
-      }, "Bypasses the temporal/spatial denoiser so you can inspect raw\ndirect and indirect lighting stability.", () -> true));
+      PhotonicsStorage.Parameter<String> directStageView = PhotonicsStorage.DEBUG_DIRECT_STAGE_VIEW;
+      buttons.add(new ModSettingsScreen.PButton("Direct View: " + formatDirectStageView(directStageView.value), w -> {
+         directStageView.value = getNextDirectStageView(directStageView.value);
+         directStageView.modified();
+         w.setMessage(Text.of("Direct View: " + formatDirectStageView(directStageView.value)));
+      }, "Cycles the direct-lighting inspection source:\nRT Raw, Noisy, Responsive, Slow, Fast,\nHist Fix, Clamp Fast, Firefly, Denoised, Atrous, Final.", () -> true));
+      PhotonicsStorage.Parameter<Boolean> directTemporalReuse = PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE;
+      buttons.add(new ModSettingsScreen.PButton("Direct Temporal Reuse: " + (directTemporalReuse.value ? "On" : "Off"), w -> {
+         directTemporalReuse.value = !directTemporalReuse.value;
+         directTemporalReuse.modified();
+         w.setMessage(Text.of("Direct Temporal Reuse: " + (directTemporalReuse.value ? "On" : "Off")));
+      }, "Enables or bypasses ReSTIR DI temporal history reuse.\nTurn this off with spatial still on to isolate spatial-only behavior.", () -> true));
+      PhotonicsStorage.Parameter<Boolean> directSpatialReuse = PhotonicsStorage.DEBUG_ENABLE_DIRECT_SPATIAL_REUSE;
+      buttons.add(new ModSettingsScreen.PButton("Direct Spatial Reuse: " + (directSpatialReuse.value ? "On" : "Off"), w -> {
+         directSpatialReuse.value = !directSpatialReuse.value;
+         directSpatialReuse.modified();
+         w.setMessage(Text.of("Direct Spatial Reuse: " + (directSpatialReuse.value ? "On" : "Off")));
+      }, "Enables or bypasses ReSTIR DI spatial reuse.\nTurn this off with temporal still on to isolate temporal-only behavior.", () -> true));
+      PhotonicsStorage.Parameter<Boolean> directFinalVisibility = PhotonicsStorage.DEBUG_ENABLE_DIRECT_FINAL_VISIBILITY;
+      buttons.add(new ModSettingsScreen.PButton("Direct Final Visibility: " + (directFinalVisibility.value ? "On" : "Off"), w -> {
+         directFinalVisibility.value = !directFinalVisibility.value;
+         directFinalVisibility.modified();
+         w.setMessage(Text.of("Direct Final Visibility: " + (directFinalVisibility.value ? "On" : "Off")));
+      }, "Toggles the final shadow ray in direct shading.\nUse this to separate reuse artifacts from final-visibility shadow artifacts.", () -> true));
       PhotonicsStorage.Parameter<String> checkerboardMode = PhotonicsStorage.RESTIR_CHECKERBOARD_MODE;
       buttons.add(new ModSettingsScreen.PButton("ReSTIR Checkerboard: " + formatCheckerboardMode(checkerboardMode.value), w -> {
          checkerboardMode.value = getNextCheckerboardMode(checkerboardMode.value);
@@ -123,7 +153,7 @@ public class ModSettingsScreen extends Screen {
          biasMode.value = getNextBiasMode(biasMode.value);
          biasMode.modified();
          w.setMessage(Text.of("Bias Correction: " + formatBiasMode(biasMode.value)));
-      }, "Bias correction mode for spatial resampling.\nAuto = use shaderpack default, Off = fastest,\nBasic = MIS correction, Ray Traced = visibility rays (slowest).", () -> true));
+      }, "Bias correction mode for spatial resampling.\nAuto = use the active quality-profile or shaderpack setting,\nBasic = RTXDI FullSample medium-style MIS,\nPairwise = legacy O(N) MIS path,\nRay Traced = visibility rays (slowest).", () -> true));
       List<OilifySlider> oilifySliders = List.of(oilifySizeSlider, oilifySharpnessSlider, oilifyScaleSlider, oilifyTuningSlider, oilifyIterationsSlider, oilifyDepthScalingSlider, oilifyStrokeStrengthSlider);
       oilifySliders.forEach(s -> s.active = PhotonicsStorage.OILIFY_ENABLED.value);
       PhotonicsStorage.Parameter<Boolean> oilify = PhotonicsStorage.OILIFY_ENABLED;
@@ -259,38 +289,38 @@ public class ModSettingsScreen extends Screen {
          case "low" -> {
             PhotonicsStorage.RENDER_SCALE.value = 0.65F;
             PhotonicsStorage.NRD_ATROUS_PASSES.value = 3.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 8.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 2.0F;
+            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 4.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 1.0F;
             PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 1.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 10.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 2.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 32.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 0.0F;
          }
          case "medium" -> {
             PhotonicsStorage.RENDER_SCALE.value = 0.75F;
             PhotonicsStorage.NRD_ATROUS_PASSES.value = 3.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 16.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 3.0F;
-            PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 2.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 10.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 2.0F;
+            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 8.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 1.0F;
+            PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 1.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 32.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 1.0F;
          }
          case "high" -> {
             PhotonicsStorage.RENDER_SCALE.value = 1.0F;
             PhotonicsStorage.NRD_ATROUS_PASSES.value = 5.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 32.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 5.0F;
+            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 8.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 1.0F;
             PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 2.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 10.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 2.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 32.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 3.0F;
          }
          case "ultra" -> {
             PhotonicsStorage.RENDER_SCALE.value = 1.0F;
             PhotonicsStorage.NRD_ATROUS_PASSES.value = 5.0F;
-            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 32.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 5.0F;
+            PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value = 16.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value = 4.0F;
             PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value = 2.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 10.0F;
-            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 2.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value = 32.0F;
+            PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value = 3.0F;
          }
          default -> {
             // "custom" — leave individual settings as-is, set all to auto
@@ -338,14 +368,17 @@ public class ModSettingsScreen extends Screen {
    private static String formatBiasMode(float value) {
       if (value < 0) return "Auto";
       if (value < 0.5f) return "Off";
-      if (value < 2.0f) return "Basic";
-      return "Ray Traced";
+      if (value < 1.5f) return "Basic";
+      if (value < 2.5f) return "Pairwise";
+      if (value < 3.5f) return "Ray Traced";
+      return "Custom";
    }
 
    private static float getNextBiasMode(float value) {
       if (value < 0) return 0.0F;
       if (value < 0.5f) return 1.0F;
-      if (value < 2.0f) return 3.0F;
+      if (value < 1.5f) return 2.0F;
+      if (value < 2.5f) return 3.0F;
       return -1.0F;
    }
 
@@ -367,6 +400,34 @@ public class ModSettingsScreen extends Screen {
          return "White";
       }
       return "Off";
+   }
+
+   private static String getNextDirectStageView(String current) {
+      String normalized = PhotonicsStorage.normalizeDirectStageView(current);
+
+      for (int i = 0; i < DIRECT_STAGE_VIEW_ORDER.length; i++) {
+         if (DIRECT_STAGE_VIEW_ORDER[i].equals(normalized)) {
+            return DIRECT_STAGE_VIEW_ORDER[(i + 1) % DIRECT_STAGE_VIEW_ORDER.length];
+         }
+      }
+
+      return DIRECT_STAGE_VIEW_ORDER[0];
+   }
+
+   private static String formatDirectStageView(String stageView) {
+      return switch (PhotonicsStorage.normalizeDirectStageView(stageView)) {
+         case "stage_direct" -> "RT Raw";
+         case "direct_noisy" -> "Noisy";
+         case "direct_responsive" -> "Responsive";
+         case "direct_slow" -> "Slow";
+         case "direct_fast" -> "Fast";
+         case "direct_historyfix" -> "Hist Fix";
+         case "direct_clamped_fast" -> "Clamp Fast";
+         case "direct_anti_firefly" -> "Firefly";
+         case "direct_denoised" -> "Denoised";
+         case "direct_atrous" -> "Atrous";
+         default -> "Final";
+      };
    }
 
    private static SplashOverlay buildLoadingOverlay(Supplier<Float> progressSupplier) {

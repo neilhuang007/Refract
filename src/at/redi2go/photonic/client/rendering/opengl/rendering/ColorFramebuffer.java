@@ -72,9 +72,11 @@ public class ColorFramebuffer extends GlFramebuffer {
          int texture = name == null ? 0 : this.writeAttachment.get(name).getTextureId();
          if (!Objects.equals(name, "depth")) {
             GL30.glFramebufferTexture2D(36160, 36064 + i, 3553, texture, 0);
+            GL.logGlError("ColorFramebuffer.glFramebufferTexture2D(color name=" + name + ", index=" + i + ")");
             i++;
          } else {
             GL30.glFramebufferTexture2D(36160, 36096, 3553, texture, 0);
+            GL.logGlError("ColorFramebuffer.glFramebufferTexture2D(depth name=" + name + ")");
          }
       }
 
@@ -88,6 +90,7 @@ public class ColorFramebuffer extends GlFramebuffer {
       buffer.position(0);
       buffer.limit(drawBufferCount);
       GL20.glDrawBuffers(buffer);
+      GL.logGlError("ColorFramebuffer.glDrawBuffers(count=" + drawBufferCount + ")");
       int status = GL30.glCheckFramebufferStatus(36160);
       if (status != 36053) {
          throw new RuntimeException("Framebuffer in invalid state: " + status);
@@ -292,6 +295,7 @@ public class ColorFramebuffer extends GlFramebuffer {
             this.textureId = GL11.glGenTextures();
             GL11.glBindTexture(3553, this.getTextureId());
             GL42.glTexStorage2D(3553, 1, GL.pGetInternalFormat(this.internalFormat), width, height);
+            GL.logGlError("ColorFramebuffer.FramebufferAttachment.glTexStorage2D(format=" + this.internalFormat + ", size=" + width + "x" + height + ")");
             int interpolateFlag = this.interpolate ? 9729 : 9728;
             GL11.glTexParameteri(3553, 10241, interpolateFlag);
             GL11.glTexParameteri(3553, 10240, interpolateFlag);

@@ -285,7 +285,8 @@ public class RegirComputeProgram {
             int lightsPerCell,
             float cellSize,
             int lightCount,
-            int frameCounter,
+            int presampleFrameCounter,
+            int buildFrameCounter,
             int numBuildSamples,
             float samplingJitter) {
 
@@ -311,7 +312,7 @@ public class RegirComputeProgram {
             GL20.glUniform1i(this.presampleLocLightCount, lightCount);
             GL20.glUniform1i(this.presampleLocTileSize,   tileSize);
             GL20.glUniform1i(this.presampleLocTileCount,  tileCount);
-            GL30.glUniform1ui(this.presampleLocFrameSeed, frameCounter);
+            GL30.glUniform1ui(this.presampleLocFrameSeed, presampleFrameCounter);
             GL30.glUniform1ui(this.presampleLocRisTileBufferOffset, risTileBufferOffset);
 
             GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindLightList,        lightList.getId());
@@ -346,7 +347,7 @@ public class RegirComputeProgram {
         // Pass 2: ReGIR build (RTXDI_PresampleLocalLightsForReGIR)
         GL20.glUseProgram(this.programId);
 
-        this.setUniforms(gridCenter, gridCells, lightsPerCell, cellSize, lightCount, frameCounter,
+        this.setUniforms(gridCenter, gridCells, lightsPerCell, cellSize, lightCount, buildFrameCounter,
                 numBuildSamples, samplingJitter, risTileBufferOffset, regirRisBufferOffset);
         this.bindBuildSsbos(lightList, lightCdf, risBuffer, compactLightData);
         this.clearRegirRegion(risBuffer, regirRisBufferOffset, gridCells.x * gridCells.y * gridCells.z, lightsPerCell);

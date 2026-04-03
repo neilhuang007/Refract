@@ -7,6 +7,7 @@ uniform sampler2D radiosity_direct;
 uniform sampler2D radiosity_direct_soft;
 uniform sampler2D colortex10;
 uniform sampler2D colortex12;
+uniform float ph_debug_direct_stage_override;
 uniform float ph_mod_oilify_enabled;
 #endreplace
 
@@ -17,13 +18,16 @@ vec4 direct_soft = texture2D(radiosity_direct_soft, texCoord);
 vec3 accumulated_direct = direct_soft.w > 0.5f
     ? (direct_soft.xyz / max(direct_soft.w, 1.0f))
     : direct.xyz;
+vec3 displayed_direct = ph_debug_direct_stage_override > 0.5f
+    ? direct.xyz
+    : accumulated_direct;
 color.xyz += (
     texture2D(colortex12, texCoord).xyz + // indirect
     texture2D(radiosity_handheld, texCoord).xyz +
     #if PH_LIGHTING_MODE >= 2
     direct.xyz
     #else
-    accumulated_direct
+    displayed_direct
     #endif
 ) * texture2D(colortex10, texCoord).xyz; // albedo
 if (ph_mod_oilify_enabled > 0.5) {

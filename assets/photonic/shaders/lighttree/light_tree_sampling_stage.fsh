@@ -47,14 +47,10 @@ void main() {
     albedo_frag_out = vec4(albedo, 1.0f);
     material_frag_out = lt_extract_stage_material();
 
-    vec2 previousPixel = ph_reprojectf(
-        previous_modelview_projection,
-        world_pos,
-        vec2(viewWidth, viewHeight),
-        vec2(0.0f)
-    );
     vec2 currentPixelCenter = vec2(pixelPosition) + vec2(0.5f);
-    float currentLinearDepth = ph_linear_view_depth(modelview_projection, world_pos);
-    float expectedPrevLinearDepth = ph_linear_view_depth(previous_modelview_projection, world_pos);
-    motion_frag_out = vec4(previousPixel - currentPixelCenter, expectedPrevLinearDepth - currentLinearDepth, 1.0f);
+    motion_frag_out = ph_compute_temporal_motion(
+        world_pos,
+        currentPixelCenter,
+        vec2(viewWidth, viewHeight)
+    );
 }

@@ -23,7 +23,7 @@ void storeEmptySurfaceOutputs() {
 }
 
 void storeEmptyProposalReservoirOutputs() {
-    Reservoir emptyReservoir = rtxdi_empty_reservoir();
+    RTXDI_DIReservoir emptyReservoir = rtxdi_empty_reservoir();
     reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(emptyReservoir);
@@ -48,43 +48,31 @@ void main() {
     rt_pos = world_pos - world_offset;
     bad_angle = is_bad_angle(world_pos, block_normal);
 
-    DirectSurface currentSurface = lt_current_surface();
+    RAB_Surface currentSurface = lt_current_surface();
     vec3 worldPos = currentSurface.worldPos;
-    vec3 geometryNormal = currentSurface.geometryNormal;
-    vec3 shadingNormal = currentSurface.shadingNormal;
-    vec3 surfaceAlbedo = currentSurface.albedo;
+    vec3 geometryNormal = currentSurface.geoNormal;
+    vec3 shadingNormal = currentSurface.normal;
+    vec3 surfaceAlbedo = currentSurface.material.diffuseAlbedo;
 
     position_frag_out = vec4(worldPos, ph_linear_view_depth(modelview_projection, worldPos));
     normal_frag_out = vec4(geometryNormal, 1.0f);
     mapped_normal_frag_out = vec4(shadingNormal, 1.0f);
     albedo_frag_out = vec4(surfaceAlbedo, 1.0f);
 
-    // RTXDI_SampleLightsForSurface: initial sampling (local lights + stubs for infinite/env/BRDF).
-    // Initial visibility (RTXDI InitialSampling.hlsli:661-668) is applied INSIDE
-    // RTXDI_SampleLightsForSurface on the combined reservoir, matching RTXDI structure exactly.
-    Reservoir reservoir = RTXDI_SampleLightsForSurface(currentSurface);
+    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(uvec2(pixelPosition), uint(frameCounter), RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+    RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(uvec2(pixelPosition / RTXDI_TILE_SIZE_IN_PIXELS), uint(frameCounter), RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+    const RTXDI_DIInitialSamplingParameters initialSamplingParams = lt_build_di_initial_sampling_parameters();
+    RAB_LightSample lightSample = RAB_EmptyLightSample();
+    RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, currentSurface, initialSamplingParams, lightSample);
 
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 
-    // Compute screen-space motion vector using the same current/previous pixel semantics
-    // consumed by the RTXDI temporal path:
-    //   motion.xy = previousPixel - currentPixel
-    //   motion.z  = previousLinearDepth - currentLinearDepth
-    vec2 previousPixel = ph_reprojectf(
-        previous_modelview_projection,
-        worldPos,
-        vec2(viewWidth, viewHeight),
-        vec2(0.0f)
-    );
-    // Match RTXDI GBufferHelpers.hlsli: motion is measured from the current pixel center,
-    // not the integer pixel index. Using the integer corner injects a constant half-pixel
-    // offset, which breaks round() in temporal reprojection and prevents DI history reuse.
     vec2 currentPixelCenter = vec2(pixelPosition) + vec2(0.5f);
-    vec2 motionXY = previousPixel - currentPixelCenter;
-    float currentLinearDepth = ph_linear_view_depth(modelview_projection, worldPos);
-    float expectedPrevLinearDepth = ph_linear_view_depth(previous_modelview_projection, worldPos);
-    float motionZ = expectedPrevLinearDepth - currentLinearDepth;
-    motion_frag_out = vec4(motionXY, motionZ, 1.0);
+    motion_frag_out = ph_compute_temporal_motion(
+        worldPos,
+        currentPixelCenter,
+        vec2(viewWidth, viewHeight)
+    );
 }

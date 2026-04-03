@@ -81,8 +81,6 @@ uniform sampler2D stage_radiosity_indirect;
 uniform float ph_debug_show_direct;
 uniform float ph_debug_show_indirect;
 uniform float ph_debug_show_handheld;
-uniform float ph_debug_show_denoiser;
-uniform float ph_debug_disable_denoiser;
 
 vec3 sample_photonics_direct(vec2 tex_coord) {
     if (ph_debug_show_direct < 0.5) return vec3(0.0);

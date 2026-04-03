@@ -1,6 +1,7 @@
 package at.redi2go.photonic.client;
 
 import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
+import at.redi2go.photonic.client.rendering.opengl.rendering.RegirComputeProgram;
 import at.redi2go.photonic.client.rendering.util.BufferUtils;
 import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.MainRenderer;
 import at.redi2go.photonic.client.rendering.world.LightRegistry;
@@ -9,6 +10,7 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -22,7 +24,9 @@ import javax.imageio.ImageIO;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.irisshaders.iris.Iris;
+import net.irisshaders.iris.uniforms.SystemTimeUniforms;
 import net.minecraft.client.MinecraftClient;
+import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL30;
 
@@ -30,6 +34,15 @@ public final class ShaderAutomation {
    private static final int MAX_REPEAT_DIAGNOSTICS = 5;
    private static final int RTXDI_PACKED_DI_RESERVOIR_M_SHIFT = 18;
    private static final int RTXDI_PACKED_DI_RESERVOIR_MAX_M_UINT = 0x3fff;
+   private static final int RTXDI_PACKED_DI_RESERVOIR_DISTANCE_CHANNEL_BITS = 8;
+   private static final int RTXDI_PACKED_DI_RESERVOIR_DISTANCE_X_SHIFT = 0;
+   private static final int RTXDI_PACKED_DI_RESERVOIR_DISTANCE_Y_SHIFT = 8;
+   private static final int RTXDI_PACKED_DI_RESERVOIR_AGE_SHIFT = 16;
+   private static final int RTXDI_PACKED_DI_RESERVOIR_MAX_AGE = 0xff;
+   private static final int RTXDI_PACKED_DI_RESERVOIR_MAX_DISTANCE = (1 << (RTXDI_PACKED_DI_RESERVOIR_DISTANCE_CHANNEL_BITS - 1)) - 1;
+   private static final int RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED = 1;
+   private static final int RTXDI_TILE_SIZE_IN_PIXELS = 16;
+   private static final float REGIR_CELL_SIZE = 32.0f;
    private static final double FIREFLY_LUMA_THRESHOLD = 16.0;
    private static final double SEVERE_FIREFLY_LUMA_THRESHOLD = 64.0;
    private static final float FP16_SATURATION_CHANNEL_THRESHOLD = 65500.0f;
@@ -334,12 +347,20 @@ public final class ShaderAutomation {
       this.maxMotionRepeatIndirectDeltaAvg = Double.parseDouble(System.getProperty("photonics.automation.maxMotionRepeatIndirectDeltaAvg", "-1"));
       this.maxMotionRepeatIndirectDeltaMax = Double.parseDouble(System.getProperty("photonics.automation.maxMotionRepeatIndirectDeltaMax", "-1"));
       this.worldPrepActiveTick = Math.max(1, Integer.getInteger("photonics.automation.worldPrepActiveTick", 1));
+      /*
       this.timeOfDaySequence = parseLongSequence(System.getProperty("photonics.automation.timeOfDaySequence", ""));
+      */
+      // Motion-only isolation: keep the original scheduling logic above for later restoration,
+      // but force all non-camera automation events off in the active path.
+      this.timeOfDaySequence = new long[0];
       this.timeOfDayStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.timeOfDayStartActiveTick", this.cameraMotionStartActiveTick + this.cameraMotionPeriodTicks));
       this.timeOfDayStepTicks = Math.max(1, Integer.getInteger("photonics.automation.timeOfDayStepTicks", Math.max(this.captureEveryActiveTicks, 30)));
       this.blockToggleStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.blockToggleStartActiveTick", this.timeOfDayStartActiveTick + this.timeOfDayStepTicks * Math.max(this.timeOfDaySequence.length, 1)));
       this.blockTogglePeriodTicks = Math.max(1, Integer.getInteger("photonics.automation.blockTogglePeriodTicks", Math.max(this.captureEveryActiveTicks, 30)));
+      /*
       this.blockToggleCount = Math.max(0, Integer.getInteger("photonics.automation.blockToggleCount", 0));
+      */
+      this.blockToggleCount = 0;
    }
 
    public static void afterPhotonicsRender() {
@@ -549,6 +570,95 @@ public final class ShaderAutomation {
       return (packed >>> RTXDI_PACKED_DI_RESERVOIR_M_SHIFT) & RTXDI_PACKED_DI_RESERVOIR_MAX_M_UINT;
    }
 
+   private static InitialSamplingDebugStats computeInitialSamplingDebugStats(TextureObject texture) {
+      if (texture == null) {
+         return InitialSamplingDebugStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      int[] dimensions = texture.getTextureDimensions();
+      if (dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 1) {
+         return InitialSamplingDebugStats.EMPTY;
+      }
+
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null || pixels.length < 4) {
+         return InitialSamplingDebugStats.EMPTY;
+      }
+
+      int width = dimensions[0];
+      int height = dimensions[1];
+      int pixelCount = Math.max(1, width * height);
+      int[] reasonCounts = new int[11];
+      double positiveCandidateFractionSum = 0.0;
+      double proposalValidSum = 0.0;
+      double proposalWeightSum = 0.0;
+      double[] successRows = new double[height];
+      double[] zeroTargetRows = new double[height];
+      double[] proposalValidRows = new double[height];
+      double[] proposalWeightRows = new double[height];
+
+      for (int y = 0; y < height; y++) {
+         int successCount = 0;
+         int zeroTargetCount = 0;
+         double proposalValidRowSum = 0.0;
+         double proposalWeightRowSum = 0.0;
+         for (int x = 0; x < width; x++) {
+            int base = (x + y * width) * 4;
+            int reason = Math.max(0, Math.min(10, Math.round(pixels[base])));
+            float positiveCandidateFraction = pixels[base + 1];
+            float proposalValid = pixels[base + 2];
+            float proposalWeight = pixels[base + 3];
+
+            reasonCounts[reason]++;
+            if (Float.isFinite(positiveCandidateFraction)) {
+               positiveCandidateFractionSum += Math.max(0.0f, positiveCandidateFraction);
+            }
+            if (Float.isFinite(proposalValid)) {
+               double clampedProposalValid = Math.max(0.0f, Math.min(1.0f, proposalValid));
+               proposalValidSum += clampedProposalValid;
+               proposalValidRowSum += clampedProposalValid;
+            }
+            if (Float.isFinite(proposalWeight)) {
+               double clampedProposalWeight = Math.max(0.0f, proposalWeight);
+               proposalWeightSum += clampedProposalWeight;
+               proposalWeightRowSum += clampedProposalWeight;
+            }
+            if (reason == 10) {
+               successCount++;
+            }
+            if (reason == 7) {
+               zeroTargetCount++;
+            }
+         }
+         successRows[y] = successCount / (double)Math.max(1, width);
+         zeroTargetRows[y] = zeroTargetCount / (double)Math.max(1, width);
+         proposalValidRows[y] = proposalValidRowSum / (double)Math.max(1, width);
+         proposalWeightRows[y] = proposalWeightRowSum / (double)Math.max(1, width);
+      }
+
+      return new InitialSamplingDebugStats(
+         reasonCounts[0] / (double)pixelCount,
+         reasonCounts[1] / (double)pixelCount,
+         reasonCounts[2] / (double)pixelCount,
+         reasonCounts[3] / (double)pixelCount,
+         reasonCounts[4] / (double)pixelCount,
+         reasonCounts[5] / (double)pixelCount,
+         reasonCounts[6] / (double)pixelCount,
+         reasonCounts[7] / (double)pixelCount,
+         reasonCounts[8] / (double)pixelCount,
+         reasonCounts[9] / (double)pixelCount,
+         reasonCounts[10] / (double)pixelCount,
+         positiveCandidateFractionSum / pixelCount,
+         proposalValidSum / pixelCount,
+         proposalWeightSum / pixelCount,
+         computeRowJumpStats(successRows),
+         computeRowJumpStats(zeroTargetRows),
+         computeRowJumpStats(proposalValidRows),
+         computeRowJumpStats(proposalWeightRows)
+      );
+   }
+
    private static FireflyStats computeFireflyStats(TextureObject texture) {
       if (texture == null) {
          return FireflyStats.EMPTY;
@@ -609,86 +719,85 @@ public final class ShaderAutomation {
       );
    }
 
-   private static DirectTemporalDebugStats computeDirectTemporalDebugStats(TextureObject texture) {
+   private static ReservoirSampleDebugStats computeReservoirSampleDebugStats(TextureObject texture) {
       if (texture == null) {
-         return DirectTemporalDebugStats.EMPTY;
+         return ReservoirSampleDebugStats.EMPTY;
       }
 
       texture.updatePerFrame();
       float[] pixels = texture.downloadFloatData();
       if (pixels == null || pixels.length < 4) {
-         return DirectTemporalDebugStats.EMPTY;
+         return ReservoirSampleDebugStats.EMPTY;
       }
 
       int pixelCount = pixels.length / 4;
-      double neighborMatchSum = 0.0;
-      double failReasonSum = 0.0;
-      double remapValidSum = 0.0;
-      int lightReloadCount = 0;
-      int emptyMotionCount = 0;
-      int oobCount = 0;
-      int invalidSurfCount = 0;
-      int depthFailCount = 0;
-      int normalFailCount = 0;
-      int mixedCount = 0;
+      int nonZeroCount = 0;
+      double uSum = 0.0;
+      double vSum = 0.0;
       for (int i = 0; i < pixelCount; i++) {
-         int base = i * 4;
-         float neighborMatch = Math.clamp(pixels[base + 1], 0.0f, 1.0f);
-         float failReason = pixels[base + 2];
-         float remapValid = Math.clamp(pixels[base + 3], 0.0f, 1.0f);
-         neighborMatchSum += neighborMatch;
-         failReasonSum += failReason;
-         remapValidSum += remapValid;
-         // Classify failure reason (encoded as 0.1-0.7 with 0.05 tolerance)
-         if (neighborMatch < 0.5f && failReason > 0.05f) {
-            if (failReason < 0.15f) lightReloadCount++;
-            else if (failReason < 0.25f) emptyMotionCount++;
-            else if (failReason < 0.35f) oobCount++;
-            else if (failReason < 0.45f) invalidSurfCount++;
-            else if (failReason < 0.55f) depthFailCount++;
-            else if (failReason < 0.65f) normalFailCount++;
-            else mixedCount++;
+         int packedUv = Float.floatToRawIntBits(pixels[i * 4]);
+         if (packedUv == 0) {
+            continue;
          }
+
+         nonZeroCount++;
+         uSum += (packedUv & 0xffff) / 65535.0;
+         vSum += ((packedUv >>> 16) & 0xffff) / 65535.0;
       }
 
-      double pixelCountDouble = Math.max(1, pixelCount);
-      return new DirectTemporalDebugStats(
-         neighborMatchSum / pixelCountDouble,
-         failReasonSum / pixelCountDouble,
-         remapValidSum / pixelCountDouble,
-         lightReloadCount / pixelCountDouble,
-         emptyMotionCount / pixelCountDouble,
-         oobCount / pixelCountDouble,
-         invalidSurfCount / pixelCountDouble,
-         depthFailCount / pixelCountDouble,
-         normalFailCount / pixelCountDouble,
-         mixedCount / pixelCountDouble
+      double denominator = Math.max(1, nonZeroCount);
+      return new ReservoirSampleDebugStats(
+         nonZeroCount / (double)Math.max(1, pixelCount),
+         uSum / denominator,
+         vSum / denominator
       );
    }
 
-   // Returns [avgDepthRatio, avgExpectedDepth, avgCandidateDepth, validPixelCount]
-   private static float[] computeDepthDebugStats(TextureObject texture) {
-      if (texture == null) return new float[]{0, 0, 0, 0};
+   private static ReservoirMetaDebugStats computeReservoirMetaDebugStats(TextureObject texture) {
+      if (texture == null) {
+         return ReservoirMetaDebugStats.EMPTY;
+      }
+
       texture.updatePerFrame();
       float[] pixels = texture.downloadFloatData();
-      if (pixels == null || pixels.length < 4) return new float[]{0, 0, 0, 0};
-      int pixelCount = pixels.length / 4;
-      double ratioSum = 0, expectedSum = 0, candidateSum = 0;
-      int validCount = 0;
-      for (int i = 0; i < pixelCount; i++) {
-         int base = i * 4;
-         float depthRatio = pixels[base + 1]; // .y = depthRatio
-         float expected = pixels[base + 2];   // .z = expectedPrevLinearDepth
-         float candidate = pixels[base + 3];  // .w = candidateDepth
-         if (expected > 0.001f && candidate > 0.001f) {
-            ratioSum += depthRatio;
-            expectedSum += expected;
-            candidateSum += candidate;
-            validCount++;
-         }
+      if (pixels == null || pixels.length < 4) {
+         return ReservoirMetaDebugStats.EMPTY;
       }
-      double vc = Math.max(1, validCount);
-      return new float[]{(float)(ratioSum / vc), (float)(expectedSum / vc), (float)(candidateSum / vc), validCount};
+
+      int pixelCount = pixels.length / 4;
+      int nonZeroCount = 0;
+      double ageSum = 0.0;
+      double absDistanceXSum = 0.0;
+      double absDistanceYSum = 0.0;
+      for (int i = 0; i < pixelCount; i++) {
+         int packedMeta = Float.floatToRawIntBits(pixels[i * 4 + 3]);
+         if (packedMeta == 0) {
+            continue;
+         }
+
+         nonZeroCount++;
+         ageSum += decodePackedReservoirAge(packedMeta);
+         absDistanceXSum += Math.abs(decodePackedReservoirDistance(packedMeta, RTXDI_PACKED_DI_RESERVOIR_DISTANCE_X_SHIFT));
+         absDistanceYSum += Math.abs(decodePackedReservoirDistance(packedMeta, RTXDI_PACKED_DI_RESERVOIR_DISTANCE_Y_SHIFT));
+      }
+
+      double denominator = Math.max(1, nonZeroCount);
+      return new ReservoirMetaDebugStats(
+         nonZeroCount / (double)Math.max(1, pixelCount),
+         ageSum / denominator,
+         absDistanceXSum / denominator,
+         absDistanceYSum / denominator
+      );
+   }
+
+   private static int decodePackedReservoirAge(int packedMeta) {
+      return (packedMeta >>> RTXDI_PACKED_DI_RESERVOIR_AGE_SHIFT) & RTXDI_PACKED_DI_RESERVOIR_MAX_AGE;
+   }
+
+   private static int decodePackedReservoirDistance(int packedMeta, int shift) {
+      int leftShift = 32 - shift - RTXDI_PACKED_DI_RESERVOIR_DISTANCE_CHANNEL_BITS;
+      int signExtendShift = 32 - RTXDI_PACKED_DI_RESERVOIR_DISTANCE_CHANNEL_BITS;
+      return (packedMeta << leftShift) >> signExtendShift;
    }
 
    private static PositionDebugStats computePositionDebugStats(TextureObject texture) {
@@ -739,6 +848,618 @@ public final class ShaderAutomation {
          maxY,
          maxZ
       );
+   }
+
+   private static RowJumpStats computeHdrLumaRowJumpStats(TextureObject texture) {
+      if (texture == null) {
+         return RowJumpStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      int[] dimensions = texture.getTextureDimensions();
+      if (dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 1) {
+         return RowJumpStats.EMPTY;
+      }
+
+      return computeHdrLumaRowJumpStats(texture.downloadFloatData(), dimensions[0], dimensions[1]);
+   }
+
+   private static RowJumpStats computeHdrLumaRowJumpStats(float[] pixels, int width, int height) {
+      if (pixels == null || width <= 0 || height <= 1) {
+         return RowJumpStats.EMPTY;
+      }
+
+      double[] rowMeans = new double[height];
+      for (int y = 0; y < height; y++) {
+         double lumaSum = 0.0;
+         int validCount = 0;
+         for (int x = 0; x < width; x++) {
+            int base = (x + y * width) * 4;
+            float r = pixels[base];
+            float g = pixels[base + 1];
+            float b = pixels[base + 2];
+            if (!Float.isFinite(r) || !Float.isFinite(g) || !Float.isFinite(b)) {
+               continue;
+            }
+
+            lumaSum += 0.2126 * Math.max(r, 0.0f) + 0.7152 * Math.max(g, 0.0f) + 0.0722 * Math.max(b, 0.0f);
+            validCount++;
+         }
+         rowMeans[y] = validCount == 0 ? 0.0 : lumaSum / validCount;
+      }
+
+      return computeRowJumpStats(rowMeans);
+   }
+
+   private static ReservoirRowJumpStats computeReservoirRowJumpStats(TextureObject texture) {
+      if (texture == null) {
+         return ReservoirRowJumpStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      int[] dimensions = texture.getTextureDimensions();
+      if (dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 1) {
+         return ReservoirRowJumpStats.EMPTY;
+      }
+
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null) {
+         return ReservoirRowJumpStats.EMPTY;
+      }
+
+      int width = dimensions[0];
+      int height = dimensions[1];
+      double[] validFractionRows = new double[height];
+      double[] weightRows = new double[height];
+      double[] targetPdfRows = new double[height];
+      double[] weightTimesTargetPdfRows = new double[height];
+      double[] reservoirMRows = new double[height];
+      for (int y = 0; y < height; y++) {
+         int strictValidCount = 0;
+         double weightSum = 0.0;
+         double targetPdfSum = 0.0;
+         double weightTimesTargetPdfSum = 0.0;
+         double reservoirMSum = 0.0;
+         for (int x = 0; x < width; x++) {
+            int base = (x + y * width) * 4;
+            int lightData = Float.floatToRawIntBits(pixels[base]);
+            float weight = pixels[base + 1];
+            float targetPdf = pixels[base + 2];
+            int reservoirM = decodePackedReservoirM(pixels[base + 3]);
+            if (lightData != 0 && weight > 0.0f && reservoirM > 0) {
+               strictValidCount++;
+            }
+            if (Float.isFinite(weight)) {
+               weightSum += Math.max(weight, 0.0f);
+            }
+            if (Float.isFinite(targetPdf)) {
+               targetPdfSum += Math.max(targetPdf, 0.0f);
+            }
+            if (Float.isFinite(weight) && Float.isFinite(targetPdf)) {
+               weightTimesTargetPdfSum += Math.max(weight, 0.0f) * Math.max(targetPdf, 0.0f);
+            }
+            reservoirMSum += reservoirM;
+         }
+         validFractionRows[y] = strictValidCount / (double) Math.max(1, width);
+         weightRows[y] = weightSum / Math.max(1, width);
+         targetPdfRows[y] = targetPdfSum / Math.max(1, width);
+         weightTimesTargetPdfRows[y] = weightTimesTargetPdfSum / Math.max(1, width);
+         reservoirMRows[y] = reservoirMSum / Math.max(1, width);
+      }
+
+      return new ReservoirRowJumpStats(
+         computeRowJumpStats(validFractionRows),
+         computeRowJumpStats(weightRows),
+         computeRowJumpStats(targetPdfRows),
+         computeRowJumpStats(weightTimesTargetPdfRows),
+         computeRowJumpStats(reservoirMRows)
+      );
+   }
+
+   private static RowJumpStats computeStageLinearDepthRowJumpStats(TextureObject texture, Vector3f cameraPosition) {
+      if (texture == null || cameraPosition == null) {
+         return RowJumpStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      int[] dimensions = texture.getTextureDimensions();
+      if (dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 1) {
+         return RowJumpStats.EMPTY;
+      }
+
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null) {
+         return RowJumpStats.EMPTY;
+      }
+
+      int width = dimensions[0];
+      int height = dimensions[1];
+      double[] depthRows = new double[height];
+      for (int y = 0; y < height; y++) {
+         double depthSum = 0.0;
+         int validCount = 0;
+         for (int x = 0; x < width; x++) {
+            int base = (x + y * width) * 4;
+            float px = pixels[base];
+            float py = pixels[base + 1];
+            float pz = pixels[base + 2];
+            if (!Float.isFinite(px) || !Float.isFinite(py) || !Float.isFinite(pz)) {
+               continue;
+            }
+            if (Math.abs(px) < 1.0e-6f && Math.abs(py) < 1.0e-6f && Math.abs(pz) < 1.0e-6f) {
+               continue;
+            }
+
+            double dx = px - cameraPosition.x;
+            double dy = py - cameraPosition.y;
+            double dz = pz - cameraPosition.z;
+            depthSum += Math.sqrt(dx * dx + dy * dy + dz * dz);
+            validCount++;
+         }
+         depthRows[y] = validCount == 0 ? 0.0 : depthSum / validCount;
+      }
+
+      return computeRowJumpStats(depthRows);
+   }
+
+   private static RowJumpStats computeReGIRCellZRowJumpStats(
+      TextureObject texture,
+      Vector3f gridCenter,
+      int gridResolution,
+      float cellSize
+   ) {
+      if (texture == null || gridCenter == null || gridResolution <= 0 || cellSize <= 0.0f) {
+         return RowJumpStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      int[] dimensions = texture.getTextureDimensions();
+      if (dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 1) {
+         return RowJumpStats.EMPTY;
+      }
+
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null) {
+         return RowJumpStats.EMPTY;
+      }
+
+      float gridOriginZ = gridCenter.z - gridResolution * cellSize * 0.5f;
+      double[] cellZRows = new double[dimensions[1]];
+      for (int y = 0; y < dimensions[1]; y++) {
+         double cellZSum = 0.0;
+         int validCount = 0;
+         for (int x = 0; x < dimensions[0]; x++) {
+            int base = (x + y * dimensions[0]) * 4;
+            float pz = pixels[base + 2];
+            if (!Float.isFinite(pz) || Math.abs(pz) < 1.0e-6f) {
+               continue;
+            }
+
+            float cellZ = (float) Math.floor((pz - gridOriginZ) / cellSize);
+            cellZSum += cellZ;
+            validCount++;
+         }
+         cellZRows[y] = validCount == 0 ? 0.0 : cellZSum / validCount;
+      }
+
+      return computeRowJumpStats(cellZRows);
+   }
+
+   private static ReGIRCoverageRowJumpStats computeReGIRCoverageRowJumpStats(
+      TextureObject texture,
+      Vector3f gridCenter,
+      int gridResolution,
+      float cellSize,
+      float samplingJitter
+   ) {
+      if (texture == null || gridCenter == null || gridResolution <= 0 || cellSize <= 0.0f) {
+         return ReGIRCoverageRowJumpStats.EMPTY;
+      }
+
+      texture.updatePerFrame();
+      int[] dimensions = texture.getTextureDimensions();
+      if (dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 1) {
+         return ReGIRCoverageRowJumpStats.EMPTY;
+      }
+
+      float[] pixels = texture.downloadFloatData();
+      if (pixels == null) {
+         return ReGIRCoverageRowJumpStats.EMPTY;
+      }
+
+      float nominalHalfExtent = gridResolution * cellSize * 0.5f;
+      float jitterMargin = samplingJitter * cellSize * 0.5f;
+      double[] nominalCoverageRows = new double[dimensions[1]];
+      double[] expandedCoverageRows = new double[dimensions[1]];
+
+      for (int y = 0; y < dimensions[1]; y++) {
+         int nominalInsideCount = 0;
+         int expandedInsideCount = 0;
+         int validCount = 0;
+         for (int x = 0; x < dimensions[0]; x++) {
+            int base = (x + y * dimensions[0]) * 4;
+            float px = pixels[base];
+            float py = pixels[base + 1];
+            float pz = pixels[base + 2];
+            if (!Float.isFinite(px) || !Float.isFinite(py) || !Float.isFinite(pz)) {
+               continue;
+            }
+            if (Math.abs(px) < 1.0e-6f && Math.abs(py) < 1.0e-6f && Math.abs(pz) < 1.0e-6f) {
+               continue;
+            }
+
+            validCount++;
+            if (isInsideAxisAlignedCube(px, py, pz, gridCenter, nominalHalfExtent)) {
+               nominalInsideCount++;
+            }
+            if (isInsideAxisAlignedCube(px, py, pz, gridCenter, nominalHalfExtent + jitterMargin)) {
+               expandedInsideCount++;
+            }
+         }
+
+         nominalCoverageRows[y] = validCount == 0 ? 0.0 : nominalInsideCount / (double) validCount;
+         expandedCoverageRows[y] = validCount == 0 ? 0.0 : expandedInsideCount / (double) validCount;
+      }
+
+      return new ReGIRCoverageRowJumpStats(
+         computeRowJumpStats(nominalCoverageRows),
+         computeRowJumpStats(expandedCoverageRows)
+      );
+   }
+
+   private static ReGIRPixelCorrelationStats computeReGIRPixelCorrelationStats(
+      TextureObject resolvedReservoirTexture,
+      TextureObject stagePositionTexture,
+      LightRegistry lightRegistry,
+      int frameIndex
+   ) {
+      if (resolvedReservoirTexture == null || stagePositionTexture == null || lightRegistry == null) {
+         return ReGIRPixelCorrelationStats.EMPTY;
+      }
+
+      resolvedReservoirTexture.updatePerFrame();
+      stagePositionTexture.updatePerFrame();
+      int[] resolvedDimensions = resolvedReservoirTexture.getTextureDimensions();
+      int[] stageDimensions = stagePositionTexture.getTextureDimensions();
+      if (resolvedDimensions.length < 2
+         || stageDimensions.length < 2
+         || resolvedDimensions[0] <= 0
+         || resolvedDimensions[1] <= 1
+         || resolvedDimensions[0] != stageDimensions[0]
+         || resolvedDimensions[1] != stageDimensions[1]) {
+         return ReGIRPixelCorrelationStats.EMPTY;
+      }
+
+      float[] resolvedPixels = resolvedReservoirTexture.downloadFloatData();
+      float[] stagePixels = stagePositionTexture.downloadFloatData();
+      if (resolvedPixels == null || stagePixels == null) {
+         return ReGIRPixelCorrelationStats.EMPTY;
+      }
+
+      ReGIRCellBufferStats cellBufferStats = downloadReGIRCellBufferStats(lightRegistry);
+      if (cellBufferStats.validSlotCounts().length == 0 || cellBufferStats.meanWeights().length == 0) {
+         return ReGIRPixelCorrelationStats.EMPTY;
+      }
+
+      int width = resolvedDimensions[0];
+      int height = resolvedDimensions[1];
+      int gridResolution = lightRegistry.getRegirGridResolution();
+      float samplingJitter = lightRegistry.getRegirSamplingJitter();
+      Vector3f gridCenter = new Vector3f(lightRegistry.getRegirGridCenter());
+      double[] cellValidSlotRows = new double[height];
+      double[] cellMeanWeightRows = new double[height];
+      double[] outsideGridRows = new double[height];
+      double[] jitteredCellChangedRows = new double[height];
+      double[] jitteredCellMeanWeightDeltaRows = new double[height];
+      double[] jitteredOutsideGridDeltaRows = new double[height];
+      int visiblePixels = 0;
+      int resolvedStrictValidVisiblePixels = 0;
+      int exactOutsideGridVisiblePixels = 0;
+      int exactOutsideGridStrictInvalidPixels = 0;
+      int exactOutsideGridStrictValidPixels = 0;
+      int zeroSlotStrictInvalidPixels = 0;
+      int zeroSlotStrictValidPixels = 0;
+      double strictInvalidCellSlotSum = 0.0;
+      double strictValidCellSlotSum = 0.0;
+      double strictInvalidCellWeightSum = 0.0;
+      double strictValidCellWeightSum = 0.0;
+      int strictInvalidInsideGridPixels = 0;
+      int strictValidInsideGridPixels = 0;
+      int jitteredCellChangedVisiblePixels = 0;
+      int jitteredOutsideGridDeltaVisiblePixels = 0;
+      double jitteredCellMeanWeightDeltaSum = 0.0;
+
+      for (int y = 0; y < height; y++) {
+         int rowVisiblePixels = 0;
+         int rowOutsideGridPixels = 0;
+         int rowJitteredCellChangedPixels = 0;
+         int rowJitteredOutsideGridDeltaPixels = 0;
+         double rowCellSlotSum = 0.0;
+         double rowCellWeightSum = 0.0;
+         double rowJitteredCellMeanWeightDeltaSum = 0.0;
+
+         for (int x = 0; x < width; x++) {
+            int base = (x + y * width) * 4;
+            float px = stagePixels[base];
+            float py = stagePixels[base + 1];
+            float pz = stagePixels[base + 2];
+            if (!Float.isFinite(px) || !Float.isFinite(py) || !Float.isFinite(pz)) {
+               continue;
+            }
+            if (Math.abs(px) < 1.0e-6f && Math.abs(py) < 1.0e-6f && Math.abs(pz) < 1.0e-6f) {
+               continue;
+            }
+
+            rowVisiblePixels++;
+            visiblePixels++;
+
+            int resolvedLightData = Float.floatToRawIntBits(resolvedPixels[base]);
+            float resolvedWeight = resolvedPixels[base + 1];
+            int resolvedM = decodePackedReservoirM(resolvedPixels[base + 3]);
+            boolean strictValid = resolvedLightData != 0 && resolvedWeight > 0.0f && resolvedM > 0;
+            if (strictValid) {
+               resolvedStrictValidVisiblePixels++;
+            }
+
+            int shaderCellIndex = calculateExactReGIRCellIndexWithoutJitter(gridCenter, gridResolution, px, py, pz);
+            int jitteredReferenceCellIndex = calculateExactReGIRCellIndex(
+               x,
+               y,
+               frameIndex,
+               gridCenter,
+               gridResolution,
+               samplingJitter,
+               px,
+               py,
+               pz
+            );
+            if (shaderCellIndex != jitteredReferenceCellIndex) {
+               rowJitteredCellChangedPixels++;
+               jitteredCellChangedVisiblePixels++;
+            }
+            if ((shaderCellIndex < 0) != (jitteredReferenceCellIndex < 0)) {
+               rowJitteredOutsideGridDeltaPixels++;
+               jitteredOutsideGridDeltaVisiblePixels++;
+            }
+            if (shaderCellIndex >= 0
+               && shaderCellIndex < cellBufferStats.meanWeights().length
+               && jitteredReferenceCellIndex >= 0
+               && jitteredReferenceCellIndex < cellBufferStats.meanWeights().length) {
+               double shaderCellMeanWeight = cellBufferStats.meanWeights()[shaderCellIndex];
+               double jitteredCellMeanWeight = cellBufferStats.meanWeights()[jitteredReferenceCellIndex];
+               double jitteredCellMeanWeightDelta = Math.abs(jitteredCellMeanWeight - shaderCellMeanWeight);
+               rowJitteredCellMeanWeightDeltaSum += jitteredCellMeanWeightDelta;
+               jitteredCellMeanWeightDeltaSum += jitteredCellMeanWeightDelta;
+            }
+            if (shaderCellIndex < 0 || shaderCellIndex >= cellBufferStats.validSlotCounts().length) {
+               rowOutsideGridPixels++;
+               exactOutsideGridVisiblePixels++;
+               if (strictValid) {
+                  exactOutsideGridStrictValidPixels++;
+               } else {
+                  exactOutsideGridStrictInvalidPixels++;
+               }
+               continue;
+            }
+
+            int cellValidSlots = cellBufferStats.validSlotCounts()[shaderCellIndex];
+            double cellMeanWeight = cellBufferStats.meanWeights()[shaderCellIndex];
+            rowCellSlotSum += cellValidSlots;
+            rowCellWeightSum += cellMeanWeight;
+
+            if (strictValid) {
+               strictValidInsideGridPixels++;
+               strictValidCellSlotSum += cellValidSlots;
+               strictValidCellWeightSum += cellMeanWeight;
+               if (cellValidSlots == 0) {
+                  zeroSlotStrictValidPixels++;
+               }
+            } else {
+               strictInvalidInsideGridPixels++;
+               strictInvalidCellSlotSum += cellValidSlots;
+               strictInvalidCellWeightSum += cellMeanWeight;
+               if (cellValidSlots == 0) {
+                  zeroSlotStrictInvalidPixels++;
+               }
+            }
+         }
+
+         cellValidSlotRows[y] = rowVisiblePixels == 0 ? 0.0 : rowCellSlotSum / rowVisiblePixels;
+         cellMeanWeightRows[y] = rowVisiblePixels == 0 ? 0.0 : rowCellWeightSum / rowVisiblePixels;
+         outsideGridRows[y] = rowVisiblePixels == 0 ? 0.0 : rowOutsideGridPixels / (double) rowVisiblePixels;
+         jitteredCellChangedRows[y] = rowVisiblePixels == 0 ? 0.0 : rowJitteredCellChangedPixels / (double) rowVisiblePixels;
+         jitteredCellMeanWeightDeltaRows[y] = rowVisiblePixels == 0 ? 0.0 : rowJitteredCellMeanWeightDeltaSum / rowVisiblePixels;
+         jitteredOutsideGridDeltaRows[y] = rowVisiblePixels == 0 ? 0.0 : rowJitteredOutsideGridDeltaPixels / (double) rowVisiblePixels;
+      }
+
+      double visiblePixelCount = Math.max(1, visiblePixels);
+      return new ReGIRPixelCorrelationStats(
+         visiblePixels / (double) Math.max(1, width * height),
+         resolvedStrictValidVisiblePixels / visiblePixelCount,
+         exactOutsideGridVisiblePixels / visiblePixelCount,
+         exactOutsideGridStrictInvalidPixels / visiblePixelCount,
+         exactOutsideGridStrictValidPixels / visiblePixelCount,
+         strictInvalidInsideGridPixels == 0 ? 0.0 : zeroSlotStrictInvalidPixels / (double) strictInvalidInsideGridPixels,
+         strictValidInsideGridPixels == 0 ? 0.0 : zeroSlotStrictValidPixels / (double) strictValidInsideGridPixels,
+         strictInvalidInsideGridPixels == 0 ? 0.0 : strictInvalidCellSlotSum / strictInvalidInsideGridPixels,
+         strictValidInsideGridPixels == 0 ? 0.0 : strictValidCellSlotSum / strictValidInsideGridPixels,
+         strictInvalidInsideGridPixels == 0 ? 0.0 : strictInvalidCellWeightSum / strictInvalidInsideGridPixels,
+         strictValidInsideGridPixels == 0 ? 0.0 : strictValidCellWeightSum / strictValidInsideGridPixels,
+         jitteredCellChangedVisiblePixels / visiblePixelCount,
+         jitteredCellMeanWeightDeltaSum / visiblePixelCount,
+         jitteredOutsideGridDeltaVisiblePixels / visiblePixelCount,
+         computeRowJumpStats(cellValidSlotRows),
+         computeRowJumpStats(cellMeanWeightRows),
+         computeRowJumpStats(outsideGridRows),
+         computeRowJumpStats(jitteredCellChangedRows),
+         computeRowJumpStats(jitteredCellMeanWeightDeltaRows),
+         computeRowJumpStats(jitteredOutsideGridDeltaRows)
+      );
+   }
+
+   private static ReGIRCellBufferStats downloadReGIRCellBufferStats(LightRegistry lightRegistry) {
+      int gridResolution = lightRegistry.getRegirGridResolution();
+      int totalCells = gridResolution * gridResolution * gridResolution;
+      int lightsPerCell = lightRegistry.getRegirLightsPerCell();
+      if (totalCells <= 0 || lightsPerCell <= 0) {
+         return ReGIRCellBufferStats.EMPTY;
+      }
+
+      int[] validSlotCounts = new int[totalCells];
+      double[] meanWeights = new double[totalCells];
+      int regirEntryOffset = RegirComputeProgram.tileCount * RegirComputeProgram.tileSize;
+      lightRegistry.getRegirLightIndexMemoryManager().download(downloadedBuffer -> {
+         ByteBuffer data = downloadedBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+         for (int cellIndex = 0; cellIndex < totalCells; cellIndex++) {
+            int validSlots = 0;
+            double weightSum = 0.0;
+            int cellEntryBase = regirEntryOffset + cellIndex * lightsPerCell;
+            for (int slot = 0; slot < lightsPerCell; slot++) {
+               int byteIndex = (cellEntryBase + slot) * 8;
+               if (byteIndex + 8 > data.capacity()) {
+                  break;
+               }
+
+               float storedWeight = Float.intBitsToFloat(data.getInt(byteIndex + 4));
+               if (Float.isFinite(storedWeight) && storedWeight > 0.0f) {
+                  validSlots++;
+                  weightSum += storedWeight;
+               }
+            }
+
+            validSlotCounts[cellIndex] = validSlots;
+            meanWeights[cellIndex] = validSlots == 0 ? 0.0 : weightSum / validSlots;
+         }
+      });
+
+      return new ReGIRCellBufferStats(validSlotCounts, meanWeights);
+   }
+
+   private static int calculateExactReGIRCellIndex(
+      int pixelX,
+      int pixelY,
+      int frameIndex,
+      Vector3f gridCenter,
+      int gridResolution,
+      float samplingJitter,
+      float worldX,
+      float worldY,
+      float worldZ
+   ) {
+      RandomSamplerState coherentRng = initRTXDIRandomSampler(
+         pixelX / RTXDI_TILE_SIZE_IN_PIXELS,
+         pixelY / RTXDI_TILE_SIZE_IN_PIXELS,
+         frameIndex,
+         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
+      );
+      float jitterScale = samplingJitter * REGIR_CELL_SIZE;
+      float jitteredX = worldX + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
+      float jitteredY = worldY + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
+      float jitteredZ = worldZ + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
+      return calculateExactReGIRCellIndexWithoutJitter(gridCenter, gridResolution, jitteredX, jitteredY, jitteredZ);
+   }
+
+   private static int calculateExactReGIRCellIndexWithoutJitter(
+      Vector3f gridCenter,
+      int gridResolution,
+      float worldX,
+      float worldY,
+      float worldZ
+   ) {
+      float gridOriginX = gridCenter.x - gridResolution * REGIR_CELL_SIZE * 0.5f;
+      float gridOriginY = gridCenter.y - gridResolution * REGIR_CELL_SIZE * 0.5f;
+      float gridOriginZ = gridCenter.z - gridResolution * REGIR_CELL_SIZE * 0.5f;
+      int cellX = (int) Math.floor((worldX - gridOriginX) / REGIR_CELL_SIZE);
+      int cellY = (int) Math.floor((worldY - gridOriginY) / REGIR_CELL_SIZE);
+      int cellZ = (int) Math.floor((worldZ - gridOriginZ) / REGIR_CELL_SIZE);
+      if (cellX < 0 || cellY < 0 || cellZ < 0 || cellX >= gridResolution || cellY >= gridResolution || cellZ >= gridResolution) {
+         return -1;
+      }
+
+      return cellX + (cellY + cellZ * gridResolution) * gridResolution;
+   }
+
+   private static RandomSamplerState initRTXDIRandomSampler(int pixelX, int pixelY, int frameIndex, int pass) {
+      int linearPixelIndex = rtxdiZCurveToLinearIndex(pixelX, pixelY);
+      int seed = rtxdiJenkinsHash(linearPixelIndex) + frameIndex + pass * 31;
+      return new RandomSamplerState(seed, 1);
+   }
+
+   private static float nextRTXDIRandom(RandomSamplerState rng) {
+      int value = murmur3(rng);
+      int bits = (value & ((1 << 23) - 1)) | 0x3f800000;
+      return Float.intBitsToFloat(bits) - 1.0f;
+   }
+
+   private static int murmur3(RandomSamplerState rng) {
+      int hash = rng.seed;
+      int k = rng.index++;
+      k *= 0xcc9e2d51;
+      k = Integer.rotateLeft(k, 15);
+      k *= 0x1b873593;
+      hash ^= k;
+      hash = Integer.rotateLeft(hash, 13);
+      hash = hash * 5 + 0xe6546b64;
+      hash ^= 4;
+      hash ^= hash >>> 16;
+      hash *= 0x85ebca6b;
+      hash ^= hash >>> 13;
+      hash *= 0xc2b2ae35;
+      hash ^= hash >>> 16;
+      return hash;
+   }
+
+   private static int rtxdiZCurveToLinearIndex(int x, int y) {
+      return rtxdiIntegerExplode(x) | (rtxdiIntegerExplode(y) << 1);
+   }
+
+   private static int rtxdiIntegerExplode(int x) {
+      x = (x | (x << 8)) & 0x00FF00FF;
+      x = (x | (x << 4)) & 0x0F0F0F0F;
+      x = (x | (x << 2)) & 0x33333333;
+      x = (x | (x << 1)) & 0x55555555;
+      return x;
+   }
+
+   private static int rtxdiJenkinsHash(int value) {
+      int hash = value;
+      hash = (hash + 0x7ed55d16) + (hash << 12);
+      hash = (hash ^ 0xc761c23c) ^ (hash >>> 19);
+      hash = (hash + 0x165667b1) + (hash << 5);
+      hash = (hash + 0xd3a2646c) ^ (hash << 9);
+      hash = (hash + 0xfd7046c5) + (hash << 3);
+      hash = (hash ^ 0xb55a4f09) ^ (hash >>> 16);
+      return hash;
+   }
+
+   private static boolean isInsideAxisAlignedCube(float x, float y, float z, Vector3f center, float halfExtent) {
+      return x >= center.x - halfExtent && x < center.x + halfExtent
+         && y >= center.y - halfExtent && y < center.y + halfExtent
+         && z >= center.z - halfExtent && z < center.z + halfExtent;
+   }
+
+   private static RowJumpStats computeRowJumpStats(double[] rowMeans) {
+      if (rowMeans == null || rowMeans.length <= 1) {
+         return RowJumpStats.EMPTY;
+      }
+
+      int bestRow = 0;
+      double bestDelta = 0.0;
+      double bestPrevious = rowMeans[0];
+      double bestNext = rowMeans[1];
+      for (int row = 0; row < rowMeans.length - 1; row++) {
+         double previous = rowMeans[row];
+         double next = rowMeans[row + 1];
+         double delta = Math.abs(next - previous);
+         if (delta > bestDelta) {
+            bestRow = row;
+            bestDelta = delta;
+            bestPrevious = previous;
+            bestNext = next;
+         }
+      }
+
+      return new RowJumpStats(bestRow, rowMeans.length - 1 - bestRow, bestDelta, bestPrevious, bestNext);
    }
 
    static double computeImageBrightnessVariance(BufferedImage image) {
@@ -947,13 +1668,26 @@ public final class ShaderAutomation {
          TextureObject directReservoirTexture = textures.get("direct_reservoir");
          TextureObject directResolvedReservoirTexture = textures.get("direct_reservoir_resolved");
          TextureObject directSoftTexture = textures.get("direct_soft");
+         TextureObject directSoftPreviousTexture = textures.get("direct_soft_prev");
+         TextureObject directNoisyTexture = textures.get("direct_noisy");
+         TextureObject directResponsiveTexture = textures.get("direct_responsive");
+         TextureObject directSlowTexture = textures.get("direct_slow");
+         TextureObject directFastTexture = textures.get("direct_fast");
+         TextureObject directClampedSlowTexture = textures.get("direct_clamped_slow");
+         TextureObject directClampedFastTexture = textures.get("direct_clamped_fast");
+         TextureObject directAntiFireflyTexture = textures.get("direct_anti_firefly");
          TextureObject directDenoisedTexture = textures.get("direct_denoised");
+         TextureObject directAtrousTexture = textures.get("direct_atrous");
          TextureObject directRawTexture = textures.get("direct_raw");
          TextureObject specDenoisedTexture = textures.get("spec_denoised");
          TextureObject specRawTexture = textures.get("spec_raw");
          TextureObject directTemporalReservoirTexture = textures.get("direct_temporal_reservoir");
+         TextureObject directTemporalReservoirPreviousTexture = textures.get("direct_temporal_reservoir_prev");
          TextureObject directTemporalReservoirSampleTexture = textures.get("direct_temporal_reservoir_sample");
+         TextureObject directTemporalReservoirSamplePreviousTexture = textures.get("direct_temporal_reservoir_sample_prev");
          TextureObject directTemporalReservoirMetaTexture = textures.get("direct_temporal_reservoir_meta");
+         TextureObject directTemporalReservoirMetaPreviousTexture = textures.get("direct_temporal_reservoir_meta_prev");
+         TextureObject directInitialDebugTexture = textures.get("direct_initial_debug");
          TextureObject lightingTexture = textures.get("lighting");
          TextureObject stageAlbedoTexture = textures.get("stage_albedo");
          TextureObject stageLightingTexture = textures.get("stage_lighting");
@@ -966,13 +1700,29 @@ public final class ShaderAutomation {
          TextureObject indirectRawTexture = textures.get("indirect_raw");
          TextureObject indirectTexture = textures.get("indirect");
          BufferedImage directImage = this.captureTexture("direct", directTexture, captureIndex);
+         this.captureTexture("direct_reservoir", directReservoirTexture, captureIndex);
+         this.captureTexture("direct_reservoir_resolved", directResolvedReservoirTexture, captureIndex);
          BufferedImage directSoftImage = this.captureTexture("direct_soft", directSoftTexture, captureIndex);
+         this.captureTexture("direct_soft_prev", directSoftPreviousTexture, captureIndex);
+         this.captureTexture("direct_noisy", directNoisyTexture, captureIndex);
+         this.captureTexture("direct_responsive", directResponsiveTexture, captureIndex);
+         this.captureTexture("direct_slow", directSlowTexture, captureIndex);
+         this.captureTexture("direct_fast", directFastTexture, captureIndex);
+         this.captureTexture("direct_clamped_slow", directClampedSlowTexture, captureIndex);
+         this.captureTexture("direct_clamped_fast", directClampedFastTexture, captureIndex);
+         this.captureTexture("direct_anti_firefly", directAntiFireflyTexture, captureIndex);
          BufferedImage directDenoisedImage = this.captureTexture("direct_denoised", directDenoisedTexture, captureIndex);
+         this.captureTexture("direct_atrous", directAtrousTexture, captureIndex);
          BufferedImage directRawImage = this.captureTexture("direct_raw", directRawTexture, captureIndex);
          this.captureTexture("spec_denoised", specDenoisedTexture, captureIndex);
          this.captureTexture("spec_raw", specRawTexture, captureIndex);
+         this.captureTexture("direct_temporal_reservoir", directTemporalReservoirTexture, captureIndex);
+         this.captureTexture("direct_temporal_reservoir_prev", directTemporalReservoirPreviousTexture, captureIndex);
          this.captureTexture("direct_temporal_reservoir_sample", directTemporalReservoirSampleTexture, captureIndex);
+         this.captureTexture("direct_temporal_reservoir_sample_prev", directTemporalReservoirSamplePreviousTexture, captureIndex);
          this.captureTexture("direct_temporal_reservoir_meta", directTemporalReservoirMetaTexture, captureIndex);
+         this.captureTexture("direct_temporal_reservoir_meta_prev", directTemporalReservoirMetaPreviousTexture, captureIndex);
+         this.captureTexture("direct_initial_debug", directInitialDebugTexture, captureIndex);
          BufferedImage lightingImage = this.captureTexture("lighting", lightingTexture, captureIndex);
          this.captureTexture("stage_albedo", stageAlbedoTexture, captureIndex);
          BufferedImage stageLightingImage = this.captureTexture("stage_lighting", stageLightingTexture, captureIndex);
@@ -992,24 +1742,59 @@ public final class ShaderAutomation {
             directRawTexture == null ? TextureObject.TextureStats.EMPTY : directRawTexture.readStats();
          TextureObject.TextureStats directDenoisedLinearStats =
             directDenoisedTexture == null ? TextureObject.TextureStats.EMPTY : directDenoisedTexture.readStats();
+         TextureObject.TextureStats directSoftLinearStats =
+            directSoftTexture == null ? TextureObject.TextureStats.EMPTY : directSoftTexture.readStats();
+         TextureObject.TextureStats directSoftPreviousLinearStats =
+            directSoftPreviousTexture == null ? TextureObject.TextureStats.EMPTY : directSoftPreviousTexture.readStats();
          TextureObject.TextureStats indirectRawLinearStats =
             indirectRawTexture == null ? TextureObject.TextureStats.EMPTY : indirectRawTexture.readStats();
          TextureObject.TextureStats indirectLinearStats =
             indirectTexture == null ? TextureObject.TextureStats.EMPTY : indirectTexture.readStats();
          TextureObject.TextureStats stageIndirectLinearStats =
             stageIndirectTexture == null ? TextureObject.TextureStats.EMPTY : stageIndirectTexture.readStats();
+         ReservoirSampleDebugStats temporalSampleStats = computeReservoirSampleDebugStats(directTemporalReservoirSampleTexture);
+         ReservoirSampleDebugStats temporalSamplePreviousStats = computeReservoirSampleDebugStats(directTemporalReservoirSamplePreviousTexture);
+         ReservoirMetaDebugStats temporalMetaStats = computeReservoirMetaDebugStats(directTemporalReservoirMetaTexture);
+         ReservoirMetaDebugStats temporalMetaPreviousStats = computeReservoirMetaDebugStats(directTemporalReservoirMetaPreviousTexture);
          FireflyStats directRawFireflyStats = computeFireflyStats(directRawTexture);
          FireflyStats directDenoisedFireflyStats = computeFireflyStats(directDenoisedTexture);
          FireflyStats specRawFireflyStats = computeFireflyStats(specRawTexture);
          FireflyStats specDenoisedFireflyStats = computeFireflyStats(specDenoisedTexture);
          FireflyStats indirectRawFireflyStats = computeFireflyStats(indirectRawTexture);
          FireflyStats indirectFireflyStats = computeFireflyStats(indirectTexture);
+         WorldRegistry worldRegistry = Raytracer.INSTANCE.getWorldRegistry();
+         LightRegistry lightRegistry = worldRegistry.getLightRegistry();
+         ReservoirDebugStats proposalReservoirStats = computeReservoirDebugStats(directReservoirTexture);
          ReservoirDebugStats temporalReservoirStats = computeReservoirDebugStats(directTemporalReservoirTexture);
-         DirectTemporalDebugStats temporalDebugStats = computeDirectTemporalDebugStats(directTemporalReservoirSampleTexture);
-         float[] depthDebug = computeDepthDebugStats(directTemporalReservoirMetaTexture);
+         ReservoirDebugStats temporalReservoirPreviousStats = computeReservoirDebugStats(directTemporalReservoirPreviousTexture);
+         InitialSamplingDebugStats initialSamplingDebugStats = computeInitialSamplingDebugStats(directInitialDebugTexture);
          ReservoirDebugStats resolvedReservoirStats = computeReservoirDebugStats(directResolvedReservoirTexture);
-         ReservoirDebugStats shadedReservoirStats = computeReservoirDebugStats(directReservoirTexture);
          PositionDebugStats stagePositionStats = computePositionDebugStats(stagePositionTexture);
+         RowJumpStats directRawRowJump = computeHdrLumaRowJumpStats(directRawTexture);
+         ReservoirRowJumpStats proposalReservoirRowJumps = computeReservoirRowJumpStats(directReservoirTexture);
+         ReservoirRowJumpStats temporalReservoirRowJumps = computeReservoirRowJumpStats(directTemporalReservoirTexture);
+         ReservoirRowJumpStats resolvedReservoirRowJumps = computeReservoirRowJumpStats(directResolvedReservoirTexture);
+         RowJumpStats stageLinearDepthRowJump = computeStageLinearDepthRowJumpStats(stagePositionTexture, lightRegistry.getRegirGridCenter());
+         RowJumpStats regirCellZRowJump = computeReGIRCellZRowJumpStats(
+            stagePositionTexture,
+            lightRegistry.getRegirGridCenter(),
+            lightRegistry.getRegirGridResolution(),
+            32.0f
+         );
+         ReGIRCoverageRowJumpStats regirCoverageRowJumps = computeReGIRCoverageRowJumpStats(
+            stagePositionTexture,
+            lightRegistry.getRegirGridCenter(),
+            lightRegistry.getRegirGridResolution(),
+            32.0f,
+            lightRegistry.getRegirSamplingJitter()
+         );
+         int frameIndex = SystemTimeUniforms.COUNTER.getAsInt();
+         ReGIRPixelCorrelationStats regirPixelCorrelationStats = computeReGIRPixelCorrelationStats(
+            directResolvedReservoirTexture,
+            stagePositionTexture,
+            lightRegistry,
+            frameIndex
+         );
          double[] directStats = computeImageStats(directImage);
          double[] directSoftStats = computeImageStats(directSoftImage);
          double[] directDenoisedStats = computeImageStats(directDenoisedImage);
@@ -1143,8 +1928,6 @@ public final class ShaderAutomation {
          this.recordTemporalDelta(directImage, false, false);
          this.recordTemporalDelta(directSoftImage, true, false);
          this.recordTemporalDelta(indirectImage, false, true);
-         WorldRegistry worldRegistry = Raytracer.INSTANCE.getWorldRegistry();
-         LightRegistry lightRegistry = worldRegistry.getLightRegistry();
          this.latestTracedLightCount = lightRegistry.lightCount();
          this.latestTotalLightCount = lightRegistry.totalLights();
          this.maxTracedLightCount = Math.max(this.maxTracedLightCount, this.latestTracedLightCount);
@@ -1261,8 +2044,12 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(false, true)),
             String.format(Locale.ROOT, "%.5f", this.indirectTemporalDeltaMax));
          Photonic.info(
-            "[Automation] reservoir capture={} temporal(lightValid={}, strict={}, meanWeight={}, meanM={}) resolved(lightValid={}, strict={}, meanWeight={}, meanM={}) shaded(lightValid={}, strict={}, meanWeight={}, meanM={}) stagePosition(mean=({}, {}, {}), min=({}, {}, {}), max=({}, {}, {}))",
+            "[Automation] reservoir capture={} proposal(lightValid={}, strict={}, meanWeight={}, meanM={}) temporal(lightValid={}, strict={}, meanWeight={}, meanM={}) resolved(lightValid={}, strict={}, meanWeight={}, meanM={}) stagePosition(mean=({}, {}, {}), min=({}, {}, {}), max=({}, {}, {}))",
             this.capturesTaken,
+            String.format(Locale.ROOT, "%.5f", proposalReservoirStats.lightValidFraction()),
+            String.format(Locale.ROOT, "%.5f", proposalReservoirStats.strictValidFraction()),
+            String.format(Locale.ROOT, "%.5f", proposalReservoirStats.meanWeight()),
+            String.format(Locale.ROOT, "%.2f", proposalReservoirStats.meanM()),
             String.format(Locale.ROOT, "%.5f", temporalReservoirStats.lightValidFraction()),
             String.format(Locale.ROOT, "%.5f", temporalReservoirStats.strictValidFraction()),
             String.format(Locale.ROOT, "%.5f", temporalReservoirStats.meanWeight()),
@@ -1271,10 +2058,6 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.strictValidFraction()),
             String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.meanWeight()),
             String.format(Locale.ROOT, "%.2f", resolvedReservoirStats.meanM()),
-            String.format(Locale.ROOT, "%.5f", shadedReservoirStats.lightValidFraction()),
-            String.format(Locale.ROOT, "%.5f", shadedReservoirStats.strictValidFraction()),
-            String.format(Locale.ROOT, "%.5f", shadedReservoirStats.meanWeight()),
-            String.format(Locale.ROOT, "%.2f", shadedReservoirStats.meanM()),
             String.format(Locale.ROOT, "%.3f", stagePositionStats.meanX()),
             String.format(Locale.ROOT, "%.3f", stagePositionStats.meanY()),
             String.format(Locale.ROOT, "%.3f", stagePositionStats.meanZ()),
@@ -1286,26 +2069,220 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.3f", stagePositionStats.maxZ())
          );
          Photonic.info(
-            "[Automation] temporal debug capture={} neighborMatch={} failReasonAvg={} remapValid={} failures(lightReload={}, emptyMotion={}, oob={}, invalidSurf={}, depthFail={}, normalFail={}, mixed={})",
+            "[Automation] capture-path capture={} directSoft(currentMax={}, currentMean={}, currentAlpha={}, currentZeroAlpha={}, previousMax={}, previousMean={}, previousAlpha={}, previousZeroAlpha={}) temporalData(currentLightValid={}, currentStrict={}, currentMeanWeight={}, currentMeanM={}, previousLightValid={}, previousStrict={}, previousMeanWeight={}, previousMeanM={}) temporalSample(currentNonZero={}, currentMeanU={}, currentMeanV={}, previousNonZero={}, previousMeanU={}, previousMeanV={}) temporalMeta(currentNonZero={}, currentMeanAge={}, currentMeanAbsDistanceX={}, currentMeanAbsDistanceY={}, previousNonZero={}, previousMeanAge={}, previousMeanAbsDistanceX={}, previousMeanAbsDistanceY={})",
             this.capturesTaken,
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.neighborMatchFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.failReasonAvg()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.remapValidFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.lightReloadFrac()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.emptyMotionFrac()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.oobFrac()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.invalidSurfFrac()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.depthFailFrac()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.normalFailFrac()),
-            String.format(Locale.ROOT, "%.5f", temporalDebugStats.mixedFrac())
+            String.format(Locale.ROOT, "%.5f", directSoftLinearStats.maxLuma()),
+            String.format(Locale.ROOT, "%.5f", directSoftLinearStats.meanLuma()),
+            String.format(Locale.ROOT, "%.5f", directSoftLinearStats.meanAlpha()),
+            String.format(Locale.ROOT, "%.5f", directSoftLinearStats.zeroAlphaFraction()),
+            String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.maxLuma()),
+            String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.meanLuma()),
+            String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.meanAlpha()),
+            String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.zeroAlphaFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.lightValidFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.strictValidFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.meanWeight()),
+            String.format(Locale.ROOT, "%.2f", temporalReservoirStats.meanM()),
+            String.format(Locale.ROOT, "%.5f", temporalReservoirPreviousStats.lightValidFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalReservoirPreviousStats.strictValidFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalReservoirPreviousStats.meanWeight()),
+            String.format(Locale.ROOT, "%.2f", temporalReservoirPreviousStats.meanM()),
+            String.format(Locale.ROOT, "%.5f", temporalSampleStats.nonZeroFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalSampleStats.meanU()),
+            String.format(Locale.ROOT, "%.5f", temporalSampleStats.meanV()),
+            String.format(Locale.ROOT, "%.5f", temporalSamplePreviousStats.nonZeroFraction()),
+            String.format(Locale.ROOT, "%.5f", temporalSamplePreviousStats.meanU()),
+            String.format(Locale.ROOT, "%.5f", temporalSamplePreviousStats.meanV()),
+            String.format(Locale.ROOT, "%.5f", temporalMetaStats.nonZeroFraction()),
+            String.format(Locale.ROOT, "%.2f", temporalMetaStats.meanAge()),
+            String.format(Locale.ROOT, "%.2f", temporalMetaStats.meanAbsDistanceX()),
+            String.format(Locale.ROOT, "%.2f", temporalMetaStats.meanAbsDistanceY()),
+            String.format(Locale.ROOT, "%.5f", temporalMetaPreviousStats.nonZeroFraction()),
+            String.format(Locale.ROOT, "%.2f", temporalMetaPreviousStats.meanAge()),
+            String.format(Locale.ROOT, "%.2f", temporalMetaPreviousStats.meanAbsDistanceX()),
+            String.format(Locale.ROOT, "%.2f", temporalMetaPreviousStats.meanAbsDistanceY())
          );
          Photonic.info(
-            "[Automation] depth debug capture={} avgRatio={} viewWidth={} prevTexWidth={} validPixels={}",
+            "[Automation] initial-sampling capture={} reasons(invalidSurface={}, noLights={}, noLocalSamples={}, invalidLightSelection={}, invalidLightSample={}, zeroRadiance={}, zeroSourcePdf={}, zeroTargetPdf={}, nonFiniteSourcePdf={}, nonFiniteTargetPdf={}, success={}) debug(meanPositiveCandidateFraction={}, proposalValidFraction={}, meanProposalWeight={}) row(successBoundaryRowFromBottom={} successBoundaryRowFromTop={} successDelta={} zeroTargetBoundaryRowFromBottom={} zeroTargetBoundaryRowFromTop={} zeroTargetDelta={} proposalValidBoundaryRowFromBottom={} proposalValidBoundaryRowFromTop={} proposalValidDelta={} proposalWeightBoundaryRowFromBottom={} proposalWeightBoundaryRowFromTop={} proposalWeightDelta={})",
             this.capturesTaken,
-            String.format(Locale.ROOT, "%.5f", depthDebug[0]),
-            String.format(Locale.ROOT, "%.0f", depthDebug[1]),
-            String.format(Locale.ROOT, "%.0f", depthDebug[2]),
-            (int) depthDebug[3]
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.invalidSurfaceFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.noLightsFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.noLocalSamplesFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.invalidLightSelectionFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.invalidLightSampleFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.zeroRadianceFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.zeroSourcePdfFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.zeroTargetPdfFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.nonFiniteSourcePdfFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.nonFiniteTargetPdfFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.successFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.meanPositiveCandidateFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.proposalValidFraction()),
+            String.format(Locale.ROOT, "%.5f", initialSamplingDebugStats.meanProposalWeight()),
+            initialSamplingDebugStats.successRowJump().rowFromBottom(),
+            initialSamplingDebugStats.successRowJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", initialSamplingDebugStats.successRowJump().delta()),
+            initialSamplingDebugStats.zeroTargetRowJump().rowFromBottom(),
+            initialSamplingDebugStats.zeroTargetRowJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", initialSamplingDebugStats.zeroTargetRowJump().delta()),
+            initialSamplingDebugStats.proposalValidRowJump().rowFromBottom(),
+            initialSamplingDebugStats.proposalValidRowJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", initialSamplingDebugStats.proposalValidRowJump().delta()),
+            initialSamplingDebugStats.proposalWeightRowJump().rowFromBottom(),
+            initialSamplingDebugStats.proposalWeightRowJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", initialSamplingDebugStats.proposalWeightRowJump().delta())
+         );
+         Photonic.info(
+            "[Automation] row-debug capture={} directRawLuma(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalValid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalWeight(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalTargetPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalWeightTimesPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalM(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalValid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalWeight(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalTargetPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalWeightTimesPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalM(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedValid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedWeight(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedTargetPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedWeightTimesPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedM(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) stageLinearDepth(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCellZ(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCoverage(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCoverageWithJitter(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={})",
+            this.capturesTaken,
+            directRawRowJump.rowFromBottom(),
+            directRawRowJump.rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", directRawRowJump.delta()),
+            String.format(Locale.ROOT, "%.6f", directRawRowJump.previousMean()),
+            String.format(Locale.ROOT, "%.6f", directRawRowJump.nextMean()),
+            proposalReservoirRowJumps.validFractionJump().rowFromBottom(),
+            proposalReservoirRowJumps.validFractionJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.validFractionJump().delta()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.validFractionJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.validFractionJump().nextMean()),
+            proposalReservoirRowJumps.weightJump().rowFromBottom(),
+            proposalReservoirRowJumps.weightJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.weightJump().delta()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.weightJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.weightJump().nextMean()),
+            proposalReservoirRowJumps.targetPdfJump().rowFromBottom(),
+            proposalReservoirRowJumps.targetPdfJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.targetPdfJump().delta()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.targetPdfJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.targetPdfJump().nextMean()),
+            proposalReservoirRowJumps.weightTimesTargetPdfJump().rowFromBottom(),
+            proposalReservoirRowJumps.weightTimesTargetPdfJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.weightTimesTargetPdfJump().delta()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.weightTimesTargetPdfJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.weightTimesTargetPdfJump().nextMean()),
+            proposalReservoirRowJumps.meanMJump().rowFromBottom(),
+            proposalReservoirRowJumps.meanMJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.meanMJump().delta()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.meanMJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.meanMJump().nextMean()),
+            temporalReservoirRowJumps.validFractionJump().rowFromBottom(),
+            temporalReservoirRowJumps.validFractionJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.validFractionJump().delta()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.validFractionJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.validFractionJump().nextMean()),
+            temporalReservoirRowJumps.weightJump().rowFromBottom(),
+            temporalReservoirRowJumps.weightJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightJump().delta()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightJump().nextMean()),
+            temporalReservoirRowJumps.targetPdfJump().rowFromBottom(),
+            temporalReservoirRowJumps.targetPdfJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.targetPdfJump().delta()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.targetPdfJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.targetPdfJump().nextMean()),
+            temporalReservoirRowJumps.weightTimesTargetPdfJump().rowFromBottom(),
+            temporalReservoirRowJumps.weightTimesTargetPdfJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightTimesTargetPdfJump().delta()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightTimesTargetPdfJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightTimesTargetPdfJump().nextMean()),
+            temporalReservoirRowJumps.meanMJump().rowFromBottom(),
+            temporalReservoirRowJumps.meanMJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.meanMJump().delta()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.meanMJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.meanMJump().nextMean()),
+            resolvedReservoirRowJumps.validFractionJump().rowFromBottom(),
+            resolvedReservoirRowJumps.validFractionJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.validFractionJump().delta()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.validFractionJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.validFractionJump().nextMean()),
+            resolvedReservoirRowJumps.weightJump().rowFromBottom(),
+            resolvedReservoirRowJumps.weightJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.weightJump().delta()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.weightJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.weightJump().nextMean()),
+            resolvedReservoirRowJumps.targetPdfJump().rowFromBottom(),
+            resolvedReservoirRowJumps.targetPdfJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.targetPdfJump().delta()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.targetPdfJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.targetPdfJump().nextMean()),
+            resolvedReservoirRowJumps.weightTimesTargetPdfJump().rowFromBottom(),
+            resolvedReservoirRowJumps.weightTimesTargetPdfJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.weightTimesTargetPdfJump().delta()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.weightTimesTargetPdfJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.weightTimesTargetPdfJump().nextMean()),
+            resolvedReservoirRowJumps.meanMJump().rowFromBottom(),
+            resolvedReservoirRowJumps.meanMJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.meanMJump().delta()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.meanMJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.meanMJump().nextMean()),
+            stageLinearDepthRowJump.rowFromBottom(),
+            stageLinearDepthRowJump.rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", stageLinearDepthRowJump.delta()),
+            String.format(Locale.ROOT, "%.6f", stageLinearDepthRowJump.previousMean()),
+            String.format(Locale.ROOT, "%.6f", stageLinearDepthRowJump.nextMean()),
+            regirCellZRowJump.rowFromBottom(),
+            regirCellZRowJump.rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirCellZRowJump.delta()),
+            String.format(Locale.ROOT, "%.6f", regirCellZRowJump.previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirCellZRowJump.nextMean()),
+            regirCoverageRowJumps.nominalCoverageJump().rowFromBottom(),
+            regirCoverageRowJumps.nominalCoverageJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirCoverageRowJumps.nominalCoverageJump().delta()),
+            String.format(Locale.ROOT, "%.6f", regirCoverageRowJumps.nominalCoverageJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirCoverageRowJumps.nominalCoverageJump().nextMean()),
+            regirCoverageRowJumps.expandedCoverageJump().rowFromBottom(),
+            regirCoverageRowJumps.expandedCoverageJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirCoverageRowJumps.expandedCoverageJump().delta()),
+            String.format(Locale.ROOT, "%.6f", regirCoverageRowJumps.expandedCoverageJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirCoverageRowJumps.expandedCoverageJump().nextMean())
+         );
+         Photonic.info(
+            "[Automation] regir-pixel capture={} visible={} strictValidVisible={} exactOutsideGrid={} invalidOutsideGrid={} validOutsideGrid={} invalidZeroSlot={} validZeroSlot={} cellValidSlots(invalidMean={}, validMean={}, boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) cellMeanWeight(invalidMean={}, validMean={}, boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) outsideGrid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) jitteredCellChanged(fraction={}, boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) jitteredCellMeanWeightDelta(mean={}, boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) jitteredOutsideGridDelta(fraction={}, boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={})",
+            this.capturesTaken,
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.visiblePixelFraction()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.strictValidVisibleFraction()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.exactOutsideGridFraction()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.strictInvalidOutsideGridFraction()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.strictValidOutsideGridFraction()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.strictInvalidZeroSlotFraction()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.strictValidZeroSlotFraction()),
+            String.format(Locale.ROOT, "%.4f", regirPixelCorrelationStats.strictInvalidMeanCellValidSlots()),
+            String.format(Locale.ROOT, "%.4f", regirPixelCorrelationStats.strictValidMeanCellValidSlots()),
+            regirPixelCorrelationStats.cellValidSlotsJump().rowFromBottom(),
+            regirPixelCorrelationStats.cellValidSlotsJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.cellValidSlotsJump().delta()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.cellValidSlotsJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.cellValidSlotsJump().nextMean()),
+            String.format(Locale.ROOT, "%.4f", regirPixelCorrelationStats.strictInvalidMeanCellWeight()),
+            String.format(Locale.ROOT, "%.4f", regirPixelCorrelationStats.strictValidMeanCellWeight()),
+            regirPixelCorrelationStats.cellMeanWeightJump().rowFromBottom(),
+            regirPixelCorrelationStats.cellMeanWeightJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.cellMeanWeightJump().delta()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.cellMeanWeightJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.cellMeanWeightJump().nextMean()),
+            regirPixelCorrelationStats.outsideGridJump().rowFromBottom(),
+            regirPixelCorrelationStats.outsideGridJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.outsideGridJump().delta()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.outsideGridJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.outsideGridJump().nextMean()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.jitteredCellChangedFraction()),
+            regirPixelCorrelationStats.jitteredCellChangedJump().rowFromBottom(),
+            regirPixelCorrelationStats.jitteredCellChangedJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredCellChangedJump().delta()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredCellChangedJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredCellChangedJump().nextMean()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.jitteredMeanCellWeightDelta()),
+            regirPixelCorrelationStats.jitteredCellMeanWeightDeltaJump().rowFromBottom(),
+            regirPixelCorrelationStats.jitteredCellMeanWeightDeltaJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredCellMeanWeightDeltaJump().delta()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredCellMeanWeightDeltaJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredCellMeanWeightDeltaJump().nextMean()),
+            String.format(Locale.ROOT, "%.5f", regirPixelCorrelationStats.jitteredOutsideGridDeltaFraction()),
+            regirPixelCorrelationStats.jitteredOutsideGridDeltaJump().rowFromBottom(),
+            regirPixelCorrelationStats.jitteredOutsideGridDeltaJump().rowFromTop(),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredOutsideGridDeltaJump().delta()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredOutsideGridDeltaJump().previousMean()),
+            String.format(Locale.ROOT, "%.6f", regirPixelCorrelationStats.jitteredOutsideGridDeltaJump().nextMean())
          );
          Photonic.info("[Automation] fireflies capture={} directRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) directDenoised(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) specRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) specDenoised(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) indirectRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) indirect(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={})",
             this.capturesTaken,
@@ -1502,7 +2479,14 @@ public final class ShaderAutomation {
       }
 
       texture.updatePerFrame();
-      BufferedImage image = texture.download();
+      BufferedImage image;
+      if (name.contains("_reservoir_sample")) {
+         image = captureReservoirSampleTexture(texture);
+      } else if (name.contains("_reservoir_meta")) {
+         image = captureReservoirMetaTexture(texture);
+      } else {
+         image = texture.download();
+      }
       if (image == null) {
          Photonic.info("[Automation] capture={} skipped texture='{}' because it is unavailable or zero-sized", captureIndex, name);
          return null;
@@ -1511,6 +2495,59 @@ public final class ShaderAutomation {
       String filename = name + "-" + String.format(Locale.ROOT, "%03d", captureIndex) + ".png";
       ImageIO.write(image, "PNG", this.captureDir.resolve(filename).toFile());
       return image;
+   }
+
+   private static BufferedImage captureReservoirSampleTexture(TextureObject texture) {
+      float[] pixels = texture.downloadFloatData();
+      int[] dimensions = texture.getTextureDimensions();
+      if (pixels == null || dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 0) {
+         return null;
+      }
+
+      int width = dimensions[0];
+      int height = dimensions[1];
+      BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+      for (int y = 0; y < height; y++) {
+         for (int x = 0; x < width; x++) {
+            int packedUv = Float.floatToRawIntBits(pixels[(x + y * width) * 4]);
+            int r = (packedUv & 0xffff) >>> 8;
+            int g = ((packedUv >>> 16) & 0xffff) >>> 8;
+            int b = packedUv == 0 ? 0 : 255;
+            image.setRGB(x, y, (255 << 24) | (r << 16) | (g << 8) | b);
+         }
+      }
+      return image;
+   }
+
+   private static BufferedImage captureReservoirMetaTexture(TextureObject texture) {
+      float[] pixels = texture.downloadFloatData();
+      int[] dimensions = texture.getTextureDimensions();
+      if (pixels == null || dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 0) {
+         return null;
+      }
+
+      int width = dimensions[0];
+      int height = dimensions[1];
+      BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+      for (int y = 0; y < height; y++) {
+         for (int x = 0; x < width; x++) {
+            int packedMeta = Float.floatToRawIntBits(pixels[(x + y * width) * 4 + 3]);
+            int spatialDistanceX = decodePackedReservoirDistance(packedMeta, RTXDI_PACKED_DI_RESERVOIR_DISTANCE_X_SHIFT);
+            int spatialDistanceY = decodePackedReservoirDistance(packedMeta, RTXDI_PACKED_DI_RESERVOIR_DISTANCE_Y_SHIFT);
+            int age = decodePackedReservoirAge(packedMeta);
+            int r = packSignedReservoirDistanceChannel(spatialDistanceX);
+            int g = packSignedReservoirDistanceChannel(spatialDistanceY);
+            int b = Math.clamp((int)Math.round(age * 255.0 / Math.max(1, RTXDI_PACKED_DI_RESERVOIR_MAX_AGE)), 0, 255);
+            image.setRGB(x, y, (255 << 24) | (r << 16) | (g << 8) | b);
+         }
+      }
+      return image;
+   }
+
+   private static int packSignedReservoirDistanceChannel(int value) {
+      double normalized = (value + RTXDI_PACKED_DI_RESERVOIR_MAX_DISTANCE)
+         / (double)Math.max(1, RTXDI_PACKED_DI_RESERVOIR_MAX_DISTANCE * 2);
+      return Math.clamp((int)Math.round(normalized * 255.0), 0, 255);
    }
 
    private void updatePostMotionWindow() {
@@ -1942,8 +2979,10 @@ public final class ShaderAutomation {
       }
 
       this.prepareWorldAutomation(client);
+      /*
       this.applyTimeOfDayAutomation(client);
       this.applyBlockToggleAutomation(client);
+      */
    }
 
    private void prepareWorldAutomation(MinecraftClient client) {
@@ -2527,6 +3566,92 @@ public final class ShaderAutomation {
    ) {
    }
 
+   private record RowJumpStats(
+      int rowFromBottom,
+      int rowFromTop,
+      double delta,
+      double previousMean,
+      double nextMean
+   ) {
+      private static final RowJumpStats EMPTY = new RowJumpStats(0, 0, 0.0, 0.0, 0.0);
+   }
+
+   private record ReservoirRowJumpStats(
+      RowJumpStats validFractionJump,
+      RowJumpStats weightJump,
+      RowJumpStats targetPdfJump,
+      RowJumpStats weightTimesTargetPdfJump,
+      RowJumpStats meanMJump
+   ) {
+      private static final ReservoirRowJumpStats EMPTY = new ReservoirRowJumpStats(
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY
+      );
+   }
+
+   private record ReGIRCoverageRowJumpStats(
+      RowJumpStats nominalCoverageJump,
+      RowJumpStats expandedCoverageJump
+   ) {
+      private static final ReGIRCoverageRowJumpStats EMPTY = new ReGIRCoverageRowJumpStats(RowJumpStats.EMPTY, RowJumpStats.EMPTY);
+   }
+
+   private record ReGIRCellBufferStats(
+      int[] validSlotCounts,
+      double[] meanWeights
+   ) {
+      private static final ReGIRCellBufferStats EMPTY = new ReGIRCellBufferStats(new int[0], new double[0]);
+   }
+
+   private record ReGIRPixelCorrelationStats(
+      double visiblePixelFraction,
+      double strictValidVisibleFraction,
+      double exactOutsideGridFraction,
+      double strictInvalidOutsideGridFraction,
+      double strictValidOutsideGridFraction,
+      double strictInvalidZeroSlotFraction,
+      double strictValidZeroSlotFraction,
+      double strictInvalidMeanCellValidSlots,
+      double strictValidMeanCellValidSlots,
+      double strictInvalidMeanCellWeight,
+      double strictValidMeanCellWeight,
+      double jitteredCellChangedFraction,
+      double jitteredMeanCellWeightDelta,
+      double jitteredOutsideGridDeltaFraction,
+      RowJumpStats cellValidSlotsJump,
+      RowJumpStats cellMeanWeightJump,
+      RowJumpStats outsideGridJump,
+      RowJumpStats jitteredCellChangedJump,
+      RowJumpStats jitteredCellMeanWeightDeltaJump,
+      RowJumpStats jitteredOutsideGridDeltaJump
+   ) {
+      private static final ReGIRPixelCorrelationStats EMPTY = new ReGIRPixelCorrelationStats(
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY
+      );
+   }
+
    private record ReservoirDebugStats(
       double lightValidFraction,
       double strictValidFraction,
@@ -2536,19 +3661,63 @@ public final class ShaderAutomation {
       private static final ReservoirDebugStats EMPTY = new ReservoirDebugStats(0.0, 0.0, 0.0, 0.0);
    }
 
-   private record DirectTemporalDebugStats(
-      double neighborMatchFraction,
-      double failReasonAvg,
-      double remapValidFraction,
-      double lightReloadFrac,
-      double emptyMotionFrac,
-      double oobFrac,
-      double invalidSurfFrac,
-      double depthFailFrac,
-      double normalFailFrac,
-      double mixedFrac
+   private record ReservoirSampleDebugStats(
+      double nonZeroFraction,
+      double meanU,
+      double meanV
    ) {
-      private static final DirectTemporalDebugStats EMPTY = new DirectTemporalDebugStats(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+      private static final ReservoirSampleDebugStats EMPTY = new ReservoirSampleDebugStats(0.0, 0.0, 0.0);
+   }
+
+   private record ReservoirMetaDebugStats(
+      double nonZeroFraction,
+      double meanAge,
+      double meanAbsDistanceX,
+      double meanAbsDistanceY
+   ) {
+      private static final ReservoirMetaDebugStats EMPTY = new ReservoirMetaDebugStats(0.0, 0.0, 0.0, 0.0);
+   }
+
+   private record InitialSamplingDebugStats(
+      double invalidSurfaceFraction,
+      double noLightsFraction,
+      double noLocalSamplesFraction,
+      double invalidLightSelectionFraction,
+      double invalidLightSampleFraction,
+      double zeroRadianceFraction,
+      double zeroSourcePdfFraction,
+      double zeroTargetPdfFraction,
+      double nonFiniteSourcePdfFraction,
+      double nonFiniteTargetPdfFraction,
+      double successFraction,
+      double meanPositiveCandidateFraction,
+      double proposalValidFraction,
+      double meanProposalWeight,
+      RowJumpStats successRowJump,
+      RowJumpStats zeroTargetRowJump,
+      RowJumpStats proposalValidRowJump,
+      RowJumpStats proposalWeightRowJump
+   ) {
+      private static final InitialSamplingDebugStats EMPTY = new InitialSamplingDebugStats(
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         0.0,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY,
+         RowJumpStats.EMPTY
+      );
    }
 
    private record PositionDebugStats(
@@ -2573,6 +3742,16 @@ public final class ShaderAutomation {
       double nonFiniteFraction
    ) {
       private static final FireflyStats EMPTY = new FireflyStats(0.0, 0.0, 0.0, 0.0, 0.0);
+   }
+
+   private static final class RandomSamplerState {
+      private final int seed;
+      private int index;
+
+      private RandomSamplerState(int seed, int index) {
+         this.seed = seed;
+         this.index = index;
+      }
    }
 }
 

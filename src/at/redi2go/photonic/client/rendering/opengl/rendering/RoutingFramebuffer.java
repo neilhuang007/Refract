@@ -1,5 +1,6 @@
 package at.redi2go.photonic.client.rendering.opengl.rendering;
 
+import at.redi2go.photonic.client.rendering.opengl.GL;
 import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.util.BufferUtils;
 import java.nio.IntBuffer;
@@ -65,6 +66,7 @@ public class RoutingFramebuffer extends ColorFramebuffer {
             attachment.getTextureId(),
             0
          );
+         GL.logGlError("RoutingFramebuffer.glFramebufferTexture2D(index=" + attachmentIndex + ", target=" + attachment.getTarget() + ")");
          attachmentIndex++;
       }
 
@@ -79,6 +81,7 @@ public class RoutingFramebuffer extends ColorFramebuffer {
       buffer.position(0);
       buffer.limit(resolvedDrawBuffers.length);
       GL20.glDrawBuffers(buffer);
+      GL.logGlError("RoutingFramebuffer.glDrawBuffers(count=" + resolvedDrawBuffers.length + ")");
       int status = GL30.glCheckFramebufferStatus(GL30.GL_DRAW_FRAMEBUFFER);
       if (status != GL30.GL_FRAMEBUFFER_COMPLETE) {
          throw new RuntimeException("Framebuffer in invalid state: " + status);

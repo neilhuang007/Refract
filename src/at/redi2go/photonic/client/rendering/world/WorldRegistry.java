@@ -436,6 +436,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private int profRootEntriesLoaded;
    private String profRootUploadCause = "none";
 
+   private boolean isRtChunkResidencyFrozenForDebug() {
+      return Boolean.getBoolean("photonics.freezeRtChunkResidency");
+   }
+
    public boolean synchronizeChunks() {
       this.ensureWorldThread();
       Set<PChunkPos> inboundNonEmptyChunks = new HashSet<>();
@@ -497,19 +501,21 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          }
       }
 
-      for (PChunkPos chunkPosxx : this.chunks.keySet().toArray(new PChunkPos[0])) {
-         if (inboundNonEmptyChunks.contains(chunkPosxx)) {
-            continue;
-         }
+      if (!this.isRtChunkResidencyFrozenForDebug()) {
+         for (PChunkPos chunkPosxx : this.chunks.keySet().toArray(new PChunkPos[0])) {
+            if (inboundNonEmptyChunks.contains(chunkPosxx)) {
+               continue;
+            }
 
-         Integer lastVisibleFrame = this.recentlyVisibleRtChunks.get(chunkPosxx);
-         if (lastVisibleFrame != null && frame - lastVisibleFrame <= RT_VISIBILITY_KEEP_ALIVE_FRAMES) {
-            continue;
-         }
+            Integer lastVisibleFrame = this.recentlyVisibleRtChunks.get(chunkPosxx);
+            if (lastVisibleFrame != null && frame - lastVisibleFrame <= RT_VISIBILITY_KEEP_ALIVE_FRAMES) {
+               continue;
+            }
 
-         this.unloadChunk(chunkPosxx);
-         this.profUnloadedChunkCount++;
-         changed = true;
+            this.unloadChunk(chunkPosxx);
+            this.profUnloadedChunkCount++;
+            changed = true;
+         }
       }
 
       this.worldMinVoxel = new PBlockPos(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE);

@@ -25,7 +25,7 @@ void main() {
 
     handheld_frag_out = lt_build_handheld_stage();
 
-    DirectSurface currentSurface = lt_load_surface(tex_coord);
+    RAB_Surface currentSurface = lt_load_surface(tex_coord);
     if (!lt_is_valid_surface(currentSurface)) {
         indirect_frag_out = vec4(0.0f);
         indirect_variance_frag_out = vec4(0.0f);
@@ -68,7 +68,7 @@ void main() {
         neighborUv = RAB_ClampSamplePositionIntoView(neighborUv, false);
         RTXDI_ActivateCheckerboardPixel(neighborUv, false, activeCheckerboardField);
 
-        DirectSurface neighborSurface = lt_load_surface(neighborUv);
+        RAB_Surface neighborSurface = lt_load_surface(neighborUv);
         if (!lt_surface_matches(currentSurface, neighborSurface, spatialDepthThreshold, spatialNormalThreshold)) {
             continue;
         }
@@ -115,7 +115,7 @@ void main() {
             neighborUv = RAB_ClampSamplePositionIntoView(neighborUv, false);
             RTXDI_ActivateCheckerboardPixel(neighborUv, false, activeCheckerboardField);
 
-            DirectSurface neighborSurface = lt_load_surface(neighborUv);
+            RAB_Surface neighborSurface = lt_load_surface(neighborUv);
             ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
             RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
             float ps = RAB_GetGISampleTargetPdfForSurface(neighborSurface, state.selected);

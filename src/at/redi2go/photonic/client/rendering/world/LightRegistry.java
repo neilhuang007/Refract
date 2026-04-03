@@ -59,7 +59,6 @@ public class LightRegistry implements Destructable {
    // RTXDI's FullSample doubles the user-facing jitter before uploading ReGIR constants,
    // so the shader-space default is 2.0, which yields a plus/minus one-cell query jitter.
    private static final float REGIR_SAMPLING_JITTER = 2.0F;
-   private static final float REGIR_BUILD_CELL_RADIUS = REGIR_CELL_RADIUS * (REGIR_SAMPLING_JITTER + 1.0F);
    private static final int REGIR_MAX_LIGHTS_PER_CELL_FALLBACK = 16;
    // RTXDI default from ReGIR.h:141 = 8 build samples per cell slot
    private static final int REGIR_BUILD_SAMPLES = 8;
@@ -90,7 +89,10 @@ public class LightRegistry implements Destructable {
       if (!light.active()) {
          return 0.0F;
       }
+      /*
       return light.type().luminanceFrom(light.position(), light.position());
+      */
+      return light.type().sourcePower();
    }
 
    private static LightSelectionCandidate createSelectionCandidate(
@@ -136,7 +138,7 @@ public class LightRegistry implements Destructable {
    private record LightSelectionCandidate(LightInstance light, float cameraScore, float sourceScore, boolean previouslySelected) {
    }
 
-   private static Vector3f getLightSelectionCameraPosition() {
+   private static Vector3f getCurrentCameraPosition() {
       MinecraftClient client = MinecraftClient.getInstance();
       if (client == null || client.gameRenderer == null || client.gameRenderer.getCamera() == null) {
          return new Vector3f();
@@ -196,6 +198,10 @@ public class LightRegistry implements Destructable {
    // RTXDI: stores the center of the grid (= camera position, snapped to cell boundaries).
    // The origin is derived in the shader as: origin = center - vec3(gridRes) * cellSize * 0.5
    private final Vector3f regirGridCenter = new Vector3f();
+   private final Vector3f frozenLightSelectionCamera = new Vector3f();
+   private final Vector3f frozenRegirGridCenter = new Vector3f();
+   private boolean frozenLightSelectionCameraInitialized = false;
+   private boolean frozenRegirGridCenterInitialized = false;
    private boolean loggedAutomationLightColors = false;
    private boolean lastCompileTopologyResetRecommended = true;
    private int pendingTracedLightMutations = 0;
@@ -261,6 +267,42 @@ public class LightRegistry implements Destructable {
          MinecraftClient.getInstance().worldRenderer.reload();
       });
       this.lock = new ReentrantReadWriteLock();
+   }
+
+   private boolean isLightSelectionCameraFrozenForDebug() {
+      return Boolean.getBoolean("photonics.freezeLightSelectionCamera");
+   }
+
+   private boolean isRegirGridCenterFrozenForDebug() {
+      return Boolean.getBoolean("photonics.freezeRegirGridCenter");
+   }
+
+   private Vector3f getTracedLightSelectionCameraPosition() {
+      Vector3f cameraPosition = getCurrentCameraPosition();
+      if (!this.isLightSelectionCameraFrozenForDebug()) {
+         return cameraPosition;
+      }
+
+      if (!this.frozenLightSelectionCameraInitialized) {
+         this.frozenLightSelectionCamera.set(cameraPosition);
+         this.frozenLightSelectionCameraInitialized = true;
+      }
+
+      return new Vector3f(this.frozenLightSelectionCamera);
+   }
+
+   private Vector3f resolveRegirGridCenter() {
+      Vector3f cameraPosition = getCurrentCameraPosition();
+      if (!this.isRegirGridCenterFrozenForDebug()) {
+         return cameraPosition;
+      }
+
+      if (!this.frozenRegirGridCenterInitialized) {
+         this.frozenRegirGridCenter.set(cameraPosition);
+         this.frozenRegirGridCenterInitialized = true;
+      }
+
+      return new Vector3f(this.frozenRegirGridCenter);
    }
 
    public Lock readLock() {
@@ -586,7 +628,7 @@ public class LightRegistry implements Destructable {
    }
 
    private void updateRegirGridOriginOnly() {
-      Vector3f gridCenter = getLightSelectionCameraPosition();
+      Vector3f gridCenter = this.resolveRegirGridCenter();
       this.regirGridCenter.set(gridCenter);
       this.updateRegirActivityStats(gridCenter);
    }
@@ -624,7 +666,7 @@ public class LightRegistry implements Destructable {
                for (int slot = 0; slot < this.regirLightsPerCell; slot++) {
                   long seed = (((long) cellIndex) << 32)
                      ^ (((long) slot + 1L) * 0x9E3779B97F4A7C15L);
-                  WeightedLightSelection selection = sampleRegirCellLight(cellLights, this.tracedLights, cellCenter, REGIR_BUILD_CELL_RADIUS, seed);
+                  WeightedLightSelection selection = sampleRegirCellLight(cellLights, this.tracedLights, cellCenter, this.getRegirBuildCellRadius(), seed);
                   if (selection.lightIndex() >= 0 && selection.invSourcePdf() > 0.0F) {
                      count++;
                   }
@@ -652,7 +694,7 @@ public class LightRegistry implements Destructable {
          lightPdfBuffer.put(i, 0.0F);
       }
 
-      Vector3f gridCenter = getLightSelectionCameraPosition();
+      Vector3f gridCenter = this.resolveRegirGridCenter();
       this.regirGridCenter.set(gridCenter);
       // Derive origin for CPU-side cell iteration (mirrors shader derivation)
       float halfExtent = this.regirGridResolution * GRID_CELL_SIZE * 0.5f;
@@ -691,7 +733,7 @@ public class LightRegistry implements Destructable {
                   // seeing a different presampled cell every rebuild.
                   long seed = (((long) cellIndex) << 32)
                      ^ (((long) slot + 1L) * 0x9E3779B97F4A7C15L);
-                  WeightedLightSelection selection = sampleRegirCellLight(cellLights, this.tracedLights, cellCenter, REGIR_BUILD_CELL_RADIUS, seed);
+                  WeightedLightSelection selection = sampleRegirCellLight(cellLights, this.tracedLights, cellCenter, this.getRegirBuildCellRadius(), seed);
                   if (selection.lightIndex() < 0 || selection.invSourcePdf() <= 0.0F) {
                      continue;
                   }
@@ -830,7 +872,7 @@ public class LightRegistry implements Destructable {
       Arrays.fill(this.newLightIndices, (short) -1);
       LightInstance[] prevLights = this.tracedLights;
       LightChurnStats.Frame frameStats = this.churnStats.beginFrame(prevLights.length, lights.length);
-      Vector3f cameraPosition = getLightSelectionCameraPosition();
+      Vector3f cameraPosition = this.getTracedLightSelectionCameraPosition();
       Set<LightInstance> previouslySelected = new HashSet<>(Arrays.asList(prevLights));
       if (lights.length > 0) {
          // Keep the capped traced-light set deterministic and sticky so ReGIR cell contents
@@ -1124,7 +1166,9 @@ public class LightRegistry implements Destructable {
 
    /** Returns the world-space center of the ReGIR grid (RTXDI: gridCenter = camera position). */
    public Vector3f getRegirGridCenter() {
-      return getLightSelectionCameraPosition();
+      Vector3f center = this.resolveRegirGridCenter();
+      this.regirGridCenter.set(center);
+      return new Vector3f(this.regirGridCenter);
    }
 
    /** @deprecated Use {@link #getRegirGridCenter()} — kept for backward compatibility. */
@@ -1149,7 +1193,19 @@ public class LightRegistry implements Destructable {
    }
 
    public float getRegirSamplingJitter() {
+      String override = System.getProperty("photonics.regirSamplingJitter");
+      if (override != null && !override.isBlank()) {
+         try {
+            return Float.parseFloat(override.trim());
+         } catch (NumberFormatException ignored) {
+         }
+      }
+
       return REGIR_SAMPLING_JITTER;
+   }
+
+   private float getRegirBuildCellRadius() {
+      return REGIR_CELL_RADIUS * (this.getRegirSamplingJitter() + 1.0F);
    }
 
    public int getRegirActiveCellCount() {

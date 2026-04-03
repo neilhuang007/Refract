@@ -1,3 +1,8 @@
+param(
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$GradleArgs
+)
+
 $stdout = Join-Path (Get-Location) 'run/shaderGameTest.stdout.log'
 $stderr = Join-Path (Get-Location) 'run/shaderGameTest.stderr.log'
 $latestLog = Join-Path (Get-Location) 'run/logs/latest.log'
@@ -79,7 +84,12 @@ $stderrPosition = 0L
 $deadline = (Get-Date).AddSeconds(200)
 $reason = 'completed'
 
-$proc = Start-Process -FilePath '.\gradlew.bat' -ArgumentList 'shaderGameTest', '--no-daemon' -WorkingDirectory (Get-Location) -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+$gradleArgumentList = @('shaderGameTest', '--no-daemon')
+if ($GradleArgs) {
+  $gradleArgumentList += $GradleArgs
+}
+
+$proc = Start-Process -FilePath '.\gradlew.bat' -ArgumentList $gradleArgumentList -WorkingDirectory (Get-Location) -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 $processIds = @($proc.Id)
 
 while (-not $proc.HasExited) {

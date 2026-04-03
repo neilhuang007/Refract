@@ -116,8 +116,36 @@ vec2 ph_reprojectf(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jit
     vec2 xy = viewspace_position.xy;
     xy = (xy/w + jitter) * 0.5f + 0.5f;
 
-
     return xy * viewSize * PH_RENDER_SCALE;
+}
+
+bool ph_is_valid_clip_projection(vec4 clipPosition) {
+    return clipPosition.w > 0.0f
+        && !any(isnan(clipPosition))
+        && !any(isinf(clipPosition));
+}
+
+// RTXDI's DI temporal pass consumes pixel-space motion:
+//   motion.xy = previousPixel - currentPixelCenter
+//   motion.z  = previousLinearDepth - currentLinearDepth
+// Invalid current/previous clip-space positions must produce an empty motion vector,
+// matching GBufferHelpers.hlsli::getMotionVector.
+vec4 ph_compute_temporal_motion(vec3 worldPosition, vec2 currentPixelCenter, vec2 viewSize) {
+    vec4 clipPosition = modelview_projection * vec4(worldPosition, 1.0f);
+    vec4 previousClipPosition = previous_modelview_projection * vec4(worldPosition, 1.0f);
+
+    if (!ph_is_valid_clip_projection(clipPosition) || !ph_is_valid_clip_projection(previousClipPosition)) {
+        return vec4(0.0f);
+    }
+
+    vec2 previousPixel = (previousClipPosition.xy / previousClipPosition.w) * 0.5f + 0.5f;
+    previousPixel *= viewSize * PH_RENDER_SCALE;
+
+    return vec4(
+        previousPixel - currentPixelCenter,
+        previousClipPosition.w - clipPosition.w,
+        1.0f
+    );
 }
 
 float ph_linear_view_depth(mat4 mvp_matrix, vec3 world_position) {

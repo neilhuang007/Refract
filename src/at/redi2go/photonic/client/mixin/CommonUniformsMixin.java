@@ -64,10 +64,8 @@ public class CommonUniformsMixin {
             () -> PhotonicsStorage.DEBUG_SHOW_HANDHELD.value ? 1.0F : 0.0F);
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_show_scene",
             () -> PhotonicsStorage.DEBUG_SHOW_SCENE.value ? 1.0F : 0.0F);
-         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_show_denoiser",
-            () -> PhotonicsStorage.DEBUG_SHOW_DENOISER.value ? 1.0F : 0.0F);
-         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_disable_denoiser",
-            () -> PhotonicsStorage.DEBUG_DISABLE_DENOISER.value ? 1.0F : 0.0F);
+         uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_direct_stage_override",
+            () -> PhotonicsStorage.isFinalDirectStageView(PhotonicsStorage.DEBUG_DIRECT_STAGE_VIEW.value) ? 0.0F : 1.0F);
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_disable_shadow_rays",
             () -> PhotonicsStorage.DEBUG_DISABLE_SHADOW_RAYS.value ? 1.0F : 0.0F);
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_debug_lock_traversal_rng",

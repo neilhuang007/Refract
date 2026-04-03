@@ -37,12 +37,75 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
-def shaderGameTestDisableDenoiser = System.getProperty("photonics.debugDisableDenoiser")
-if (shaderGameTestDisableDenoiser == null || shaderGameTestDisableDenoiser.isBlank()) {
-    shaderGameTestDisableDenoiser = System.getenv("PHOTONICS_DEBUG_DISABLE_DENOISER")
+def shaderGameTestEnableDirectTemporalReuse = System.getProperty("photonics.debugEnableDirectTemporalReuse")
+if (shaderGameTestEnableDirectTemporalReuse == null || shaderGameTestEnableDirectTemporalReuse.isBlank()) {
+    shaderGameTestEnableDirectTemporalReuse = System.getenv("PHOTONICS_DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE")
 }
-if (shaderGameTestDisableDenoiser == null || shaderGameTestDisableDenoiser.isBlank()) {
-    shaderGameTestDisableDenoiser = "false"
+if (shaderGameTestEnableDirectTemporalReuse == null || shaderGameTestEnableDirectTemporalReuse.isBlank()) {
+    shaderGameTestEnableDirectTemporalReuse = "true"
+}
+
+def shaderGameTestEnableDirectSpatialReuse = System.getProperty("photonics.debugEnableDirectSpatialReuse")
+if (shaderGameTestEnableDirectSpatialReuse == null || shaderGameTestEnableDirectSpatialReuse.isBlank()) {
+    shaderGameTestEnableDirectSpatialReuse = System.getenv("PHOTONICS_DEBUG_ENABLE_DIRECT_SPATIAL_REUSE")
+}
+if (shaderGameTestEnableDirectSpatialReuse == null || shaderGameTestEnableDirectSpatialReuse.isBlank()) {
+    shaderGameTestEnableDirectSpatialReuse = "true"
+}
+
+def shaderGameTestBlockToggleCount = System.getProperty("photonics.automation.blockToggleCount")
+if (shaderGameTestBlockToggleCount == null || shaderGameTestBlockToggleCount.isBlank()) {
+    shaderGameTestBlockToggleCount = System.getenv("PHOTONICS_AUTOMATION_BLOCK_TOGGLE_COUNT")
+}
+if (shaderGameTestBlockToggleCount == null || shaderGameTestBlockToggleCount.isBlank()) {
+    shaderGameTestBlockToggleCount = "2"
+}
+
+def shaderGameTestTimeOfDaySequence = System.getProperty("photonics.automation.timeOfDaySequence")
+if (shaderGameTestTimeOfDaySequence == null) {
+    shaderGameTestTimeOfDaySequence = System.getenv("PHOTONICS_AUTOMATION_TIME_OF_DAY_SEQUENCE")
+}
+if (shaderGameTestTimeOfDaySequence == null) {
+    shaderGameTestTimeOfDaySequence = "18000"
+}
+
+def shaderGameTestFreezeLightSelectionCamera = System.getProperty("photonics.freezeLightSelectionCamera")
+if (shaderGameTestFreezeLightSelectionCamera == null || shaderGameTestFreezeLightSelectionCamera.isBlank()) {
+    shaderGameTestFreezeLightSelectionCamera = System.getenv("PHOTONICS_FREEZE_LIGHT_SELECTION_CAMERA")
+}
+if (shaderGameTestFreezeLightSelectionCamera == null || shaderGameTestFreezeLightSelectionCamera.isBlank()) {
+    shaderGameTestFreezeLightSelectionCamera = "false"
+}
+
+def shaderGameTestFreezeRegirGridCenter = System.getProperty("photonics.freezeRegirGridCenter")
+if (shaderGameTestFreezeRegirGridCenter == null || shaderGameTestFreezeRegirGridCenter.isBlank()) {
+    shaderGameTestFreezeRegirGridCenter = System.getenv("PHOTONICS_FREEZE_REGIR_GRID_CENTER")
+}
+if (shaderGameTestFreezeRegirGridCenter == null || shaderGameTestFreezeRegirGridCenter.isBlank()) {
+    shaderGameTestFreezeRegirGridCenter = "false"
+}
+
+def shaderGameTestFreezeRtChunkResidency = System.getProperty("photonics.freezeRtChunkResidency")
+if (shaderGameTestFreezeRtChunkResidency == null || shaderGameTestFreezeRtChunkResidency.isBlank()) {
+    shaderGameTestFreezeRtChunkResidency = System.getenv("PHOTONICS_FREEZE_RT_CHUNK_RESIDENCY")
+}
+if (shaderGameTestFreezeRtChunkResidency == null || shaderGameTestFreezeRtChunkResidency.isBlank()) {
+    shaderGameTestFreezeRtChunkResidency = "false"
+}
+
+def shaderGameTestRegirFrameSeed = System.getProperty("photonics.regirFrameSeed")
+if (shaderGameTestRegirFrameSeed == null || shaderGameTestRegirFrameSeed.isBlank()) {
+    shaderGameTestRegirFrameSeed = System.getenv("PHOTONICS_REGIR_FRAME_SEED")
+}
+
+def shaderGameTestRegirPresampleFrameSeed = System.getProperty("photonics.regirPresampleFrameSeed")
+if (shaderGameTestRegirPresampleFrameSeed == null || shaderGameTestRegirPresampleFrameSeed.isBlank()) {
+    shaderGameTestRegirPresampleFrameSeed = System.getenv("PHOTONICS_REGIR_PRESAMPLE_FRAME_SEED")
+}
+
+def shaderGameTestRegirBuildFrameSeed = System.getProperty("photonics.regirBuildFrameSeed")
+if (shaderGameTestRegirBuildFrameSeed == null || shaderGameTestRegirBuildFrameSeed.isBlank()) {
+    shaderGameTestRegirBuildFrameSeed = System.getenv("PHOTONICS_REGIR_BUILD_FRAME_SEED")
 }
 
 def mainClasspathGroup = "${layout.buildDirectory.dir('classes/java/main').get().asFile.absolutePath}${File.pathSeparator}${layout.buildDirectory.dir('resources/main').get().asFile.absolutePath}"
@@ -68,7 +131,22 @@ loom {
             programArg "quickPlay/log.json"
             vmArg "-Dphotonics.automation.enabled=true"
             vmArg "-Dphotonics.profilerEnabled=true"
-            vmArg "-Dphotonics.debugDisableDenoiser=${shaderGameTestDisableDenoiser}"
+            // Force the reuse path under test instead of inheriting whatever local debug
+            // toggles happen to be persisted in the developer's config.
+            vmArg "-Dphotonics.debugEnableDirectTemporalReuse=${shaderGameTestEnableDirectTemporalReuse}"
+            vmArg "-Dphotonics.debugEnableDirectSpatialReuse=${shaderGameTestEnableDirectSpatialReuse}"
+            vmArg "-Dphotonics.freezeLightSelectionCamera=${shaderGameTestFreezeLightSelectionCamera}"
+            vmArg "-Dphotonics.freezeRegirGridCenter=${shaderGameTestFreezeRegirGridCenter}"
+            vmArg "-Dphotonics.freezeRtChunkResidency=${shaderGameTestFreezeRtChunkResidency}"
+            if (shaderGameTestRegirFrameSeed != null && !shaderGameTestRegirFrameSeed.isBlank()) {
+                vmArg "-Dphotonics.regirFrameSeed=${shaderGameTestRegirFrameSeed}"
+            }
+            if (shaderGameTestRegirPresampleFrameSeed != null && !shaderGameTestRegirPresampleFrameSeed.isBlank()) {
+                vmArg "-Dphotonics.regirPresampleFrameSeed=${shaderGameTestRegirPresampleFrameSeed}"
+            }
+            if (shaderGameTestRegirBuildFrameSeed != null && !shaderGameTestRegirBuildFrameSeed.isBlank()) {
+                vmArg "-Dphotonics.regirBuildFrameSeed=${shaderGameTestRegirBuildFrameSeed}"
+            }
             vmArg "-Dphotonics.automation.worldName=backup"
             vmArg "-Dphotonics.automation.autoStartWorld=false"
             vmArg "-Dphotonics.automation.startDelayTicks=220"
@@ -89,12 +167,12 @@ loom {
             vmArg "-Dphotonics.automation.cameraMotionPeriodTicks=120"
             vmArg "-Dphotonics.automation.cameraYawAmplitudeDegrees=35"
             vmArg "-Dphotonics.automation.cameraPitchAmplitudeDegrees=8"
-            vmArg "-Dphotonics.automation.timeOfDaySequence=18000"
+            vmArg "-Dphotonics.automation.timeOfDaySequence=${shaderGameTestTimeOfDaySequence}"
             vmArg "-Dphotonics.automation.timeOfDayStartActiveTick=780"
             vmArg "-Dphotonics.automation.timeOfDayStepTicks=60"
             vmArg "-Dphotonics.automation.blockToggleStartActiveTick=1020"
             vmArg "-Dphotonics.automation.blockTogglePeriodTicks=60"
-            vmArg "-Dphotonics.automation.blockToggleCount=2"
+            vmArg "-Dphotonics.automation.blockToggleCount=${shaderGameTestBlockToggleCount}"
             vmArg "-Dphotonics.automation.maxMotionRepeatDirectDeltaAvg=0.06"
             vmArg "-Dphotonics.automation.maxMotionRepeatDirectDeltaMax=0.10"
             vmArg "-Dphotonics.automation.maxMotionRepeatIndirectDeltaAvg=0.12"

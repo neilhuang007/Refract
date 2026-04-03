@@ -13,18 +13,9 @@ layout(location = 3) out vec4 indirect_temporal_meta_frag_out;
 const int lt_gi_temporal_search_radius = 1;
 const int lt_gi_temporal_sample_count = 5;
 
-// RTXDI_ApplyPermutationSampling (ReservoirAddressing.hlsli:50)
-void RTXDI_ApplyPermutationSampling(inout ivec2 prevPixelPos, uint uniformRandomNumber) {
-    ivec2 offset = ivec2(uniformRandomNumber & 3u, (uniformRandomNumber >> 2u) & 3u);
-    prevPixelPos += offset;
-    prevPixelPos.x ^= 3;
-    prevPixelPos.y ^= 3;
-    prevPixelPos -= offset;
-}
-
 void main() {
     RTXDI_GIReservoirStore temporalStore = gi_make_invalid_reservoir_store();
-    DirectSurface currentSurface = lt_load_surface(tex_coord);
+    RAB_Surface currentSurface = lt_load_surface(tex_coord);
     if (!lt_is_valid_surface(currentSurface)) {
         indirect_temporal_position_frag_out = temporalStore.positionData;
         indirect_temporal_normal_frag_out = temporalStore.normalData;
@@ -67,7 +58,7 @@ void main() {
     float temporalSearchRadius = (activeCheckerboardField == 0) ? 1.0f : 2.0f;
 
     RTXDI_GIReservoir temporalReservoir = RTXDI_EmptyGIReservoir();
-    DirectSurface temporalSurface = lt_empty_surface();
+    RAB_Surface temporalSurface = lt_empty_surface();
     bool foundTemporalReservoir = false;
 
     for (int i = 0; i < lt_gi_temporal_sample_count + (enableFallbackSampling ? 1 : 0); i++) {
@@ -91,7 +82,7 @@ void main() {
             continue;
         }
 
-        DirectSurface candidateSurface = lt_load_previous_surface(idx);
+        RAB_Surface candidateSurface = lt_load_previous_surface(idx);
         if (!lt_is_valid_surface(candidateSurface)) {
             continue;
         }
