@@ -46,10 +46,13 @@ void main() {
             uvec2(GlobalIndex),
             restirDI.bufferIndices.spatialResamplingInputBufferIndex
         );
-        // Temporary isolation path: bypass spatial resampling entirely and forward the
-        // temporal reservoir unchanged. This determines whether the visible DI band is
-        // introduced by DISpatialResampling or already present in the temporal result.
-        spatialResult = centerSample;
+
+        uint sourceBufferIndex = restirDI.bufferIndices.spatialResamplingInputBufferIndex;
+        RAB_LightSample lightSample = RAB_EmptyLightSample();
+        spatialResult = RTXDI_DISpatialResampling(
+            uvec2(pixelPosition), surface, centerSample,
+            rng, params, restirDI.reservoirBufferParams,
+            sourceBufferIndex, restirDI.spatialResamplingParams, lightSample);
     }
 
     storeDIReservoir(spatialResult);
