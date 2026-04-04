@@ -133,17 +133,16 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0f;
 }
 
-// The CPU-side ReGIR builder buckets lights into a fixed world-cell lattice and
-// snaps the grid origin to that lattice before filling per-cell RIS slots.
-// Query-time lookup must use the same snapped origin; the previous continuous
-// center-based origin selected different cells than the build populated, which
-// showed up as large stable lighting partitions and quadrant-like flicker.
+// Grid origin: snapped to cell boundaries for frame-to-frame stability.
+// When the camera moves less than one cell, the grid doesn't shift, which helps
+// temporal reuse maintain stable reservoirs.  The snap is applied identically
+// in the GPU build shader so build and query always agree.
 vec3 regir_grid_origin() {
     vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
     return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
 }
 
-// RTXDI: RTXDI_ReGIR_WorldPosToCellIndex — adapted to match the snapped CPU build origin
+// RTXDI: RTXDI_ReGIR_WorldPosToCellIndex — maps world position to grid cell
 bool regir_world_to_cell(vec3 shadingWorldPos, out ivec3 cellCoord) {
     vec3 gridOrigin = regir_grid_origin();
     vec3 relative   = shadingWorldPos - gridOrigin;
@@ -183,21 +182,20 @@ bool regir_unpack_slot(int flatCellIndex, int cellSlot,
 // RTXDI: RTXDI_CalculateReGIRCellIndex — determines which cell this pixel falls in.
 // Returns true if inside the grid, with flatCellIndex set.
 // Applies query-time jitter matching RTXDI_ReGIR_GetJitterScale (samplingJitter * cellSize).
+// The rng must be the tile-coherent RNG (seeded with pixelPosition / TILE_SIZE) so
+// all pixels in a 16x16 tile share the same jitter offset, exactly like RTXDI.
 bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng, out int flatCellIndex) {
     flatCellIndex = -1;
 
-    vec3 jitteredWorldPos = shadingWorldPos;
-    /*
-    // Original RTXDI-style query path:
-    // cellJitter = (rand3 - 0.5) * (samplingJitter * cellSize).
-    // This is left commented for isolation because the tile-coherent query jitter
-    // is what produces the visible 16x16 ReGIR grid flicker under camera motion.
-    vec3 jitteredWorldPos = shadingWorldPos + (vec3(
+    // RTXDI InitialSampling.hlsli:154-162 — tile-coherent cell jitter.
+    // cellJitter = (rand3 - 0.5) * jitterScale, where jitterScale = samplingJitter * cellSize.
+    vec3 cellJitter = vec3(
         RTXDI_GetNextRandom(rng),
         RTXDI_GetNextRandom(rng),
         RTXDI_GetNextRandom(rng)
-    ) - 0.5f) * ph_regir_sampling_jitter * ph_regir_cell_size;
-    */
+    ) - 0.5f;
+    float jitterScale = ph_regir_sampling_jitter * ph_regir_cell_size;
+    vec3 jitteredWorldPos = shadingWorldPos + cellJitter * jitterScale;
 
     ivec3 cellCoord;
     if (!regir_world_to_cell(jitteredWorldPos, cellCoord)) {

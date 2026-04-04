@@ -25,7 +25,6 @@ import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -64,7 +63,6 @@ public class LightRegistry implements Destructable {
    private static final int REGIR_BUILD_SAMPLES = 8;
    private static final int INCREMENTAL_PARALLEL_THRESHOLD = 32;
    private static final float MIN_TRACED_LIGHT_SELECTION_LUMA = 0.0025F;
-   private static final float PREVIOUS_SELECTION_CAMERA_BIAS = 1.2F;
    private static final Comparator<LightInstance> STABLE_LIGHT_ORDER = (a, b) -> {
       Vector3f pa = a.position();
       Vector3f pb = b.position();
@@ -78,12 +76,6 @@ public class LightRegistry implements Destructable {
       if (cmp != 0) return cmp;
       return a.type().compareTo(b.type());
    };
-   private static float selectionCameraScore(LightInstance light, Vector3f cameraPosition) {
-      if (!light.active()) {
-         return 0.0F;
-      }
-      return light.type().luminanceFrom(light.position(), cameraPosition);
-   }
 
    private static float selectionSourceScore(LightInstance light) {
       if (!light.active()) {
@@ -95,47 +87,14 @@ public class LightRegistry implements Destructable {
       return light.type().sourcePower();
    }
 
-   private static LightSelectionCandidate createSelectionCandidate(
-      LightInstance light,
-      Vector3f cameraPosition,
-      Set<LightInstance> previouslySelected
-   ) {
-      return new LightSelectionCandidate(
-         light,
-         selectionCameraScore(light, cameraPosition),
-         selectionSourceScore(light),
-         previouslySelected.contains(light)
-      );
-   }
-
-   private static float effectiveSelectionCameraScore(LightSelectionCandidate candidate) {
-      return candidate.cameraScore() * (candidate.previouslySelected() ? PREVIOUS_SELECTION_CAMERA_BIAS : 1.0F);
-   }
-
-   private static int compareLightSelectionOrder(LightSelectionCandidate a, LightSelectionCandidate b) {
-      int cmp = Float.compare(effectiveSelectionCameraScore(b), effectiveSelectionCameraScore(a));
-      if (cmp != 0) return cmp;
-      cmp = Boolean.compare(b.previouslySelected(), a.previouslySelected());
-      if (cmp != 0) return cmp;
-      cmp = Float.compare(b.sourceScore(), a.sourceScore());
-      if (cmp != 0) return cmp;
-      return STABLE_LIGHT_ORDER.compare(a.light(), b.light());
-   }
-
-   private static LightInstance[] selectTracedLights(List<LightSelectionCandidate> candidates, int maxLights) {
-      if (candidates.size() <= maxLights) {
-         return candidates.stream().map(LightSelectionCandidate::light).sorted(STABLE_LIGHT_ORDER).toArray(LightInstance[]::new);
+   private static LightInstance[] selectTracedLights(LightInstance[] lights, int maxLights) {
+      if (lights.length <= maxLights) {
+         Arrays.sort(lights, STABLE_LIGHT_ORDER);
+         return lights;
       }
 
-      candidates.sort(LightRegistry::compareLightSelectionOrder);
-      return candidates.stream()
-         .limit(maxLights)
-         .map(LightSelectionCandidate::light)
-         .sorted(STABLE_LIGHT_ORDER)
-         .toArray(LightInstance[]::new);
-   }
-
-   private record LightSelectionCandidate(LightInstance light, float cameraScore, float sourceScore, boolean previouslySelected) {
+      Arrays.sort(lights, STABLE_LIGHT_ORDER);
+      return Arrays.copyOf(lights, maxLights);
    }
 
    private static Vector3f getCurrentCameraPosition() {
@@ -872,19 +831,10 @@ public class LightRegistry implements Destructable {
       Arrays.fill(this.newLightIndices, (short) -1);
       LightInstance[] prevLights = this.tracedLights;
       LightChurnStats.Frame frameStats = this.churnStats.beginFrame(prevLights.length, lights.length);
-      Vector3f cameraPosition = this.getTracedLightSelectionCameraPosition();
-      Set<LightInstance> previouslySelected = new HashSet<>(Arrays.asList(prevLights));
-      if (lights.length > 0) {
-         // Keep the capped traced-light set deterministic and sticky so ReGIR cell contents
-         // do not churn when near-tied lights trade places between frames.
-         if (lights.length > this.maxLights) {
-            List<LightSelectionCandidate> candidates = new ArrayList<>(lights.length);
-            for (LightInstance light : lights) {
-               LightSelectionCandidate candidate = createSelectionCandidate(light, cameraPosition, previouslySelected);
-               candidates.add(candidate);
-            }
-            lights = selectTracedLights(candidates, this.maxLights);
-         }
+      if (lights.length > this.maxLights) {
+         lights = selectTracedLights(lights, this.maxLights);
+      } else {
+         Arrays.sort(lights, STABLE_LIGHT_ORDER);
       }
       Object2ObjectOpenHashMap<Vector3f, LightInvalidation> differences = new Object2ObjectOpenHashMap<>(
          Math.max(lights.length, prevLights.length)

@@ -116,6 +116,14 @@ def shaderGameTestRestirDebugForceTargetPdfOne = System.getProperty("photonics.r
 def shaderGameTestRestirDebugForceShadingInvPdfOne = System.getProperty("photonics.restirDebugForceShadingInvPdfOne")
 def shaderGameTestRestirDebugForceSolidAnglePdfOne = System.getProperty("photonics.restirDebugForceSolidAnglePdfOne")
 
+def runtimeMaxLights = System.getProperty("photonics.maxLights")
+if (runtimeMaxLights == null || runtimeMaxLights.isBlank()) {
+    runtimeMaxLights = System.getenv("PHOTONICS_MAX_LIGHTS")
+}
+if (runtimeMaxLights == null || runtimeMaxLights.isBlank()) {
+    runtimeMaxLights = "4096"
+}
+
 def mainClasspathGroup = "${layout.buildDirectory.dir('classes/java/main').get().asFile.absolutePath}${File.pathSeparator}${layout.buildDirectory.dir('resources/main').get().asFile.absolutePath}"
 
 loom {
@@ -126,6 +134,7 @@ loom {
             vmArg "-Xms2G"
             vmArg "-Xmx8G"
             vmArg "-Dfabric.classPathGroups=${mainClasspathGroup}"
+            vmArg "-Dphotonics.maxLights=${runtimeMaxLights}"
         }
         shaderGameTestClient {
             client()
@@ -133,6 +142,7 @@ loom {
             vmArg "-Xms2G"
             vmArg "-Xmx8G"
             vmArg "-Dfabric.classPathGroups=${mainClasspathGroup}"
+            vmArg "-Dphotonics.maxLights=${runtimeMaxLights}"
             programArg "--quickPlaySingleplayer"
             programArg "backup"
             programArg "--quickPlayPath"

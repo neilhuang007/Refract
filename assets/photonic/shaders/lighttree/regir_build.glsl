@@ -183,10 +183,7 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0;
 }
 
-// The CPU-side ReGIR builder snaps its origin to the fixed world-cell lattice
-// before assigning lights to cells. The GPU build pass must derive cell
-// centers from that same snapped origin or it will generate RIS PDFs for a
-// different grid than the one the CPU actually populated.
+// Grid origin: snapped to cell boundaries — must match light_tree.glsl::regir_grid_origin().
 vec3 regir_grid_origin() {
     vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
     return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
