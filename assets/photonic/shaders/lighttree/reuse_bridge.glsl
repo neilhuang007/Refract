@@ -423,11 +423,10 @@ vec3 lt_surface_rt_pos(RAB_Surface surface) {
     return surface.worldPos - world_offset;
 }
 
-RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geometryNormalValue, vec3 shadingNormalValue, vec3 albedoValue, RAB_Material materialValue, float linearDepthValue) {
+RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geometryNormalValue, vec3 shadingNormalValue, vec3 albedoValue, RAB_Material materialValue, vec3 cameraWorldPosition, float linearDepthValue) {
     vec3 resolvedGeoNormal = lt_resolve_reuse_normal(geometryNormalValue, geometryNormalValue);
     vec3 resolvedShadingNormal = lt_resolve_reuse_normal(geometryNormalValue, shadingNormalValue);
-    vec3 surfaceRtPos = worldPosValue - world_offset;
-    vec3 viewDir = rt_camera_position - surfaceRtPos;
+    vec3 viewDir = cameraWorldPosition - worldPosValue;
     float viewDirLengthSq = dot(viewDir, viewDir);
     viewDir = (viewDirLengthSq > 1e-6f) ? (viewDir * inversesqrt(viewDirLengthSq)) : vec3(0.0f, 0.0f, 1.0f);
     materialValue.diffuseAlbedo = clamp(albedoValue, vec3(0.0f), vec3(1.0f));
@@ -441,6 +440,18 @@ RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geometryNormalValue, vec3 s
         linearDepthValue,
         lt_material_diffuse_probability_with_view(materialValue, resolvedShadingNormal, viewDir),
         materialValue
+    );
+}
+
+RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geometryNormalValue, vec3 shadingNormalValue, vec3 albedoValue, RAB_Material materialValue, float linearDepthValue) {
+    return lt_make_surface(
+        worldPosValue,
+        geometryNormalValue,
+        shadingNormalValue,
+        albedoValue,
+        materialValue,
+        world_camera_position,
+        linearDepthValue
     );
 }
 
@@ -462,6 +473,18 @@ RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geometryNormalValue, vec3 s
         shadingNormalValue,
         vec3(1.0f),
         lt_make_material(materialValue, vec3(1.0f))
+    );
+}
+
+RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geometryNormalValue, vec3 shadingNormalValue, vec3 albedoValue, vec4 materialValue, vec3 cameraWorldPosition, float linearDepthValue) {
+    return lt_make_surface(
+        worldPosValue,
+        geometryNormalValue,
+        shadingNormalValue,
+        albedoValue,
+        lt_make_material(materialValue, albedoValue),
+        cameraWorldPosition,
+        linearDepthValue
     );
 }
 
@@ -532,6 +555,7 @@ RAB_Surface lt_load_previous_surface(ivec2 uv) {
         texelFetch(prev_radiosity_mapped_normal, uv, 0).xyz,
         clamp(texelFetch(prev_radiosity_albedo, uv, 0).rgb, vec3(0.04f), vec3(1.0f)),
         texelFetch(prev_radiosity_material, uv, 0),
+        previous_world_camera_position,
         positionData.w
     );
 }
