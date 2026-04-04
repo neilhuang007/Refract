@@ -27,3 +27,9 @@ tools/
 
 # Docs (not part of mod distribution)
 docs/
+
+# AI Shit
+.codex*
+AGENTS.md
+CLAUDE.md
+nul
