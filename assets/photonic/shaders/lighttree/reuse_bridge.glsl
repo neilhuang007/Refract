@@ -1643,16 +1643,9 @@ RTXDI_DITemporalResamplingParameters lt_build_di_temporal_resampling_parameters(
 
     temporalResamplingParams.depthThreshold = ph_restir_temporal_depth_threshold > 0.0f ? ph_restir_temporal_depth_threshold : 0.1f;
     temporalResamplingParams.normalThreshold = ph_restir_temporal_normal_threshold > 0.0f ? ph_restir_temporal_normal_threshold : 0.5f;
-    temporalResamplingParams.enableVisibilityShortcut = ph_restir_temporal_visibility_shortcut >= 0.5f ? 1u : 0u;
-    temporalResamplingParams.enablePermutationSampling = 0u;
-    if (ph_restir_temporal_permutation_sampling < -0.5f) {
-        temporalResamplingParams.enablePermutationSampling = 0u;
-    } else if (ph_restir_temporal_permutation_sampling < 0.5f) {
-        temporalResamplingParams.enablePermutationSampling = 1u;
-    } else {
-        temporalResamplingParams.enablePermutationSampling = ph_restir_temporal_permutation_sampling >= 0.5f ? 1u : 0u;
-    }
-    temporalResamplingParams.uniformRandomNumber = ph_restir_temporal_uniform_random != 0 ? uint(ph_restir_temporal_uniform_random) : uint(frameCounter);
+    temporalResamplingParams.enableVisibilityShortcut = (ph_restir_temporal_visibility_shortcut >= 0.5f) ? 1u : 0u;
+    temporalResamplingParams.enablePermutationSampling = (ph_restir_temporal_permutation_sampling >= 0.5f) ? 1u : 0u;
+    temporalResamplingParams.uniformRandomNumber = uint(ph_restir_temporal_uniform_random);
     temporalResamplingParams.permutationSamplingThreshold = 0.0f;
     return temporalResamplingParams;
 }
@@ -1735,8 +1728,8 @@ RTXDI_DISpatioTemporalResamplingParameters lt_build_di_spatiotemporal_resampling
 RTXDI_ShadingParameters lt_build_shading_parameters()
 {
     RTXDI_ShadingParameters shadingParams;
-    shadingParams.enableFinalVisibility = (ph_debug_enable_direct_final_visibility < 0.5f || ph_restir_enable_final_visibility < -1.5f) ? 0u : 1u;
-    shadingParams.reuseFinalVisibility = (ph_restir_reuse_final_visibility < -1.5f) ? 0u : 1u;
+    shadingParams.enableFinalVisibility = (ph_restir_enable_final_visibility >= 0.5f) ? 1u : 0u;
+    shadingParams.reuseFinalVisibility = (ph_restir_reuse_final_visibility >= 0.5f) ? 1u : 0u;
     shadingParams.finalVisibilityMaxAge = uint((ph_restir_visibility_max_age > 0.0f) ? ph_restir_visibility_max_age : lt_visibility_reuse_max_age);
     shadingParams.finalVisibilityMaxDistance = (ph_restir_visibility_max_distance > 0.0f) ? ph_restir_visibility_max_distance : lt_visibility_reuse_max_distance;
     shadingParams.enableDenoiserInputPacking = (ph_restir_enable_denoiser_packing >= 0.5f) ? 1u : 0u;
@@ -1934,7 +1927,7 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample lightSam
 bool RAB_GetTemporalConservativeVisibility(RAB_Surface surface, RAB_Surface temporalSurface, RAB_LightSample lightSample)
 {
     RAB_LightSample lightSampleCopy = lightSample;
-    return lt_trace_conservative_visibility(lightSampleCopy, surface);
+    return lt_trace_conservative_visibility(lightSampleCopy, temporalSurface);
 }
 
 RTXDI_DIReservoir RTXDI_LoadDIReservoir(
@@ -3586,25 +3579,8 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
 
         RTXDI_SelectNextLocalLight(lightSelectionContext, rnd, lightInfo, lightIndex, invSourcePdf);
 
-        if (lightInfo.index < 0 || invSourcePdf <= 0.0f)
-        {
-            continue;
-        }
-
         vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
         RAB_LightSample candidateSample = RAB_SamplePolymorphicLight(lightInfo, surface, uv);
-        if (candidateSample.index < 0 || candidateSample.solidAnglePdf <= 0.0f
-            || isnan(candidateSample.solidAnglePdf) || isinf(candidateSample.solidAnglePdf))
-        {
-            continue;
-        }
-
-        float radianceLuma = ph_luminance(max(candidateSample.color, vec3(0.0f)));
-        if (radianceLuma <= 1e-6f)
-        {
-            continue;
-        }
-
         float blendedSourcePdf = RTXDI_LightBrdfMisWeight(
             surface,
             candidateSample,
@@ -3612,28 +3588,15 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
             misData.localLightMisWeight,
             misData.brdfMisWeight,
             initialSamplingParams.brdfCutoff);
-
-        if (blendedSourcePdf <= 0.0f || isnan(blendedSourcePdf) || isinf(blendedSourcePdf))
-        {
-            continue;
-        }
-
-        // float targetPdf = RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface);
-        float targetPdf = lt_debug_resolve_target_pdf(RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface));
-        if (targetPdf <= 0.0f || isnan(targetPdf) || isinf(targetPdf))
-        {
-            continue;
-        }
-
-        float invBlendedSourcePdf = 1.0f / blendedSourcePdf;
-        float risWeight = targetPdf * invBlendedSourcePdf;
-        if (risWeight <= 0.0f || isnan(risWeight) || isinf(risWeight))
-        {
-            continue;
-        }
-
+        float targetPdf = RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface);
         float risRnd = RTXDI_GetNextRandom(rng);
-        bool selected = RTXDI_StreamSample(state, int(lightIndex), uv, risRnd, targetPdf, invBlendedSourcePdf);
+
+        if (blendedSourcePdf == 0.0f)
+        {
+            continue;
+        }
+
+        bool selected = RTXDI_StreamSample(state, int(lightIndex), uv, risRnd, targetPdf, 1.0f / blendedSourcePdf);
         if (selected)
         {
             o_selectedSample = candidateSample;

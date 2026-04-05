@@ -56,6 +56,12 @@ void main() {
 
         vec4 motionData = texelFetch(radiosity_motion, pixelPosition, 0);
         vec3 motionVector = motionData.xyz;
+        if (motionData.w > 0.5f)
+        {
+            // ph_compute_temporal_motion stores previousPixel - currentPixelCenter.
+            // RTXDI DI temporal resampling expects previousPixel - pixelPosition.
+            motionVector.xy += vec2(0.5f);
+        }
 
         uint sourceBufferIndex = restirDI.bufferIndices.temporalResamplingInputBufferIndex;
 

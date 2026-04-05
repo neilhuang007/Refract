@@ -10,37 +10,29 @@ layout(location = 3) out vec4 filtered_meta_frag_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/restir_gi_bridge.glsl"
 
-const int gi_boiling_filter_radius = 4; // half of 8x8 tile
-
 void main() {
-    RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, tex_coord);
-    RTXDI_GIReservoirStore filteredStore = gi_make_reservoir_store(reservoir);
-
-    float weight = ph_luminance(reservoir.selected.radiance) * reservoir.weight_sum;
-    float weightSum = 0.0f;
-    float weightCount = 0.0f;
-
-    for (int dy = -gi_boiling_filter_radius; dy < gi_boiling_filter_radius; dy += 2) {
-        for (int dx = -gi_boiling_filter_radius; dx < gi_boiling_filter_radius; dx += 2) {
-            ivec2 sampleUv = tex_coord + ivec2(dx, dy);
-            if (!lt_is_viewport_uv_in_bounds(sampleUv)) continue;
-
-            RTXDI_GIReservoir sampleReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, sampleUv);
-            float sampleWeight = ph_luminance(sampleReservoir.selected.radiance) * sampleReservoir.weight_sum;
-            if (sampleWeight > 0.0f) {
-                weightSum += sampleWeight;
-                weightCount += 1.0f;
-            }
-        }
+    RTXDI_GIReservoirStore filteredStore = gi_make_invalid_reservoir_store();
+    int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
+    ivec2 reservoirPos = lt_current_reservoir_pos();
+    if (!lt_is_active_reservoir_lane(reservoirPos)) {
+        filtered_position_frag_out = filteredStore.positionData;
+        filtered_normal_frag_out = filteredStore.normalData;
+        filtered_radiance_frag_out = filteredStore.radianceData;
+        filtered_meta_frag_out = filteredStore.metaData;
+        return;
     }
 
-    float averageNonzeroWeight = weightCount > 0.0f ? weightSum / weightCount : 0.0f;
-    float boilingFilterStrength = gi_runtime_boiling_filter_strength();
-    float boilingFilterMultiplier = 10.0f / clamp(boilingFilterStrength, 1e-6f, 1.0f) - 9.0f;
-
-    if (weight > averageNonzeroWeight * boilingFilterMultiplier) {
-        filteredStore = gi_make_invalid_reservoir_store();
+    ivec2 pixelPosition = RTXDI_ReservoirPosToPixelPos(reservoirPos, activeCheckerboardField);
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
+        filtered_position_frag_out = filteredStore.positionData;
+        filtered_normal_frag_out = filteredStore.normalData;
+        filtered_radiance_frag_out = filteredStore.radianceData;
+        filtered_meta_frag_out = filteredStore.metaData;
+        return;
     }
+
+    RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, reservoirPos, activeCheckerboardField);
+    filteredStore = gi_make_reservoir_store(reservoir);
 
     filtered_position_frag_out = filteredStore.positionData;
     filtered_normal_frag_out = filteredStore.normalData;

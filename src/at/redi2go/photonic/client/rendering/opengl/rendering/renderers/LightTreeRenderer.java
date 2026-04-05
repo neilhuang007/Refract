@@ -261,12 +261,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.specularDenoisedBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.specularAtrousPingBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.specularHistoryLengthBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.indirectInitialReservoirBuffer = new ColorFramebuffer(renderScale);
-      this.createIndirectReservoirAttachments(this.indirectInitialReservoirBuffer);
-      this.indirectTemporalReservoirBuffer = new ColorFramebuffer(renderScale);
-      this.createIndirectReservoirAttachments(this.indirectTemporalReservoirBuffer);
-      this.indirectReservoirBuffer = new ColorFramebuffer(renderScale);
-      this.createIndirectReservoirAttachments(this.indirectReservoirBuffer);
+      this.indirectInitialReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
+      this.indirectTemporalReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
+      this.indirectReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
       this.indirectDenoisedBuffer = new ColorFramebuffer(renderScale);
       this.indirectDenoisedBuffer.createAttachment("data", "RGBA16F", false);
       this.proposalFramebuffer = this.createProposalGeometryFramebuffer();
@@ -658,7 +655,7 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> this.properties.getRestirTemporalBiasMode());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_permutation_sampling", () -> this.properties.getRestirTemporalPermutationSampling());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_temporal_permutation_sampling", () -> 0.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_visibility_shortcut", () -> this.properties.getRestirTemporalVisibilityShortcut());
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_visibility_shortcut", () -> 0.0f);
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_uniform_random", () -> this.getTemporalUniformRandom());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_fallback_sampling_mode", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_bias_mode", () -> {
@@ -699,13 +696,13 @@ public class LightTreeRenderer extends MainRenderer {
          "ph_debug_enable_direct_visibility_transmittance",
          () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_VISIBILITY_TRANSMITTANCE.value ? 1.0f : 0.0f
       );
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_final_visibility", () -> 0.0f);
+      // Match the RTXDI default shading configuration: evaluate and store final
+      // visibility on the final shading pass, then reuse that visibility while
+      // reservoir age/spatial distance limits remain valid.
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_final_visibility", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_enable_final_mis", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_boiling_filter_strength", () -> 0.2f);
-      // Keep RTXDI final-visibility shading enabled, but do not reuse stored visibility across
-      // frames in this port. The Minecraft voxel/chunk update path invalidates visibility more
-      // aggressively than the reference sample scene and otherwise causes visible light fighting.
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_reuse_final_visibility", () -> -2.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_reuse_final_visibility", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 1.0f);
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
@@ -1083,6 +1080,12 @@ public class LightTreeRenderer extends MainRenderer {
       return framebuffer;
    }
 
+   private ColorFramebuffer createIndirectReservoirFramebuffer(float renderScale) {
+      ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
+      this.createIndirectReservoirAttachments(framebuffer);
+      return framebuffer;
+   }
+
    private Vector2f getDirectReservoirResolution() {
       Vector2f framebufferSize = new Vector2f(
          MinecraftClient.getInstance().getWindow().getFramebufferWidth(),
@@ -1236,6 +1239,8 @@ public class LightTreeRenderer extends MainRenderer {
       framebuffer.createAttachment("radiance", "RGBA32F", false);
       framebuffer.createAttachment("meta", "RGBA32F", false);
    }
+
+
 
    private RoutingFramebuffer createProposalGeometryFramebuffer() {
       return this.createRoutingFramebuffer(
@@ -1485,25 +1490,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private float getDirectSampleBudgetScale() {
-      float blendFactor = this.worldRegistry.fetchLightBlendFactor();
-      boolean lightReload = this.worldRegistry.fetchLightReload();
-      boolean hasActiveBlend = this.worldRegistry.hasActiveLightBlend();
-      int blendRegions = this.worldRegistry.getLightBlendRegionCount();
-      LightRegistry lightRegistry = this.worldRegistry.getLightRegistry();
-      float lightCoverage = 0.0f;
-      if (lightRegistry.totalLights() > 0) {
-         lightCoverage = Math.min(1.0f, (float) lightRegistry.lightCount() / (float) lightRegistry.totalLights());
-      }
-
-      float warmupScale = 0.25f + 0.75f * blendFactor;
-      if (!lightReload && blendRegions == 0) {
-         warmupScale = Math.max(warmupScale, 0.85f);
-      }
-      if (!lightReload && hasActiveBlend) {
-         warmupScale = Math.min(warmupScale, 0.55f);
-      }
-      float residencyScale = 0.35f + 0.65f * lightCoverage;
-      return Math.max(0.2f, Math.min(1.0f, warmupScale * residencyScale));
+      return 1.0f;
    }
 
    private int getCurrentDirectAtrousIsLastPass() {

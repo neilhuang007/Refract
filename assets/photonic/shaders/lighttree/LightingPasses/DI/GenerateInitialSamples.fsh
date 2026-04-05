@@ -136,8 +136,7 @@ LtInitialSamplingDebugInfo lt_debug_diagnose_initial_local_samples(
             sawZeroSourcePdf = true;
         }
 
-        // float targetPdf = RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface);
-        float targetPdf = lt_debug_resolve_target_pdf(RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface));
+        float targetPdf = RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface);
         if (!lt_is_finite_float(targetPdf)) {
             sawNonFiniteTargetPdf = true;
         } else if (targetPdf <= 0.0f) {

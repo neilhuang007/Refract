@@ -133,13 +133,9 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0f;
 }
 
-// Grid origin: snapped to cell boundaries for frame-to-frame stability.
-// When the camera moves less than one cell, the grid doesn't shift, which helps
-// temporal reuse maintain stable reservoirs.  The snap is applied identically
-// in the GPU build shader so build and query always agree.
+// RTXDI grid origin is continuous; build/query must match exactly.
 vec3 regir_grid_origin() {
-    vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
-    return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
+    return ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
 }
 
 // RTXDI: RTXDI_ReGIR_WorldPosToCellIndex — maps world position to grid cell
@@ -187,8 +183,6 @@ bool regir_unpack_slot(int flatCellIndex, int cellSlot,
 bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng, out int flatCellIndex) {
     flatCellIndex = -1;
 
-    // RTXDI InitialSampling.hlsli:154-162 — tile-coherent cell jitter.
-    // cellJitter = (rand3 - 0.5) * jitterScale, where jitterScale = samplingJitter * cellSize.
     vec3 cellJitter = vec3(
         RTXDI_GetNextRandom(rng),
         RTXDI_GetNextRandom(rng),

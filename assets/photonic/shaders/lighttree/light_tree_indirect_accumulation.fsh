@@ -23,19 +23,32 @@ void main() {
     indirect_reservoir_radiance_frag_out = outputStore.radianceData;
     indirect_reservoir_meta_frag_out = outputStore.metaData;
 
+    int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
+    ivec2 currentReservoirPos = lt_current_reservoir_pos();
+    if (!lt_is_active_reservoir_lane(currentReservoirPos)) {
+        indirect_frag_out = vec4(0.0f);
+        indirect_variance_frag_out = vec4(0.0f);
+        return;
+    }
+
+    ivec2 pixelPosition = RTXDI_ReservoirPosToPixelPos(currentReservoirPos, activeCheckerboardField);
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
+        indirect_frag_out = vec4(0.0f);
+        indirect_variance_frag_out = vec4(0.0f);
+        return;
+    }
+
     handheld_frag_out = lt_build_handheld_stage();
 
-    RAB_Surface currentSurface = lt_load_surface(tex_coord);
+    RAB_Surface currentSurface = lt_load_surface(pixelPosition);
     if (!lt_is_valid_surface(currentSurface)) {
         indirect_frag_out = vec4(0.0f);
         indirect_variance_frag_out = vec4(0.0f);
         return;
     }
 
-    RTXDI_GIReservoir initialReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_initial, tex_coord);
+    RTXDI_GIReservoir initialReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_initial, currentReservoirPos, activeCheckerboardField);
 
-    int activeCheckerboardField = ph_restir_active_checkerboard_field;
-    ivec2 currentReservoirPos = RTXDI_PixelPosToReservoirPos(tex_coord, activeCheckerboardField);
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
         uvec2(currentReservoirPos),
         uint(frameCounter),
@@ -61,7 +74,7 @@ void main() {
     }
 
     for (int i = 0; i < activeSpatialSampleCount; i++) {
-        ivec2 neighborUv = tex_coord + lt_calculate_spatial_resampling_offset(
+        ivec2 neighborUv = pixelPosition + lt_calculate_spatial_resampling_offset(
             neighborSampleStartIdx + i,
             spatialReuseRadius
         );
@@ -108,7 +121,7 @@ void main() {
                 continue;
             }
 
-            ivec2 neighborUv = tex_coord + lt_calculate_spatial_resampling_offset(
+            ivec2 neighborUv = pixelPosition + lt_calculate_spatial_resampling_offset(
                 neighborSampleStartIdx + i,
                 spatialReuseRadius
             );

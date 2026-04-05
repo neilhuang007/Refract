@@ -3,6 +3,7 @@ package at.redi2go.photonic.client.rendering.world;
 import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.Raytracer;
+import at.redi2go.photonic.client.ShaderAutomation;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
 import at.redi2go.photonic.client.config.ShaderPackLights;
 import at.redi2go.photonic.client.config.lights.BlockLightInfo;
@@ -307,6 +308,7 @@ public class LightRegistry implements Destructable {
       if (level == null) {
          return;
       }
+      boolean freezeMutationIngress = ShaderAutomation.suppressWorldMutationIngress();
       this.building = true;
       boolean profiling = PhotonicsStorage.PROFILER_ENABLED.value;
       long t0 = profiling ? System.nanoTime() : 0;
@@ -321,7 +323,7 @@ public class LightRegistry implements Destructable {
          this.lock.writeLock().lock();
          LightInstance[] lights;
          try {
-            if (++this.compileCount % 10 == 0) {
+            if (!freezeMutationIngress && ++this.compileCount % 10 == 0) {
                this.compileCount = 0;
                lights = this.toLightInstanceArrayClearUnloaded(level);
             } else {
@@ -973,6 +975,9 @@ public class LightRegistry implements Destructable {
    }
 
    public void onBlockLoad(Vector3f position) {
+      if (ShaderAutomation.suppressWorldMutationIngress()) {
+         return;
+      }
       this.lock.writeLock().lock();
       try {
          ClientWorld level = MinecraftAccessor.getLevel();
@@ -994,6 +999,9 @@ public class LightRegistry implements Destructable {
    }
 
    public void onBlockUpdate(BlockPos blockPos) {
+      if (ShaderAutomation.suppressWorldMutationIngress()) {
+         return;
+      }
       this.lock.writeLock().lock();
       try {
          ClientWorld level = MinecraftAccessor.getLevel();
@@ -1007,6 +1015,9 @@ public class LightRegistry implements Destructable {
    }
 
    public void onBlockUpdate(BlockPos blockPos, BlockState blockState, BlockLightInfo lightInfo) {
+      if (ShaderAutomation.suppressWorldMutationIngress()) {
+         return;
+      }
       this.lock.writeLock().lock();
       try {
          this.syncTracedLight(blockPos, blockState, lightInfo);
@@ -1016,6 +1027,9 @@ public class LightRegistry implements Destructable {
    }
 
    public void synchronizeChunkLights(ClientWorld level, PChunkPos chunkPos) {
+      if (ShaderAutomation.suppressWorldMutationIngress()) {
+         return;
+      }
       this.lock.writeLock().lock();
       try {
          this.loadedLightChunks.add(chunkKey(chunkPos));
@@ -1035,6 +1049,9 @@ public class LightRegistry implements Destructable {
    }
 
    public void clearChunkLights(PChunkPos chunkPos) {
+      if (ShaderAutomation.suppressWorldMutationIngress()) {
+         return;
+      }
       this.lock.writeLock().lock();
       try {
          this.loadedLightChunks.remove(chunkKey(chunkPos));

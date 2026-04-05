@@ -332,10 +332,7 @@ void main() {
 
         if (!enableFinalVisibility) {
             if (lightSample.index >= 0 && lightSample.solidAnglePdf > 0.0f) {
-                // lightSample.color *= RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf;
-                float shadingInvPdf = lt_debug_resolve_shading_inv_pdf(RTXDI_GetDIReservoirInvPdf(reservoir));
-                float shadingSolidAnglePdf = lt_debug_resolve_solid_angle_pdf(lightSample.solidAnglePdf);
-                lightSample.color *= shadingInvPdf / shadingSolidAnglePdf;
+                lightSample.color *= RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf;
                 LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
                 shadedDiffuse = splitShade.diffuse;
                 shadedSpecular = splitShade.specular;
@@ -351,10 +348,7 @@ void main() {
 
             if (hasStoredVisibility && rtxdi_is_visible(reservoir)) {
                 if (lightSample.index >= 0 && lightSample.solidAnglePdf > 0.0f) {
-                    // lightSample.color *= visibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
-                    float shadingInvPdf = lt_debug_resolve_shading_inv_pdf(RTXDI_GetDIReservoirInvPdf(reservoir));
-                    float shadingSolidAnglePdf = lt_debug_resolve_solid_angle_pdf(lightSample.solidAnglePdf);
-                    lightSample.color *= visibility * (shadingInvPdf / shadingSolidAnglePdf);
+                    lightSample.color *= visibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
                     shadedDiffuse = splitShade.diffuse;
                     shadedSpecular = splitShade.specular;
@@ -368,10 +362,7 @@ void main() {
                 RTXDI_StoreVisibilityInDIReservoir(reservoir, storedVisibility, discardIfInvisible);
 
                 if (isVisible && lightSample.solidAnglePdf > 0.0f) {
-                    // lightSample.color *= storedVisibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
-                    float shadingInvPdf = lt_debug_resolve_shading_inv_pdf(RTXDI_GetDIReservoirInvPdf(reservoir));
-                    float shadingSolidAnglePdf = lt_debug_resolve_solid_angle_pdf(lightSample.solidAnglePdf);
-                    lightSample.color *= storedVisibility * (shadingInvPdf / shadingSolidAnglePdf);
+                    lightSample.color *= storedVisibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
                     shadedDiffuse = splitShade.diffuse;
                     shadedSpecular = splitShade.specular;

@@ -183,10 +183,9 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0;
 }
 
-// Grid origin: snapped to cell boundaries — must match light_tree.glsl::regir_grid_origin().
+// Grid origin: continuous, matching RTXDI_ReGIR_WorldPosToCellIndex.
 vec3 regir_grid_origin() {
-    vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
-    return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
+    return ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
 }
 
 // ---------------------------------------------------------------------------

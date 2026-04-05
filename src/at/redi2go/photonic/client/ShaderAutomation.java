@@ -76,7 +76,17 @@ public final class ShaderAutomation {
    private final double maxMotionRepeatDirectDeltaMax;
    private final double maxMotionRepeatIndirectDeltaAvg;
    private final double maxMotionRepeatIndirectDeltaMax;
+   private final double maxDirectTemporalDeltaAvg;
+   private final double maxDirectTemporalDeltaMax;
+   private final double maxIndirectTemporalDeltaAvg;
+   private final double maxIndirectTemporalDeltaMax;
+   private final double maxIndirectLinearOverbrightFraction;
+   private final double maxIndirectLinearSevereFireflyFraction;
+   private final double maxIndirectRawLinearOverbrightFraction;
    private final int worldPrepActiveTick;
+   private final int stableSceneSettleTicks;
+   private final int stableSceneBlendRegionThreshold;
+   private final double stableSceneBlendFactorThreshold;
    private final long[] timeOfDaySequence;
    private final int timeOfDayStartActiveTick;
    private final int timeOfDayStepTicks;
@@ -212,9 +222,11 @@ public final class ShaderAutomation {
    private int timeOfDayCommandsIssued = 0;
    private int blockToggleCommandsIssued = 0;
    private int pendingBurstCaptures = 0;
+   private int stableSceneTicks = 0;
    private double latestLightBlendFactor = 0.0;
    private boolean latestLightSelectionCapped = false;
    private boolean latestGlobalLightReload = false;
+   private boolean latestWorldBuildWorkPending = false;
    private double directTemporalDeltaSum = 0.0;
    private double directTemporalDeltaMax = 0.0;
    private int directTemporalDeltaSamples = 0;
@@ -346,7 +358,17 @@ public final class ShaderAutomation {
       this.maxMotionRepeatDirectDeltaMax = Double.parseDouble(System.getProperty("photonics.automation.maxMotionRepeatDirectDeltaMax", "-1"));
       this.maxMotionRepeatIndirectDeltaAvg = Double.parseDouble(System.getProperty("photonics.automation.maxMotionRepeatIndirectDeltaAvg", "-1"));
       this.maxMotionRepeatIndirectDeltaMax = Double.parseDouble(System.getProperty("photonics.automation.maxMotionRepeatIndirectDeltaMax", "-1"));
+      this.maxDirectTemporalDeltaAvg = Double.parseDouble(System.getProperty("photonics.automation.maxDirectTemporalDeltaAvg", "-1"));
+      this.maxDirectTemporalDeltaMax = Double.parseDouble(System.getProperty("photonics.automation.maxDirectTemporalDeltaMax", "-1"));
+      this.maxIndirectTemporalDeltaAvg = Double.parseDouble(System.getProperty("photonics.automation.maxIndirectTemporalDeltaAvg", "-1"));
+      this.maxIndirectTemporalDeltaMax = Double.parseDouble(System.getProperty("photonics.automation.maxIndirectTemporalDeltaMax", "-1"));
+      this.maxIndirectLinearOverbrightFraction = Double.parseDouble(System.getProperty("photonics.automation.maxIndirectLinearOverbrightFraction", "-1"));
+      this.maxIndirectLinearSevereFireflyFraction = Double.parseDouble(System.getProperty("photonics.automation.maxIndirectLinearSevereFireflyFraction", "-1"));
+      this.maxIndirectRawLinearOverbrightFraction = Double.parseDouble(System.getProperty("photonics.automation.maxIndirectRawLinearOverbrightFraction", "-1"));
       this.worldPrepActiveTick = Math.max(1, Integer.getInteger("photonics.automation.worldPrepActiveTick", 1));
+      this.stableSceneSettleTicks = Math.max(0, Integer.getInteger("photonics.automation.stableSceneSettleTicks", Math.max(this.captureEveryActiveTicks * 2, 120)));
+      this.stableSceneBlendRegionThreshold = Math.max(0, Integer.getInteger("photonics.automation.stableSceneBlendRegionThreshold", 0));
+      this.stableSceneBlendFactorThreshold = Math.max(0.0, Double.parseDouble(System.getProperty("photonics.automation.stableSceneBlendFactorThreshold", "0.0")));
       /*
       this.timeOfDaySequence = parseLongSequence(System.getProperty("photonics.automation.timeOfDaySequence", ""));
       */
@@ -373,6 +395,10 @@ public final class ShaderAutomation {
       if (INSTANCE != null) {
          INSTANCE.captureFinalFrame();
       }
+   }
+
+   public static boolean suppressWorldMutationIngress() {
+      return INSTANCE != null && INSTANCE.shouldSuppressWorldMutationIngress();
    }
 
    static boolean matchesExpectedShaderPack(String expected, String actual) {
@@ -2802,10 +2828,40 @@ public final class ShaderAutomation {
    }
 
    private void refreshRuntimeState() {
-      this.shaderPackName = Iris.getIrisConfig().getShaderPackName().orElse("");
-      this.expectedShaderPackMatched = matchesExpectedShaderPack(this.expectedShaderPack, this.shaderPackName);
-      this.raytracerActive |= Raytracer.INSTANCE != null && !Raytracer.isDisabled();
-      this.patchId = currentPatchId();
+      this.patchId = this.currentPatchId();
+      this.expectedShaderPackMatched = matchesExpectedShaderPack(this.expectedShaderPack, Iris.getCurrentPackName());
+      this.raytracerActive = Raytracer.INSTANCE != null && !Raytracer.isDisabled();
+      if (!this.raytracerActive) {
+         this.stableSceneTicks = 0;
+         return;
+      }
+
+      WorldRegistry worldRegistry = Raytracer.INSTANCE.getWorldRegistry();
+      if (worldRegistry == null) {
+         this.stableSceneTicks = 0;
+         return;
+      }
+
+      this.latestLightBlendFactor = worldRegistry.fetchLightBlendFactor();
+      this.latestLightBlendRegionCount = worldRegistry.getLightBlendRegionCount();
+      this.latestGlobalLightReload = worldRegistry.fetchLightReload();
+      this.latestWorldBuildWorkPending = worldRegistry.hasPendingWork();
+      LightRegistry lightRegistry = worldRegistry.getLightRegistry();
+      if (lightRegistry != null) {
+         this.latestTracedLightCount = lightRegistry.lightCount();
+         this.latestTotalLightCount = lightRegistry.totalLights();
+         this.latestLightSelectionCapped = this.latestTotalLightCount > this.latestTracedLightCount;
+      } else {
+         this.latestTracedLightCount = 0;
+         this.latestTotalLightCount = 0;
+         this.latestLightSelectionCapped = false;
+      }
+
+      if (this.isStableSceneNow()) {
+         this.stableSceneTicks++;
+      } else {
+         this.stableSceneTicks = 0;
+      }
       this.detectFatalShaderFailure();
    }
 
@@ -2939,7 +2995,7 @@ public final class ShaderAutomation {
    }
 
    private void applyCameraMotion(MinecraftClient client) {
-      if (!this.isCameraMotionEnabled() || client.player == null) {
+      if (!this.isCameraMotionEnabled() || client.player == null || !this.stableSceneSatisfied()) {
          return;
       }
 
@@ -2993,6 +3049,9 @@ public final class ShaderAutomation {
       boolean prepared = true;
       prepared &= this.executeServerCommand(client, "gamerule doDaylightCycle false");
       prepared &= this.executeServerCommand(client, "gamerule doWeatherCycle false");
+      prepared &= this.executeServerCommand(client, "gamerule randomTickSpeed 0");
+      prepared &= this.executeServerCommand(client, "gamerule doMobSpawning false");
+      prepared &= this.executeServerCommand(client, "gamerule doFireTick false");
       prepared &= this.executeServerCommand(client, "weather clear");
       if (prepared) {
          this.worldAutomationPrepared = true;
@@ -3158,6 +3217,11 @@ public final class ShaderAutomation {
          props.setProperty("motionRepeatSettleTicks", Integer.toString(this.motionRepeatSettleTicks));
          props.setProperty("worldPrepActiveTick", Integer.toString(this.worldPrepActiveTick));
          props.setProperty("worldAutomationPrepared", Boolean.toString(this.worldAutomationPrepared));
+         props.setProperty("stableSceneSettleTicks", Integer.toString(this.stableSceneSettleTicks));
+         props.setProperty("stableSceneTicks", Integer.toString(this.stableSceneTicks));
+         props.setProperty("stableSceneSatisfied", Boolean.toString(this.stableSceneSatisfied()));
+         props.setProperty("stableSceneBlendRegionThreshold", Integer.toString(this.stableSceneBlendRegionThreshold));
+         props.setProperty("stableSceneBlendFactorThreshold", Double.toString(this.stableSceneBlendFactorThreshold));
          props.setProperty("timeOfDaySequenceLength", Integer.toString(this.timeOfDaySequence.length));
          props.setProperty("timeOfDayStartActiveTick", Integer.toString(this.timeOfDayStartActiveTick));
          props.setProperty("timeOfDayStepTicks", Integer.toString(this.timeOfDayStepTicks));
@@ -3297,6 +3361,7 @@ public final class ShaderAutomation {
          props.setProperty("latestLightBlendFactor", Double.toString(this.latestLightBlendFactor));
          props.setProperty("latestLightBlendRegionCount", Integer.toString(this.latestLightBlendRegionCount));
          props.setProperty("latestGlobalLightReload", Boolean.toString(this.latestGlobalLightReload));
+         props.setProperty("latestWorldBuildWorkPending", Boolean.toString(this.latestWorldBuildWorkPending));
          props.setProperty("globalLightReloadCaptures", Integer.toString(this.globalLightReloadCaptures));
          props.setProperty("directSoftSignalDetected", Boolean.toString(this.directSoftSignalDetected));
          props.setProperty("directSoftSignalCaptureCount", Integer.toString(this.directSoftSignalCaptureCount));
@@ -3351,6 +3416,13 @@ public final class ShaderAutomation {
          props.setProperty("maxMotionRepeatDirectDeltaMax", Double.toString(this.maxMotionRepeatDirectDeltaMax));
          props.setProperty("maxMotionRepeatIndirectDeltaAvg", Double.toString(this.maxMotionRepeatIndirectDeltaAvg));
          props.setProperty("maxMotionRepeatIndirectDeltaMax", Double.toString(this.maxMotionRepeatIndirectDeltaMax));
+         props.setProperty("maxDirectTemporalDeltaAvg", Double.toString(this.maxDirectTemporalDeltaAvg));
+         props.setProperty("maxDirectTemporalDeltaMax", Double.toString(this.maxDirectTemporalDeltaMax));
+         props.setProperty("maxIndirectTemporalDeltaAvg", Double.toString(this.maxIndirectTemporalDeltaAvg));
+         props.setProperty("maxIndirectTemporalDeltaMax", Double.toString(this.maxIndirectTemporalDeltaMax));
+         props.setProperty("maxIndirectLinearOverbrightFraction", Double.toString(this.maxIndirectLinearOverbrightFraction));
+         props.setProperty("maxIndirectLinearSevereFireflyFraction", Double.toString(this.maxIndirectLinearSevereFireflyFraction));
+         props.setProperty("maxIndirectRawLinearOverbrightFraction", Double.toString(this.maxIndirectRawLinearOverbrightFraction));
          props.setProperty("patchId", this.patchId);
 
          try (OutputStream outputStream = Files.newOutputStream(this.reportFile)) {
@@ -3361,15 +3433,32 @@ public final class ShaderAutomation {
       }
    }
 
+   private boolean stableSceneSatisfied() {
+      return this.stableSceneTicks >= this.stableSceneSettleTicks;
+   }
+
+   private boolean shouldSuppressWorldMutationIngress() {
+      return this.worldAutomationPrepared && this.activeTicks >= this.startDelayTicks && !this.finished;
+   }
+
+   private boolean isStableSceneNow() {
+      return !this.latestGlobalLightReload
+         && !this.latestWorldBuildWorkPending
+         && this.latestLightBlendRegionCount <= this.stableSceneBlendRegionThreshold
+         && this.latestLightBlendFactor <= this.stableSceneBlendFactorThreshold;
+   }
+
    private boolean buildSuccess() {
       return this.failureReason.isBlank()
          && this.expectedShaderPackMatched
          && this.patchIdMatches()
          && this.raytracerActive
+         && this.stableSceneSatisfied()
          && (!this.requireDirectSignal || this.directSignalDetected)
          && this.directSoftSignalSatisfied()
          && this.worldAutomationSatisfied()
          && this.motionRepeatValidationSatisfied()
+         && this.qualityThresholdsSatisfied()
          && isCompletionSatisfied(
             this.capturesTaken,
             this.captureTarget,
@@ -3387,6 +3476,10 @@ public final class ShaderAutomation {
    }
 
    private boolean shouldCaptureThisFrame() {
+      if (!this.stableSceneSatisfied()) {
+         this.pendingBurstCaptures = 0;
+         return false;
+      }
       if (this.pendingBurstCaptures > 0) {
          this.pendingBurstCaptures--;
          return true;
@@ -3433,6 +3526,16 @@ public final class ShaderAutomation {
          && thresholdSatisfied(this.motionRepeatDirectDeltaMax, this.maxMotionRepeatDirectDeltaMax)
          && thresholdSatisfied(this.averageMotionRepeatDelta(false), this.maxMotionRepeatIndirectDeltaAvg)
          && thresholdSatisfied(this.motionRepeatIndirectDeltaMax, this.maxMotionRepeatIndirectDeltaMax);
+   }
+
+   private boolean qualityThresholdsSatisfied() {
+      return thresholdSatisfied(this.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)
+         && thresholdSatisfied(this.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax)
+         && thresholdSatisfied(this.averageTemporalDelta(false, true), this.maxIndirectTemporalDeltaAvg)
+         && thresholdSatisfied(this.indirectTemporalDeltaMax, this.maxIndirectTemporalDeltaMax)
+         && thresholdSatisfied(this.latestIndirectLinearOverbrightFraction, this.maxIndirectLinearOverbrightFraction)
+         && thresholdSatisfied(this.latestIndirectLinearSevereFireflyFraction, this.maxIndirectLinearSevereFireflyFraction)
+         && thresholdSatisfied(this.latestIndirectRawLinearOverbrightFraction, this.maxIndirectRawLinearOverbrightFraction);
    }
 
    private static boolean thresholdSatisfied(double value, double maxAllowed) {
@@ -3516,6 +3619,48 @@ public final class ShaderAutomation {
                + formatRepeatDeltaDiagnostics(this.topIndirectRepeatDeltas)
                + "]";
          }
+      }
+      if (!thresholdSatisfied(this.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)) {
+         return "Direct temporal delta average exceeded threshold: "
+            + this.averageTemporalDelta(false, false)
+            + " > "
+            + this.maxDirectTemporalDeltaAvg;
+      }
+      if (!thresholdSatisfied(this.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax)) {
+         return "Direct temporal delta max exceeded threshold: "
+            + this.directTemporalDeltaMax
+            + " > "
+            + this.maxDirectTemporalDeltaMax;
+      }
+      if (!thresholdSatisfied(this.averageTemporalDelta(false, true), this.maxIndirectTemporalDeltaAvg)) {
+         return "Indirect temporal delta average exceeded threshold: "
+            + this.averageTemporalDelta(false, true)
+            + " > "
+            + this.maxIndirectTemporalDeltaAvg;
+      }
+      if (!thresholdSatisfied(this.indirectTemporalDeltaMax, this.maxIndirectTemporalDeltaMax)) {
+         return "Indirect temporal delta max exceeded threshold: "
+            + this.indirectTemporalDeltaMax
+            + " > "
+            + this.maxIndirectTemporalDeltaMax;
+      }
+      if (!thresholdSatisfied(this.latestIndirectLinearOverbrightFraction, this.maxIndirectLinearOverbrightFraction)) {
+         return "Indirect resolve overbright fraction exceeded threshold: "
+            + this.latestIndirectLinearOverbrightFraction
+            + " > "
+            + this.maxIndirectLinearOverbrightFraction;
+      }
+      if (!thresholdSatisfied(this.latestIndirectLinearSevereFireflyFraction, this.maxIndirectLinearSevereFireflyFraction)) {
+         return "Indirect resolve severe firefly fraction exceeded threshold: "
+            + this.latestIndirectLinearSevereFireflyFraction
+            + " > "
+            + this.maxIndirectLinearSevereFireflyFraction;
+      }
+      if (!thresholdSatisfied(this.latestIndirectRawLinearOverbrightFraction, this.maxIndirectRawLinearOverbrightFraction)) {
+         return "Indirect raw overbright fraction exceeded threshold: "
+            + this.latestIndirectRawLinearOverbrightFraction
+            + " > "
+            + this.maxIndirectRawLinearOverbrightFraction;
       }
       if (this.timeOfDaySequence.length > 0 && this.timeOfDayCommandsIssued < this.timeOfDaySequence.length) {
          return "Time-of-day automation incomplete: " + this.timeOfDayCommandsIssued + "/" + this.timeOfDaySequence.length;

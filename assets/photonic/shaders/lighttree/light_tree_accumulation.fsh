@@ -174,9 +174,11 @@ void main() {
         prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
         // if (ph_restir_enable_denoiser_packing >= 0.5f) {
         if (ph_restir_enable_denoiser_packing >= 0.5f) {
-            vec3 denoisedDiffuse = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
+            vec3 denoisedDiffuseDemodulated = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
             vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
+            vec3 diffuseRemodulation = max(stageAlbedo.rgb, vec3(0.02f));
             vec3 specularRemodulation = nrd_compute_specular_demodulation(stageAlbedo.rgb, stageMaterial.g);
+            vec3 denoisedDiffuse = nrd_safe_remodulate(denoisedDiffuseDemodulated, diffuseRemodulation);
             vec3 denoisedSpecular = nrd_safe_remodulate(denoisedSpecularDemodulated, specularRemodulation);
             directCombined = denoisedDiffuse + denoisedSpecular;
         // } else {

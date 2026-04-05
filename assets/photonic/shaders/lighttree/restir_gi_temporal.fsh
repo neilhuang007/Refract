@@ -15,7 +15,26 @@ const int lt_gi_temporal_sample_count = 5;
 
 void main() {
     RTXDI_GIReservoirStore temporalStore = gi_make_invalid_reservoir_store();
-    RAB_Surface currentSurface = lt_load_surface(tex_coord);
+    int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
+    ivec2 currentReservoirPos = lt_current_reservoir_pos();
+    if (!lt_is_active_reservoir_lane(currentReservoirPos)) {
+        indirect_temporal_position_frag_out = temporalStore.positionData;
+        indirect_temporal_normal_frag_out = temporalStore.normalData;
+        indirect_temporal_radiance_frag_out = temporalStore.radianceData;
+        indirect_temporal_meta_frag_out = temporalStore.metaData;
+        return;
+    }
+
+    ivec2 pixelPosition = RTXDI_ReservoirPosToPixelPos(currentReservoirPos, activeCheckerboardField);
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
+        indirect_temporal_position_frag_out = temporalStore.positionData;
+        indirect_temporal_normal_frag_out = temporalStore.normalData;
+        indirect_temporal_radiance_frag_out = temporalStore.radianceData;
+        indirect_temporal_meta_frag_out = temporalStore.metaData;
+        return;
+    }
+
+    RAB_Surface currentSurface = lt_load_surface(pixelPosition);
     if (!lt_is_valid_surface(currentSurface)) {
         indirect_temporal_position_frag_out = temporalStore.positionData;
         indirect_temporal_normal_frag_out = temporalStore.normalData;
@@ -23,7 +42,7 @@ void main() {
         indirect_temporal_meta_frag_out = temporalStore.metaData;
         return;
     }
-    RTXDI_GIReservoir inputReservoir = RTXDI_LoadInitialGIReservoir(tex_coord);
+    RTXDI_GIReservoir inputReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_initial, currentReservoirPos, activeCheckerboardField);
     RTXDI_GIReservoir state = RTXDI_EmptyGIReservoir();
     float selectedTargetPdf = 0.0f;
     float temporalMaxHistory = gi_runtime_temporal_max_history();
@@ -39,16 +58,17 @@ void main() {
         RTXDI_CombineGIReservoirs(state, inputReservoir, 0.5f, selectedTargetPdf);
     }
 
-    int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
-    ivec2 currentReservoirPos = RTXDI_PixelPosToReservoirPos(tex_coord, activeCheckerboardField);
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
         uvec2(currentReservoirPos),
         uint(frameCounter),
         RTXDI_GI_TEMPORAL_RESAMPLING_RANDOM_SEED
     );
     temporalMaxReservoirAge *= 0.5f + RTXDI_GetNextRandom(rng) * 0.5f;
-    vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
-    ivec2 prevPos = ivec2(round(vec2(tex_coord) + motionVector.xy));
+    vec4 motionVector = texelFetch(radiosity_motion, pixelPosition, 0);
+    if (motionVector.w > 0.5f) {
+        motionVector.xy += vec2(0.5f);
+    }
+    ivec2 prevPos = ivec2(round(vec2(pixelPosition) + motionVector.xy));
     float currentLinearDepth = ph_linear_view_depth(modelview_projection, currentSurface.worldPos);
     float expectedPrevLinearDepth = currentLinearDepth + motionVector.z;
     uint uniformRandomNumber = ph_restir_temporal_uniform_random != 0
@@ -67,7 +87,7 @@ void main() {
         ivec2 idx = prevPos;
 
         if (isFallbackSample) {
-            idx = tex_coord;
+            idx = pixelPosition;
         } else if (!isFirstSample) {
             idx += lt_calculate_temporal_resampling_offset(temporalSampleStartIdx + i, int(temporalSearchRadius));
         }
