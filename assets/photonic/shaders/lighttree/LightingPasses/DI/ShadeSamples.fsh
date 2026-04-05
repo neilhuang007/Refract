@@ -219,6 +219,14 @@ void storeDIReservoir(RTXDI_DIReservoir reservoir) {
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 }
 
+ivec2 lt_get_checkerboard_shading_pixel(ivec2 pixelPosition, int activeCheckerboardField) {
+    ivec2 shadingPixel = pixelPosition;
+    RTXDI_ActivateCheckerboardPixel(shadingPixel, false, activeCheckerboardField);
+    shadingPixel.x = clamp(shadingPixel.x, 0, int(viewWidth) - 1);
+    shadingPixel.y = clamp(shadingPixel.y, 0, int(viewHeight) - 1);
+    return shadingPixel;
+}
+
 void main() {
     const RTXDI_RuntimeParameters params = lt_build_runtime_parameters();
     ivec2 pixelPosition = lt_fragment_pixel_pos();
@@ -228,8 +236,8 @@ void main() {
         return;
     }
 
-    RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
-    if (!RAB_IsSurfaceValid(surface)) {
+    RAB_Surface pixelSurface = RAB_GetGBufferSurface(pixelPosition, false);
+    if (!RAB_IsSurfaceValid(pixelSurface)) {
         storeEmptyShadeOutputs();
         storeDIReservoir(RTXDI_EmptyDIReservoir());
         return;
@@ -240,19 +248,19 @@ void main() {
         vec3 debugColor = vec3(1.0f, 0.0f, 1.0f);
 
         if (debugMode == 1) {
-            float dist = length(surface.worldPos - ph_regir_grid_center);
+            float dist = length(pixelSurface.worldPos - ph_regir_grid_center);
             float t = clamp(dist / 256.0f, 0.0f, 1.0f);
             debugColor = lt_debug_heat_ramp(t);
         } else if (debugMode == 2) {
             ivec3 cellCoord;
-            bool inside = regir_world_to_cell(surface.worldPos, cellCoord);
+            bool inside = regir_world_to_cell(pixelSurface.worldPos, cellCoord);
             debugColor = inside ? vec3(0.0f, 1.0f, 0.0f) : vec3(1.0f, 0.0f, 0.0f);
         } else if (debugMode == 3) {
             ivec3 cellCoord;
-            bool inside = regir_world_to_cell(surface.worldPos, cellCoord);
+            bool inside = regir_world_to_cell(pixelSurface.worldPos, cellCoord);
             debugColor = inside ? vec3(cellCoord) / vec3(ph_regir_grid_cells) : vec3(0.0f);
         } else if (debugMode == 4) {
-            debugColor = lt_debug_color_regir_coverage(surface);
+            debugColor = lt_debug_color_regir_coverage(pixelSurface);
         } else if (debugMode == 5) {
             ivec2 reservoirPos = lt_debug_reservoir_pos_for_pixel(pixelPosition, int(params.activeCheckerboardField));
             vec4 initialDebug = texelFetch(direct_initial_debug_input, reservoirPos, 0);
@@ -266,10 +274,10 @@ void main() {
             );
         } else if (debugMode == 6) {
             ivec2 reservoirPos = lt_debug_reservoir_pos_for_pixel(pixelPosition, int(params.activeCheckerboardField));
-            debugColor = lt_debug_color_visibility_classification(reservoirPos, surface);
+            debugColor = lt_debug_color_visibility_classification(reservoirPos, pixelSurface);
         } else if (debugMode == 7) {
             ivec2 reservoirPos = lt_debug_reservoir_pos_for_pixel(pixelPosition, int(params.activeCheckerboardField));
-            debugColor = lt_debug_color_selected_light_distance(reservoirPos, surface);
+            debugColor = lt_debug_color_selected_light_distance(reservoirPos, pixelSurface);
         } else if (debugMode == 8) {
             ivec2 reservoirPos = lt_debug_reservoir_pos_for_pixel(pixelPosition, int(params.activeCheckerboardField));
             debugColor = lt_debug_color_reservoir_inv_pdf(reservoirPos);
@@ -278,13 +286,13 @@ void main() {
             debugColor = lt_debug_color_reservoir_target_pdf(reservoirPos);
         } else if (debugMode == 10) {
             ivec2 reservoirPos = lt_debug_reservoir_pos_for_pixel(pixelPosition, int(params.activeCheckerboardField));
-            debugColor = lt_debug_color_selected_solid_angle_pdf(reservoirPos, surface);
+            debugColor = lt_debug_color_selected_solid_angle_pdf(reservoirPos, pixelSurface);
         } else if (debugMode == 11) {
             ivec2 reservoirPos = lt_debug_reservoir_pos_for_pixel(pixelPosition, int(params.activeCheckerboardField));
-            debugColor = lt_debug_color_selected_incident_radiance(reservoirPos, surface);
+            debugColor = lt_debug_color_selected_incident_radiance(reservoirPos, pixelSurface);
         } else if (debugMode == 12) {
             ivec2 reservoirPos = lt_debug_reservoir_pos_for_pixel(pixelPosition, int(params.activeCheckerboardField));
-            debugColor = lt_debug_color_selected_brdf_response(reservoirPos, surface);
+            debugColor = lt_debug_color_selected_brdf_response(reservoirPos, pixelSurface);
         }
 
         direct_diffuse_frag_out = vec4(debugColor, 1.0f);
@@ -293,13 +301,22 @@ void main() {
         return;
     }
 
-    if (!RTXDI_IsActiveCheckerboardPixel(pixelPosition, false, int(params.activeCheckerboardField))) {
+    bool isActiveCheckerboardPixel = RTXDI_IsActiveCheckerboardPixel(pixelPosition, false, int(params.activeCheckerboardField));
+    if (!isActiveCheckerboardPixel) {
         storeEmptyShadeOutputs();
         storeDIReservoir(RTXDI_EmptyDIReservoir());
         return;
     }
 
-    ivec2 GlobalIndex = RTXDI_PixelPosToReservoirPos(pixelPosition, int(params.activeCheckerboardField));
+    ivec2 shadingPixelPosition = pixelPosition;
+    ivec2 GlobalIndex = RTXDI_PixelPosToReservoirPos(shadingPixelPosition, int(params.activeCheckerboardField));
+
+    RAB_Surface surface = RAB_GetGBufferSurface(shadingPixelPosition, false);
+    if (!RAB_IsSurfaceValid(surface)) {
+        storeEmptyShadeOutputs();
+        storeDIReservoir(RTXDI_EmptyDIReservoir());
+        return;
+    }
 
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
     const RTXDI_VisibilityReuseParameters visibilityReuseParams = lt_build_visibility_reuse_parameters();
@@ -317,7 +334,7 @@ void main() {
     bool enableFinalVisibility = restirDI.shadingParams.enableFinalVisibility != 0u;
     bool reuseFinalVisibility = restirDI.shadingParams.reuseFinalVisibility != 0u;
     bool enableVisibilityTransmittance = true;
-    bool discardIfInvisible = true;
+    bool discardIfInvisible = restirDI.temporalResamplingParams.enableVisibilityShortcut != 0u;
 
     if (RTXDI_IsValidDIReservoir(reservoir))
     {
@@ -352,14 +369,14 @@ void main() {
                     shadedSpecular = splitShade.specular;
                     directHitDistance = length(lightSample.position + world_offset - surface.worldPos);
                 }
-            } else if (lightSample.index >= 0) {
+            } else if (lightSample.index >= 0 && lightSample.solidAnglePdf > 0.0f) {
                 float hitDist = 0.0f;
                 vec3 tracedVisibility = lt_trace_final_visibility_with_offset(lightSample, surface, 0.01f, hitDist);
                 bool isVisible = ph_luminance(tracedVisibility) > 0.0f && lightSample.index >= 0;
                 vec3 storedVisibility = enableVisibilityTransmittance ? tracedVisibility : (isVisible ? vec3(1.0f) : vec3(0.0f));
                 RTXDI_StoreVisibilityInDIReservoir(reservoir, storedVisibility, discardIfInvisible);
 
-                if (isVisible && lightSample.solidAnglePdf > 0.0f) {
+                if (isVisible) {
                     lightSample.color *= storedVisibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
                     shadedDiffuse = splitShade.diffuse;
@@ -380,5 +397,9 @@ void main() {
         direct_specular_frag_out = vec4(shadedSpecular, directHitDistance);
     }
 
-    storeDIReservoir(reservoir);
+    if (isActiveCheckerboardPixel) {
+        storeDIReservoir(reservoir);
+    } else {
+        storeDIReservoir(RTXDI_EmptyDIReservoir());
+    }
 }

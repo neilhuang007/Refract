@@ -85,56 +85,16 @@ vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
     return (prevSoft.a > 0.0f && !any(isnan(prevSoft))) ? prevSoft : vec4(0.0f);
 }
 
-bool lt_is_active_checkerboard_pixel(ivec2 pixelPosition, int activeCheckerboardField) {
-    if (activeCheckerboardField == 0) {
-        return true;
+vec4 lt_load_stage_direct_lobe(sampler2D stageTexture, ivec2 pixelPosition) {
+    if (ph_restir_active_checkerboard_field != 0) {
+        return nrd_reconstruct_checkerboard_signal(
+            stageTexture,
+            pixelPosition,
+            stage_radiosity_position,
+            stage_radiosity_normal
+        );
     }
-
-    return ((pixelPosition.x + pixelPosition.y) & 1) == (activeCheckerboardField & 1);
-}
-
-ivec2 lt_other_checkerboard_pixel(ivec2 pixelPosition, int activeCheckerboardField) {
-    ivec2 otherFieldPixelPosition = pixelPosition;
-    otherFieldPixelPosition.x += ((activeCheckerboardField == 1) == ((pixelPosition.y & 1) != 0)) ? 1 : -1;
-    return otherFieldPixelPosition;
-}
-
-vec4 lt_load_stage_direct_lobe(sampler2D stageTexture, ivec2 pixelPosition, int activeCheckerboardField) {
-    if (activeCheckerboardField == 0
-        || lt_is_active_checkerboard_pixel(pixelPosition, activeCheckerboardField)) {
-        return texelFetch(stageTexture, pixelPosition, 0);
-    }
-
-    // Reconstruct inactive checkerboard pixels before accumulation so the compatibility
-    // direct/direct_soft outputs are not left as alternating sparse fields.
-    return nrd_reconstruct_checkerboard_signal(
-        stageTexture,
-        pixelPosition,
-        stage_radiosity_position,
-        stage_radiosity_normal
-    );
-}
-
-vec3 lt_safe_normalize(vec3 value, vec3 fallbackValue) {
-    float valueLengthSq = dot(value, value);
-    if (valueLengthSq > 1e-6f) {
-        return value * inversesqrt(valueLengthSq);
-    }
-
-    float fallbackLengthSq = dot(fallbackValue, fallbackValue);
-    if (fallbackLengthSq > 1e-6f) {
-        return fallbackValue * inversesqrt(fallbackLengthSq);
-    }
-
-    return vec3(0.0f, 1.0f, 0.0f);
-}
-
-vec3 lt_unpack_stage_direct_radiance(vec4 encodedSignal, vec3 remodulationFactor) {
-    if (ph_restir_enable_denoiser_packing < 0.5f) {
-        return encodedSignal.rgb;
-    }
-
-    return nrd_safe_remodulate(nrd_unpack_direct_signal(encodedSignal).radiance, remodulationFactor);
+    return texelFetch(stageTexture, pixelPosition, 0);
 }
 
 void main() {
@@ -155,24 +115,17 @@ void main() {
     vec4 stageAlbedo = texelFetch(stage_radiosity_albedo, tex_coord, 0);
     vec2 uv = (vec2(tex_coord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
     vec4 stageMaterial = lt_extract_accumulation_material(uv);
-    int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
-    vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord, activeCheckerboardField);
-    vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord, activeCheckerboardField);
+    vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord);
+    vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
-    // The compat direct/direct_soft path must remodulate the denoised specular
-    // signal back into radiance space before combining it with the denoised
-    // diffuse result. Dropping denoised specular here leaves the downstream
-    // lighting path stuck on raw sparkly specular energy.
+
     vec3 directCombined;
     vec4 prevSoft = vec4(0.0f);
     if (ph_debug_view_mode > 0.5f) {
-        // Keep debug views in raw display space. The normal denoiser/remodulation path
-        // interprets debug colors as packed radiance and turns the overlay pink/white.
         directCombined = directDiffuse.rgb;
         prevSoft = vec4(directCombined, 0.0f);
     } else {
         prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
-        // if (ph_restir_enable_denoiser_packing >= 0.5f) {
         if (ph_restir_enable_denoiser_packing >= 0.5f) {
             vec3 denoisedDiffuseDemodulated = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
             vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
@@ -181,7 +134,6 @@ void main() {
             vec3 denoisedDiffuse = nrd_safe_remodulate(denoisedDiffuseDemodulated, diffuseRemodulation);
             vec3 denoisedSpecular = nrd_safe_remodulate(denoisedSpecularDemodulated, specularRemodulation);
             directCombined = denoisedDiffuse + denoisedSpecular;
-        // } else {
         } else {
             directCombined = directDiffuse.rgb + directSpecular.rgb;
         }

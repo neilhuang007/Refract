@@ -634,7 +634,8 @@ public class LightTreeRenderer extends MainRenderer {
          return switch (configuredMode) {
             case "uniform" -> 0.0f;
             case "power_ris" -> 1.0f;
-            default -> 2.0f;
+            case "regir_ris" -> 2.0f;
+            default -> 1.0f;
          };
       });
       uniforms.uniform1f(
@@ -655,7 +656,7 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_bias_mode", () -> this.properties.getRestirTemporalBiasMode());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_permutation_sampling", () -> this.properties.getRestirTemporalPermutationSampling());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_temporal_permutation_sampling", () -> 0.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_visibility_shortcut", () -> 0.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_visibility_shortcut", () -> this.properties.getRestirTemporalVisibilityShortcut());
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_uniform_random", () -> this.getTemporalUniformRandom());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_fallback_sampling_mode", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_bias_mode", () -> {
@@ -762,19 +763,14 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int getActiveCheckerboardField() {
-      String checkerboardMode = PhotonicsStorage.RESTIR_CHECKERBOARD_MODE.value;
-      if (checkerboardMode == null) {
+      String checkerboardMode = PhotonicsStorage.normalizeCheckerboardMode(PhotonicsStorage.RESTIR_CHECKERBOARD_MODE.value);
+      if ("off".equals(checkerboardMode)) {
          return 0;
       }
 
-      int frameIndex = SystemTimeUniforms.COUNTER.getAsInt();
-      if ("black".equalsIgnoreCase(checkerboardMode)) {
-         return (frameIndex & 1) == 0 ? 2 : 1;
-      }
-      if ("white".equalsIgnoreCase(checkerboardMode)) {
-         return (frameIndex & 1) == 0 ? 1 : 2;
-      }
-      return 0;
+      int frameParity = SystemTimeUniforms.COUNTER.getAsInt() & 1;
+      boolean evenFrameUsesBlackField = "black".equals(checkerboardMode);
+      return ((frameParity == 0) == evenFrameUsesBlackField) ? 1 : 2;
    }
 
    @Override

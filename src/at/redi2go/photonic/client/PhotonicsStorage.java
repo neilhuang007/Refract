@@ -52,7 +52,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ANTI_FIREFLY = boolParam("debug_enable_direct_anti_firefly", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
-   public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "regir_ris");
+   public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "power_ris");
    // Performance tuning — individual per-parameter overrides.
    // A value of -1 means "use shaderpack default" (auto).  Any positive
    // value overrides the shaderpack setting at runtime.
@@ -133,6 +133,18 @@ public final class PhotonicsStorage {
       }
 
       parameter.value = Boolean.parseBoolean(value);
+   }
+
+   public static String normalizeCheckerboardMode(String checkerboardMode) {
+      if (checkerboardMode == null) {
+         return "off";
+      }
+
+      return switch (checkerboardMode.trim().toLowerCase(Locale.ROOT)) {
+         case "black" -> "black";
+         case "white" -> "white";
+         default -> "off";
+      };
    }
 
    public static String normalizeDirectStageView(String stageView) {

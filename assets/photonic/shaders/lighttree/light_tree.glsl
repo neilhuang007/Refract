@@ -152,7 +152,7 @@ int regir_flatten_cell(ivec3 cellCoord) {
 }
 
 // Unpack a ReGIR output slot — same format as a RIS tile entry.
-// Returns false if the slot is invalid (lightIndex = sentinel or invSourcePdf = 0).
+// Returns false if the slot is invalid (RTXDI invalid entry uint2(0,0) or a zero invSourcePdf payload).
 // outHasCompact: true when RTXDI_LIGHT_COMPACT_BIT is set — compact companion data is available
 //   in ph_compact_light_data at outRisBufferPtr*ph_compact_light_stride + [0..3].
 bool regir_unpack_slot(int flatCellIndex, int cellSlot,
@@ -164,9 +164,12 @@ bool regir_unpack_slot(int flatCellIndex, int cellSlot,
     outHasCompact      = (slotData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u;
     lightIndex         = int(slotData.x & RTXDI_LIGHT_INDEX_MASK);
     invSourcePdf       = uintBitsToFloat(slotData.y);
-    // Sentinel for invalid: all INDEX_MASK bits set (== 0x7FFFFFFF)
-    bool isSentinel = (slotData.x == RTXDI_LIGHT_INDEX_MASK);
-    if (isSentinel || invSourcePdf <= 0.0) {
+
+    // RTXDI writes invalid ReGIR entries as uint2(0, 0), not INDEX_MASK sentinel values.
+    // Because light 0 is a legal light, validity must be derived from the stored weight/PDF,
+    // not from the decoded light index alone.
+    bool isInvalidEntry = (slotData.x == 0u && slotData.y == 0u) || invSourcePdf <= 0.0;
+    if (isInvalidEntry) {
         lightIndex    = -1;
         invSourcePdf  = 0.0;
         outHasCompact = false;

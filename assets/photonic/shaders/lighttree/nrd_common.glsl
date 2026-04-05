@@ -3,64 +3,41 @@
 
 #include "/photonics/lighttree/nrd_material_id.glsl"
 
-// Checkerboard support for NRD passes — mirrors RTXDI Checkerboard.hlsli logic.
-// Guard against duplicate declaration when both nrd_common.glsl and reuse_bridge.glsl are included.
 #ifndef PH_RESTIR_CHECKERBOARD_DECLARED
 #define PH_RESTIR_CHECKERBOARD_DECLARED
 uniform int ph_restir_active_checkerboard_field;
 #endif
 
-// RTXDI Checkerboard.hlsli:16-25 — test whether a pixel is active in the current checkerboard field.
-bool nrd_is_active_checkerboard_pixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField) {
-    if (activeCheckerboardField == 0)
-        return true;
-    return ((pixelPosition.x + pixelPosition.y + int(previousFrame)) & 1) == (activeCheckerboardField & 1);
-}
-
-// Geometry-aware checkerboard reconstruction: for inactive pixels, blend from valid cardinal
-// neighbors weighted by normal/depth similarity. This matches NRD RELAX's pre-temporal
-// reconstruction step that fills checkerboard holes before temporal accumulation.
-vec4 nrd_reconstruct_checkerboard_signal(sampler2D signalTex, ivec2 coord, sampler2D positionTex, sampler2D normalTex) {
-    vec3 centerPos = texelFetch(positionTex, coord, 0).xyz;
-    vec3 centerNormal = texelFetch(normalTex, coord, 0).xyz;
-    float centerViewZ = length(centerPos - world_camera_position);
-
-    vec4 result = vec4(0.0);
-    float totalWeight = 0.0;
-
-    // Sample 4 cardinal neighbors — in checkerboard pattern, all cardinal neighbors
-    // of an inactive pixel are active.
-    ivec2 offsets[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
-    ivec2 texSize = textureSize(signalTex, 0);
-
-    for (int i = 0; i < 4; i++) {
-        ivec2 neighborCoord = coord + offsets[i];
-        if (any(lessThan(neighborCoord, ivec2(0))) || any(greaterThanEqual(neighborCoord, texSize)))
-            continue;
-
-        vec3 neighborPos = texelFetch(positionTex, neighborCoord, 0).xyz;
-        vec3 neighborNormal = texelFetch(normalTex, neighborCoord, 0).xyz;
-
-        // Depth-plane similarity
-        float planeDist = abs(dot(neighborPos - centerPos, centerNormal));
-        float neighborViewZ = length(neighborPos - world_camera_position);
-        float depthWeight = (planeDist / max(centerViewZ, 1e-3)) < 0.1 ? 1.0 : 0.0;
-
-        // Normal similarity
-        float normalDot = max(dot(normalize(centerNormal), normalize(neighborNormal)), 0.0);
-        float normalWeight = normalDot > 0.9 ? 1.0 : 0.0;
-
-        float w = depthWeight * normalWeight;
-        result += texelFetch(signalTex, neighborCoord, 0) * w;
-        totalWeight += w;
-    }
-
-    return totalWeight > 0.0 ? result / totalWeight : texelFetch(signalTex, coord, 0);
-}
-
 const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;
+
+bool nrd_is_active_checkerboard_pixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField) {
+    if (activeCheckerboardField == 0) {
+        return true;
+    }
+    return ((pixelPosition.x + pixelPosition.y + int(previousFrame)) & 1) == (activeCheckerboardField & 1);
+}
+
+void nrd_activate_checkerboard_pixel(inout ivec2 pixelPos, bool previousFrame, int activeCheckerboardField) {
+    if (nrd_is_active_checkerboard_pixel(pixelPos, previousFrame, activeCheckerboardField)) {
+        return;
+    }
+
+    if (previousFrame) {
+        pixelPos.x += activeCheckerboardField * 2 - 3;
+    } else {
+        pixelPos.x += ((pixelPos.y & 1) != 0) ? 1 : -1;
+    }
+}
+
+vec4 nrd_reconstruct_checkerboard_signal(sampler2D signalTex, ivec2 coord, sampler2D positionTex, sampler2D normalTex) {
+    ivec2 sampleCoord = coord;
+    nrd_activate_checkerboard_pixel(sampleCoord, false, ph_restir_active_checkerboard_field);
+    ivec2 texSize = textureSize(signalTex, 0);
+    sampleCoord = clamp(sampleCoord, ivec2(0), texSize - ivec2(1));
+    return texelFetch(signalTex, sampleCoord, 0);
+}
 
 float nrd_luminance(vec3 value) {
     return dot(value, PH_NRD_LUMA_COEFF);

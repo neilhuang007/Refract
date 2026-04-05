@@ -121,12 +121,13 @@ public class ModSettingsScreen extends Screen {
          w.setMessage(Text.of("Direct Final Visibility: " + (directFinalVisibility.value ? "On" : "Off")));
       }, "Toggles the final shadow ray in direct shading.\nUse this to separate reuse artifacts from final-visibility shadow artifacts.", () -> true));
       PhotonicsStorage.Parameter<String> checkerboardMode = PhotonicsStorage.RESTIR_CHECKERBOARD_MODE;
+      checkerboardMode.value = PhotonicsStorage.normalizeCheckerboardMode(checkerboardMode.value);
       buttons.add(new ModSettingsScreen.PButton("ReSTIR Checkerboard: " + formatCheckerboardMode(checkerboardMode.value), w -> {
          checkerboardMode.value = getNextCheckerboardMode(checkerboardMode.value);
          checkerboardMode.modified();
          w.setMessage(Text.of("ReSTIR Checkerboard: " + formatCheckerboardMode(checkerboardMode.value)));
          this.reloadShaders();
-      }, "Cycles ReSTIR checkerboard sampling between Off, Black, and White\nso ph_restir_active_checkerboard_field matches RTXDI runtime modes.", () -> true));
+      }, "Cycles the RTXDI checkerboard field used by the direct-lighting path:\nOff, Black, White.", () -> true));
       PhotonicsStorage.Parameter<String> localLightSamplingMode = PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE;
       buttons.add(new ModSettingsScreen.PButton("Local Light Sampling: " + formatRestirLocalLightSamplingMode(localLightSamplingMode.value), w -> {
          localLightSamplingMode.value = getNextRestirLocalLightSamplingMode(localLightSamplingMode.value);

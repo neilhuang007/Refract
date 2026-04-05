@@ -10,6 +10,10 @@ layout(location = 3) out vec4 filtered_meta_frag_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/restir_gi_bridge.glsl"
 
+float gi_boiling_filter_weight(RTXDI_GIReservoir reservoir) {
+    return ph_luminance(max(reservoir.selected.radiance, vec3(0.0f))) * max(reservoir.weight_sum, 0.0f);
+}
+
 void main() {
     RTXDI_GIReservoirStore filteredStore = gi_make_invalid_reservoir_store();
     int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
@@ -32,6 +36,41 @@ void main() {
     }
 
     RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, reservoirPos, activeCheckerboardField);
+    if (RTXDI_IsValidGIReservoir(reservoir)) {
+        float nonzeroWeightSum = 0.0f;
+        float nonzeroCount = 0.0f;
+
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec2 neighborPixel = pixelPosition + ivec2(dx, dy);
+                if (!lt_is_viewport_uv_in_bounds(neighborPixel)) {
+                    continue;
+                }
+
+                RTXDI_ActivateCheckerboardPixel(neighborPixel, false, activeCheckerboardField);
+                if (!lt_is_viewport_uv_in_bounds(neighborPixel)) {
+                    continue;
+                }
+
+                ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborPixel, activeCheckerboardField);
+                RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, neighborReservoirPos, activeCheckerboardField);
+                float neighborWeight = gi_boiling_filter_weight(neighborReservoir);
+                if (neighborWeight > 0.0f) {
+                    nonzeroWeightSum += neighborWeight;
+                    nonzeroCount += 1.0f;
+                }
+            }
+        }
+
+        float averageNonzeroWeight = nonzeroCount > 0.0f ? (nonzeroWeightSum / nonzeroCount) : 0.0f;
+        float filterStrength = clamp(gi_runtime_boiling_filter_strength(), 1e-6f, 1.0f);
+        float boilingFilterMultiplier = 10.0f / filterStrength - 9.0f;
+        float reservoirWeight = gi_boiling_filter_weight(reservoir);
+        if (averageNonzeroWeight > 0.0f && reservoirWeight > averageNonzeroWeight * boilingFilterMultiplier) {
+            reservoir = RTXDI_EmptyGIReservoir();
+        }
+    }
+
     filteredStore = gi_make_reservoir_store(reservoir);
 
     filtered_position_frag_out = filteredStore.positionData;

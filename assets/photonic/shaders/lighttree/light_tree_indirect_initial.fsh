@@ -21,8 +21,7 @@ void main() {
         return;
     }
 
-    RTXDI_GIReservoir reservoir = gi_build_initial_reservoir(currentSurface);
-    initialStore = gi_make_reservoir_store(reservoir);
+    initialStore = gi_build_initial_reservoir_store(currentSurface);
     indirect_initial_position_frag_out = initialStore.positionData;
     indirect_initial_normal_frag_out = initialStore.normalData;
     indirect_initial_radiance_frag_out = initialStore.radianceData;

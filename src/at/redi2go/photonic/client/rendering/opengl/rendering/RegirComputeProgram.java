@@ -11,6 +11,9 @@ import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
+import org.lwjgl.system.MemoryUtil;
+
+import java.nio.FloatBuffer;
 
 public class RegirComputeProgram {
 
@@ -53,6 +56,7 @@ public class RegirComputeProgram {
     private int pdfTextureWidth = 0;
     private int pdfTextureHeight = 0;
     private int pdfTextureMipLevels = 0;
+    private FloatBuffer pdfUploadBuffer = null;
     private static final int bindPdfTextureUnit = 0; // texture unit for sampler2D
 
     // -----------------------------------------------------------------------
@@ -200,6 +204,25 @@ public class RegirComputeProgram {
         return new int[]{ integerCompact(index), integerCompact(index >> 1) };
     }
 
+    private void ensurePdfUploadBufferCapacity(int texelCount) {
+        if (this.pdfUploadBuffer != null && this.pdfUploadBuffer.capacity() >= texelCount) {
+            return;
+        }
+
+        if (this.pdfUploadBuffer != null) {
+            MemoryUtil.memFree(this.pdfUploadBuffer);
+        }
+
+        this.pdfUploadBuffer = MemoryUtil.memAllocFloat(texelCount);
+    }
+
+    private void releasePdfUploadBuffer() {
+        if (this.pdfUploadBuffer != null) {
+            MemoryUtil.memFree(this.pdfUploadBuffer);
+            this.pdfUploadBuffer = null;
+        }
+    }
+
     // -----------------------------------------------------------------------
     // PDF texture creation / update
     // -----------------------------------------------------------------------
@@ -239,9 +262,13 @@ public class RegirComputeProgram {
     public void updatePdfTexture(float[] lightPowers, int lightCount) {
         if (this.pdfTextureId == 0) return;
 
-        // Fill a zero-initialised buffer (texture may be larger than lightCount)
         int texelCount = this.pdfTextureWidth * this.pdfTextureHeight;
-        float[] texData = new float[texelCount];
+        this.ensurePdfUploadBufferCapacity(texelCount);
+        this.pdfUploadBuffer.clear();
+        for (int i = 0; i < texelCount; i++) {
+            this.pdfUploadBuffer.put(i, 0.0f);
+        }
+
         int availableLightCount = Math.min(lightCount, lightPowers.length);
 
         // Write each light's power at its Z-curve position
@@ -250,15 +277,24 @@ public class RegirComputeProgram {
             int x = zc[0];
             int y = zc[1];
             if (x < this.pdfTextureWidth && y < this.pdfTextureHeight) {
-                texData[y * this.pdfTextureWidth + x] = lightPowers[i];
+                this.pdfUploadBuffer.put(y * this.pdfTextureWidth + x, lightPowers[i]);
             }
         }
 
-        // Upload to mip 0 and generate the full mip chain
+        this.pdfUploadBuffer.limit(texelCount);
+        this.pdfUploadBuffer.position(0);
+
+        // Upload to mip 0 and generate the full mip chain.
+        // Reset all unpack state that can reinterpret the direct buffer layout,
+        // because other texture paths may leave row-length / skip state behind.
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, this.pdfTextureId);
+        GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, Float.BYTES);
+        GL11.glPixelStorei(GL11.GL_UNPACK_ROW_LENGTH, 0);
+        GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_ROWS, 0);
+        GL11.glPixelStorei(GL11.GL_UNPACK_SKIP_PIXELS, 0);
         GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0,
                 this.pdfTextureWidth, this.pdfTextureHeight,
-                GL11.GL_RED, GL11.GL_FLOAT, texData);
+                GL11.GL_RED, GL11.GL_FLOAT, this.pdfUploadBuffer);
         GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
     }
@@ -442,6 +478,7 @@ public class RegirComputeProgram {
         if (this.pdfTextureId != 0) {
             GL11.glDeleteTextures(this.pdfTextureId);
         }
+        this.releasePdfUploadBuffer();
 
         this.programId          = 0;
         this.compiled           = false;

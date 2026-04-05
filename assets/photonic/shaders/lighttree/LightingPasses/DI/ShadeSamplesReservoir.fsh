@@ -46,9 +46,7 @@ void main() {
 
     bool enableFinalVisibility = restirDI.shadingParams.enableFinalVisibility != 0u;
     bool reuseFinalVisibility = restirDI.shadingParams.reuseFinalVisibility != 0u;
-    bool discardIfInvisible = (ph_restir_temporal_visibility_shortcut < -0.5)
-        ? false
-        : (ph_restir_temporal_visibility_shortcut >= 0.5);
+    bool discardIfInvisible = restirDI.temporalResamplingParams.enableVisibilityShortcut != 0u;
     bool enableVisibilityTransmittance = true;
 
     // Match RTXDI ShadeSamples.hlsl: valid shading / visibility storage is gated
@@ -59,7 +57,7 @@ void main() {
     if (hasValidReservoir && enableFinalVisibility && !hasStoredVisibility) {
         RAB_LightInfo lightInfo = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(reservoir), false);
         RAB_LightSample traceSample = RAB_SamplePolymorphicLight(lightInfo, surface, RTXDI_GetDIReservoirSampleUV(reservoir));
-        if (traceSample.index >= 0) {
+        if (traceSample.index >= 0 && traceSample.solidAnglePdf > 0.0f) {
             // RTXDI GetFinalVisibility uses a 0.01 ray offset for final shading.
             float hitDist = 0.0f;
             vec3 visRgb = lt_trace_final_visibility_with_offset(traceSample, surface, 0.01f, hitDist);

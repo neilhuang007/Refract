@@ -47,7 +47,7 @@ void main() {
         return;
     }
 
-    RTXDI_GIReservoir initialReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_initial, currentReservoirPos, activeCheckerboardField);
+    RTXDI_GIReservoir initialReservoir = RTXDI_LoadInitialGIReservoir(currentReservoirPos);
 
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
         uvec2(currentReservoirPos),
@@ -160,14 +160,14 @@ void main() {
     vec3 shadedSpecular = vec3(0.0f);
     gi_shade_reservoir(currentSurface, state, initialReservoir, shadedDiffuse, shadedSpecular);
 
-    vec3 demodulatedIndirect = max(shadedDiffuse + shadedSpecular, vec3(0.0f));
+    vec3 resolvedIndirectDiffuse = max(shadedDiffuse, vec3(0.0f));
     float history = min(state.age + 1.0f, gi_runtime_temporal_max_history());
-    float luma = ph_luminance(demodulatedIndirect);
+    float luma = ph_luminance(resolvedIndirectDiffuse);
     float secondMoment = luma * luma;
     float variance = max(secondMoment / max(history, 1.0f), 1e-6f);
     float confidence = 0.0f;
 
-    indirect_frag_out = vec4(demodulatedIndirect, history);
+    indirect_frag_out = vec4(resolvedIndirectDiffuse, history);
     indirect_variance_frag_out = vec4(luma, secondMoment, variance, confidence);
     outputStore = gi_make_reservoir_store(state);
     indirect_reservoir_position_frag_out = outputStore.positionData;

@@ -221,7 +221,12 @@ float GetMISWeight(SplitBrdf roughBrdf, SplitBrdf trueBrdf, vec3 diffuseAlbedo) 
 }
 
 vec3 gi_clamp_secondary_radiance(vec3 radiance) {
-    return ph_clamp_indirect_radiance(max(radiance, vec3(0.0f)));
+    radiance = max(radiance, vec3(0.0f));
+    float indirectLuminance = ph_luminance(radiance);
+    if (indirectLuminance > 10.0f) {
+        radiance *= 10.0f / indirectLuminance;
+    }
+    return radiance;
 }
 
 vec3 gi_demodulate_specular(vec3 specular, RAB_Surface surface) {
@@ -495,6 +500,12 @@ RTXDI_GIReservoirStore gi_make_reservoir_store(RTXDI_GIReservoir reservoir) {
     return store;
 }
 
+RTXDI_GIReservoirStore gi_make_initial_reservoir_store(RTXDI_GIReservoir reservoir, vec3 misRadiance) {
+    RTXDI_GIReservoirStore store = gi_make_reservoir_store(reservoir);
+    store.radianceData = vec4(max(misRadiance, vec3(0.0f)), 0.0f);
+    return store;
+}
+
 RTXDI_GIReservoirStore gi_make_reservoir_store_from_index(int bufferIndex, ivec2 uv) {
     return gi_make_reservoir_store(RTXDI_LoadGIReservoir(bufferIndex, uv));
 }
@@ -664,7 +675,7 @@ vec3 GetFinalVisibility(RAB_Surface surface, RTXDI_GISample giSample);
 bool gi_sample_requires_final_visibility(RAB_Surface surface, RTXDI_GISample giSample);
 
 RTXDI_GIReservoir RTXDI_LoadInitialGIReservoir(ivec2 uv) {
-    return gi_unpack_reservoir(RTXDI_PackedGIReservoir(
+    RTXDI_GIReservoir reservoir = gi_unpack_reservoir(RTXDI_PackedGIReservoir(
         texelFetch(radiosity_indirect_initial_position, uv, 0).xyz,
         floatBitsToUint(texelFetch(radiosity_indirect_initial_position, uv, 0).w),
         floatBitsToUint(texelFetch(radiosity_indirect_initial_normal, uv, 0).x),
@@ -672,6 +683,10 @@ RTXDI_GIReservoir RTXDI_LoadInitialGIReservoir(ivec2 uv) {
         floatBitsToUint(texelFetch(radiosity_indirect_initial_normal, uv, 0).z),
         floatBitsToUint(texelFetch(radiosity_indirect_initial_normal, uv, 0).w)
     ));
+    reservoir.selected.radiance = max(texelFetch(radiosity_indirect_initial_radiance, uv, 0).rgb, vec3(0.0f));
+    reservoir.samples = 1.0f;
+    reservoir.age = 0.0f;
+    return reservoir;
 }
 
 bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 samplePosition) {
@@ -731,16 +746,16 @@ vec3 GetFinalVisibility(RAB_Surface surface, RTXDI_GISample giSample) {
 }
 
 bool gi_sample_requires_final_visibility(RAB_Surface surface, RTXDI_GISample giSample) {
-    return ph_restir_enable_final_visibility > 0.5f;
+    return lt_build_shading_parameters().enableFinalVisibility != 0u;
 }
 
 bool gi_shade_secondary_surface(
     RAB_Surface currentSurface,
     RAB_Surface secondarySurface,
     inout RTXDI_RandomSamplerState rng,
-    out vec3 shadedRadiance
+    inout vec3 shadedRadiance
 ) {
-    shadedRadiance = vec3(0.0f);
+    vec3 directRadiance = vec3(0.0f);
 
     uvec2 reservoirPosition = uvec2(lt_current_reservoir_pos());
     RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(
@@ -749,6 +764,7 @@ bool gi_shade_secondary_surface(
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
     );
     RTXDI_DIInitialSamplingParameters initialSamplingParams = lt_build_di_initial_sampling_parameters();
+    RTXDI_ShadingParameters shadingParams = lt_build_shading_parameters();
     RAB_LightSample secondaryLightSample = RAB_EmptyLightSample();
     RTXDI_DIReservoir secondaryLightReservoir = RTXDI_SampleLightsForSurface(
         rng,
@@ -762,12 +778,9 @@ bool gi_shade_secondary_surface(
         gi_spatial_resample_secondary_light(secondarySurface, rng, secondaryLightReservoir, secondaryLightSample);
     }
 
-    if (RTXDI_IsValidDIReservoir(secondaryLightReservoir)
-        && secondaryLightSample.index >= 0
-        && secondaryLightSample.solidAnglePdf > 0.0f)
-    {
+    if (secondaryLightSample.solidAnglePdf > 0.0f) {
         vec3 secondaryVisibility = vec3(1.0f);
-        if (ph_restir_enable_final_visibility > 0.5f) {
+        if (shadingParams.enableFinalVisibility != 0u) {
             float secondaryLightDistance = 0.0f;
             secondaryVisibility = lt_trace_final_visibility_with_offset(
                 secondaryLightSample,
@@ -780,18 +793,21 @@ bool gi_shade_secondary_surface(
         secondaryLightSample.color *= secondaryVisibility;
         secondaryLightSample.color *= RTXDI_GetDIReservoirInvPdf(secondaryLightReservoir) / secondaryLightSample.solidAnglePdf;
 
-        if (ph_luminance(secondaryLightSample.color) > 0.0f) {
-            shadedRadiance += lt_shade_surface_light_sample(secondarySurface, secondaryLightSample);
+        if (any(greaterThan(secondaryLightSample.color, vec3(0.0f)))) {
+            LtSplitRadiance indirect = lt_shade_surface_split(secondarySurface, secondaryLightSample);
+            directRadiance += indirect.diffuse * secondarySurface.material.diffuseAlbedo + indirect.specular;
         }
     }
 
+    shadedRadiance += directRadiance;
     shadedRadiance = gi_clamp_secondary_radiance(shadedRadiance);
     return ph_luminance(shadedRadiance) > 1e-6f;
 }
 
-bool gi_build_initial_sample(RAB_Surface currentSurface, out RTXDI_GISample giSample, out float samplePdf) {
+bool gi_build_initial_sample(RAB_Surface currentSurface, out RTXDI_GISample giSample, out float samplePdf, out vec3 misRadiance) {
     giSample = gi_null_sample();
     samplePdf = 0.0f;
+    misRadiance = vec3(0.0f);
 
     uvec2 pixelPosition = uvec2(lt_current_pixel_pos());
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixelPosition, uint(frameCounter), RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
@@ -821,8 +837,9 @@ bool gi_build_initial_sample(RAB_Surface currentSurface, out RTXDI_GISample giSa
     vec3 secondaryPos = ray.result_position;
     vec3 secondaryNormal = normalize(ray.result_normal);
     vec3 secondaryAlbedo = max(ray.result_color, vec3(0.0f));
-    vec3 emissionRadiance = dot(lightEmittance, lightEmittance) > 0.0f ? lightEmittance : vec3(0.0f);
-    vec3 secondaryRadiance = max(emissionRadiance, vec3(0.0f));
+    vec3 secondaryThroughput = clamp(result_tint_color, vec3(0.0f), vec3(1.0f));
+    vec3 emissionRadiance = max(dot(lightEmittance, lightEmittance) > 0.0f ? lightEmittance : vec3(0.0f), vec3(0.0f));
+    vec3 secondaryRadiance = emissionRadiance;
     RAB_Material secondaryMaterial = RAB_Material(
         clamp(secondaryAlbedo, vec3(0.0f), vec3(1.0f)),
         vec3(0.0f),
@@ -843,20 +860,22 @@ bool gi_build_initial_sample(RAB_Surface currentSurface, out RTXDI_GISample giSa
         return false;
     }
 
-    giSample.position = secondaryPos;
+    giSample.position = secondarySurface.worldPos;
     giSample.normal = secondarySurface.normal;
     giSample.radiance = secondaryRadiance;
+    misRadiance = secondaryRadiance * secondaryThroughput;
     return gi_sample_is_valid(giSample);
 }
 
-RTXDI_GIReservoir gi_build_initial_reservoir(RAB_Surface currentSurface) {
+RTXDI_GIReservoirStore gi_build_initial_reservoir_store(RAB_Surface currentSurface) {
     RTXDI_GISample giSample = gi_null_sample();
     float samplePdf = 0.0f;
-    if (!gi_build_initial_sample(currentSurface, giSample, samplePdf)) {
-        return RTXDI_EmptyGIReservoir();
+    vec3 misRadiance = vec3(0.0f);
+    if (!gi_build_initial_sample(currentSurface, giSample, samplePdf, misRadiance)) {
+        return gi_make_invalid_reservoir_store();
     }
 
-    return RTXDI_MakeGIReservoir(giSample, samplePdf);
+    return gi_make_initial_reservoir_store(RTXDI_MakeGIReservoir(giSample, samplePdf), misRadiance);
 }
 
 bool gi_stream_contributor(
@@ -908,7 +927,7 @@ void gi_shade_reservoir(RAB_Surface currentSurface, RTXDI_GIReservoir reservoir,
 
     SplitBrdf finalBrdf = EvaluateBrdf(currentSurface, reservoir.selected.position, gi_surface_roughness(currentSurface));
 
-    if (ph_restir_indirect_enable_final_mis >= 0.5f && RTXDI_IsValidGIReservoir(initialReservoir)) {
+    if (ph_restir_indirect_enable_final_mis >= 0.5f) {
         vec3 initialRadiance = initialReservoir.selected.radiance * initialReservoir.weight_sum;
         SplitBrdf initialBrdf = EvaluateBrdf(currentSurface, initialReservoir.selected.position, gi_surface_roughness(currentSurface));
         float roughnessForMis = max(gi_surface_roughness(currentSurface), lt_gi_mis_roughness);

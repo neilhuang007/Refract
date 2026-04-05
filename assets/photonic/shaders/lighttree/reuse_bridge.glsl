@@ -1616,9 +1616,12 @@ RTXDI_DIInitialSamplingParameters lt_build_di_initial_sampling_parameters()
     initialSamplingParams.numBrdfSamples = uint(max(lt_resolve_initial_num_brdf_samples(), 0));
     initialSamplingParams.brdfCutoff = (ph_restir_initial_brdf_cutoff > 0.0) ? ph_restir_initial_brdf_cutoff : 0.0001f;
     initialSamplingParams.brdfRayMinT = 0.001f;
-    initialSamplingParams.localLightSamplingMode = uint((ph_restir_local_light_sampling_mode <= 0.0)
+
+    int requestedLocalLightSamplingMode = (ph_restir_local_light_sampling_mode <= 0.0)
         ? RTXDI_LOCAL_LIGHT_SAMPLING_UNIFORM
-        : int(round(ph_restir_local_light_sampling_mode)));
+        : int(round(ph_restir_local_light_sampling_mode));
+
+    initialSamplingParams.localLightSamplingMode = uint(requestedLocalLightSamplingMode);
     initialSamplingParams.enableInitialVisibility = (ph_restir_initial_enable_visibility > -0.5f) ? 1u : 0u;
     initialSamplingParams.environmentMapImportanceSampling = 0u;
     initialSamplingParams.pad1 = 0u;
@@ -1634,8 +1637,6 @@ RTXDI_DITemporalResamplingParameters lt_build_di_temporal_resampling_parameters(
 
     if (ph_restir_temporal_bias_mode < -0.5f) {
         temporalResamplingParams.biasCorrectionMode = 0u;
-    } else if (ph_restir_temporal_bias_mode < 0.5f) {
-        temporalResamplingParams.biasCorrectionMode = 1u;
     } else {
         int resolvedMode = int(round(ph_restir_temporal_bias_mode));
         temporalResamplingParams.biasCorrectionMode = uint((resolvedMode == 0 || resolvedMode == 1 || resolvedMode == 3) ? resolvedMode : 1);
@@ -1665,8 +1666,6 @@ RTXDI_DISpatialResamplingParameters lt_build_di_spatial_resampling_parameters()
 
     if (ph_restir_spatial_bias_mode < -0.5f) {
         spatialResamplingParams.biasCorrectionMode = uint(RTXDI_BIAS_CORRECTION_OFF);
-    } else if (ph_restir_spatial_bias_mode < 0.5f) {
-        spatialResamplingParams.biasCorrectionMode = uint(RTXDI_BIAS_CORRECTION_BASIC);
     } else {
         int resolvedMode = int(round(ph_restir_spatial_bias_mode));
         spatialResamplingParams.biasCorrectionMode = uint(
@@ -1697,7 +1696,7 @@ RTXDI_DISpatialResamplingParameters lt_build_di_spatial_resampling_parameters()
 RTXDI_BoilingFilterParameters lt_build_di_boiling_filter_parameters()
 {
     RTXDI_BoilingFilterParameters boilingFilterParams;
-    boilingFilterParams.enableBoilingFilter = 0u;
+    boilingFilterParams.enableBoilingFilter = 1u;
     boilingFilterParams.boilingFilterStrength = 0.2f;
     boilingFilterParams.pad1 = 0u;
     boilingFilterParams.pad2 = 0u;
@@ -3489,6 +3488,16 @@ void RTXDI_UnpackLocalLightFromRISLightData(
     lightIndex = tileData.x & RTXDI_LIGHT_INDEX_MASK;
     invSourcePdf = uintBitsToFloat(tileData.y);
 
+    // Match RTXDI's actual invalid payload contract: empty RIS/ReGIR entries are uint2(0,0).
+    // Do not reinterpret such an entry as legal light 0.
+    bool invalidEntry = (tileData.x == 0u && tileData.y == 0u) || invSourcePdf <= 0.0f;
+    if (invalidEntry)
+    {
+        lightIndex = 0u;
+        invSourcePdf = 0.0f;
+        return;
+    }
+
     if ((tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u)
     {
         lightInfo = RAB_LoadCompactLightInfo(risBufferPtr, int(lightIndex));
@@ -3578,6 +3587,10 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
         rnd = (rnd + float(i)) / float(initialSamplingParams.numLocalLightSamples);
 
         RTXDI_SelectNextLocalLight(lightSelectionContext, rnd, lightInfo, lightIndex, invSourcePdf);
+        if (lightInfo.index < 0 || invSourcePdf <= 0.0f)
+        {
+            continue;
+        }
 
         vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
         RAB_LightSample candidateSample = RAB_SamplePolymorphicLight(lightInfo, surface, uv);

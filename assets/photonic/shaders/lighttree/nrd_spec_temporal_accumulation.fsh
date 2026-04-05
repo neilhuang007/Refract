@@ -81,80 +81,11 @@ float spec_check_tap(ivec2 tapCoord, ivec2 bufTexSize,
 }
 
 vec4 spec_load_stage_spec_signal(ivec2 pixelCoord) {
-    vec4 encodedSignal = texelFetch(stage_radiosity_direct_specular, pixelCoord, 0);
     if (ph_restir_active_checkerboard_field != 0
         && !nrd_is_active_checkerboard_pixel(pixelCoord, false, ph_restir_active_checkerboard_field)) {
-        encodedSignal = nrd_reconstruct_checkerboard_signal(
-            stage_radiosity_direct_specular,
-            pixelCoord,
-            stage_radiosity_position,
-            stage_radiosity_normal
-        );
+        return vec4(0.0);
     }
-    return encodedSignal;
-}
-
-vec3 spec_stabilize_current_radiance(ivec2 pixelCoord, vec4 centerMaterial, vec3 centerRadiance) {
-    if (any(isnan(centerRadiance)) || any(isinf(centerRadiance))) {
-        return vec3(0.0);
-    }
-
-    centerRadiance = max(centerRadiance, vec3(0.0));
-    float centerLuma = nrd_luminance(centerRadiance);
-    ivec2 texSize = textureSize(stage_radiosity_direct_specular, 0);
-
-    int compatibleSamples = 0;
-    float maxNeighborLuma = -1.0;
-    float minNeighborLuma = 1e30;
-    vec3 maxNeighborRadiance = centerRadiance;
-    vec3 minNeighborRadiance = centerRadiance;
-
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            if (dx == 0 && dy == 0) {
-                continue;
-            }
-
-            ivec2 sampleCoord = pixelCoord + ivec2(dx, dy);
-            if (any(lessThan(sampleCoord, ivec2(0))) || any(greaterThanEqual(sampleCoord, texSize))) {
-                continue;
-            }
-
-            vec4 sampleMaterial = texelFetch(stage_radiosity_material, sampleCoord, 0);
-            if (nrd_material_weight(centerMaterial, sampleMaterial) <= 0.0) {
-                continue;
-            }
-
-            vec3 sampleRadiance = nrd_unpack_direct_signal(spec_load_stage_spec_signal(sampleCoord)).radiance;
-            if (any(isnan(sampleRadiance)) || any(isinf(sampleRadiance))) {
-                continue;
-            }
-
-            sampleRadiance = max(sampleRadiance, vec3(0.0));
-            float sampleLuma = nrd_luminance(sampleRadiance);
-            compatibleSamples++;
-
-            if (sampleLuma > maxNeighborLuma) {
-                maxNeighborLuma = sampleLuma;
-                maxNeighborRadiance = sampleRadiance;
-            }
-            if (sampleLuma < minNeighborLuma) {
-                minNeighborLuma = sampleLuma;
-                minNeighborRadiance = sampleRadiance;
-            }
-        }
-    }
-
-    vec3 stabilizedRadiance = centerRadiance;
-    if (compatibleSamples > 0) {
-        if (centerLuma > maxNeighborLuma) {
-            stabilizedRadiance = maxNeighborRadiance;
-        } else if (centerLuma < minNeighborLuma) {
-            stabilizedRadiance = minNeighborRadiance;
-        }
-    }
-
-    return max(stabilizedRadiance, vec3(0.0));
+    return texelFetch(stage_radiosity_direct_specular, pixelCoord, 0);
 }
 
 void spec_reset_outputs() {
@@ -171,11 +102,15 @@ void main() {
         return;
     }
 
+    if (ph_restir_active_checkerboard_field != 0
+        && !nrd_is_active_checkerboard_pixel(tex_coord, false, ph_restir_active_checkerboard_field)) {
+        spec_reset_outputs();
+        return;
+    }
+
     // -------------------------------------------------------------------------
     // Setup: fetch current frame data
     // -------------------------------------------------------------------------
-    // Checkerboard reconstruction: inactive pixels have zero radiance from shade_samples.
-    // Reconstruct from geometry-aware neighbors before temporal accumulation.
     vec4 rawSpec = spec_load_stage_spec_signal(tex_coord);
     NrdDirectSignal currentSpec     = nrd_unpack_direct_signal(rawSpec);
     vec4  currentMaterial           = texelFetch(stage_radiosity_material,      tex_coord, 0);
@@ -186,8 +121,6 @@ void main() {
         texelFetch(stage_radiosity_mapped_normal, tex_coord, 0).xyz
     );
     float currentRoughness = currentMaterial.r; // roughness packed in .r
-
-    currentSpec.radiance = spec_stabilize_current_radiance(tex_coord, currentMaterial, currentSpec.radiance);
 
     NrdDirectHistorySample currentHistory = nrd_direct_history_from_radiance(currentSpec.radiance);
 
@@ -215,6 +148,7 @@ void main() {
         }
     }
     currentNormalAveraged /= 9.0; // intentionally NOT normalized; used for nrd_modified_roughness_from_normal_variance
+    vec3 reprojectionNormal = normalize(currentNormalAveraged);
 
     float currentRoughnessModified = nrd_modified_roughness_from_normal_variance(currentRoughness, currentNormalAveraged);
 
@@ -244,7 +178,7 @@ void main() {
     vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
     vec2 reprojectionPx = motionVector.a > 0.5
         ? (vec2(tex_coord) + vec2(0.5) + motionVector.xy)
-        : spec_project_to_prev_pixels(currentPosition + currentNormal * 0.01);
+        : spec_project_to_prev_pixels(currentPosition + reprojectionNormal * 0.01);
 
     // -------------------------------------------------------------------------
     // NRD RELAX disocclusion threshold (scaled by NoV and parallax)
@@ -282,10 +216,10 @@ void main() {
     ivec2 smbTap11 = smbBilinearOrigin + ivec2(1, 1);
 
     vec4 smbTapValid;
-    smbTapValid.x = spec_check_tap(smbTap00, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
-    smbTapValid.y = spec_check_tap(smbTap10, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
-    smbTapValid.z = spec_check_tap(smbTap01, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
-    smbTapValid.w = spec_check_tap(smbTap11, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
+    smbTapValid.x = spec_check_tap(smbTap00, texSize, currentPosition, reprojectionNormal, currentMaterial, disocclusionThreshold);
+    smbTapValid.y = spec_check_tap(smbTap10, texSize, currentPosition, reprojectionNormal, currentMaterial, disocclusionThreshold);
+    smbTapValid.z = spec_check_tap(smbTap01, texSize, currentPosition, reprojectionNormal, currentMaterial, disocclusionThreshold);
+    smbTapValid.w = spec_check_tap(smbTap11, texSize, currentPosition, reprojectionNormal, currentMaterial, disocclusionThreshold);
 
     // NRD RELAX backface rejection (SMB): reject if previous normal faces away from current normal
     // smbPixelPosFloat is already in [0, texSize) pixel space; divide by texSize to get UV.
@@ -294,8 +228,7 @@ void main() {
         texture(prev_radiosity_normal,        smbNormalUv).xyz,
         texture(prev_radiosity_mapped_normal, smbNormalUv).xyz
     );
-    vec3 reprojNormal = normalize(currentNormalAveraged);
-    if (dot(reprojNormal, prevNormalSmb) < 0.0) {
+    if (dot(reprojectionNormal, prevNormalSmb) < 0.0) {
         smbTapValid = vec4(0.0);
     }
 
@@ -552,7 +485,6 @@ void main() {
     vmbTapValid.z = spec_check_tap(vmbTap01, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
     vmbTapValid.w = spec_check_tap(vmbTap11, texSize, currentPosition, currentNormal, currentMaterial, disocclusionThreshold);
 
-    // VMB reprojection found only if ALL four taps valid (NRD ref line 351)
     float vmbReprojectionFound = (dot(vmbTapValid, vec4(1.0)) > 3.5) ? 1.0 : 0.0;
 
     float vmbFx = vmbBilinearWeights.x;

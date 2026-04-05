@@ -211,6 +211,14 @@ void storeEmptyShadeOutputs() {
     direct_specular_frag_out = vec4(0.0f);
 }
 
+ivec2 lt_get_checkerboard_shading_pixel(ivec2 pixelPosition, int activeCheckerboardField) {
+    ivec2 shadingPixel = pixelPosition;
+    RTXDI_ActivateCheckerboardPixel(shadingPixel, false, activeCheckerboardField);
+    shadingPixel.x = clamp(shadingPixel.x, 0, int(viewWidth) - 1);
+    shadingPixel.y = clamp(shadingPixel.y, 0, int(viewHeight) - 1);
+    return shadingPixel;
+}
+
 void main() {
     const RTXDI_RuntimeParameters params = lt_build_runtime_parameters();
     ivec2 pixelPosition = lt_fragment_pixel_pos();
@@ -287,15 +295,16 @@ void main() {
         return;
     }
 
-    // This pass rasterizes a full-resolution target, so derive the reservoir index from the
-    // current screen-space pixel instead of treating gl_FragCoord as a packed reservoir index.
-    if (!RTXDI_IsActiveCheckerboardPixel(pixelPosition, false, int(params.activeCheckerboardField))) {
+    bool isActiveCheckerboardPixel = RTXDI_IsActiveCheckerboardPixel(pixelPosition, false, int(params.activeCheckerboardField));
+    if (!isActiveCheckerboardPixel) {
         storeEmptyShadeOutputs();
         return;
     }
-    ivec2 GlobalIndex = RTXDI_PixelPosToReservoirPos(pixelPosition, int(params.activeCheckerboardField));
 
-    RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
+    ivec2 shadingPixelPosition = pixelPosition;
+    ivec2 GlobalIndex = RTXDI_PixelPosToReservoirPos(shadingPixelPosition, int(params.activeCheckerboardField));
+
+    RAB_Surface surface = RAB_GetGBufferSurface(shadingPixelPosition, false);
     if (!RAB_IsSurfaceValid(surface)) {
         storeEmptyShadeOutputs();
         return;
@@ -317,9 +326,7 @@ void main() {
     bool enableFinalVisibility = restirDI.shadingParams.enableFinalVisibility != 0u;
     bool reuseFinalVisibility = restirDI.shadingParams.reuseFinalVisibility != 0u;
     bool enableVisibilityTransmittance = true;
-    bool discardIfInvisible = (ph_restir_temporal_visibility_shortcut < -0.5f)
-        ? false
-        : (ph_restir_temporal_visibility_shortcut >= 0.5f);
+    bool discardIfInvisible = restirDI.temporalResamplingParams.enableVisibilityShortcut != 0u;
 
     if (RTXDI_IsValidDIReservoir(reservoir))
     {
@@ -354,14 +361,14 @@ void main() {
                     shadedSpecular = splitShade.specular;
                     directHitDistance = length(lightSample.position + world_offset - surface.worldPos);
                 }
-            } else if (lightSample.index >= 0) {
+            } else if (lightSample.index >= 0 && lightSample.solidAnglePdf > 0.0f) {
                 float hitDist = 0.0f;
                 vec3 tracedVisibility = lt_trace_final_visibility_with_offset(lightSample, surface, 0.01f, hitDist);
                 bool isVisible = ph_luminance(tracedVisibility) > 0.0f && lightSample.index >= 0;
                 vec3 storedVisibility = enableVisibilityTransmittance ? tracedVisibility : (isVisible ? vec3(1.0f) : vec3(0.0f));
                 RTXDI_StoreVisibilityInDIReservoir(reservoir, storedVisibility, discardIfInvisible);
 
-                if (isVisible && lightSample.solidAnglePdf > 0.0f) {
+                if (isVisible) {
                     lightSample.color *= storedVisibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
                     shadedDiffuse = splitShade.diffuse;

@@ -56,9 +56,9 @@ public class LightRegistry implements Destructable {
    private static final int LIGHT_BYTE_SIZE = 64;
    private static final int GRID_CELL_SIZE = 32;
    private static final float REGIR_CELL_RADIUS = (float)(Math.sqrt(3.0) * GRID_CELL_SIZE);
-   // RTXDI's FullSample doubles the user-facing jitter before uploading ReGIR constants,
-   // so the shader-space default is 2.0, which yields a plus/minus one-cell query jitter.
-   private static final float REGIR_SAMPLING_JITTER = 2.0F;
+   // RTXDI defines regirSamplingJitter in grid-cell units.
+   // A value of 1.0 means plus/minus one cell of query jitter.
+   private static final float REGIR_SAMPLING_JITTER = 1.0F;
    private static final int REGIR_MAX_LIGHTS_PER_CELL_FALLBACK = 16;
    // RTXDI default from ReGIR.h:141 = 8 build samples per cell slot
    private static final int REGIR_BUILD_SAMPLES = 8;
@@ -113,76 +113,80 @@ public class LightRegistry implements Destructable {
    };
 
    private final GlMemoryManager lightsMemoryManager;
-   private final MemoryOwner lightsMemory;
-   private final GlMemoryManager previousLightsMemoryManager;
-   private final SimpleMemoryOwner previousLightsMemory;
-   private final GlMemoryManager lightMappingMemoryManager;
-   private final MemoryOwner lightMappingMemory;
-   private final GlMemoryManager lightReverseMappingMemoryManager;
-   private final MemoryOwner lightReverseMappingMemory;
-   private final GlMemoryManager globalLightCdfMemoryManager;
-   private final MemoryOwner globalLightCdfMemory;
-   private final GlMemoryManager regirCellCountMemoryManager;
-   private final MemoryOwner regirCellCountMemory;
-   private final GlMemoryManager regirLightIndexMemoryManager;
-   private final MemoryOwner regirLightIndexMemory;
-   private final GlMemoryManager regirLightPdfMemoryManager;
-   private final MemoryOwner regirLightPdfMemory;
-   private final GlMemoryManager regirCompactLightDataMemoryManager;
-   private static final int NEIGHBOR_OFFSET_COUNT = 8192;
-   private final GlMemoryManager neighborOffsetMemoryManager;
-   private final SimpleMemoryOwner neighborOffsetMemory;
-   private final int maxLights;
-   private final int regirGridResolution;
-   private final int regirCellCount;
-   private final int regirLightsPerCell;
-   private short[] newLightIndices;
-   private PBlockPos offset = new PBlockPos(0, 0, 0);
-   private int lightCount = 0;
-   private LightInstance[] tracedLights = new LightInstance[0];
-   private final Map<Vector3f, TracedLightPosition> tracedLightPositions = new ConcurrentHashMap<>();
-   private final Set<Long> loadedLightChunks = ConcurrentHashMap.newKeySet();
-   private final PhotonicsConfig.Observer<LightList> lightListObserver;
-   private LightList lightList = new LightList();
-   private final ReadWriteLock lock;
-   private boolean building = false;
-   private int compileCount = 0;
-   private LightsProvider lightsProvider = null;
-   private volatile boolean tracedLightSetDirty = true;
+  private final MemoryOwner lightsMemory;
+  private final GlMemoryManager previousLightsMemoryManager;
+  private final SimpleMemoryOwner previousLightsMemory;
+  private final GlMemoryManager lightMappingMemoryManager;
+  private final MemoryOwner lightMappingMemory;
+  private final GlMemoryManager lightReverseMappingMemoryManager;
+  private final MemoryOwner lightReverseMappingMemory;
+  private final GlMemoryManager globalLightCdfMemoryManager;
+  private final MemoryOwner globalLightCdfMemory;
+  private final GlMemoryManager regirCellCountMemoryManager;
+  private final MemoryOwner regirCellCountMemory;
+  private final GlMemoryManager regirLightIndexMemoryManager;
+  private final MemoryOwner regirLightIndexMemory;
+  private final GlMemoryManager regirLightPdfMemoryManager;
+  private final MemoryOwner regirLightPdfMemory;
+  private final GlMemoryManager regirCompactLightDataMemoryManager;
+  private final MemoryOwner regirCompactLightDataMemory;
+  private static final int NEIGHBOR_OFFSET_COUNT = 8192;
+  private final GlMemoryManager neighborOffsetMemoryManager;
+  private final SimpleMemoryOwner neighborOffsetMemory;
+  private final int maxLights;
+  private final int regirGridResolution;
+  private final int regirCellCount;
+  private final int regirLightsPerCell;
+  private short[] newLightIndices;
+  private PBlockPos offset = new PBlockPos(0, 0, 0);
+  private int lightCount = 0;
+  private LightInstance[] tracedLights = new LightInstance[0];
+  private final Map<Vector3f, TracedLightPosition> tracedLightPositions = new ConcurrentHashMap<>();
+  private final Set<Long> loadedLightChunks = ConcurrentHashMap.newKeySet();
+  private final PhotonicsConfig.Observer<LightList> lightListObserver;
+  private LightList lightList = new LightList();
+  private final ReadWriteLock lock;
+  private boolean building = false;
+  private int compileCount = 0;
+  private LightsProvider lightsProvider = null;
+  private volatile boolean tracedLightSetDirty = true;
    private HashMap<Long, List<Integer>> lightGrid;
-   private int lightGridAssignments = 0;
-   private final LightChurnStats churnStats = new LightChurnStats();
-   private boolean identityLightMappingPending = false;
-   private int regirActiveCellCount = 0;
-   private int regirActiveLightSlotCount = 0;
-   // RTXDI: stores the center of the grid (= camera position, snapped to cell boundaries).
-   // The origin is derived in the shader as: origin = center - vec3(gridRes) * cellSize * 0.5
-   private final Vector3f regirGridCenter = new Vector3f();
-   private final Vector3f frozenLightSelectionCamera = new Vector3f();
-   private final Vector3f frozenRegirGridCenter = new Vector3f();
-   private boolean frozenLightSelectionCameraInitialized = false;
-   private boolean frozenRegirGridCenterInitialized = false;
-   private boolean loggedAutomationLightColors = false;
-   private boolean lastCompileTopologyResetRecommended = true;
-   private int pendingTracedLightMutations = 0;
-   private volatile boolean gpuRegirBuildEnabled = false;
-   private float[] lightPowers = new float[0];
-   private int mutationDebugLogsRemaining = 48;
-   public LightRegistry(int maxLights, int maxLightsPerNode, float minTracedLightSelectionLuma, int nodeSize, int worldSize) {
-      if (16 % nodeSize != 0) {
-         throw new IllegalArgumentException();
-      }
-      this.maxLights = maxLights;
-      this.regirLightsPerCell = Math.max(1, maxLightsPerNode > 0 ? maxLightsPerNode : REGIR_MAX_LIGHTS_PER_CELL_FALLBACK);
-      this.regirGridResolution = Math.max(1, worldSize / GRID_CELL_SIZE);
-      this.regirCellCount = this.regirGridResolution * this.regirGridResolution * this.regirGridResolution;
-      this.newLightIndices = new short[maxLights];
-      this.lightsMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list", maxLights * LIGHT_BYTE_SIZE + 4, true);
-      this.lightsMemory = new SimpleMemoryOwner(this.lightsMemoryManager, this.lightsMemoryManager.getCapacity());
-      this.previousLightsMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list_previous", maxLights * LIGHT_BYTE_SIZE + 4, true);
-      this.previousLightsMemory = new SimpleMemoryOwner(this.previousLightsMemoryManager, this.previousLightsMemoryManager.getCapacity());
-      this.lightMappingMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list_mapping", maxLights * 4, false);
-      this.lightMappingMemory = new SimpleMemoryOwner(this.lightMappingMemoryManager, this.lightMappingMemoryManager.getCapacity());
+  private int lightGridAssignments = 0;
+  private final LightChurnStats churnStats = new LightChurnStats();
+  private boolean identityLightMappingPending = false;
+  private int regirActiveCellCount = 0;
+  private int regirActiveLightSlotCount = 0;
+  // RTXDI: stores the center of the grid (= camera position, snapped to cell boundaries).
+  // The origin is derived in the shader as: origin = center - vec3(gridRes) * cellSize * 0.5
+  private final Vector3f regirGridCenter = new Vector3f();
+  private boolean regirGridCenterInitialized = false;
+  private final Vector3f frozenLightSelectionCamera = new Vector3f();
+  private final Vector3f frozenRegirGridCenter = new Vector3f();
+  private boolean frozenLightSelectionCameraInitialized = false;
+  private boolean frozenRegirGridCenterInitialized = false;
+  private boolean loggedAutomationLightColors = false;
+  private boolean lastCompileTopologyResetRecommended = true;
+  private int pendingTracedLightMutations = 0;
+  private volatile boolean gpuRegirBuildEnabled = false;
+  private float[] lightPowers = new float[0];
+  private int mutationDebugLogsRemaining = 48;
+
+  public LightRegistry(int maxLights, int maxLightsPerNode, float minTracedLightSelectionLuma, int nodeSize, int worldSize) {
+     if (16 % nodeSize != 0) {
+        throw new IllegalArgumentException();
+     }
+
+     this.maxLights = maxLights;
+     this.regirLightsPerCell = Math.max(1, maxLightsPerNode > 0 ? maxLightsPerNode : REGIR_MAX_LIGHTS_PER_CELL_FALLBACK);
+     this.regirGridResolution = Math.max(1, worldSize / GRID_CELL_SIZE);
+     this.regirCellCount = this.regirGridResolution * this.regirGridResolution * this.regirGridResolution;
+     this.newLightIndices = new short[maxLights];
+     this.lightsMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list", maxLights * LIGHT_BYTE_SIZE + 4, true);
+     this.lightsMemory = new SimpleMemoryOwner(this.lightsMemoryManager, this.lightsMemoryManager.getCapacity());
+     this.previousLightsMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list_previous", maxLights * LIGHT_BYTE_SIZE + 4, true);
+     this.previousLightsMemory = new SimpleMemoryOwner(this.previousLightsMemoryManager, this.previousLightsMemoryManager.getCapacity());
+     this.lightMappingMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_list_mapping", maxLights * 4, false);
+     this.lightMappingMemory = new SimpleMemoryOwner(this.lightMappingMemoryManager, this.lightMappingMemoryManager.getCapacity());
       this.lightReverseMappingMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_light_reverse_mapping", maxLights * 4, false);
       this.lightReverseMappingMemory = new SimpleMemoryOwner(this.lightReverseMappingMemoryManager, this.lightReverseMappingMemoryManager.getCapacity());
       this.globalLightCdfMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_global_light_cdf", maxLights * Float.BYTES, false);
@@ -217,6 +221,7 @@ public class LightRegistry implements Destructable {
          compactTotalEntries * 4 * 16,
          false
       );
+      this.regirCompactLightDataMemory = new SimpleMemoryOwner(this.regirCompactLightDataMemoryManager, this.regirCompactLightDataMemoryManager.getCapacity());
       this.neighborOffsetMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_neighbor_offsets", NEIGHBOR_OFFSET_COUNT * 2, false);
       this.neighborOffsetMemory = new SimpleMemoryOwner(this.neighborOffsetMemoryManager, this.neighborOffsetMemoryManager.getCapacity());
       this.fillNeighborOffsets();
@@ -376,6 +381,7 @@ public class LightRegistry implements Destructable {
             this.regirCellCountMemoryManager.queueUpload(this.regirCellCountMemory);
             this.regirLightIndexMemoryManager.queueUpload(this.regirLightIndexMemory);
             this.regirLightPdfMemoryManager.queueUpload(this.regirLightPdfMemory);
+            this.regirCompactLightDataMemoryManager.queueUpload(this.regirCompactLightDataMemory);
          }
          if (profiling) {
             tStore = System.nanoTime();
@@ -936,9 +942,11 @@ public class LightRegistry implements Destructable {
       uploadDone &= this.lightMappingMemoryManager.upload();
       uploadDone &= this.lightReverseMappingMemoryManager.upload();
       uploadDone &= this.regirCellCountMemoryManager.upload();
-      uploadDone &= this.regirLightIndexMemoryManager.upload();
-      uploadDone &= this.regirLightPdfMemoryManager.upload();
-      uploadDone &= this.regirCompactLightDataMemoryManager.upload();
+      if (!this.gpuRegirBuildEnabled) {
+         uploadDone &= this.regirLightIndexMemoryManager.upload();
+         uploadDone &= this.regirLightPdfMemoryManager.upload();
+         uploadDone &= this.regirCompactLightDataMemoryManager.upload();
+      }
       uploadDone &= this.neighborOffsetMemoryManager.upload();
       this.lightCount = this.tracedLights.length;
       return uploadDone;

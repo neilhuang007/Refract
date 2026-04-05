@@ -107,8 +107,8 @@ public class CommonUniformsMixin {
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_lights_per_cell", () -> worldRegistry.get().getLightRegistry().getRegirLightsPerCell());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_cell_size", () -> 32.0F);
          // ph_regir_build_samples is compute-only (set by RegirComputeProgram.dispatch()).
-         // RTXDI FullSample multiplies the dynamic ReGIR jitter by 2.0 before uploading
-         // constants, so the shader-side default is 2.0 (= plus/minus one cell of jitter).
+         // Upload the RTXDI ReGIR jitter parameter directly in grid-cell units.
+         // A value of 1.0 means plus/minus one cell of query jitter.
          uniforms.uniform1f(
             UniformUpdateFrequency.PER_FRAME,
             "ph_regir_sampling_jitter",

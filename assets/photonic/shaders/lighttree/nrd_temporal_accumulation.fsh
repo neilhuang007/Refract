@@ -82,16 +82,15 @@ void main() {
         return;
     }
 
-    // --- Setup: fetch current frame data ---
-    // Checkerboard reconstruction: inactive pixels have zero radiance from shade_samples.
-    // Reconstruct from geometry-aware neighbors before temporal accumulation.
-    vec4 rawDirect = texelFetch(stage_radiosity_direct, tex_coord, 0);
     if (ph_restir_active_checkerboard_field != 0
         && !nrd_is_active_checkerboard_pixel(tex_coord, false, ph_restir_active_checkerboard_field)) {
-        rawDirect = nrd_reconstruct_checkerboard_signal(
-            stage_radiosity_direct, tex_coord,
-            stage_radiosity_position, stage_radiosity_normal);
+        direct_reset_outputs();
+        return;
     }
+
+    // --- Setup: fetch current frame data ---
+    // Under checkerboard, temporal accumulation operates only on active lanes.
+    vec4 rawDirect = texelFetch(stage_radiosity_direct, tex_coord, 0);
     NrdDirectSignal currentDirect = nrd_unpack_direct_signal(rawDirect);
     vec4 currentMaterial = texelFetch(stage_radiosity_material, tex_coord, 0);
     vec3 currentPosition = texelFetch(stage_radiosity_position, tex_coord, 0).xyz;
@@ -163,8 +162,6 @@ void main() {
     ivec2 texSize = textureSize(prev_radiosity_position, 0);
 
     // --- Per-tap disocclusion threshold as vec4 (reference lines 112-117) ---
-    // The diffuse path still uses the legacy frustum-size approximation because it
-    // is materially more stable in this integration than the looser spec-style one.
     float disocclusionThresholdSlopeScale =
         1.0 / max(mix(mix(0.05, 1.0, NoV), 1.0, clamp(smbParallaxInPixelsMax / 30.0, 0.0, 1.0)), 0.05);
     float frustumSize = ph_nrd_depth_threshold * viewDistance;
@@ -184,13 +181,11 @@ void main() {
     ivec2 tap11 = bilinearOrigin + ivec2(1, 1);
 
     // --- Per-tap validity using per-tap threshold (reference line 125-134) ---
-    // The reference uses the averaged reprojection normal here, but in this
-    // integration the center-pixel surface normal is materially more stable.
     vec4 bilinearTapsValid;
-    bilinearTapsValid.x = direct_check_tap(tap00, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.x);
-    bilinearTapsValid.y = direct_check_tap(tap10, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.y);
-    bilinearTapsValid.z = direct_check_tap(tap01, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.z);
-    bilinearTapsValid.w = direct_check_tap(tap11, texSize, currentPosition, currentNormal, currentMaterial, smbDisocclusionThreshold.w);
+    bilinearTapsValid.x = direct_check_tap(tap00, texSize, currentPosition, reprojectionNormal, currentMaterial, smbDisocclusionThreshold.x);
+    bilinearTapsValid.y = direct_check_tap(tap10, texSize, currentPosition, reprojectionNormal, currentMaterial, smbDisocclusionThreshold.y);
+    bilinearTapsValid.z = direct_check_tap(tap01, texSize, currentPosition, reprojectionNormal, currentMaterial, smbDisocclusionThreshold.z);
+    bilinearTapsValid.w = direct_check_tap(tap11, texSize, currentPosition, reprojectionNormal, currentMaterial, smbDisocclusionThreshold.w);
 
     // --- NRD RELAX backface rejection: bilinear sample of previous normal at reprojection center ---
     // NRD samples one bilinearly filtered previous normal at the footprint center.

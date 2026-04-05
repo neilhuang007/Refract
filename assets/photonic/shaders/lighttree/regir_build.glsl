@@ -110,7 +110,7 @@ uniform uint  ph_ris_frame_index;              // RTXDI: g_Const.runtimeParams.f
 uniform int   ph_ris_tile_size;                // RTXDI: risBufferSegmentParams.tileSize
 uniform int   ph_ris_tile_count;               // RTXDI: risBufferSegmentParams.tileCount
 uniform uint  ph_regir_build_samples;          // RTXDI: ReGIR.h:141 default = 8
-uniform float ph_regir_sampling_jitter;        // RTXDI FullSample uploads 2.0 for the default UI jitter of 1.0
+uniform float ph_regir_sampling_jitter;        // RTXDI ReGIR jitter in grid-cell units; 1.0 = +/- one cell
 uniform uint  ph_ris_tile_buffer_offset;       // RTXDI: risBufferSegmentParams.bufferOffset (typically 0)
 uniform uint  ph_regir_ris_buffer_offset;      // RTXDI: offset into unified RIS buffer where ReGIR data starts
 
@@ -243,6 +243,16 @@ void RTXDI_RandomlySelectLightDataFromRISTile(
     hasCompact   = (tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u;
     rndLight     = int(tileData.x & RTXDI_LIGHT_INDEX_MASK);
     invSourcePdf = uintBitsToFloat(tileData.y);
+
+    // Empty RIS entries are stored as uint2(0, 0). In Photonics, the ReGIR build path
+    // evaluates target PDFs from the decoded light index directly, so aliasing an empty
+    // entry to light 0 would manufacture bogus positive weights and poison whole cells.
+    bool invalidEntry = (tileData.x == 0u && tileData.y == 0u) || invSourcePdf <= 0.0;
+    if (invalidEntry) {
+        rndLight = -1;
+        invSourcePdf = 0.0;
+        hasCompact = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +414,10 @@ void main() {
         uint  tileRisBufferPtr;
         RTXDI_RandomlySelectLightDataFromRISTile(rand, risTileInfo, rndLight, invSourcePdf, tileHasCompact, tileRisBufferPtr);
 
+        if (rndLight < 0 || invSourcePdf <= 0.0) {
+            continue;
+        }
+
         // RTXDI: no early rejection — invalid entries produce zero risWeight naturally.
         // invSourcePdf *= invNumSamples
         invSourcePdf *= invNumSamples;
@@ -433,12 +447,14 @@ void main() {
 
     // RTXDI: store compact data for the selected light in the ReGIR output slot.
     // If storage succeeds, set COMPACT_BIT on the stored index.
+    // When no candidate had positive weight, store the exact RTXDI invalid entry: uint2(0, 0).
     // risBufferPtr was pre-computed at the top of main() as ph_regir_ris_buffer_offset + cellIndex * lightsPerCell + lightInCell.
-    uint packedIndex = (selectedLight >= 0)
-        ? (uint(selectedLight) & RTXDI_LIGHT_INDEX_MASK)
-        : 0u;
-    if (weight > 0.0 && selectedLight >= 0 && RAB_StoreCompactLightInfo(risBufferPtr, selectedLight)) {
-        packedIndex |= RTXDI_LIGHT_COMPACT_BIT;
+    uint packedIndex = 0u;
+    if (weight > 0.0 && selectedLight >= 0) {
+        packedIndex = uint(selectedLight) & RTXDI_LIGHT_INDEX_MASK;
+        if (RAB_StoreCompactLightInfo(risBufferPtr, selectedLight)) {
+            packedIndex |= RTXDI_LIGHT_COMPACT_BIT;
+        }
     }
     ph_ris_data[risBufferPtr] = uvec2(packedIndex, floatBitsToUint(weight));
 }
