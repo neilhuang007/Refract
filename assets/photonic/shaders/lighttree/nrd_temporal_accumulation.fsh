@@ -79,6 +79,15 @@ ivec2 direct_previous_owner_tap(ivec2 tapCoord, ivec2 texSize) {
     );
 }
 
+ivec2 direct_current_owner_tap(ivec2 tapCoord, ivec2 texSize) {
+    return nrd_get_checkerboard_owner_pixel(
+        tapCoord,
+        false,
+        ph_restir_active_checkerboard_field,
+        texSize
+    );
+}
+
 vec4 direct_bilinear_fetch_prev_vec4(
     sampler2D tex,
     ivec2 tap00,
@@ -166,15 +175,16 @@ void main() {
     // Reference starts with currentNormal (center pixel), adds 8 neighbors, then divides by 9.
     // The divide-by-9 happens before normalization (reference line 457: currentNormalAveraged /= 9.0).
     vec3 avgNormal = currentNormal;
+    ivec2 texSizeLocal = textureSize(stage_radiosity_normal, 0);
     for (int ny = -1; ny <= 1; ny++) {
         for (int nx = -1; nx <= 1; nx++) {
             if (nx == 0 && ny == 0) continue;
             ivec2 nCoord = ownerCoord + ivec2(nx, ny);
-            ivec2 texSizeLocal = textureSize(stage_radiosity_normal, 0);
             if (any(lessThan(nCoord, ivec2(0))) || any(greaterThanEqual(nCoord, texSizeLocal))) continue;
+            ivec2 sampleCoord = direct_current_owner_tap(nCoord, texSizeLocal);
             vec3 sn = nrd_select_surface_normal(
-                texelFetch(stage_radiosity_normal, nCoord, 0).xyz,
-                texelFetch(stage_radiosity_mapped_normal, nCoord, 0).xyz
+                texelFetch(stage_radiosity_normal, sampleCoord, 0).xyz,
+                texelFetch(stage_radiosity_mapped_normal, sampleCoord, 0).xyz
             );
             avgNormal += sn;
         }

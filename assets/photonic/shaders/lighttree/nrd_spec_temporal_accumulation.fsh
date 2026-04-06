@@ -94,6 +94,15 @@ ivec2 spec_previous_owner_tap(ivec2 tapCoord, ivec2 texSize) {
     );
 }
 
+ivec2 spec_current_owner_tap(ivec2 tapCoord, ivec2 texSize) {
+    return nrd_get_checkerboard_owner_pixel(
+        tapCoord,
+        false,
+        ph_restir_active_checkerboard_field,
+        texSize
+    );
+}
+
 vec4 spec_bilinear_fetch_prev_vec4(
     sampler2D tex,
     ivec2 tap00,
@@ -139,6 +148,25 @@ vec3 spec_bilinear_fetch_prev_normal(
         texSize
     );
     return nrd_select_surface_normal(prevGeoNormal.xyz, prevMappedNormal.xyz);
+}
+
+ivec2 spec_previous_owner_from_uv(vec2 uv, ivec2 texSize) {
+    ivec2 pixelCoord = ivec2(round(uv * vec2(texSize) - vec2(0.5)));
+    pixelCoord = clamp(pixelCoord, ivec2(0), texSize - ivec2(1));
+    return spec_previous_owner_tap(pixelCoord, texSize);
+}
+
+vec3 spec_fetch_prev_normal_uv(vec2 uv, ivec2 texSize) {
+    ivec2 sampleCoord = spec_previous_owner_from_uv(uv, texSize);
+    return nrd_select_surface_normal(
+        texelFetch(prev_radiosity_normal, sampleCoord, 0).xyz,
+        texelFetch(prev_radiosity_mapped_normal, sampleCoord, 0).xyz
+    );
+}
+
+float spec_fetch_prev_roughness_uv(vec2 uv, ivec2 texSize) {
+    ivec2 sampleCoord = spec_previous_owner_from_uv(uv, texSize);
+    return texelFetch(prev_radiosity_material, sampleCoord, 0).r;
 }
 
 vec4 spec_load_stage_spec_signal(ivec2 pixelCoord) {
@@ -204,15 +232,16 @@ void main() {
     // Divided by 9.0 (not normalized), used for modified roughness and reprojection validation.
     // -------------------------------------------------------------------------
     vec3 currentNormalAveraged = currentNormal;
+    ivec2 texSizeN = textureSize(stage_radiosity_normal, 0);
     for (int ny = -1; ny <= 1; ny++) {
         for (int nx = -1; nx <= 1; nx++) {
             if (nx == 0 && ny == 0) continue;
             ivec2 nCoord = ownerCoord + ivec2(nx, ny);
-            ivec2 texSizeN = textureSize(stage_radiosity_normal, 0);
             if (any(lessThan(nCoord, ivec2(0))) || any(greaterThanEqual(nCoord, texSizeN))) continue;
+            ivec2 sampleCoord = spec_current_owner_tap(nCoord, texSizeN);
             vec3 sn = nrd_select_surface_normal(
-                texelFetch(stage_radiosity_normal,        nCoord, 0).xyz,
-                texelFetch(stage_radiosity_mapped_normal, nCoord, 0).xyz
+                texelFetch(stage_radiosity_normal,        sampleCoord, 0).xyz,
+                texelFetch(stage_radiosity_mapped_normal, sampleCoord, 0).xyz
             );
             currentNormalAveraged += sn;
         }
@@ -429,7 +458,8 @@ void main() {
                 if (nx == 0 && ny == 0) continue;
                 ivec2 nc = ownerCoord + ivec2(nx, ny);
                 if (any(lessThan(nc, ivec2(0))) || any(greaterThanEqual(nc, localTexSize))) continue;
-                float ht = texelFetch(stage_radiosity_direct_specular, nc, 0).a;
+                ivec2 sampleCoord = spec_current_owner_tap(nc, localTexSize);
+                float ht = texelFetch(stage_radiosity_direct_specular, sampleCoord, 0).a;
                 if (ht > 0.0) minHitDist = min(minHitDist, ht);
             }
         }
@@ -473,9 +503,10 @@ void main() {
             if (any(lessThan(nc10, ivec2(0))) || any(greaterThanEqual(nc10, localSize))) {
                 n10 = currentNormal;
             } else {
+                ivec2 sampleCoord10 = spec_current_owner_tap(nc10, localSize);
                 n10 = nrd_select_surface_normal(
-                    texelFetch(stage_radiosity_normal,        nc10, 0).xyz,
-                    texelFetch(stage_radiosity_mapped_normal, nc10, 0).xyz
+                    texelFetch(stage_radiosity_normal,        sampleCoord10, 0).xyz,
+                    texelFetch(stage_radiosity_mapped_normal, sampleCoord10, 0).xyz
                 );
             }
             // Ray from camera through neighbor pixel (offset +1 pixel right in screen space)
@@ -493,9 +524,10 @@ void main() {
             if (any(lessThan(nc01, ivec2(0))) || any(greaterThanEqual(nc01, localSize))) {
                 n01 = currentNormal;
             } else {
+                ivec2 sampleCoord01 = spec_current_owner_tap(nc01, localSize);
                 n01 = nrd_select_surface_normal(
-                    texelFetch(stage_radiosity_normal,        nc01, 0).xyz,
-                    texelFetch(stage_radiosity_mapped_normal, nc01, 0).xyz
+                    texelFetch(stage_radiosity_normal,        sampleCoord01, 0).xyz,
+                    texelFetch(stage_radiosity_mapped_normal, sampleCoord01, 0).xyz
                 );
             }
             // Ray from camera through neighbor pixel (offset +1 pixel up in screen space)
@@ -522,10 +554,11 @@ void main() {
             ivec2 motionCoord  = ivec2(floor(motionPxHigh));
             ivec2 localSize    = textureSize(stage_radiosity_normal, 0);
             if (all(greaterThanEqual(motionCoord, ivec2(0))) && all(lessThan(motionCoord, localSize))) {
-                vec3  xHigh = texelFetch(stage_radiosity_position, motionCoord, 0).xyz;
+                ivec2 sampleCoord = spec_current_owner_tap(motionCoord, localSize);
+                vec3  xHigh = texelFetch(stage_radiosity_position, sampleCoord, 0).xyz;
                 vec3  nHigh = nrd_select_surface_normal(
-                    texelFetch(stage_radiosity_normal,        motionCoord, 0).xyz,
-                    texelFetch(stage_radiosity_mapped_normal, motionCoord, 0).xyz
+                    texelFetch(stage_radiosity_normal,        sampleCoord, 0).xyz,
+                    texelFetch(stage_radiosity_mapped_normal, sampleCoord, 0).xyz
                 );
                 float frustumSize = min(viewWidth, viewHeight) * pixelSize;
                 float planeDistHigh = abs(dot(xHigh - currentPosition, currentNormal));
@@ -695,24 +728,24 @@ void main() {
 
         vec2 backUV1 = prevUVVMB + 1.0 * uvStep;
         vec2 backUV2 = prevUVVMB + 2.0 * uvStep;
-
-        // Sample back normals and roughness
-        vec3  backNorm1 = nrd_select_surface_normal(
-            texture(prev_radiosity_normal,        backUV1).xyz,
-            texture(prev_radiosity_mapped_normal, backUV1).xyz
-        );
-        vec4  backMat1  = texture(prev_radiosity_material, backUV1);
-        float backRough1 = backMat1.r;
-
-        vec3  backNorm2 = nrd_select_surface_normal(
-            texture(prev_radiosity_normal,        backUV2).xyz,
-            texture(prev_radiosity_mapped_normal, backUV2).xyz
-        );
-        vec4  backMat2  = texture(prev_radiosity_material, backUV2);
-        float backRough2 = backMat2.r;
+        ivec2 prevHistoryTexSize = textureSize(prev_radiosity_normal, 0);
 
         bool inScreen1 = all(greaterThan(backUV1, vec2(0.0))) && all(lessThan(backUV1, vec2(1.0)));
         bool inScreen2 = all(greaterThan(backUV2, vec2(0.0))) && all(lessThan(backUV2, vec2(1.0)));
+
+        vec3 backNorm1 = prevNormalVMB;
+        float backRough1 = prevRoughnessVMB;
+        if (inScreen1) {
+            backNorm1 = spec_fetch_prev_normal_uv(backUV1, prevHistoryTexSize);
+            backRough1 = spec_fetch_prev_roughness_uv(backUV1, prevHistoryTexSize);
+        }
+
+        vec3 backNorm2 = prevNormalVMB;
+        float backRough2 = prevRoughnessVMB;
+        if (inScreen2) {
+            backNorm2 = spec_fetch_prev_normal_uv(backUV2, prevHistoryTexSize);
+            backRough2 = spec_fetch_prev_roughness_uv(backUV2, prevHistoryTexSize);
+        }
 
         float prevPrevNormalWeight = 1.0;
         if (inScreen1) prevPrevNormalWeight *= nrd_encoding_aware_normal_weight(prevNormalVMB, backNorm1, lobeHalfAngle, curvatureAngle * 2.0, RELAX_NORMAL_ULP_VAL);

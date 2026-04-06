@@ -296,15 +296,12 @@ void main() {
     }
 
     bool isActiveCheckerboardPixel = RTXDI_IsActiveCheckerboardPixel(pixelPosition, false, int(params.activeCheckerboardField));
-    ivec2 shadingPixelPosition = pixelPosition;
     if (!isActiveCheckerboardPixel) {
-        // Mirror the reservoir-owned checkerboard writer model from RTXDI as closely as
-        // possible in the split fullscreen pass: shade the owning active pixel for both
-        // checkerboard fields, but keep reservoir mutation limited to the real active lane.
-        RTXDI_ActivateCheckerboardPixel(shadingPixelPosition, false, int(params.activeCheckerboardField));
-        shadingPixelPosition.x = clamp(shadingPixelPosition.x, 0, int(viewWidth) - 1);
-        shadingPixelPosition.y = clamp(shadingPixelPosition.y, 0, int(viewHeight) - 1);
+        storeEmptyShadeOutputs();
+        return;
     }
+
+    ivec2 shadingPixelPosition = pixelPosition;
     ivec2 GlobalIndex = RTXDI_PixelPosToReservoirPos(shadingPixelPosition, int(params.activeCheckerboardField));
 
     RAB_Surface surface = RAB_GetGBufferSurface(shadingPixelPosition, false);

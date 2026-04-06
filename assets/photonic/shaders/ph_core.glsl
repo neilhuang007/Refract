@@ -130,6 +130,8 @@ bool ph_is_valid_clip_projection(vec4 clipPosition) {
 //   motion.z  = previousLinearDepth - currentLinearDepth
 // Invalid current/previous clip-space positions must produce an empty motion vector,
 // matching GBufferHelpers.hlsli::getMotionVector.
+// The Z term must stay in the same linear-depth space we store in stage_radiosity_position.w,
+// otherwise temporal neighbor validation compares mismatched units and destabilizes reuse.
 vec4 ph_compute_temporal_motion(vec3 worldPosition, vec2 currentPixelCenter, vec2 viewSize) {
     vec4 clipPosition = modelview_projection * vec4(worldPosition, 1.0f);
     vec4 previousClipPosition = previous_modelview_projection * vec4(worldPosition, 1.0f);
@@ -141,9 +143,12 @@ vec4 ph_compute_temporal_motion(vec3 worldPosition, vec2 currentPixelCenter, vec
     vec2 previousPixel = (previousClipPosition.xy / previousClipPosition.w) * 0.5f + 0.5f;
     previousPixel *= viewSize * PH_RENDER_SCALE;
 
+    float currentLinearDepth = ph_linear_view_depth(modelview_projection, worldPosition);
+    float previousLinearDepth = ph_linear_view_depth(previous_modelview_projection, worldPosition);
+
     return vec4(
         previousPixel - currentPixelCenter,
-        previousClipPosition.w - clipPosition.w,
+        previousLinearDepth - currentLinearDepth,
         1.0f
     );
 }

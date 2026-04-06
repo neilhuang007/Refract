@@ -21,6 +21,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LightRegistryIncrementalInvalidationTest {
@@ -239,20 +240,21 @@ class LightRegistryIncrementalInvalidationTest {
 
 
    @Test
-   void createTracedLightsRetainsPreviousMemberWhenNewcomerOnlySlightlyImprovesCameraScore() throws Exception {
+   void createTracedLightsRetainsPreviousMemberWhenNewcomerOnlySlightlyImprovesSourcePower() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
-      BlockLightInfo info = createTestLightInfo(100.0F);
+      BlockLightInfo incumbent = createTestLightInfo(100.0F);
+      BlockLightInfo slightUpgrade = createTestLightInfo(110.0F);
       Vector3f lightA = new Vector3f(0.5F, 0.5F, 0.5F);
       Vector3f lightB = new Vector3f(2.5F, 0.5F, 0.5F);
-      Vector3f lightC = new Vector3f(2.0F, 0.5F, 0.5F);
+      Vector3f lightC = new Vector3f(1.0F, 0.5F, 0.5F);
 
-      positions.put(lightA, new TracedLightPosition(1, info));
-      positions.put(lightB, new TracedLightPosition(2, info));
+      positions.put(lightA, new TracedLightPosition(1, incumbent));
+      positions.put(lightB, new TracedLightPosition(2, incumbent));
       assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
-      positions.put(lightC, new TracedLightPosition(3, info));
+      positions.put(lightC, new TracedLightPosition(3, slightUpgrade));
       assertFalse(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
@@ -262,20 +264,21 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
-   void createTracedLightsReplacesPreviousMemberWhenNewcomerIsMeaningfullyBetter() throws Exception {
+   void createTracedLightsReplacesPreviousMemberWhenNewcomerIsMeaningfullyStronger() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
-      BlockLightInfo info = createTestLightInfo(100.0F);
+      BlockLightInfo incumbent = createTestLightInfo(100.0F);
+      BlockLightInfo stronger = createTestLightInfo(140.0F);
       Vector3f lightA = new Vector3f(0.5F, 0.5F, 0.5F);
       Vector3f lightB = new Vector3f(2.5F, 0.5F, 0.5F);
       Vector3f lightC = new Vector3f(1.0F, 0.5F, 0.5F);
 
-      positions.put(lightA, new TracedLightPosition(1, info));
-      positions.put(lightB, new TracedLightPosition(2, info));
+      positions.put(lightA, new TracedLightPosition(1, incumbent));
+      positions.put(lightB, new TracedLightPosition(2, incumbent));
       assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
-      positions.put(lightC, new TracedLightPosition(3, info));
+      positions.put(lightC, new TracedLightPosition(3, stronger));
       assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
@@ -360,6 +363,27 @@ class LightRegistryIncrementalInvalidationTest {
       @SuppressWarnings("unchecked")
       Deque<MemoryOwner> previousUploadQueue = (Deque<MemoryOwner>) getField(getField(registry, "previousLightsMemoryManager"), "uploadQueue");
       assertEquals(1, previousUploadQueue.size());
+   }
+
+   @Test
+   void syncTracedLightTreatsEquivalentLightDescriptorInstancesAsNoop() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
+      @SuppressWarnings("unchecked")
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      BlockLightInfo infoA = createTestLightInfo(100.0F);
+      BlockLightInfo infoB = createTestLightInfo(100.0F);
+      Vector3f lightPos = new Vector3f(8.5F, 3.5F, 9.5F);
+      positions.put(lightPos, new TracedLightPosition(-1, infoA));
+      setField(registry, "tracedLightSetDirty", false);
+
+      Method method = LightRegistry.class.getDeclaredMethod("syncTracedLight", net.minecraft.util.math.BlockPos.class, net.minecraft.block.BlockState.class, BlockLightInfo.class);
+      method.setAccessible(true);
+      method.invoke(registry, new net.minecraft.util.math.BlockPos(8, 3, 9), null, infoB);
+
+      assertFalse((boolean) getField(registry, "tracedLightSetDirty"), "Equivalent light descriptors should not dirty the traced light set");
+      TracedLightPosition updated = positions.get(lightPos);
+      assertEquals(-1, updated.blockId());
+      assertSame(infoA, updated.lightInfo(), "Equivalent updates should preserve the existing tracked light instance");
    }
 
    @Test

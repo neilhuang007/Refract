@@ -31,7 +31,7 @@ bool lt_is_valid_history(vec4 historySample) {
 }
 
 bool lt_is_valid_reprojection(vec2 reprojectionUv, vec3 currentPosition, vec3 currentNormal) {
-    ivec2 previousUv = ivec2(reprojectionUv);
+    ivec2 previousUv = ivec2(round(reprojectionUv));
     ivec2 textureSizeValue = textureSize(prev_radiosity_position, 0);
     if (any(lessThan(previousUv, ivec2(0))) || any(greaterThanEqual(previousUv, textureSizeValue))) {
         return false;
@@ -61,6 +61,32 @@ vec4 lt_encode_variance(vec2 moments, float history) {
     return vec4(moments.x, moments.y, variance, confidence);
 }
 
+vec4 lt_load_stage_direct_signal(sampler2D stageTexture, ivec2 pixelPosition) {
+    if (ph_restir_active_checkerboard_field != 0) {
+        ivec2 ownerCoord = nrd_get_checkerboard_owner_pixel(
+            pixelPosition,
+            false,
+            ph_restir_active_checkerboard_field,
+            textureSize(stageTexture, 0)
+        );
+        return texelFetch(stageTexture, ownerCoord, 0);
+    }
+    return texelFetch(stageTexture, pixelPosition, 0);
+}
+
+vec4 lt_load_stage_gbuffer_like(sampler2D stageTexture, ivec2 pixelPosition) {
+    if (ph_restir_active_checkerboard_field != 0) {
+        ivec2 ownerCoord = nrd_get_checkerboard_owner_pixel(
+            pixelPosition,
+            false,
+            ph_restir_active_checkerboard_field,
+            textureSize(stageTexture, 0)
+        );
+        return texelFetch(stageTexture, ownerCoord, 0);
+    }
+    return texelFetch(stageTexture, pixelPosition, 0);
+}
+
 void lt_accumulate_direct(
     vec4 currentSample,
     vec3 currentPosition,
@@ -76,11 +102,14 @@ void lt_accumulate_direct(
         return;
     }
 
+    // Match the stable accumulation path: frame-varying TAA jitter shifts
+    // integer reprojection targets between neighboring pixels and injects
+    // temporal churn even when geometry and lighting are unchanged.
     vec2 reprojectionUv = ph_reprojectf(
         previous_modelview_projection,
         currentPosition + currentNormal * 0.01f,
         vec2(viewWidth, viewHeight),
-        get_taa_jitter()
+        vec2(0.0f)
     );
 
     float localLightBlend = ph_dirty_region_factor(currentPosition);
@@ -94,7 +123,7 @@ void lt_accumulate_direct(
         return;
     }
 
-    ivec2 previousUv = ivec2(reprojectionUv);
+    ivec2 previousUv = ivec2(round(reprojectionUv));
     vec4 previousSignal = texelFetch(prev_radiosity_lighting, previousUv, 0);
     vec4 previousVariance = texelFetch(prev_radiosity_lighting_variance, previousUv, 0);
     if (!lt_is_valid_history(previousSignal)) {
@@ -127,11 +156,14 @@ void lt_accumulate_indirect(
         return;
     }
 
+    // Keep indirect history addressing aligned with the direct/NRD paths.
+    // TAA jitter moves the previous-frame texel lookup between neighbors and
+    // destabilizes temporal reuse without representing a semantic scene change.
     vec2 reprojectionUv = ph_reprojectf(
         previous_modelview_projection,
         currentPosition + currentNormal * 0.01f,
         vec2(viewWidth, viewHeight),
-        get_taa_jitter()
+        vec2(0.0f)
     );
 
     bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
@@ -143,7 +175,7 @@ void lt_accumulate_indirect(
         return;
     }
 
-    ivec2 previousUv = ivec2(reprojectionUv);
+    ivec2 previousUv = ivec2(round(reprojectionUv));
     vec4 previousSignal = texelFetch(prev_radiosity_indirect, previousUv, 0);
     vec4 previousVariance = texelFetch(prev_radiosity_indirect_variance, previousUv, 0);
     if (!lt_is_valid_history(previousSignal)) {
@@ -172,10 +204,10 @@ void main() {
         return;
     }
 
-    vec4 currentPosition = texelFetch(stage_radiosity_position, tex_coord, 0);
-    vec4 currentNormal = texelFetch(stage_radiosity_normal, tex_coord, 0);
-    vec4 currentDirect = texelFetch(stage_radiosity_direct, tex_coord, 0);
-    vec4 currentHandheld = texelFetch(stage_radiosity_handheld, tex_coord, 0);
+    vec4 currentPosition = lt_load_stage_gbuffer_like(stage_radiosity_position, tex_coord);
+    vec4 currentNormal = lt_load_stage_gbuffer_like(stage_radiosity_normal, tex_coord);
+    vec4 currentDirect = lt_load_stage_direct_signal(stage_radiosity_direct, tex_coord);
+    vec4 currentHandheld = lt_load_stage_direct_signal(stage_radiosity_handheld, tex_coord);
     vec4 currentIndirect = texelFetch(stage_radiosity_indirect, tex_coord, 0);
 
     handheld_frag_out = currentHandheld;
