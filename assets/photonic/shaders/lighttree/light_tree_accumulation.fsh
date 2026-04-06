@@ -142,9 +142,11 @@ void main() {
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
 
     vec3 directCombined;
+    vec3 accumulatedDirect;
     vec4 prevSoft = vec4(0.0f);
     if (ph_debug_view_mode > 0.5f) {
         directCombined = directDiffuse.rgb;
+        accumulatedDirect = directCombined;
         prevSoft = vec4(directCombined, 0.0f);
     } else {
         prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
@@ -159,6 +161,7 @@ void main() {
         } else {
             directCombined = directDiffuse.rgb + directSpecular.rgb;
         }
+        accumulatedDirect = (prevSoft.rgb + directCombined) / max(prevSoft.a + 1.0f, 1.0f);
     }
 
     position_frag_out = stagePosition;
@@ -166,6 +169,6 @@ void main() {
     mapped_normal_frag_out = stageMappedNormal;
     albedo_frag_out = stageAlbedo;
     material_frag_out = stageMaterial;
-    direct_frag_out = vec4(directCombined, directHitDistance);
+    direct_frag_out = vec4(accumulatedDirect, directHitDistance);
     direct_soft_frag_out = vec4(prevSoft.rgb + directCombined, prevSoft.a + 1.0f);
 }
