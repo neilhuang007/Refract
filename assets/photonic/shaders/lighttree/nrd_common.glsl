@@ -31,11 +31,15 @@ void nrd_activate_checkerboard_pixel(inout ivec2 pixelPos, bool previousFrame, i
     }
 }
 
+ivec2 nrd_get_checkerboard_owner_pixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField, ivec2 textureSizePx) {
+    ivec2 ownerPixel = pixelPosition;
+    nrd_activate_checkerboard_pixel(ownerPixel, previousFrame, activeCheckerboardField);
+    return clamp(ownerPixel, ivec2(0), textureSizePx - ivec2(1));
+}
+
 vec4 nrd_reconstruct_checkerboard_signal(sampler2D signalTex, ivec2 coord, sampler2D positionTex, sampler2D normalTex) {
-    ivec2 sampleCoord = coord;
-    nrd_activate_checkerboard_pixel(sampleCoord, false, ph_restir_active_checkerboard_field);
     ivec2 texSize = textureSize(signalTex, 0);
-    sampleCoord = clamp(sampleCoord, ivec2(0), texSize - ivec2(1));
+    ivec2 sampleCoord = nrd_get_checkerboard_owner_pixel(coord, false, ph_restir_active_checkerboard_field, texSize);
     return texelFetch(signalTex, sampleCoord, 0);
 }
 

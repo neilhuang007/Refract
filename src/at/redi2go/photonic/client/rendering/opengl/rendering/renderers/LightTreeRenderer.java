@@ -661,7 +661,15 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_fallback_sampling_mode", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_bias_mode", () -> {
          float override = PhotonicsStorage.RESTIR_SPATIAL_BIAS_MODE.value;
-         return override >= 0 ? override : this.properties.getRestirSpatialBiasMode();
+         if (override >= 0) {
+            return override;
+         }
+
+         String configuredMode = PhotonicsStorage.normalizeRestirSpatialMisMode(PhotonicsStorage.RESTIR_SPATIAL_MIS_MODE.value);
+         return switch (configuredMode) {
+            case "basic" -> 1.0f;
+            default -> 2.0f;
+         };
       });
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_discount_naive", () -> this.properties.getRestirSpatialDiscountNaive());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_material_test", () -> this.properties.getRestirSpatialMaterialTest());

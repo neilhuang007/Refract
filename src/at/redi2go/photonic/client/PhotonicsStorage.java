@@ -53,6 +53,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
    public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "power_ris");
+   public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
    // Performance tuning — individual per-parameter overrides.
    // A value of -1 means "use shaderpack default" (auto).  Any positive
    // value overrides the shaderpack setting at runtime.
@@ -182,6 +183,18 @@ public final class PhotonicsStorage {
          case "0", "uniform" -> "uniform";
          case "1", "power", "power_ris", "power-ris", "power ris" -> "power_ris";
          default -> "regir_ris";
+      };
+   }
+
+   public static String normalizeRestirSpatialMisMode(String misMode) {
+      if (misMode == null) {
+         return "pairwise";
+      }
+
+      return switch (misMode.trim().toLowerCase(Locale.ROOT)) {
+         case "", "2", "pairwise", "pairwise_mis", "pairwise-mis", "pairwise mis" -> "pairwise";
+         case "1", "basic", "basic_mis", "basic-mis", "basic mis" -> "basic";
+         default -> "pairwise";
       };
    }
 

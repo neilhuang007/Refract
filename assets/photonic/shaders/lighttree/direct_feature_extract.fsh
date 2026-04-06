@@ -25,14 +25,31 @@ float ph_compute_specular_confidence(float roughness, vec3 directSpecularRadianc
 
 vec4 ph_load_direct_signal(sampler2D signalTex, ivec2 pixelCoord) {
     if (ph_restir_active_checkerboard_field != 0) {
-        return nrd_reconstruct_checkerboard_signal(
-            signalTex,
+        ivec2 texSize = textureSize(signalTex, 0);
+        ivec2 ownerCoord = nrd_get_checkerboard_owner_pixel(
             pixelCoord,
-            stage_radiosity_position,
-            stage_radiosity_normal
+            false,
+            ph_restir_active_checkerboard_field,
+            texSize
         );
+        vec4 signal = texelFetch(signalTex, ownerCoord, 0);
+        return signal;
     }
     return texelFetch(signalTex, pixelCoord, 0);
+}
+
+vec4 ph_load_material_for_confidence(vec2 uv, ivec2 pixelCoord) {
+    if (ph_restir_active_checkerboard_field != 0) {
+        ivec2 ownerCoord = nrd_get_checkerboard_owner_pixel(
+            pixelCoord,
+            false,
+            ph_restir_active_checkerboard_field,
+            textureSize(stage_radiosity_material, 0)
+        );
+        vec2 ownerUv = (vec2(ownerCoord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
+        return ph_extract_material(ownerUv);
+    }
+    return ph_extract_material(uv);
 }
 
 vec4 ph_extract_direct_confidence(vec2 uv, vec4 material) {
@@ -57,6 +74,7 @@ void main() {
     }
 
     vec2 uv = (vec2(tex_coord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
-    material_frag_out = ph_extract_material(uv);
+    ivec2 pixelCoord = ivec2(tex_coord);
+    material_frag_out = ph_load_material_for_confidence(uv, pixelCoord);
     direct_confidence_frag_out = ph_extract_direct_confidence(uv, material_frag_out);
 }

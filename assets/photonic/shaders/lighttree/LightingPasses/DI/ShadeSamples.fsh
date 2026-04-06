@@ -302,13 +302,16 @@ void main() {
     }
 
     bool isActiveCheckerboardPixel = RTXDI_IsActiveCheckerboardPixel(pixelPosition, false, int(params.activeCheckerboardField));
-    if (!isActiveCheckerboardPixel) {
-        storeEmptyShadeOutputs();
-        storeDIReservoir(RTXDI_EmptyDIReservoir());
-        return;
-    }
-
     ivec2 shadingPixelPosition = pixelPosition;
+    if (!isActiveCheckerboardPixel) {
+        // RTXDI shades reservoir-owned pixels and its store path can publish the result
+        // to the other checkerboard field. In this full-screen fragment variant, the
+        // closest equivalent is to shade the owning active pixel for both fields while
+        // only storing reservoir state for the true active lane.
+        RTXDI_ActivateCheckerboardPixel(shadingPixelPosition, false, int(params.activeCheckerboardField));
+        shadingPixelPosition.x = clamp(shadingPixelPosition.x, 0, int(viewWidth) - 1);
+        shadingPixelPosition.y = clamp(shadingPixelPosition.y, 0, int(viewHeight) - 1);
+    }
     ivec2 GlobalIndex = RTXDI_PixelPosToReservoirPos(shadingPixelPosition, int(params.activeCheckerboardField));
 
     RAB_Surface surface = RAB_GetGBufferSurface(shadingPixelPosition, false);

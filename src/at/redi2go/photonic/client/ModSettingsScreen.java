@@ -134,6 +134,13 @@ public class ModSettingsScreen extends Screen {
          localLightSamplingMode.modified();
          w.setMessage(Text.of("Local Light Sampling: " + formatRestirLocalLightSamplingMode(localLightSamplingMode.value)));
       }, "Cycles the RTXDI/ReSTIR DI local-light proposal mode:\nUniform, Power RIS, and ReGIR RIS.", () -> true));
+      PhotonicsStorage.Parameter<String> spatialMisMode = PhotonicsStorage.RESTIR_SPATIAL_MIS_MODE;
+      spatialMisMode.value = PhotonicsStorage.normalizeRestirSpatialMisMode(spatialMisMode.value);
+      buttons.add(new ModSettingsScreen.PButton("Spatial MIS: " + formatRestirSpatialMisMode(spatialMisMode.value), w -> {
+         spatialMisMode.value = getNextRestirSpatialMisMode(spatialMisMode.value);
+         spatialMisMode.modified();
+         w.setMessage(Text.of("Spatial MIS: " + formatRestirSpatialMisMode(spatialMisMode.value)));
+      }, "Chooses the RTXDI spatial reuse bias correction mode:\nBasic MIS or Pairwise MIS. Pairwise MIS is the default and matches the current RTXDI reference intent for spatial reuse.", () -> true));
       PhotonicsStorage.Parameter<Float> debugViewMode = PhotonicsStorage.DEBUG_VIEW_MODE;
       buttons.add(new ModSettingsScreen.PButton("Debug View: " + formatDebugViewMode(debugViewMode.value), w -> {
          debugViewMode.value = getNextDebugViewMode(debugViewMode.value);
@@ -295,6 +302,20 @@ public class ModSettingsScreen extends Screen {
          case "uniform" -> "Uniform";
          case "power_ris" -> "Power RIS";
          default -> "ReGIR RIS";
+      };
+   }
+
+   private static String getNextRestirSpatialMisMode(String misMode) {
+      return switch (PhotonicsStorage.normalizeRestirSpatialMisMode(misMode)) {
+         case "basic" -> "pairwise";
+         default -> "basic";
+      };
+   }
+
+   private static String formatRestirSpatialMisMode(String misMode) {
+      return switch (PhotonicsStorage.normalizeRestirSpatialMisMode(misMode)) {
+         case "basic" -> "Basic MIS";
+         default -> "Pairwise MIS";
       };
    }
 

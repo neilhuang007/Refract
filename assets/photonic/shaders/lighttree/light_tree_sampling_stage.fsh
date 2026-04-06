@@ -10,15 +10,13 @@ layout(location = 4) out vec4 material_frag_out;
 layout(location = 5) out vec4 motion_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/nrd_material_id.glsl"
 
 vec4 lt_extract_stage_material() {
     vec2 uv = (vec2(tex_coord) + vec2(0.5f)) / vec2(viewWidth, viewHeight);
     vec4 spec = texture(specular, uv);
-    float smoothness = clamp(spec.r, 0.0f, 1.0f);
-    float roughness = clamp(1.0f - smoothness, 0.0f, 1.0f);
-    float metallic = clamp(spec.g, 0.0f, 1.0f);
-    float emission = clamp(spec.a, 0.0f, 1.0f);
-    return vec4(roughness, metallic, emission, smoothness);
+    // Match the denoiser-facing material contract used everywhere else.
+    return nrd_pack_surface_material(spec);
 }
 
 void storeEmptySurfaceOutputs() {

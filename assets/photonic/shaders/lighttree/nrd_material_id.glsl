@@ -14,12 +14,20 @@ float nrd_derive_material_id(vec4 specularData) {
     return 3.0;
 }
 
-bool nrd_compare_materials(float materialId0, float materialId1) {
-    return abs(materialId0 - materialId1) < 0.5;
-}
-
 float nrd_encode_material_id(float materialId) {
     return clamp(materialId / 3.0, 0.0, 1.0);
+}
+
+vec4 nrd_pack_surface_material(vec4 specularData) {
+    float smoothness = clamp(specularData.r, 0.0, 1.0);
+    float roughness = clamp(1.0 - smoothness, 0.0, 1.0);
+    float metallic = clamp(specularData.g, 0.0, 1.0);
+    float emission = clamp(specularData.a, 0.0, 1.0);
+    return vec4(roughness, metallic, emission, nrd_encode_material_id(nrd_derive_material_id(specularData)));
+}
+
+bool nrd_compare_materials(float materialId0, float materialId1) {
+    return abs(materialId0 - materialId1) < 0.5;
 }
 
 float nrd_decode_material_id(float encoded) {

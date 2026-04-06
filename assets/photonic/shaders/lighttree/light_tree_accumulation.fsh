@@ -30,11 +30,7 @@ const float lt_reproject_position_threshold_sq = 0.35f;
 
 vec4 lt_extract_accumulation_material(vec2 uv) {
     vec4 spec = texture(specular, uv);
-    float smoothness = clamp(spec.r, 0.0, 1.0);
-    float roughness = clamp(1.0 - smoothness, 0.0, 1.0);
-    float metallic = clamp(spec.g, 0.0, 1.0);
-    float emission = clamp(spec.a, 0.0, 1.0);
-    return vec4(roughness, metallic, emission, nrd_encode_material_id(nrd_derive_material_id(spec)));
+    return nrd_pack_surface_material(spec);
 }
 
 bool is_valid_reprojection(ivec2 prevUv, ivec2 textureBounds) {
@@ -87,14 +83,30 @@ vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
 
 vec4 lt_load_stage_direct_lobe(sampler2D stageTexture, ivec2 pixelPosition) {
     if (ph_restir_active_checkerboard_field != 0) {
-        return nrd_reconstruct_checkerboard_signal(
-            stageTexture,
+        ivec2 texSize = textureSize(stageTexture, 0);
+        ivec2 ownerCoord = nrd_get_checkerboard_owner_pixel(
             pixelPosition,
-            stage_radiosity_position,
-            stage_radiosity_normal
+            false,
+            ph_restir_active_checkerboard_field,
+            texSize
         );
+        vec4 signal = texelFetch(stageTexture, ownerCoord, 0);
+        return signal;
     }
     return texelFetch(stageTexture, pixelPosition, 0);
+}
+
+vec4 lt_load_stage_gbuffer_like(sampler2D textureSampler, ivec2 pixelPosition) {
+    ivec2 sampleCoord = pixelPosition;
+    if (ph_restir_active_checkerboard_field != 0) {
+        sampleCoord = nrd_get_checkerboard_owner_pixel(
+            pixelPosition,
+            false,
+            ph_restir_active_checkerboard_field,
+            textureSize(textureSampler, 0)
+        );
+    }
+    return texelFetch(textureSampler, sampleCoord, 0);
 }
 
 void main() {
@@ -109,11 +121,21 @@ void main() {
         return;
     }
 
-    vec4 stagePosition = texelFetch(stage_radiosity_position, tex_coord, 0);
-    vec4 stageNormal = texelFetch(stage_radiosity_normal, tex_coord, 0);
-    vec4 stageMappedNormal = texelFetch(stage_radiosity_mapped_normal, tex_coord, 0);
-    vec4 stageAlbedo = texelFetch(stage_radiosity_albedo, tex_coord, 0);
-    vec2 uv = (vec2(tex_coord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
+    ivec2 ownerCoord = tex_coord;
+    if (ph_restir_active_checkerboard_field != 0) {
+        ownerCoord = nrd_get_checkerboard_owner_pixel(
+            tex_coord,
+            false,
+            ph_restir_active_checkerboard_field,
+            textureSize(stage_radiosity_position, 0)
+        );
+    }
+
+    vec4 stagePosition = lt_load_stage_gbuffer_like(stage_radiosity_position, tex_coord);
+    vec4 stageNormal = lt_load_stage_gbuffer_like(stage_radiosity_normal, tex_coord);
+    vec4 stageMappedNormal = lt_load_stage_gbuffer_like(stage_radiosity_mapped_normal, tex_coord);
+    vec4 stageAlbedo = lt_load_stage_gbuffer_like(stage_radiosity_albedo, tex_coord);
+    vec2 uv = (vec2(ownerCoord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
     vec4 stageMaterial = lt_extract_accumulation_material(uv);
     vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord);
     vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord);
@@ -127,8 +149,8 @@ void main() {
     } else {
         prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
         if (ph_restir_enable_denoiser_packing >= 0.5f) {
-            vec3 denoisedDiffuseDemodulated = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
-            vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
+            vec3 denoisedDiffuseDemodulated = lt_load_stage_direct_lobe(denoised_direct_diffuse, tex_coord).rgb;
+            vec3 denoisedSpecularDemodulated = lt_load_stage_direct_lobe(denoised_direct_specular, tex_coord).rgb;
             vec3 diffuseRemodulation = max(stageAlbedo.rgb, vec3(0.02f));
             vec3 specularRemodulation = nrd_compute_specular_demodulation(stageAlbedo.rgb, stageMaterial.g);
             vec3 denoisedDiffuse = nrd_safe_remodulate(denoisedDiffuseDemodulated, diffuseRemodulation);

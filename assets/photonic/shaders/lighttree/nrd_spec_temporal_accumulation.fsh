@@ -15,9 +15,8 @@ uniform float ph_debug_disable_temporal_reset;
 uniform float ph_nrd_max_accumulated_frame_num;
 uniform float ph_nrd_max_fast_accumulated_frame_num;
 uniform float ph_nrd_depth_threshold;
-// NRD checkerboard reconstruction: when checkerboard rendering is active, inactive pixels
-// receive zero radiance from shade_samples. Reconstruct from geometry-aware neighbors
-// before temporal accumulation, matching NRD RELAX's built-in checkerboard support.
+// NRD checkerboard support uses the owning active pixel for all current-frame fetches,
+// matching RTXDI checkerboard activation/addressing instead of reconstructing neighbors.
 
 // --- NRD RELAX constants ---
 const float RELAX_NORMAL_ULP_VAL          = 1.5 / 255.0;
@@ -27,26 +26,30 @@ const float NRD_SPEC_VARIANCE_BOOST       = 1.0;  // gSpecVarianceBoost
 
 // NRD Common.hlsli:331 - ComputeParallaxInPixels
 // Returns parallax magnitude in pixels using world-position shift through previous MVP.
-float spec_compute_parallax_in_pixels(vec3 currentPosition, vec3 cameraDelta) {
+// Stable reprojection is mandatory here as well; TAA jitter injects artificial motion into
+// the history footprint and prevents static specular from converging.
+float spec_compute_parallax_in_pixels(ivec2 currentPixelCoord, vec3 currentPosition, vec3 cameraDelta) {
     vec3 shiftedPos = currentPosition + cameraDelta;
     vec2 shiftedPx = ph_reprojectf(
         previous_modelview_projection,
         shiftedPos,
         vec2(viewWidth, viewHeight),
-        get_taa_jitter()
+        vec2(0.0f)
     );
-    vec2 currentPx = vec2(tex_coord) + 0.5;
+    vec2 currentPx = vec2(currentPixelCoord) + 0.5;
     return length(shiftedPx - currentPx);
 }
 
 // Project a world position through previous_modelview_projection and return pixel coords.
 // ph_reprojectf returns pixel coords in [0, viewWidth*PH_RENDER_SCALE] x [0, viewHeight*PH_RENDER_SCALE].
+// Like the diffuse temporal pass and soft accumulation path, this intentionally uses zero jitter
+// so history lookups stay anchored to the real previous pixel instead of the current TAA phase.
 vec2 spec_project_to_prev_pixels(vec3 worldPos) {
     return ph_reprojectf(
         previous_modelview_projection,
         worldPos,
         vec2(viewWidth, viewHeight),
-        get_taa_jitter()
+        vec2(0.0f)
     );
 }
 
@@ -66,26 +69,89 @@ float spec_check_tap(ivec2 tapCoord, ivec2 bufTexSize,
         return 0.0;
     }
 
-    // Checkerboard validity: previous frame taps on inactive pixels hold stale/zero data.
-    if (!nrd_is_active_checkerboard_pixel(tapCoord, true, ph_restir_active_checkerboard_field)) {
-        return 0.0;
-    }
+    ivec2 ownerTapCoord = nrd_get_checkerboard_owner_pixel(
+        tapCoord,
+        true,
+        ph_restir_active_checkerboard_field,
+        bufTexSize
+    );
 
-    vec4 prevMaterial = texelFetch(prev_radiosity_material, tapCoord, 0);
+    vec4 prevMaterial = texelFetch(prev_radiosity_material, ownerTapCoord, 0);
     if (nrd_material_weight(currentMaterial, prevMaterial) <= 0.0) {
         return 0.0;
     }
 
-    vec3 prevPosition = texelFetch(prev_radiosity_position, tapCoord, 0).xyz;
+    vec3 prevPosition = texelFetch(prev_radiosity_position, ownerTapCoord, 0).xyz;
     return nrd_is_reprojection_tap_valid(currentPosition, prevPosition, currentNormal, disocclusionThreshold);
 }
 
+ivec2 spec_previous_owner_tap(ivec2 tapCoord, ivec2 texSize) {
+    return nrd_get_checkerboard_owner_pixel(
+        tapCoord,
+        true,
+        ph_restir_active_checkerboard_field,
+        texSize
+    );
+}
+
+vec4 spec_bilinear_fetch_prev_vec4(
+    sampler2D tex,
+    ivec2 tap00,
+    ivec2 tap10,
+    ivec2 tap01,
+    ivec2 tap11,
+    vec4 weights,
+    ivec2 texSize
+) {
+    return nrd_bilinear_custom_vec4(
+        texelFetch(tex, spec_previous_owner_tap(tap00, texSize), 0),
+        texelFetch(tex, spec_previous_owner_tap(tap10, texSize), 0),
+        texelFetch(tex, spec_previous_owner_tap(tap01, texSize), 0),
+        texelFetch(tex, spec_previous_owner_tap(tap11, texSize), 0),
+        weights
+    );
+}
+
+vec3 spec_bilinear_fetch_prev_normal(
+    ivec2 tap00,
+    ivec2 tap10,
+    ivec2 tap01,
+    ivec2 tap11,
+    vec4 weights,
+    ivec2 texSize
+) {
+    vec4 prevGeoNormal = spec_bilinear_fetch_prev_vec4(
+        prev_radiosity_normal,
+        tap00,
+        tap10,
+        tap01,
+        tap11,
+        weights,
+        texSize
+    );
+    vec4 prevMappedNormal = spec_bilinear_fetch_prev_vec4(
+        prev_radiosity_mapped_normal,
+        tap00,
+        tap10,
+        tap01,
+        tap11,
+        weights,
+        texSize
+    );
+    return nrd_select_surface_normal(prevGeoNormal.xyz, prevMappedNormal.xyz);
+}
+
 vec4 spec_load_stage_spec_signal(ivec2 pixelCoord) {
-    if (ph_restir_active_checkerboard_field != 0
-        && !nrd_is_active_checkerboard_pixel(pixelCoord, false, ph_restir_active_checkerboard_field)) {
-        return vec4(0.0);
+    ivec2 sampleCoord = pixelCoord;
+    if (ph_restir_active_checkerboard_field != 0) {
+        sampleCoord = nrd_get_checkerboard_owner_pixel(
+            pixelCoord,
+            false,
+            ph_restir_active_checkerboard_field,
+            textureSize(stage_radiosity_direct_specular, 0)
+        );
     }
-    return texelFetch(stage_radiosity_direct_specular, pixelCoord, 0);
+    return texelFetch(stage_radiosity_direct_specular, sampleCoord, 0);
 }
 
 void spec_reset_outputs() {
@@ -102,23 +168,27 @@ void main() {
         return;
     }
 
-    if (ph_restir_active_checkerboard_field != 0
-        && !nrd_is_active_checkerboard_pixel(tex_coord, false, ph_restir_active_checkerboard_field)) {
-        spec_reset_outputs();
-        return;
+    ivec2 ownerCoord = tex_coord;
+    if (ph_restir_active_checkerboard_field != 0) {
+        ownerCoord = nrd_get_checkerboard_owner_pixel(
+            tex_coord,
+            false,
+            ph_restir_active_checkerboard_field,
+            textureSize(stage_radiosity_position, 0)
+        );
     }
 
     // -------------------------------------------------------------------------
     // Setup: fetch current frame data
     // -------------------------------------------------------------------------
-    vec4 rawSpec = spec_load_stage_spec_signal(tex_coord);
+    vec4 rawSpec = spec_load_stage_spec_signal(ownerCoord);
     NrdDirectSignal currentSpec     = nrd_unpack_direct_signal(rawSpec);
-    vec4  currentMaterial           = texelFetch(stage_radiosity_material,      tex_coord, 0);
-    vec3  currentPosition           = texelFetch(stage_radiosity_position,       tex_coord, 0).xyz;
-    vec3  currentGeometryNormal     = texelFetch(stage_radiosity_normal,         tex_coord, 0).xyz;
+    vec4  currentMaterial           = texelFetch(stage_radiosity_material,      ownerCoord, 0);
+    vec3  currentPosition           = texelFetch(stage_radiosity_position,       ownerCoord, 0).xyz;
+    vec3  currentGeometryNormal     = texelFetch(stage_radiosity_normal,         ownerCoord, 0).xyz;
     vec3  currentNormal = nrd_select_surface_normal(
         currentGeometryNormal,
-        texelFetch(stage_radiosity_mapped_normal, tex_coord, 0).xyz
+        texelFetch(stage_radiosity_mapped_normal, ownerCoord, 0).xyz
     );
     float currentRoughness = currentMaterial.r; // roughness packed in .r
 
@@ -137,7 +207,7 @@ void main() {
     for (int ny = -1; ny <= 1; ny++) {
         for (int nx = -1; nx <= 1; nx++) {
             if (nx == 0 && ny == 0) continue;
-            ivec2 nCoord = tex_coord + ivec2(nx, ny);
+            ivec2 nCoord = ownerCoord + ivec2(nx, ny);
             ivec2 texSizeN = textureSize(stage_radiosity_normal, 0);
             if (any(lessThan(nCoord, ivec2(0))) || any(greaterThanEqual(nCoord, texSizeN))) continue;
             vec3 sn = nrd_select_surface_normal(
@@ -165,8 +235,8 @@ void main() {
     // Parallax (camera translation)
     // -------------------------------------------------------------------------
     vec3  cameraDelta           = world_camera_position - previous_world_camera_position;
-    float smbParallaxInPixels1  = spec_compute_parallax_in_pixels(currentPosition,  cameraDelta);
-    float smbParallaxInPixels2  = spec_compute_parallax_in_pixels(currentPosition, -cameraDelta);
+    float smbParallaxInPixels1  = spec_compute_parallax_in_pixels(ownerCoord, currentPosition,  cameraDelta);
+    float smbParallaxInPixels2  = spec_compute_parallax_in_pixels(ownerCoord, currentPosition, -cameraDelta);
     float smbParallaxInPixelsMax = max(smbParallaxInPixels1, smbParallaxInPixels2);
     float smbParallaxInPixelsMin = min(smbParallaxInPixels1, smbParallaxInPixels2);
 
@@ -175,10 +245,12 @@ void main() {
     // -------------------------------------------------------------------------
     // Motion vector convention: .xy = previousPixel - currentPixelCenter (see light_tree_sampling_stage.fsh).
     // To recover previousPixel: currentPixelCenter + motion.xy. Must ADD, not subtract.
-    vec4 motionVector = texelFetch(radiosity_motion, tex_coord, 0);
+    vec4 motionVector = texelFetch(radiosity_motion, ownerCoord, 0);
     vec2 reprojectionPx = motionVector.a > 0.5
-        ? (vec2(tex_coord) + vec2(0.5) + motionVector.xy)
+        ? (vec2(ownerCoord) + vec2(0.5) + motionVector.xy)
         : spec_project_to_prev_pixels(currentPosition + reprojectionNormal * 0.01);
+    ivec2 prevTextureSize = textureSize(prev_radiosity_position, 0);
+    vec2 ownerReprojectionPx = reprojectionPx;
 
     // -------------------------------------------------------------------------
     // NRD RELAX disocclusion threshold (scaled by NoV and parallax)
@@ -195,11 +267,11 @@ void main() {
     // -------------------------------------------------------------------------
     // SMB bilinear footprint
     // -------------------------------------------------------------------------
-    vec2  smbPixelPosFloat = reprojectionPx;
-    vec2  prevUVSMB = spec_pixels_to_uv(reprojectionPx);
+    vec2  smbPixelPosFloat = ownerReprojectionPx;
+    vec2  prevUVSMB = smbPixelPosFloat / vec2(prevTextureSize);
     ivec2 smbBilinearOrigin = ivec2(floor(smbPixelPosFloat - 0.5));
     vec2  smbBilinearWeights = fract(smbPixelPosFloat - 0.5);
-    ivec2 texSize = textureSize(prev_radiosity_position, 0);
+    ivec2 texSize = prevTextureSize;
 
     float smbFx = smbBilinearWeights.x;
     float smbFy = smbBilinearWeights.y;
@@ -221,27 +293,48 @@ void main() {
     smbTapValid.z = spec_check_tap(smbTap01, texSize, currentPosition, reprojectionNormal, currentMaterial, disocclusionThreshold);
     smbTapValid.w = spec_check_tap(smbTap11, texSize, currentPosition, reprojectionNormal, currentMaterial, disocclusionThreshold);
 
-    // NRD RELAX backface rejection (SMB): reject if previous normal faces away from current normal
-    // smbPixelPosFloat is already in [0, texSize) pixel space; divide by texSize to get UV.
-    vec2 smbNormalUv = smbPixelPosFloat / vec2(textureSize(prev_radiosity_normal, 0));
-    vec3 prevNormalSmb = nrd_select_surface_normal(
-        texture(prev_radiosity_normal,        smbNormalUv).xyz,
-        texture(prev_radiosity_mapped_normal, smbNormalUv).xyz
-    );
-    if (dot(reprojectionNormal, prevNormalSmb) < 0.0) {
-        smbTapValid = vec4(0.0);
-    }
-
     vec4  smbCustomWeights = smbStandardWeights * smbTapValid;
     float smbSumCustom     = dot(smbCustomWeights, vec4(1.0));
     bool  smbCanReproject  = smbSumCustom > 1e-4;
+    vec4  smbNormalizedWeights = smbCanReproject
+        ? (smbCustomWeights / smbSumCustom)
+        : vec4(0.0);
+
+    // NRD RELAX backface rejection (SMB): reject if previous normal faces away from current normal.
+    vec3 prevNormalSmb = spec_bilinear_fetch_prev_normal(
+        smbTap00,
+        smbTap10,
+        smbTap01,
+        smbTap11,
+        smbNormalizedWeights,
+        texSize
+    );
+    if (smbCanReproject && dot(reprojectionNormal, prevNormalSmb) < 0.0) {
+        smbTapValid = vec4(0.0);
+        smbCustomWeights = vec4(0.0);
+        smbNormalizedWeights = vec4(0.0);
+        smbSumCustom = 0.0;
+        smbCanReproject = false;
+    }
+
     float smbFootprintQuality = smbCanReproject ? smbSumCustom : 0.0;
-    if (smbCanReproject) smbCustomWeights /= smbSumCustom;
+    if (smbCanReproject) {
+        smbCustomWeights = smbNormalizedWeights;
+    }
 
     float smbReprojectionFound = smbCanReproject ? 1.0 : 0.0;
 
     // NRD RELAX: footprint stretching avoidance
-    vec3  prevWorldPosSMB = texture(prev_radiosity_position, smbNormalUv).xyz;
+    vec4 prevWorldPosSmbVec = spec_bilinear_fetch_prev_vec4(
+        prev_radiosity_position,
+        smbTap00,
+        smbTap10,
+        smbTap01,
+        smbTap11,
+        smbCustomWeights,
+        texSize
+    );
+    vec3  prevWorldPosSMB = prevWorldPosSmbVec.xyz;
     vec3  Vprev           = normalize(prevWorldPosSMB - previous_world_camera_position);
     float NoVprev         = abs(dot(currentNormal, Vprev));
     float sizeQuality     = (NoVprev + 1e-3) / (NoV + 1e-3);
@@ -259,33 +352,33 @@ void main() {
 
     if (smbCanReproject) {
         if (smbCustomWeights.x > 0.0) {
-            smbPrevSlow       += texelFetch(prev_spec_slow_input,           smbTap00, 0) * smbCustomWeights.x;
-            smbPrevFast       += texelFetch(prev_spec_fast_input,           smbTap00, 0) * smbCustomWeights.x;
-            smbPrevHistoryVec += texelFetch(prev_spec_history_length_input,  smbTap00, 0) * smbCustomWeights.x;
+            smbPrevSlow       += texelFetch(prev_spec_slow_input,           spec_previous_owner_tap(smbTap00, texSize), 0) * smbCustomWeights.x;
+            smbPrevFast       += texelFetch(prev_spec_fast_input,           spec_previous_owner_tap(smbTap00, texSize), 0) * smbCustomWeights.x;
+            smbPrevHistoryVec += texelFetch(prev_spec_history_length_input, spec_previous_owner_tap(smbTap00, texSize), 0) * smbCustomWeights.x;
         }
         if (smbCustomWeights.y > 0.0) {
-            smbPrevSlow       += texelFetch(prev_spec_slow_input,           smbTap10, 0) * smbCustomWeights.y;
-            smbPrevFast       += texelFetch(prev_spec_fast_input,           smbTap10, 0) * smbCustomWeights.y;
-            smbPrevHistoryVec += texelFetch(prev_spec_history_length_input,  smbTap10, 0) * smbCustomWeights.y;
+            smbPrevSlow       += texelFetch(prev_spec_slow_input,           spec_previous_owner_tap(smbTap10, texSize), 0) * smbCustomWeights.y;
+            smbPrevFast       += texelFetch(prev_spec_fast_input,           spec_previous_owner_tap(smbTap10, texSize), 0) * smbCustomWeights.y;
+            smbPrevHistoryVec += texelFetch(prev_spec_history_length_input, spec_previous_owner_tap(smbTap10, texSize), 0) * smbCustomWeights.y;
         }
         if (smbCustomWeights.z > 0.0) {
-            smbPrevSlow       += texelFetch(prev_spec_slow_input,           smbTap01, 0) * smbCustomWeights.z;
-            smbPrevFast       += texelFetch(prev_spec_fast_input,           smbTap01, 0) * smbCustomWeights.z;
-            smbPrevHistoryVec += texelFetch(prev_spec_history_length_input,  smbTap01, 0) * smbCustomWeights.z;
+            smbPrevSlow       += texelFetch(prev_spec_slow_input,           spec_previous_owner_tap(smbTap01, texSize), 0) * smbCustomWeights.z;
+            smbPrevFast       += texelFetch(prev_spec_fast_input,           spec_previous_owner_tap(smbTap01, texSize), 0) * smbCustomWeights.z;
+            smbPrevHistoryVec += texelFetch(prev_spec_history_length_input, spec_previous_owner_tap(smbTap01, texSize), 0) * smbCustomWeights.z;
         }
         if (smbCustomWeights.w > 0.0) {
-            smbPrevSlow       += texelFetch(prev_spec_slow_input,           smbTap11, 0) * smbCustomWeights.w;
-            smbPrevFast       += texelFetch(prev_spec_fast_input,           smbTap11, 0) * smbCustomWeights.w;
-            smbPrevHistoryVec += texelFetch(prev_spec_history_length_input,  smbTap11, 0) * smbCustomWeights.w;
+            smbPrevSlow       += texelFetch(prev_spec_slow_input,           spec_previous_owner_tap(smbTap11, texSize), 0) * smbCustomWeights.w;
+            smbPrevFast       += texelFetch(prev_spec_fast_input,           spec_previous_owner_tap(smbTap11, texSize), 0) * smbCustomWeights.w;
+            smbPrevHistoryVec += texelFetch(prev_spec_history_length_input, spec_previous_owner_tap(smbTap11, texSize), 0) * smbCustomWeights.w;
         }
 
         // NRD keeps the accumulated reflection hit distance in a separate history
         // buffer. This integration stores it in spec history confidence .g.
         smbPrevHitT =
-            texelFetch(spec_history_confidence_input, smbTap00, 0).g * smbCustomWeights.x +
-            texelFetch(spec_history_confidence_input, smbTap10, 0).g * smbCustomWeights.y +
-            texelFetch(spec_history_confidence_input, smbTap01, 0).g * smbCustomWeights.z +
-            texelFetch(spec_history_confidence_input, smbTap11, 0).g * smbCustomWeights.w;
+            texelFetch(spec_history_confidence_input, spec_previous_owner_tap(smbTap00, texSize), 0).g * smbCustomWeights.x +
+            texelFetch(spec_history_confidence_input, spec_previous_owner_tap(smbTap10, texSize), 0).g * smbCustomWeights.y +
+            texelFetch(spec_history_confidence_input, spec_previous_owner_tap(smbTap01, texSize), 0).g * smbCustomWeights.z +
+            texelFetch(spec_history_confidence_input, spec_previous_owner_tap(smbTap11, texSize), 0).g * smbCustomWeights.w;
         smbPrevHitT = max(0.001, smbPrevHitT);
     }
 
@@ -311,7 +404,13 @@ void main() {
     // -------------------------------------------------------------------------
     // Confidence-scaled max accumulated frame nums
     // -------------------------------------------------------------------------
-    float specConfidence        = clamp(texture(spec_confidence_input, prevUVSMB).g, 0.0, 1.0);
+    float specConfidence = clamp(nrd_bilinear_custom_float(
+        texelFetch(spec_confidence_input, spec_previous_owner_tap(smbTap00, texSize), 0).g,
+        texelFetch(spec_confidence_input, spec_previous_owner_tap(smbTap10, texSize), 0).g,
+        texelFetch(spec_confidence_input, spec_previous_owner_tap(smbTap01, texSize), 0).g,
+        texelFetch(spec_confidence_input, spec_previous_owner_tap(smbTap11, texSize), 0).g,
+        smbCustomWeights
+    ), 0.0, 1.0);
     float specMaxAccumFrameNum  = ph_nrd_max_accumulated_frame_num  * specConfidence;
     float specMaxFastAccumFrame = ph_nrd_max_fast_accumulated_frame_num * specConfidence;
 
@@ -328,7 +427,7 @@ void main() {
         for (int ny = -1; ny <= 1; ny++) {
             for (int nx = -1; nx <= 1; nx++) {
                 if (nx == 0 && ny == 0) continue;
-                ivec2 nc = tex_coord + ivec2(nx, ny);
+                ivec2 nc = ownerCoord + ivec2(nx, ny);
                 if (any(lessThan(nc, ivec2(0))) || any(greaterThanEqual(nc, localTexSize))) continue;
                 float ht = texelFetch(stage_radiosity_direct_specular, nc, 0).a;
                 if (ht > 0.0) minHitDist = min(minHitDist, ht);
@@ -369,7 +468,7 @@ void main() {
         // 10 edge: neighbor at tex_coord + ivec2(1, 0)
         vec3 n10, x10;
         {
-            ivec2 nc10      = tex_coord + ivec2(1, 0);
+            ivec2 nc10      = ownerCoord + ivec2(1, 0);
             ivec2 localSize = textureSize(stage_radiosity_normal, 0);
             if (any(lessThan(nc10, ivec2(0))) || any(greaterThanEqual(nc10, localSize))) {
                 n10 = currentNormal;
@@ -389,7 +488,7 @@ void main() {
         // 01 edge: neighbor at tex_coord + ivec2(0, 1)
         vec3 n01, x01;
         {
-            ivec2 nc01      = tex_coord + ivec2(0, 1);
+            ivec2 nc01      = ownerCoord + ivec2(0, 1);
             ivec2 localSize = textureSize(stage_radiosity_normal, 0);
             if (any(lessThan(nc01, ivec2(0))) || any(greaterThanEqual(nc01, localSize))) {
                 n01 = currentNormal;
@@ -419,7 +518,7 @@ void main() {
         deltaUvLenFixed        *= 1.0 + edgeFix;
 
         if (deltaUvLenFixed > 1.0) {
-            vec2  motionPxHigh = vec2(tex_coord) + 0.5 + deltaUvLenFixed * deltaUvNorm;
+            vec2  motionPxHigh = vec2(ownerCoord) + 0.5 + deltaUvLenFixed * deltaUvNorm;
             ivec2 motionCoord  = ivec2(floor(motionPxHigh));
             ivec2 localSize    = textureSize(stage_radiosity_normal, 0);
             if (all(greaterThanEqual(motionCoord, ivec2(0))) && all(lessThan(motionCoord, localSize))) {
@@ -509,30 +608,49 @@ void main() {
 
     if (vmbCanSample) {
         if (vmbCustomWeights.x > 0.0) {
-            vmbPrevSlow += texelFetch(prev_spec_slow_input, vmbTap00, 0) * vmbCustomWeights.x;
-            vmbPrevFast += texelFetch(prev_spec_fast_input, vmbTap00, 0) * vmbCustomWeights.x;
+            vmbPrevSlow += texelFetch(prev_spec_slow_input, spec_previous_owner_tap(vmbTap00, texSize), 0) * vmbCustomWeights.x;
+            vmbPrevFast += texelFetch(prev_spec_fast_input, spec_previous_owner_tap(vmbTap00, texSize), 0) * vmbCustomWeights.x;
         }
         if (vmbCustomWeights.y > 0.0) {
-            vmbPrevSlow += texelFetch(prev_spec_slow_input, vmbTap10, 0) * vmbCustomWeights.y;
-            vmbPrevFast += texelFetch(prev_spec_fast_input, vmbTap10, 0) * vmbCustomWeights.y;
+            vmbPrevSlow += texelFetch(prev_spec_slow_input, spec_previous_owner_tap(vmbTap10, texSize), 0) * vmbCustomWeights.y;
+            vmbPrevFast += texelFetch(prev_spec_fast_input, spec_previous_owner_tap(vmbTap10, texSize), 0) * vmbCustomWeights.y;
         }
         if (vmbCustomWeights.z > 0.0) {
-            vmbPrevSlow += texelFetch(prev_spec_slow_input, vmbTap01, 0) * vmbCustomWeights.z;
-            vmbPrevFast += texelFetch(prev_spec_fast_input, vmbTap01, 0) * vmbCustomWeights.z;
+            vmbPrevSlow += texelFetch(prev_spec_slow_input, spec_previous_owner_tap(vmbTap01, texSize), 0) * vmbCustomWeights.z;
+            vmbPrevFast += texelFetch(prev_spec_fast_input, spec_previous_owner_tap(vmbTap01, texSize), 0) * vmbCustomWeights.z;
         }
         if (vmbCustomWeights.w > 0.0) {
-            vmbPrevSlow += texelFetch(prev_spec_slow_input, vmbTap11, 0) * vmbCustomWeights.w;
-            vmbPrevFast += texelFetch(prev_spec_fast_input, vmbTap11, 0) * vmbCustomWeights.w;
+            vmbPrevSlow += texelFetch(prev_spec_slow_input, spec_previous_owner_tap(vmbTap11, texSize), 0) * vmbCustomWeights.w;
+            vmbPrevFast += texelFetch(prev_spec_fast_input, spec_previous_owner_tap(vmbTap11, texSize), 0) * vmbCustomWeights.w;
         }
 
-        // Sample prev normal and roughness at VMB UV (bilinear)
-        vec2 vmbNormalUv = prevUVVMB;
-        vec3 vmbPrevGeoN  = texture(prev_radiosity_normal,        vmbNormalUv).xyz;
-        vec3 vmbPrevMapN  = texture(prev_radiosity_mapped_normal,  vmbNormalUv).xyz;
-        prevNormalVMB     = nrd_select_surface_normal(vmbPrevGeoN, vmbPrevMapN);
-        vec4 vmbPrevMat   = texture(prev_radiosity_material,       vmbNormalUv);
-        prevRoughnessVMB  = vmbPrevMat.r;
-        prevHitTVMB       = max(0.001, texture(spec_history_confidence_input, prevUVVMB).g);
+        // Checkerboard history must be resolved through previous-frame owner pixels,
+        // otherwise VMB reprojects specular history onto inactive lanes and sparkles in motion.
+        prevNormalVMB = spec_bilinear_fetch_prev_normal(
+            vmbTap00,
+            vmbTap10,
+            vmbTap01,
+            vmbTap11,
+            vmbCustomWeights,
+            texSize
+        );
+        vec4 vmbPrevMat = spec_bilinear_fetch_prev_vec4(
+            prev_radiosity_material,
+            vmbTap00,
+            vmbTap10,
+            vmbTap01,
+            vmbTap11,
+            vmbCustomWeights,
+            texSize
+        );
+        prevRoughnessVMB = vmbPrevMat.r;
+        prevHitTVMB = max(0.001, nrd_bilinear_custom_float(
+            texelFetch(spec_history_confidence_input, spec_previous_owner_tap(vmbTap00, texSize), 0).g,
+            texelFetch(spec_history_confidence_input, spec_previous_owner_tap(vmbTap10, texSize), 0).g,
+            texelFetch(spec_history_confidence_input, spec_previous_owner_tap(vmbTap01, texSize), 0).g,
+            texelFetch(spec_history_confidence_input, spec_previous_owner_tap(vmbTap11, texSize), 0).g,
+            vmbCustomWeights
+        ));
     }
 
     // -------------------------------------------------------------------------

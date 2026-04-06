@@ -799,7 +799,8 @@ vec3 lt_light_sample_radiance(Light light, vec3 toLight) {
     }
 
     vec3 lightDir = toLight * inversesqrt(lightDistanceSq);
-    vec3 resultColor = light.color * light.intensity / dot(vec2(1.0f, lightDistanceSq * light.falloff), light.attenuation);
+    float safeDistanceSq = max(lightDistanceSq, 0.25f);
+    vec3 resultColor = light.color * light.intensity / dot(vec2(1.0f, safeDistanceSq * light.falloff), light.attenuation);
 
     if (light.orientationSpread < lt_pi) {
         float axisAngle = acos(clamp(dot(light.emissionAxis, -lightDir), -1.0f, 1.0f));
@@ -944,7 +945,7 @@ vec2 lt_encode_light_sample_uv(Light light, vec3 lightPosition) {
 }
 
 vec3 lt_sample_light_position(Light light, vec3 shadowRayOrigin) {
-    return lt_sample_light_position_from_uv(light, vec2(rand_next_float(), rand_next_float()), shadowRayOrigin);
+    return light.position;
 }
 
 float lt_light_sample_source_pdf() {
@@ -1062,7 +1063,7 @@ bool lt_visibility_trace_is_unoccluded() {
 }
 
 bool lt_visibility_trace_is_unoccluded(Light light, vec3 targetPosition) {
-    return lt_visibility_trace_hit_matches_light(light, targetPosition);
+    return lt_visibility_trace_is_unoccluded() || lt_visibility_trace_hit_matches_light(light, targetPosition);
 }
 
 // Match RTXDI's final-visibility contract: the expensive visibility query returns an RGB
@@ -1106,12 +1107,14 @@ bool lt_trace_conservative_visibility(inout RAB_LightSample smple, RAB_Surface s
     ray_stop_on_target = false;
     ray_min_trace_distance = 0.0f;
     ray_max_trace_distance = -1.0f;
-    return lt_visibility_trace_is_unoccluded();
+    return lt_visibility_trace_is_unoccluded(light, targetPosition);
 }
 
 // Match RTXDI's final-visibility contract: trace the bounded segment to the sampled point,
 // return zero when anything blocks before TMax, and otherwise preserve RGB transmittance
-// accumulated through transparent voxels along the way.
+// accumulated through transparent voxels along the way. For finite block emitters, a hit on
+// the sampled emitter cell itself is a successful terminal event, just like in the conservative
+// visibility path.
 vec3 lt_trace_final_visibility_with_offset(
     inout RAB_LightSample smple,
     RAB_Surface surface,
@@ -1151,7 +1154,7 @@ vec3 lt_trace_final_visibility_with_offset(
     ray_min_trace_distance = 0.0f;
     ray_max_trace_distance = -1.0f;
 
-    if (!lt_visibility_trace_is_unoccluded()) {
+    if (!lt_visibility_trace_is_unoccluded(light, targetPosition)) {
         smple.color = vec3(0.0f);
         return vec3(0.0f);
     }
@@ -1664,8 +1667,10 @@ RTXDI_DISpatialResamplingParameters lt_build_di_spatial_resampling_parameters()
         ? max(ph_restir_spatial_radius, 1.0f)
         : max(PH_LIGHTTREE_SPATIAL_REUSE_RADIUS, 1.0f);
 
+    // Player/runtime default is pairwise MIS for spatial reuse, matching the RTXDI reference's
+    // dedicated spatial resampling path. The explicit override still accepts Off/Basic/Pairwise/Ray-traced.
     if (ph_restir_spatial_bias_mode < -0.5f) {
-        spatialResamplingParams.biasCorrectionMode = uint(RTXDI_BIAS_CORRECTION_OFF);
+        spatialResamplingParams.biasCorrectionMode = uint(RTXDI_BIAS_CORRECTION_PAIRWISE);
     } else {
         int resolvedMode = int(round(ph_restir_spatial_bias_mode));
         spatialResamplingParams.biasCorrectionMode = uint(
