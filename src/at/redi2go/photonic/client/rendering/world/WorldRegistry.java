@@ -1268,8 +1268,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       return 0.0f;
    }
 
-   public void advanceLightBlendFrame() {
-      int frame = SystemTimeUniforms.COUNTER.getAsInt();
+   public void advanceLightBlendFrame(int frame) {
       if (frame == this.lastLightBlendFrame) {
          return;
       }

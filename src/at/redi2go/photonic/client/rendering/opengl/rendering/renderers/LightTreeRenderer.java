@@ -22,7 +22,6 @@ import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import net.irisshaders.iris.shaderpack.include.IncludeGraph;
-import net.irisshaders.iris.uniforms.SystemTimeUniforms;
 import net.irisshaders.iris.gl.sampler.SamplerHolder;
 import net.irisshaders.iris.gl.uniform.DynamicUniformHolder;
 import net.irisshaders.iris.gl.uniform.UniformUpdateFrequency;
@@ -202,6 +201,7 @@ public class LightTreeRenderer extends MainRenderer {
    private int specAtrousIteration = 0;
    private boolean compatDirectSoftDirty = true;
    private boolean reservoirHistoryDirty = true;
+   private int temporalFrameIndex = 0;
    private int profilerFrameCounter = 0;
    private long lastCpuLightTreeSamplingStageNanos;
    private long lastCpuDIGenerateInitialSamplesNanos;
@@ -756,7 +756,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int getTemporalUniformRandom() {
-      return this.jenkinsHash(SystemTimeUniforms.COUNTER.getAsInt());
+      return this.jenkinsHash(this.temporalFrameIndex);
    }
 
    private int jenkinsHash(int value) {
@@ -776,7 +776,7 @@ public class LightTreeRenderer extends MainRenderer {
          return 0;
       }
 
-      int frameParity = SystemTimeUniforms.COUNTER.getAsInt() & 1;
+      int frameParity = this.temporalFrameIndex & 1;
       boolean evenFrameUsesBlackField = "black".equals(checkerboardMode);
       return ((frameParity == 0) == evenFrameUsesBlackField) ? 1 : 2;
    }
@@ -787,6 +787,7 @@ public class LightTreeRenderer extends MainRenderer {
          return;
       }
 
+      this.temporalFrameIndex++;
       this.resolveGpuProfile();
       this.advanceGpuProfileFrame();
       this.ensureCompatDirectSoftCleared();
@@ -868,7 +869,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.renderProfiled(indirectCompositeRegionIndex, this.indirectRenderer);
       long t20 = System.nanoTime();
       this.recordCpuPassTimes(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20);
-      this.worldRegistry.advanceLightBlendFrame();
+      this.worldRegistry.advanceLightBlendFrame(this.temporalFrameIndex);
       this.logRenderProfileIfNeeded(t20 - t0);
    }
 
@@ -1552,7 +1553,7 @@ public class LightTreeRenderer extends MainRenderer {
          }
       }
 
-      return SystemTimeUniforms.COUNTER.getAsInt();
+      return this.temporalFrameIndex;
    }
 
    private int resolveRegirPresampleFrameSeed() {
