@@ -41,7 +41,7 @@ bool is_valid_reprojection(ivec2 prevUv, ivec2 textureBounds) {
 }
 
 bool lt_is_valid_direct_soft_reprojection(vec2 reprojectionUv, vec3 currentPosition, vec3 currentNormal) {
-    ivec2 prevUv = ivec2(reprojectionUv);
+    ivec2 prevUv = ivec2(round(reprojectionUv));
     ivec2 textureBounds = textureSize(prev_radiosity_position, 0);
     if (!is_valid_reprojection(prevUv, textureBounds)) {
         return false;
@@ -59,8 +59,9 @@ bool lt_is_valid_direct_soft_reprojection(vec2 reprojectionUv, vec3 currentPosit
 
 vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
     // Soft reprojection uses zero jitter (not TAA jitter) for stable pixel mapping.
-    // TAA jitter changes every frame and can cause ivec2 truncation to hit adjacent
-    // pixels, failing the tight validation thresholds and resetting the accumulation.
+    // TAA jitter changes every frame and can cause reprojection to land near pixel
+    // boundaries; nearest-texel rounding keeps the history address aligned with the
+    // RTXDI/NRD-style temporal paths instead of truncating toward a neighbor.
     if (ph_dirty_region_factor(stagePosition) > 0.0f) {
         return vec4(0.0f);
     }
@@ -76,7 +77,7 @@ vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
         return vec4(0.0f);
     }
 
-    ivec2 prevUv = ivec2(reprojectionUv);
+    ivec2 prevUv = ivec2(round(reprojectionUv));
     vec4 prevSoft = texelFetch(prev_radiosity_direct_soft, prevUv, 0);
     return (prevSoft.a > 0.0f && !any(isnan(prevSoft))) ? prevSoft : vec4(0.0f);
 }

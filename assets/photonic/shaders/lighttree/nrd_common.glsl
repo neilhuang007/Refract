@@ -37,9 +37,17 @@ ivec2 nrd_get_checkerboard_owner_pixel(ivec2 pixelPosition, bool previousFrame, 
     return clamp(ownerPixel, ivec2(0), textureSizePx - ivec2(1));
 }
 
+ivec2 nrd_get_current_checkerboard_owner_pixel(ivec2 pixelPosition, ivec2 textureSizePx) {
+    return nrd_get_checkerboard_owner_pixel(pixelPosition, false, ph_restir_active_checkerboard_field, textureSizePx);
+}
+
+ivec2 nrd_get_previous_checkerboard_owner_pixel(ivec2 pixelPosition, ivec2 textureSizePx) {
+    return nrd_get_checkerboard_owner_pixel(pixelPosition, true, ph_restir_active_checkerboard_field, textureSizePx);
+}
+
 vec4 nrd_reconstruct_checkerboard_signal(sampler2D signalTex, ivec2 coord, sampler2D positionTex, sampler2D normalTex) {
     ivec2 texSize = textureSize(signalTex, 0);
-    ivec2 sampleCoord = nrd_get_checkerboard_owner_pixel(coord, false, ph_restir_active_checkerboard_field, texSize);
+    ivec2 sampleCoord = nrd_get_current_checkerboard_owner_pixel(coord, texSize);
     return texelFetch(signalTex, sampleCoord, 0);
 }
 

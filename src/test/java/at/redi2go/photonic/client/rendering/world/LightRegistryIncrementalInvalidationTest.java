@@ -1,6 +1,7 @@
 package at.redi2go.photonic.client.rendering.world;
 
 import at.redi2go.photonic.client.config.lights.BlockLightInfo;
+import at.redi2go.photonic.client.config.lights.LightList;
 import at.redi2go.photonic.client.config.lights.color.RgbColor;
 import at.redi2go.photonic.client.config.lights.orientation.LightOrientation;
 import at.redi2go.photonic.client.config.lights.predicate.LightPredicate;
@@ -12,9 +13,9 @@ import net.minecraft.block.pattern.CachedBlockPosition;
 import org.joml.Vector3f;
 import org.junit.jupiter.api.Test;
 
-import java.nio.IntBuffer;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.IntBuffer;
 import java.util.Deque;
 import java.util.Map;
 
@@ -175,7 +176,7 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
-   void createTracedLightsRetainsInactivePlaceholderForTemporaryDisappearances() throws Exception {
+   void createTracedLightsCompactsRemovedLightsOutOfTheActiveList() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
@@ -193,19 +194,17 @@ class LightRegistryIncrementalInvalidationTest {
       assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
-      assertEquals(2, tracedLights.length);
-      assertEquals(lightA, tracedLights[0].position());
-      assertFalse(tracedLights[0].active(), "Removed light should be retained as an inactive placeholder");
-      assertEquals(lightB, tracedLights[1].position());
-      assertTrue(tracedLights[1].active());
+      assertEquals(1, tracedLights.length);
+      assertEquals(lightB, tracedLights[0].position());
+      assertTrue(tracedLights[0].active());
 
       short[] newLightIndices = (short[]) getField(registry, "newLightIndices");
-      assertEquals(0, newLightIndices[0], "Previous light A index should map to its inactive placeholder");
-      assertEquals(1, newLightIndices[1], "Unchanged light B index should remain stable");
+      assertEquals(-1, newLightIndices[0], "Removed light should no longer map into the active list");
+      assertEquals(0, newLightIndices[1], "Remaining light should be compacted to dense slot 0");
    }
 
    @Test
-   void createTracedLightsKeepsStableIndicesForUnchangedCappedSelection() throws Exception {
+   void createTracedLightsKeepsStableIndicesForUnchangedUncappedTracking() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
@@ -229,18 +228,19 @@ class LightRegistryIncrementalInvalidationTest {
       assertFalse(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
+      assertEquals(3, tracedLights.length);
       assertEquals(lightA, tracedLights[0].position());
       assertEquals(lightB, tracedLights[1].position());
+      assertEquals(lightC, tracedLights[2].position());
 
       short[] newLightIndices = (short[]) getField(registry, "newLightIndices");
       assertEquals(0, newLightIndices[0]);
       assertEquals(1, newLightIndices[1]);
+      assertEquals(2, newLightIndices[2]);
    }
 
-
-
    @Test
-   void createTracedLightsRetainsPreviousMemberWhenNewcomerOnlySlightlyImprovesSourcePower() throws Exception {
+   void createTracedLightsAdmitsNewcomerWhenCapacityWasPreviouslySaturated() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
@@ -255,16 +255,17 @@ class LightRegistryIncrementalInvalidationTest {
       assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       positions.put(lightC, new TracedLightPosition(3, slightUpgrade));
-      assertFalse(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
+      assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
-      assertEquals(2, tracedLights.length);
+      assertEquals(3, tracedLights.length);
       assertEquals(lightA, tracedLights[0].position());
       assertEquals(lightB, tracedLights[1].position());
+      assertEquals(lightC, tracedLights[2].position());
    }
 
    @Test
-   void createTracedLightsReplacesPreviousMemberWhenNewcomerIsMeaningfullyStronger() throws Exception {
+   void createTracedLightsPreservesAllTrackedLightsWhenAddingStrongerNewcomer() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
@@ -282,13 +283,14 @@ class LightRegistryIncrementalInvalidationTest {
       assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
-      assertEquals(2, tracedLights.length);
+      assertEquals(3, tracedLights.length);
       assertEquals(lightA, tracedLights[0].position());
-      assertEquals(lightC, tracedLights[1].position());
+      assertEquals(lightB, tracedLights[1].position());
+      assertEquals(lightC, tracedLights[2].position());
    }
 
    @Test
-   void createTracedLightsDropsVeryWeakUnselectedLightsBeforeCapping() throws Exception {
+   void createTracedLightsTracksWeakLightsInsteadOfDroppingThemBeforeCapping() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
       Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
@@ -305,9 +307,10 @@ class LightRegistryIncrementalInvalidationTest {
       assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       LightInstance[] tracedLights = (LightInstance[]) getField(registry, "tracedLights");
-      assertEquals(2, tracedLights.length);
+      assertEquals(3, tracedLights.length);
       assertEquals(lightA, tracedLights[0].position());
       assertEquals(lightB, tracedLights[1].position());
+      assertEquals(lightC, tracedLights[2].position());
    }
 
 
@@ -473,8 +476,9 @@ class LightRegistryIncrementalInvalidationTest {
       assertTrue(invokeCreateTracedLights(registry, invokeToLightInstanceArray(registry)));
 
       String churn = registry.describeRecentChurn();
-      assertTrue(churn.contains("added=1"), churn);
-      assertTrue(churn.contains("removed=1"), churn);
+      assertTrue(churn.contains("added=0"), churn);
+      assertTrue(churn.contains("removed=0"), churn);
+      assertTrue(churn.contains("lightInfo=2"), churn);
    }
 
    @Test
@@ -511,6 +515,12 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
+   void regirSamplingJitterMatchesRtxdiRuntimeScale() {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
+      assertEquals(2.0F, registry.getRegirSamplingJitter(), 1.0e-6F);
+   }
+
+   @Test
    void buildSpatialGridSkipsInactivePlaceholderLights() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
       BlockLightInfo info = createTestLightInfo(100.0F);
@@ -528,6 +538,87 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
+   void buildSpatialGridExpandsCoverageToMatchRegirBuildVolume() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
+      BlockLightInfo info = createTestLightInfo(100.0F);
+      LightInstance[] lights = new LightInstance[] {
+         new LightInstance(1, new Vector3f(0.5F, 0.5F, 0.5F), info, true)
+      };
+
+      invokeBuildSpatialGrid(registry, lights);
+
+      @SuppressWarnings("unchecked")
+      Map<Long, java.util.List<Integer>> lightGrid = (Map<Long, java.util.List<Integer>>) getField(registry, "lightGrid");
+      long nearbyButOutOfRawRadiusCell = invokeGridKey(2, 0, 0);
+      java.util.List<Integer> candidates = lightGrid.get(nearbyButOutOfRawRadiusCell);
+      assertTrue(candidates != null, "ReGIR spatial coverage should include cells reached by the jitter-expanded build volume");
+      assertTrue(candidates.contains(0), "Nearby cells in the ReGIR build volume should see the light as a candidate");
+   }
+
+   @Test
+   void storeGlobalLightCdfRespondsToCameraMovementWithoutLightSetChanges() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
+      BlockLightInfo info = createTestLightInfo(100.0F);
+      LightInstance[] lights = new LightInstance[] {
+         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info, true),
+         new LightInstance(2, new Vector3f(96.5F, 1.5F, 1.5F), info, true)
+      };
+      setField(registry, "tracedLights", lights);
+
+      Method shouldRefresh = LightRegistry.class.getDeclaredMethod("shouldRefreshGlobalLightCdf", Vector3f.class, boolean.class);
+      shouldRefresh.setAccessible(true);
+      Method storeCdf = LightRegistry.class.getDeclaredMethod("storeGlobalLightCdf", Vector3f.class);
+      storeCdf.setAccessible(true);
+      Method markCamera = LightRegistry.class.getDeclaredMethod("markGlobalLightCdfCamera", Vector3f.class);
+      markCamera.setAccessible(true);
+
+      Vector3f initialCamera = new Vector3f(0.0F, 0.0F, 0.0F);
+      assertTrue((boolean) shouldRefresh.invoke(registry, initialCamera, false));
+      storeCdf.invoke(registry, initialCamera);
+      markCamera.invoke(registry, initialCamera);
+
+      float[] initialWeights = registry.getLightPowers().clone();
+      assertTrue(initialWeights[0] > initialWeights[1], "Initial camera should prefer the nearby light");
+
+      Vector3f movedCamera = new Vector3f(96.5F, 1.5F, 1.5F);
+      assertTrue((boolean) shouldRefresh.invoke(registry, movedCamera, false), "Large camera moves should trigger a CDF refresh");
+      storeCdf.invoke(registry, movedCamera);
+      markCamera.invoke(registry, movedCamera);
+
+      float[] movedWeights = registry.getLightPowers();
+      assertTrue(movedWeights[1] > movedWeights[0], "Moved camera should now prefer the new nearby light");
+   }
+
+   @Test
+   void storeGlobalLightCdfPrioritizesNearbyVisibleLights() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
+      BlockLightInfo info = createTestLightInfo(100.0F);
+      LightInstance[] lights = new LightInstance[] {
+         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), info, true),
+         new LightInstance(2, new Vector3f(96.5F, 1.5F, 1.5F), info, true)
+      };
+      setField(registry, "tracedLights", lights);
+      setField(registry, "frozenLightSelectionCamera", new Vector3f(0.0F, 0.0F, 0.0F));
+      setField(registry, "frozenLightSelectionCameraInitialized", true);
+      System.setProperty("photonics.freezeLightSelectionCamera", "true");
+      try {
+         Method method = LightRegistry.class.getDeclaredMethod("storeGlobalLightCdf", Vector3f.class);
+         method.setAccessible(true);
+         method.invoke(registry, new Vector3f(0.0F, 0.0F, 0.0F));
+      } finally {
+         System.clearProperty("photonics.freezeLightSelectionCamera");
+      }
+
+      float[] lightPowers = registry.getLightPowers();
+      assertTrue(lightPowers[0] > lightPowers[1], "Nearby light should receive more global sampling weight than a far light");
+
+      MemoryOwner cdfMemory = (MemoryOwner) getField(registry, "globalLightCdfMemory");
+      java.nio.FloatBuffer cdf = cdfMemory.getMemory().getBuffer().asFloatBuffer();
+      assertTrue(cdf.get(0) > 0.0F);
+      assertTrue(cdf.get(1) > cdf.get(0), "Second CDF entry should accumulate both nearby and far light weights");
+   }
+
+   @Test
    void storeGlobalLightCdfGivesInactivePlaceholderZeroWeight() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
       BlockLightInfo info = createTestLightInfo(100.0F);
@@ -537,9 +628,9 @@ class LightRegistryIncrementalInvalidationTest {
       };
       setField(registry, "tracedLights", lights);
 
-      Method method = LightRegistry.class.getDeclaredMethod("storeGlobalLightCdf");
+      Method method = LightRegistry.class.getDeclaredMethod("storeGlobalLightCdf", Vector3f.class);
       method.setAccessible(true);
-      method.invoke(registry);
+      method.invoke(registry, new Vector3f(0.0F, 0.0F, 0.0F));
 
       float[] lightPowers = registry.getLightPowers();
       assertTrue(lightPowers[0] > 0.0F);
@@ -549,6 +640,54 @@ class LightRegistryIncrementalInvalidationTest {
       java.nio.FloatBuffer cdf = cdfMemory.getMemory().getBuffer().asFloatBuffer();
       assertTrue(cdf.get(0) > 0.0F);
       assertEquals(cdf.get(0), cdf.get(1), 1.0e-6F, "Inactive placeholders must not increase the global CDF");
+   }
+
+   @Test
+   void shouldRefreshGlobalLightCdfEveryFrameWhenGpuRegirBuildEnabled() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
+      setField(registry, "gpuRegirBuildEnabled", true);
+      setField(registry, "tracedLights", new LightInstance[] {
+         new LightInstance(1, new Vector3f(1.5F, 1.5F, 1.5F), createTestLightInfo(100.0F), true)
+      });
+
+      Method shouldRefresh = LightRegistry.class.getDeclaredMethod("shouldRefreshGlobalLightCdf", Vector3f.class, boolean.class);
+      shouldRefresh.setAccessible(true);
+      Method markCamera = LightRegistry.class.getDeclaredMethod("markGlobalLightCdfCamera", Vector3f.class);
+      markCamera.setAccessible(true);
+
+      Vector3f camera = new Vector3f(0.0F, 0.0F, 0.0F);
+      markCamera.invoke(registry, camera);
+
+      assertTrue((boolean) shouldRefresh.invoke(registry, camera, false),
+         "GPU ReGIR path should refresh the global CDF every frame so presample tiles follow camera-priority changes immediately");
+   }
+
+   @Test
+   void hasPossibleLightIsConservativeForConfiguredBlockTypes() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
+      LightList lightList = new LightList();
+      Block configuredBlock = constructorFreeBlock();
+      Block otherBlock = constructorFreeBlock();
+      BlockLightInfo info = createTestLightInfo(configuredBlock);
+
+      lightList.add(info);
+      setField(registry, "lightList", lightList);
+
+      assertTrue(registry.hasPossibleLight(configuredBlock),
+         "Configured block types must be treated as possible lights even when predicates need world context");
+      assertFalse(registry.hasPossibleLight(otherBlock),
+         "Unconfigured block types should still avoid neighbor light refresh work");
+   }
+
+   private static Block constructorFreeBlock() throws Exception {
+      sun.misc.Unsafe unsafe = getUnsafe();
+      return (Block) unsafe.allocateInstance(Block.class);
+   }
+
+   private static sun.misc.Unsafe getUnsafe() throws Exception {
+      Field field = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+      field.setAccessible(true);
+      return (sun.misc.Unsafe) field.get(null);
    }
 
    private static LightInstance[] invokeToLightInstanceArray(LightRegistry registry) throws Exception {
@@ -567,6 +706,12 @@ class LightRegistryIncrementalInvalidationTest {
       Method method = LightRegistry.class.getDeclaredMethod("buildRegirGrid");
       method.setAccessible(true);
       method.invoke(registry);
+   }
+
+   private static long invokeGridKey(int x, int y, int z) throws Exception {
+      Method method = LightRegistry.class.getDeclaredMethod("gridKey", int.class, int.class, int.class);
+      method.setAccessible(true);
+      return (long) method.invoke(null, x, y, z);
    }
 
    private static long invokeChunkKey(int x, int y, int z) throws Exception {
@@ -594,15 +739,23 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    private static BlockLightInfo createTestLightInfo() {
-      return createTestLightInfo(100.0F);
+      return createTestLightInfo(null, 100.0F);
+   }
+
+   private static BlockLightInfo createTestLightInfo(Block block) {
+      return createTestLightInfo(block, 100.0F);
    }
 
    private static BlockLightInfo createTestLightInfo(float intensity) {
+      return createTestLightInfo(null, intensity);
+   }
+
+   private static BlockLightInfo createTestLightInfo(Block block, float intensity) {
       return new BlockLightInfo(
          new LightPredicate() {
             @Override
             public Block block() {
-               return null;
+               return block;
             }
 
             @Override

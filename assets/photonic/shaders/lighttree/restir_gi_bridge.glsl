@@ -68,6 +68,7 @@ struct RTXDI_GIReservoir {
     float weight_sum;
     float samples;
     float age;
+    uint miscData;
 };
 
 RTXDI_GISample gi_null_sample() {
@@ -75,7 +76,30 @@ RTXDI_GISample gi_null_sample() {
 }
 
 RTXDI_GIReservoir RTXDI_EmptyGIReservoir() {
-    return RTXDI_GIReservoir(gi_null_sample(), 0.0f, 0.0f, 0.0f);
+    return RTXDI_GIReservoir(gi_null_sample(), 0.0f, 0.0f, 0.0f, 0u);
+}
+
+const uint gi_misc_flag_skylight = 1u << 16u;
+
+bool gi_reservoir_is_skylight(RTXDI_GIReservoir reservoir) {
+    return (reservoir.miscData & gi_misc_flag_skylight) != 0u;
+}
+
+void gi_mark_reservoir_skylight(inout RTXDI_GIReservoir reservoir) {
+    reservoir.miscData |= gi_misc_flag_skylight;
+}
+
+bool gi_sample_is_skylight(RTXDI_GIReservoir reservoir, RAB_Surface surface) {
+    return gi_reservoir_is_skylight(reservoir)
+        || distance(reservoir.selected.position, surface.worldPos) > 32768.0f;
+}
+
+bool gi_is_skylight_sample_position(vec3 samplePosition, vec3 worldPosition) {
+    return distance(samplePosition, worldPosition) > 32768.0f;
+}
+
+float gi_skylight_distance() {
+    return 65536.0f;
 }
 
 bool gi_sample_is_valid(RTXDI_GISample giSample) {
@@ -247,7 +271,7 @@ bool gi_project_secondary_surface(RAB_Surface secondarySurface, out ivec2 second
         return false;
     }
 
-    secondaryPixelPosition = ivec2((secondaryClipPosition.xy * 0.5f + 0.5f) * vec2(viewWidth, viewHeight) * PH_RENDER_SCALE);
+    secondaryPixelPosition = ivec2((secondaryClipPosition.xy * 0.5f + 0.5f) * vec2(viewWidth, viewHeight));
     secondaryViewDepth = secondaryClipPosition.w;
     return lt_is_viewport_uv_in_bounds(secondaryPixelPosition);
 }
@@ -296,6 +320,11 @@ bool RAB_ValidateGISampleWithJacobian(inout float jacobian) {
 }
 
 float RTXDI_GICalculateJacobian(RAB_Surface currentSurface, RAB_Surface sourceSurface, RTXDI_GISample giSample) {
+    if (gi_is_skylight_sample_position(giSample.position, currentSurface.worldPos)
+        || gi_is_skylight_sample_position(giSample.position, sourceSurface.worldPos)) {
+        return 1.0f;
+    }
+
     vec3 vecNew = lt_surface_rt_pos(currentSurface) - giSample.position;
     vec3 vecOriginal = lt_surface_rt_pos(sourceSurface) - giSample.position;
 
@@ -324,6 +353,7 @@ RTXDI_GIReservoir RTXDI_MakeGIReservoir(RTXDI_GISample giSample, float samplePdf
     reservoir.weight_sum = samplePdf > 0.0f ? 1.0f / samplePdf : 0.0f;
     reservoir.samples = 1.0f;
     reservoir.age = 0.0f;
+    reservoir.miscData = 0u;
     return reservoir;
 }
 
@@ -337,6 +367,7 @@ bool RTXDI_CombineGIReservoirs(inout RTXDI_GIReservoir reservoir, RTXDI_GIReserv
     if (selectSample) {
         reservoir.selected = newReservoir.selected;
         reservoir.age = newReservoir.age;
+        reservoir.miscData = newReservoir.miscData;
     }
 
     return selectSample;
@@ -466,6 +497,7 @@ RTXDI_GIReservoir gi_unpack_reservoir(RTXDI_PackedGIReservoir packedData) {
     reservoir.weight_sum = packedData.weight;
     reservoir.samples = float((packedData.packedMiscDataAgeM >> gi_packed_reservoir_m_shift) & gi_packed_reservoir_max_m);
     reservoir.age = float((packedData.packedMiscDataAgeM >> gi_packed_reservoir_age_shift) & gi_packed_reservoir_max_age);
+    reservoir.miscData = packedData.packedMiscDataAgeM & gi_packed_reservoir_misc_data_mask;
     return reservoir;
 }
 
@@ -486,7 +518,7 @@ RTXDI_GIReservoirStore gi_make_invalid_reservoir_store() {
 }
 
 RTXDI_GIReservoirStore gi_make_reservoir_store(RTXDI_GIReservoir reservoir) {
-    RTXDI_PackedGIReservoir packedReservoir = gi_pack_reservoir(reservoir, 0u);
+    RTXDI_PackedGIReservoir packedReservoir = gi_pack_reservoir(reservoir, reservoir.miscData);
     RTXDI_GIReservoirStore store;
     store.positionData = vec4(packedReservoir.position, uintBitsToFloat(packedReservoir.packedNormal));
     store.normalData = vec4(
@@ -548,6 +580,8 @@ const float gi_default_spatial_depth_threshold = 0.1f;
 const float gi_default_spatial_normal_threshold = 0.6f;
 const float gi_default_spatial_sampling_radius = 32.0f;
 const float gi_default_boiling_filter_strength = 0.2f;
+const float gi_skylight_bootstrap_history = 8.0f;
+const float gi_skylight_bootstrap_age = 4.0f;
 
 int gi_runtime_bias_correction_mode(float configuredMode) {
     if (configuredMode < -0.5f) {
@@ -718,6 +752,10 @@ bool RAB_GetTemporalConservativeVisibility(RAB_Surface surface, RAB_Surface temp
 }
 
 vec3 GetFinalVisibility(RAB_Surface surface, RTXDI_GISample giSample) {
+    if (gi_is_skylight_sample_position(giSample.position, surface.worldPos)) {
+        return vec3(1.0f);
+    }
+
     vec3 rayOrigin;
     vec3 rayDirection;
     float traceMinDistance;
@@ -746,6 +784,9 @@ vec3 GetFinalVisibility(RAB_Surface surface, RTXDI_GISample giSample) {
 }
 
 bool gi_sample_requires_final_visibility(RAB_Surface surface, RTXDI_GISample giSample) {
+    if (gi_is_skylight_sample_position(giSample.position, surface.worldPos)) {
+        return false;
+    }
     return lt_build_shading_parameters().enableFinalVisibility != 0u;
 }
 
@@ -830,14 +871,31 @@ bool gi_build_initial_sample(RAB_Surface currentSurface, out RTXDI_GISample giSa
     trace_ray(ray, true);
     breakOnEmpty = false;
 
-    if (!ray.result_hit || ray_iteration_bound_reached) {
-        return false;
+    vec3 secondaryThroughput = clamp(result_tint_color, vec3(0.0f), vec3(1.0f));
+    bool hitSceneSurface = ray.result_hit && !ray_iteration_bound_reached;
+
+    if (!hitSceneSurface) {
+        vec3 skyRadiance = max(get_sky_color(ivec2(pixelPosition), currentSurface.worldPos, sampleDir), vec3(0.0f));
+        if (ph_luminance(skyRadiance) <= 1e-6f) {
+            skyRadiance = max(indirect_light_color, vec3(0.0f));
+        }
+        skyRadiance *= secondaryThroughput;
+        skyRadiance = gi_clamp_secondary_radiance(skyRadiance);
+        if (ph_luminance(skyRadiance) <= 1e-6f) {
+            return false;
+        }
+
+        vec3 skyDistance = sampleDir * gi_skylight_distance();
+        giSample.position = currentSurface.worldPos + skyDistance;
+        giSample.normal = -sampleDir;
+        giSample.radiance = skyRadiance;
+        misRadiance = skyRadiance;
+        return gi_sample_is_valid(giSample);
     }
 
     vec3 secondaryPos = ray.result_position;
     vec3 secondaryNormal = normalize(ray.result_normal);
     vec3 secondaryAlbedo = max(ray.result_color, vec3(0.0f));
-    vec3 secondaryThroughput = clamp(result_tint_color, vec3(0.0f), vec3(1.0f));
     vec3 emissionRadiance = max(dot(lightEmittance, lightEmittance) > 0.0f ? lightEmittance : vec3(0.0f), vec3(0.0f));
     vec3 secondaryRadiance = emissionRadiance;
     RAB_Material secondaryMaterial = RAB_Material(
@@ -875,7 +933,13 @@ RTXDI_GIReservoirStore gi_build_initial_reservoir_store(RAB_Surface currentSurfa
         return gi_make_invalid_reservoir_store();
     }
 
-    return gi_make_initial_reservoir_store(RTXDI_MakeGIReservoir(giSample, samplePdf), misRadiance);
+    RTXDI_GIReservoir reservoir = RTXDI_MakeGIReservoir(giSample, samplePdf);
+    if (gi_is_skylight_sample_position(giSample.position, currentSurface.worldPos)) {
+        gi_mark_reservoir_skylight(reservoir);
+        reservoir.samples = max(reservoir.samples, gi_skylight_bootstrap_history);
+        reservoir.age = max(reservoir.age, gi_skylight_bootstrap_age);
+    }
+    return gi_make_initial_reservoir_store(reservoir, misRadiance);
 }
 
 bool gi_stream_contributor(

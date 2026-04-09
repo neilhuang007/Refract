@@ -20,6 +20,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
@@ -112,31 +113,31 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private final Set<BlockPos> pendingBlockUpdates = ConcurrentHashMap.newKeySet();
    private final Map<BlockPos, BlockUpdateSnapshot> pendingBlockSnapshots = new ConcurrentHashMap<>();
    private final Set<BlockPos> pendingLightBlockUpdates = ConcurrentHashMap.newKeySet();
+   private final Map<BlockPos, BlockUpdateSnapshot> deferredLightBlockSnapshots = new ConcurrentHashMap<>();
    private final AtomicBoolean blockUpdateFlushQueued = new AtomicBoolean(false);
    private int pendingSemanticChunkMutations = 0;
    private final Map<PChunkPos, Integer> recentlyVisibleRtChunks = new HashMap<>();
    private static final int CHUNK_LOAD_BUDGET = 256;
-  private long automationResetRequestsTotal = 0L;
-  private long automationResetRequestsWorldOffset = 0L;
-  private long automationResetRequestsCameraJump = 0L;
-  private long automationResetRequestsTopology = 0L;
-  private long automationResetRequestsOther = 0L;
-  private long automationBlendFullActivations = 0L;
-  private long automationBlendRegionActivations = 0L;
-  private long automationBlendCompletions = 0L;
-  private long automationFramesGlobalReloadActive = 0L;
-  private long automationFramesBlendActive = 0L;
-  private long automationFramesPendingWork = 0L;
-  private long automationFramesPendingStableLightCompile = 0L;
-  private long automationFramesDeferredLightRebuildsPositive = 0L;
-  private long automationCompileFramesLightWorkNeeded = 0L;
-  private long automationCompileFramesLightCompiled = 0L;
-  private long automationCompileFramesLightDeferred = 0L;
-  private long automationCompileFramesWorldOffsetChanged = 0L;
-  private long automationCompileFramesChunkTopologyChanged = 0L;
-  private long automationCompileFramesChunkContentChanged = 0L;
-  private long automationCompileFramesTracedLightDirty = 0L;
-  private long automationPendingBlendMutationEvents = 0L;
+   private long automationResetRequestsTotal = 0L;
+   private long automationResetRequestsWorldOffset = 0L;
+   private long automationResetRequestsCameraJump = 0L;
+   private long automationResetRequestsTopology = 0L;
+   private long automationResetRequestsOther = 0L;
+   private long automationBlendFullActivations = 0L;
+   private long automationBlendRegionActivations = 0L;
+   private long automationBlendCompletions = 0L;
+   private long automationFramesGlobalReloadActive = 0L;
+   private long automationFramesBlendActive = 0L;
+   private long automationFramesPendingWork = 0L;
+   private long automationFramesPendingStableLightCompile = 0L;
+   private long automationFramesDeferredLightRebuildsPositive = 0L;
+   private long automationCompileFramesLightWorkNeeded = 0L;
+   private long automationCompileFramesLightCompiled = 0L;
+   private long automationCompileFramesWorldOffsetChanged = 0L;
+   private long automationCompileFramesChunkTopologyChanged = 0L;
+   private long automationCompileFramesChunkContentChanged = 0L;
+   private long automationCompileFramesTracedLightDirty = 0L;
+   private long automationPendingBlendMutationEvents = 0L;
   private int automationMaxPendingBlendRegions = 0;
   private long automationMaxPendingBlendVolume = 0L;
 
@@ -172,7 +173,9 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    public void upload() {
       if (this.buildStage != WorldRegistry.BuildStage.WAIT_FOR_UPLOAD) {
          if (this.blockLightEnabled && this.lightRegistry.queueIdentityLightMappingsIfNeeded()) {
+            this.lightRegistry.getPreviousLightsMemoryManager().upload();
             this.lightRegistry.getLightMappingMemoryManager().upload();
+            this.lightRegistry.getLightReverseMappingMemoryManager().upload();
          }
          return;
       }
@@ -595,6 +598,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       });
       if (!chunkCreated[0]) {
          this.refreshResidentChunk(chunkPos, chunk);
+         this.applyDeferredChunkLightUpdates(chunkPos, chunk);
          return;
       }
 
@@ -609,6 +613,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             this.lightRegistry.synchronizeChunkLights(level, chunkPos);
          }
       }
+      this.applyDeferredChunkLightUpdates(chunkPos, chunk);
    }
 
    private void refreshResidentChunk(PChunkPos chunkPos, WorldChunk chunk) {
@@ -617,6 +622,41 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          ClientWorld level = MinecraftAccessor.getLevel();
          if (level != null) {
             this.lightRegistry.synchronizeChunkLights(level, chunkPos);
+         }
+      }
+      this.applyDeferredChunkLightUpdates(chunkPos, chunk);
+   }
+
+   private void applyDeferredChunkLightUpdates(PChunkPos chunkPos, WorldChunk chunk) {
+      if (this.deferredLightBlockSnapshots.isEmpty()) {
+         return;
+      }
+      ClientWorld level = MinecraftAccessor.getLevel();
+      if (level == null) {
+         return;
+      }
+      List<BlockUpdateSnapshot> deferredSnapshots = new ArrayList<>();
+      Iterator<Entry<BlockPos, BlockUpdateSnapshot>> itr = this.deferredLightBlockSnapshots.entrySet().iterator();
+      while (itr.hasNext()) {
+         Entry<BlockPos, BlockUpdateSnapshot> entry = itr.next();
+         BlockPos blockPos = entry.getKey();
+         if ((blockPos.getX() >> 4) == chunkPos.x && (blockPos.getY() >> 4) == chunkPos.y && (blockPos.getZ() >> 4) == chunkPos.z) {
+            deferredSnapshots.add(entry.getValue());
+            itr.remove();
+         }
+      }
+      deferredSnapshots.sort(Comparator
+         .comparingInt((BlockUpdateSnapshot snapshot) -> snapshot.blockPos().getX())
+         .thenComparingInt(snapshot -> snapshot.blockPos().getY())
+         .thenComparingInt(snapshot -> snapshot.blockPos().getZ()));
+      for (BlockUpdateSnapshot snapshot : deferredSnapshots) {
+         BlockPos blockPos = snapshot.blockPos();
+         if (this.refreshChunkBlock(level, chunkPos, chunk, blockPos, snapshot.blockState())) {
+            this.pendingSemanticChunkMutations++;
+            this.markLightBlendBlock(blockPos);
+         }
+         if (this.blockLightEnabled) {
+            this.lightRegistry.onBlockUpdate(blockPos, snapshot.blockState(), snapshot.lightInfo());
          }
       }
    }
@@ -991,7 +1031,8 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       for (Direction face : FACES) {
          BlockPos neighborPos = blockPos.offset(face);
          BlockState neighborState = this.captureBlockStateSnapshot(level, neighborPos);
-         this.queueSingleBlockUpdate(this.captureBlockUpdateSnapshot(level, neighborPos, neighborState, false), false);
+         boolean refreshNeighborLight = this.blockLightEnabled && this.lightRegistry.hasPossibleLight(neighborState);
+         this.queueSingleBlockUpdate(this.captureBlockUpdateSnapshot(level, neighborPos, neighborState, refreshNeighborLight), refreshNeighborLight);
       }
    }
 
@@ -1037,6 +1078,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       }
    }
 
+   private void queueDeferredLightBlockUpdate(BlockUpdateSnapshot snapshot) {
+      BlockPos blockPos = snapshot.blockPos();
+      this.deferredLightBlockSnapshots.put(blockPos, snapshot);
+   }
+
    private void queueChunkRefresh(PChunkPos chunkPos) {
       if (this.pendingBuildChunks.add(chunkPos)) {
          this.buildQueue.add(() -> {
@@ -1066,11 +1112,15 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       BlockPos blockPos = snapshot.blockPos();
       PChunkPos chunkPos = new PChunkPos(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
       if (!this.shouldKeepChunkForRt(chunkPos)) {
+         this.deferredLightBlockSnapshots.remove(blockPos);
          return;
       }
 
       WorldChunk chunk = this.chunks.get(chunkPos);
       if (chunk == null) {
+         if (refreshLight) {
+            this.queueDeferredLightBlockUpdate(snapshot);
+         }
          if (!this.renderDispatcher.isChunkEmpty(chunkPos) && this.pendingChunkSet.add(chunkPos)) {
             this.pendingChunkLoads.add(chunkPos);
             this.chunkSyncNeeded = true;
@@ -1078,12 +1128,16 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return;
       }
 
-      if (this.refreshChunkBlock(level, chunkPos, chunk, blockPos, snapshot.blockState())) {
+      this.deferredLightBlockSnapshots.remove(blockPos);
+      boolean chunkMutated = this.refreshChunkBlock(level, chunkPos, chunk, blockPos, snapshot.blockState());
+      if (chunkMutated) {
          this.pendingSemanticChunkMutations++;
-         this.markLightBlendBlock(blockPos);
       }
       if (refreshLight && this.blockLightEnabled) {
+         this.markLightBlendBlock(blockPos);
          this.lightRegistry.onBlockUpdate(blockPos, snapshot.blockState(), snapshot.lightInfo());
+      } else if (chunkMutated) {
+         this.markLightBlendBlock(blockPos);
       }
    }
 
@@ -1365,7 +1419,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    static boolean shouldForceTemporalResetForLightMutation(boolean chunkTopologyChanged, int pendingTracedLightMutations) {
-      return !chunkTopologyChanged && pendingTracedLightMutations > 0;
+      // Local light edits should preserve the surrounding temporal history and rely on
+      // localized blend regions for fast visible convergence. Full-scene resets remain
+      // reserved for topology/world-offset/camera-jump class events that invalidate the
+      // broader sampling domain.
+      return chunkTopologyChanged;
    }
 
    static boolean shouldForceTemporalResetForWorldOffset(PChunkPos previousOffset, PChunkPos currentOffset, int worldChunkSize) {
@@ -1381,26 +1439,46 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       return dx >= worldChunkSize || dy >= worldChunkSize || dz >= worldChunkSize;
    }
 
+   static boolean hasResetReason(String reasonList, String reason) {
+      if (reason == null || reason.isBlank() || reasonList == null || reasonList.isBlank()) {
+         return false;
+      }
+      for (String token : reasonList.split("\\+")) {
+         if (reason.equals(token)) {
+            return true;
+         }
+      }
+      return false;
+   }
+
    private void requestFullLightBlendReset(String reason) {
-      boolean wasPending = this.pendingFullLightBlendReset;
       String resolvedReason = reason == null || reason.isBlank() ? "unknown" : reason;
-      this.automationResetRequestsTotal++;
-      if (resolvedReason.contains("world_offset")) {
-         this.automationResetRequestsWorldOffset++;
+      String currentReason = this.pendingFullLightBlendResetReason == null || this.pendingFullLightBlendResetReason.isBlank()
+         ? "none"
+         : this.pendingFullLightBlendResetReason;
+      boolean alreadyPendingSameReason = this.pendingFullLightBlendReset && hasResetReason(currentReason, resolvedReason);
+      if (!alreadyPendingSameReason) {
+         this.automationResetRequestsTotal++;
+         if (resolvedReason.contains("world_offset")) {
+            this.automationResetRequestsWorldOffset++;
+         }
+         if (resolvedReason.contains("camera_jump")) {
+            this.automationResetRequestsCameraJump++;
+         }
+         if (resolvedReason.contains("topology")) {
+            this.automationResetRequestsTopology++;
+         }
+         if (!resolvedReason.contains("world_offset") && !resolvedReason.contains("camera_jump") && !resolvedReason.contains("topology")) {
+            this.automationResetRequestsOther++;
+         }
       }
-      if (resolvedReason.contains("camera_jump")) {
-         this.automationResetRequestsCameraJump++;
-      }
-      if (resolvedReason.contains("topology")) {
-         this.automationResetRequestsTopology++;
-      }
-      if (!resolvedReason.contains("world_offset") && !resolvedReason.contains("camera_jump") && !resolvedReason.contains("topology")) {
-         this.automationResetRequestsOther++;
-      }
+      boolean wasPending = this.pendingFullLightBlendReset;
       this.pendingFullLightBlendReset = true;
-      this.pendingFullLightBlendResetReason = wasPending && this.pendingFullLightBlendResetReason != null && !this.pendingFullLightBlendResetReason.equals("none")
-         ? this.pendingFullLightBlendResetReason + "+" + resolvedReason
-         : resolvedReason;
+      if (!wasPending || currentReason.equals("none")) {
+         this.pendingFullLightBlendResetReason = resolvedReason;
+      } else if (!currentReason.equals(resolvedReason) && !currentReason.contains(resolvedReason)) {
+         this.pendingFullLightBlendResetReason = currentReason + "+" + resolvedReason;
+      }
       if (PhotonicsStorage.PROFILER_ENABLED.value && !wasPending) {
          Photonic.info("[Profiler] temporalReset pending: reason={} liveAge={} liveRegions={} pendingRegions={}",
             this.pendingFullLightBlendResetReason,

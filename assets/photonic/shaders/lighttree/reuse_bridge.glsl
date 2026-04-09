@@ -98,6 +98,7 @@ uniform float ph_restir_temporal_normal_threshold; // RTXDI: temporal normalThre
 uniform float ph_restir_temporal_permutation_sampling; // RTXDI: enablePermutationSampling
 uniform float ph_restir_temporal_visibility_shortcut;  // RTXDI: enableVisibilityShortcut
 uniform int ph_restir_temporal_uniform_random;         // RTXDI: uniformRandomNumber
+uniform int ph_restir_temporal_frame_index;            // Renderer-managed temporal frame counter for DI parity/rng
 #endif
 uniform float ph_restir_spatial_sample_count;      // RTXDI: numSamples (default 1)
 uniform float ph_restir_spatial_radius;            // RTXDI: samplingRadius (default 32.0)
@@ -121,6 +122,8 @@ uniform float ph_restir_spatial_target_history;    // RTXDI: targetHistoryLength
 uniform float ph_restir_enable_final_visibility;   // RTXDI: enableFinalVisibility
 uniform float ph_restir_reuse_final_visibility;    // RTXDI: reuseFinalVisibility
 uniform float ph_restir_enable_denoiser_packing;   // RTXDI: enableDenoiserInputPacking
+uniform float ph_debug_enable_direct_temporal_reuse;
+uniform float ph_debug_enable_direct_spatial_reuse;
 uniform float ph_debug_enable_direct_final_visibility;
 uniform float ph_debug_enable_direct_visibility_transmittance;
 
@@ -1098,7 +1101,7 @@ bool lt_trace_conservative_visibility(inout RAB_LightSample smple, RAB_Surface s
     ray.direction = rayDirection;
     ray_target = ivec3(floor(smple.position));
     ray_ignore_block_id = light.blockId;
-    ray_stop_on_target = false;
+    ray_stop_on_target = true;
     ray_min_trace_distance = traceMinDistance;
     ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
@@ -1144,7 +1147,7 @@ vec3 lt_trace_final_visibility_with_offset(
     ray.direction = rayDirection;
     ray_target = ivec3(floor(smple.position));
     ray_ignore_block_id = light.blockId;
-    ray_stop_on_target = false;
+    ray_stop_on_target = true;
     ray_min_trace_distance = traceMinDistance;
     ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
@@ -1591,7 +1594,7 @@ RTXDI_RuntimeParameters lt_build_runtime_parameters()
     RTXDI_RuntimeParameters params;
     params.neighborOffsetMask = uint(lt_neighbor_offset_count - 1);
     params.activeCheckerboardField = uint(ph_restir_active_checkerboard_field);
-    params.frameIndex = uint(frameCounter);
+    params.frameIndex = uint(max(ph_restir_temporal_frame_index, 0));
     params.pad2 = 0u;
     return params;
 }
@@ -1931,7 +1934,10 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample lightSam
 bool RAB_GetTemporalConservativeVisibility(RAB_Surface surface, RAB_Surface temporalSurface, RAB_LightSample lightSample)
 {
     RAB_LightSample lightSampleCopy = lightSample;
-    return lt_trace_conservative_visibility(lightSampleCopy, temporalSurface);
+    // RTXDI fallback contract: when no previous-frame AS is available, trace against the
+    // current frame using the current receiver surface instead of mixing a previous-frame
+    // receiver with current-frame geometry.
+    return lt_trace_conservative_visibility(lightSampleCopy, surface);
 }
 
 RTXDI_DIReservoir RTXDI_LoadDIReservoir(
@@ -2543,8 +2549,9 @@ RTXDI_DIReservoir RTXDI_DITemporalResampling(
 
     RAB_Surface temporalSurface = RAB_EmptySurface();
     bool foundNeighbor = false;
-    const float radius = (params.activeCheckerboardField == 0u) ? 4.0f : 8.0f;
     ivec2 spatialOffset = ivec2(0, 0);
+
+    const float radius = (params.activeCheckerboardField == 0u) ? 4.0f : 8.0f;
 
     for (int i = 0; i < 9; i++)
     {
@@ -2646,7 +2653,6 @@ RTXDI_DIReservoir RTXDI_DITemporalResampling(
             float temporalP = 0.0f;
 
             Light selectedLightPrev = RAB_LoadLightInfo(selectedLightPrevID, true);
-
             RAB_LightSample selectedSampleAtTemporal = RAB_SamplePolymorphicLight(
                 selectedLightPrev, temporalSurface, RTXDI_GetDIReservoirSampleUV(state));
 

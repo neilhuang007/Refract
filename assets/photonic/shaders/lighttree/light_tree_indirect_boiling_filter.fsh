@@ -63,6 +63,9 @@ void main() {
         }
 
         float averageNonzeroWeight = nonzeroCount > 0.0f ? (nonzeroWeightSum / nonzeroCount) : 0.0f;
+        if (gi_reservoir_is_skylight(reservoir)) {
+            averageNonzeroWeight *= 2.0f;
+        }
         float filterStrength = clamp(gi_runtime_boiling_filter_strength(), 1e-6f, 1.0f);
         float boilingFilterMultiplier = 10.0f / filterStrength - 9.0f;
         float reservoirWeight = gi_boiling_filter_weight(reservoir);

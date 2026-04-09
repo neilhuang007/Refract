@@ -166,7 +166,9 @@ void lt_accumulate_indirect(
         vec2(0.0f)
     );
 
-    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
+    float localLightBlend = ph_dirty_region_factor(currentPosition);
+    bool lightReloadActive = (light_reload && (ph_debug_disable_temporal_reset < 0.5f))
+        || localLightBlend > 0.0f;
     bool canReproject = lt_is_valid_reprojection(reprojectionUv, currentPosition, currentNormal);
     if (lightReloadActive || !canReproject) {
         vec2 currentMoments = lt_compute_moments(currentSample.rgb);

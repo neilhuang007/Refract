@@ -41,8 +41,8 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_FREEZE_RNG = boolParam("debug_freeze_rng", false);
    public static final Parameter<String> DEBUG_DIRECT_STAGE_VIEW = stringParam("debug_direct_stage_view", "final");
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_PROPOSAL_RESERVOIR = boolParam("debug_enable_direct_proposal_reservoir", true);
-   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE = boolParam("debug_enable_direct_temporal_reuse", false);
-   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_SPATIAL_REUSE = boolParam("debug_enable_direct_spatial_reuse", false);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE = boolParam("debug_enable_direct_temporal_reuse", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_SPATIAL_REUSE = boolParam("debug_enable_direct_spatial_reuse", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_SHADE_SAMPLES = boolParam("debug_enable_direct_shade_samples", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_FINAL_VISIBILITY = boolParam("debug_enable_direct_final_visibility", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_VISIBILITY_TRANSMITTANCE = boolParam("debug_enable_direct_visibility_transmittance", true);
@@ -52,7 +52,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ANTI_FIREFLY = boolParam("debug_enable_direct_anti_firefly", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
-   public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "power_ris");
+   public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "regir_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
    // Performance tuning — individual per-parameter overrides.
    // A value of -1 means "use shaderpack default" (auto).  Any positive

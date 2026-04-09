@@ -44,16 +44,17 @@ class WorldRegistryLightBlendModeTest {
    }
 
    @Test
-   void lightMutationWithoutTopologyChangeTriggersFullTemporalReset() {
-      assertTrue(WorldRegistry.shouldForceTemporalResetForLightMutation(false, 1));
-      assertTrue(WorldRegistry.shouldForceTemporalResetForLightMutation(false, 4));
+   void localLightMutationUsesRegionalBlendInsteadOfFullTemporalReset() {
+      assertFalse(WorldRegistry.shouldForceTemporalResetForLightMutation(false, 1));
+      assertFalse(WorldRegistry.shouldForceTemporalResetForLightMutation(false, 4));
       assertFalse(WorldRegistry.shouldForceTemporalResetForLightMutation(false, 0));
    }
 
    @Test
-   void topologyDrivenLightMutationDoesNotForceFullTemporalReset() {
-      assertFalse(WorldRegistry.shouldForceTemporalResetForLightMutation(true, 1));
-      assertFalse(WorldRegistry.shouldForceTemporalResetForLightMutation(true, 8));
+   void topologyDrivenLightMutationStillForcesFullTemporalReset() {
+      assertTrue(WorldRegistry.shouldForceTemporalResetForLightMutation(true, 1));
+      assertTrue(WorldRegistry.shouldForceTemporalResetForLightMutation(true, 8));
+      assertTrue(WorldRegistry.shouldForceTemporalResetForLightMutation(true, 0));
    }
 
    @Test
@@ -77,5 +78,14 @@ class WorldRegistryLightBlendModeTest {
          new PChunkPos(32, 0, 0),
          32
       ));
+   }
+
+   @Test
+   void resetReasonMatchingTreatsCombinedPendingReasonsAsAlreadyPresent() {
+      assertTrue(WorldRegistry.hasResetReason("light_set", "light_set"));
+      assertTrue(WorldRegistry.hasResetReason("initial+light_set", "light_set"));
+      assertTrue(WorldRegistry.hasResetReason("world_offset+camera_jump+light_set", "camera_jump"));
+      assertFalse(WorldRegistry.hasResetReason("initial+light_set", "topology"));
+      assertFalse(WorldRegistry.hasResetReason("", "light_set"));
    }
 }

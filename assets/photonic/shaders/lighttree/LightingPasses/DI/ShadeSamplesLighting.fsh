@@ -369,7 +369,8 @@ void main() {
                 RTXDI_StoreVisibilityInDIReservoir(reservoir, storedVisibility, discardIfInvisible);
 
                 if (isVisible) {
-                    lightSample.color *= storedVisibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
+                    vec3 shadingVisibility = enableVisibilityTransmittance ? tracedVisibility : storedVisibility;
+                    lightSample.color *= shadingVisibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
                     shadedDiffuse = splitShade.diffuse;
                     shadedSpecular = splitShade.specular;

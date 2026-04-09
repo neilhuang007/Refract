@@ -9,6 +9,7 @@ layout(location = 3) out vec4 direct_fast_out;
 layout(location = 4) out vec4 direct_history_length_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/common/light_blend_regions.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
 uniform float ph_debug_disable_temporal_reset;
@@ -233,6 +234,7 @@ void main() {
     ivec2 bilinearOrigin = ivec2(floor(prevPixelPosFloat - 0.5));
     vec2 bilinearWeights = fract(prevPixelPosFloat - 0.5);
     ivec2 texSize = prevTextureSize;
+    vec2 prevUVSMB = reprojectionUv / vec2(texSize);
 
     // --- Per-tap disocclusion threshold as vec4 (reference lines 112-117) ---
     float disocclusionThresholdSlopeScale =
@@ -335,7 +337,8 @@ void main() {
     footprintQuality *= mix(0.1, 1.0, clamp(sizeQuality + 0.0, 0.0, 1.0));
 
     // --- Temporal accumulation ---
-    bool temporalReset = light_reload && (ph_debug_disable_temporal_reset < 0.5);
+    bool temporalReset = (light_reload && (ph_debug_disable_temporal_reset < 0.5))
+        || ph_dirty_region_factor(currentPosition) > 0.0;
 
     vec4 noisySignal = nrd_pack_direct_history(currentHistory.radiance, currentHistory.secondMoment);
     vec4 slowSignal = noisySignal;
@@ -381,15 +384,7 @@ void main() {
             prevFast += texelFetch(prev_direct_fast_input, direct_previous_owner_tap(tap11, texSize), 0) * bilinearCustomWeights.w;
         }
 
-        // NRD RELAX reference (RELAX_TemporalAccumulation.cs.hlsl:595-600):
-        // Sample diffuse history confidence at the reprojected SMB location.
-        float diffConfidence = clamp(nrd_bilinear_custom_float(
-            texelFetch(diffuse_confidence_input, direct_previous_owner_tap(tap00, texSize), 0).r,
-            texelFetch(diffuse_confidence_input, direct_previous_owner_tap(tap10, texSize), 0).r,
-            texelFetch(diffuse_confidence_input, direct_previous_owner_tap(tap01, texSize), 0).r,
-            texelFetch(diffuse_confidence_input, direct_previous_owner_tap(tap11, texSize), 0).r,
-            bilinearCustomWeights
-        ), 0.0, 1.0);
+        float diffConfidence = clamp(textureLod(diffuse_confidence_input, prevUVSMB, 0.0).r, 0.0, 1.0);
         slowMaxAccumulatedFrameNum *= diffConfidence;
         fastMaxAccumulatedFrameNum *= diffConfidence;
 

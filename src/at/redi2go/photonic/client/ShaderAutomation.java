@@ -26,6 +26,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.uniforms.SystemTimeUniforms;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.Screen;
 import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL30;
@@ -247,6 +248,13 @@ public final class ShaderAutomation {
    private long latestPendingBlendMutationEvents = 0L;
    private int latestMaxPendingBlendRegions = 0;
    private long latestMaxPendingBlendVolume = 0L;
+   private long observedResetRequestsTotal = -1L;
+   private long observedBlendFullActivations = -1L;
+   private long observedBlendRegionActivations = -1L;
+   private long observedBlendCompletions = -1L;
+   private boolean observedMotionRepeatHistoryActivity = false;
+   private int motionRepeatHistoryEpoch = 0;
+   private int lastMotionRepeatHistoryInvalidationActiveTick = Integer.MIN_VALUE;
    private double directTemporalDeltaSum = 0.0;
    private double directTemporalDeltaMax = 0.0;
    private int directTemporalDeltaSamples = 0;
@@ -317,10 +325,12 @@ public final class ShaderAutomation {
    private boolean directSignalDetected = false;
    private boolean lightingSignalDetected = false;
    private boolean finished = false;
+   private boolean fullScreenshotSaved = false;
    private boolean reportInitialized = false;
    private boolean fullscreenApplied = false;
    private boolean cameraBaselineCaptured = false;
    private boolean worldAutomationPrepared = false;
+   private boolean recoveringFromScreen = false;
    private String failureReason = "";
    private String shaderPackName = "";
    private boolean expectedShaderPackMatched = false;
@@ -1651,6 +1661,7 @@ public final class ShaderAutomation {
       if (client.world != null) {
          this.releaseAutomationMouse(client);
          this.applyFullscreen(client);
+         this.ensureGameplayScreen(client);
       }
 
       if (client.world != null && this.raytracerActive) {
@@ -1758,7 +1769,9 @@ public final class ShaderAutomation {
          this.captureTexture("direct_clamped_fast", directClampedFastTexture, captureIndex);
          this.captureTexture("direct_anti_firefly", directAntiFireflyTexture, captureIndex);
          BufferedImage directDenoisedImage = this.captureTexture("direct_denoised", directDenoisedTexture, captureIndex);
-         this.captureTexture("direct_atrous", directAtrousTexture, captureIndex);
+         BufferedImage directAtrousImage = this.captureTexture("direct_atrous", directAtrousTexture, captureIndex);
+         BufferedImage directValidationImage = directAtrousImage != null ? directAtrousImage : directDenoisedImage;
+         BufferedImage directTemporalAndRepeatImage = directValidationImage != null ? directValidationImage : directImage;
          BufferedImage directRawImage = this.captureTexture("direct_raw", directRawTexture, captureIndex);
          this.captureTexture("spec_denoised", specDenoisedTexture, captureIndex);
          this.captureTexture("spec_raw", specRawTexture, captureIndex);
@@ -1971,7 +1984,7 @@ public final class ShaderAutomation {
          this.latestIndirectMeanAlpha = indirectAlphaStats[0];
          this.latestIndirectZeroAlphaFraction = indirectAlphaStats[3];
          this.updateDirectSoftSignalState(directSoftLuma, captureIndex);
-         this.recordTemporalDelta(directImage, false, false);
+         this.recordTemporalDelta(directTemporalAndRepeatImage, false, false);
          this.recordTemporalDelta(directSoftImage, true, false);
          this.recordTemporalDelta(indirectImage, false, true);
          this.latestTracedLightCount = lightRegistry.lightCount();
@@ -2001,7 +2014,7 @@ public final class ShaderAutomation {
          this.indirectResolveGainSum += this.latestIndirectResolveGain;
          this.indirectResolveGainMax = Math.max(this.indirectResolveGainMax, this.latestIndirectResolveGain);
          this.indirectResolveGainSamples++;
-         this.recordMotionRepeatDelta(directImage, true, captureIndex);
+         this.recordMotionRepeatDelta(directTemporalAndRepeatImage, true, captureIndex);
          this.recordMotionRepeatDelta(indirectImage, false, captureIndex);
          this.capturesTaken = captureIndex;
          this.pendingFinalCaptureIndex = captureIndex;
@@ -2724,8 +2737,11 @@ public final class ShaderAutomation {
       if (ticksSinceCommand < this.motionRepeatSettleTicks) {
          return;
       }
+      if (!this.isMotionRepeatHistorySettled()) {
+         return;
+      }
 
-      MotionRepeatKey repeatKey = new MotionRepeatKey(phaseKey, this.timeOfDayCommandsIssued, this.blockToggleCommandsIssued);
+      MotionRepeatKey repeatKey = new MotionRepeatKey(phaseKey, this.timeOfDayCommandsIssued, this.blockToggleCommandsIssued, this.motionRepeatHistoryEpoch());
       Map<MotionRepeatKey, MotionPhaseSample> historyByPhase = direct ? this.previousDirectImagesByPhase : this.previousIndirectImagesByPhase;
       MotionPhaseSample previousSample = historyByPhase.get(repeatKey);
       if (previousSample != null) {
@@ -2753,7 +2769,8 @@ public final class ShaderAutomation {
                previousSample.timeOfDayCommandCount(),
                previousSample.blockToggleCommandCount(),
                this.timeOfDayCommandsIssued,
-               this.blockToggleCommandsIssued
+               this.blockToggleCommandsIssued,
+               repeatKey.historyEpoch()
             )
          );
       }
@@ -2765,7 +2782,8 @@ public final class ShaderAutomation {
             this.activeTicks,
             ticksSinceCommand,
             this.timeOfDayCommandsIssued,
-            this.blockToggleCommandsIssued
+            this.blockToggleCommandsIssued,
+            repeatKey.historyEpoch()
          )
       );
    }
@@ -2811,6 +2829,45 @@ public final class ShaderAutomation {
          : Math.max(0, this.activeTicks - this.lastAutomationCommandActiveTick);
    }
 
+   private int ticksSinceLastMotionRepeatHistoryInvalidation() {
+      return this.lastMotionRepeatHistoryInvalidationActiveTick == Integer.MIN_VALUE
+         ? Integer.MAX_VALUE
+         : Math.max(0, this.activeTicks - this.lastMotionRepeatHistoryInvalidationActiveTick);
+   }
+
+   private void observeMotionRepeatHistoryActivity() {
+      boolean resetRequestsChanged = this.observedResetRequestsTotal >= 0L && this.latestResetRequestsTotal != this.observedResetRequestsTotal;
+      boolean blendActivationsChanged = this.observedBlendFullActivations >= 0L && this.latestBlendFullActivations != this.observedBlendFullActivations;
+      boolean regionActivationsChanged = this.observedBlendRegionActivations >= 0L && this.latestBlendRegionActivations != this.observedBlendRegionActivations;
+      boolean blendCompletionsChanged = this.observedBlendCompletions >= 0L && this.latestBlendCompletions != this.observedBlendCompletions;
+      if (resetRequestsChanged || blendActivationsChanged || regionActivationsChanged || blendCompletionsChanged) {
+         this.observedMotionRepeatHistoryActivity = true;
+         this.motionRepeatHistoryEpoch++;
+         this.lastMotionRepeatHistoryInvalidationActiveTick = this.activeTicks;
+      }
+      this.observedResetRequestsTotal = this.latestResetRequestsTotal;
+      this.observedBlendFullActivations = this.latestBlendFullActivations;
+      this.observedBlendRegionActivations = this.latestBlendRegionActivations;
+      this.observedBlendCompletions = this.latestBlendCompletions;
+   }
+
+   private int motionRepeatSettleTicksRequired() {
+      if (!this.observedMotionRepeatHistoryActivity) {
+         return this.motionRepeatSettleTicks;
+      }
+      return Math.max(this.motionRepeatSettleTicks, this.stableSceneSettleTicks);
+   }
+
+   private boolean isMotionRepeatHistorySettled() {
+      return !this.latestGlobalLightReload
+         && !this.latestWorldBuildWorkPending
+         && ticksSinceLastMotionRepeatHistoryInvalidation() >= this.motionRepeatSettleTicksRequired();
+   }
+
+   private int motionRepeatHistoryEpoch() {
+      return this.observedMotionRepeatHistoryActivity ? this.motionRepeatHistoryEpoch : 0;
+   }
+
    private void recordTopRepeatDelta(boolean direct, MotionRepeatDeltaRecord record) {
       List<MotionRepeatDeltaRecord> topDeltas = direct ? this.topDirectRepeatDeltas : this.topIndirectRepeatDeltas;
       topDeltas.add(record);
@@ -2829,13 +2886,10 @@ public final class ShaderAutomation {
       for (MotionRepeatDeltaRecord record : records) {
          parts.add(String.format(
             Locale.ROOT,
-            "delta=%.5f phase=%d scene=t%d/b%d>t%d/b%d captures=%d>%d activeTicks=%d>%d ticksSinceCommand=%d>%d",
+            "delta=%.5f phase=%d epoch=%d captures=%d→%d activeTicks=%d→%d cmdTicks=%d→%d",
             record.delta(),
             record.phaseKey(),
-            record.previousTimeOfDayCommandCount(),
-            record.previousBlockToggleCommandCount(),
-            record.currentTimeOfDayCommandCount(),
-            record.currentBlockToggleCommandCount(),
+            record.historyEpoch(),
             record.previousCaptureIndex(),
             record.currentCaptureIndex(),
             record.previousActiveTick(),
@@ -2886,6 +2940,7 @@ public final class ShaderAutomation {
       this.latestPendingBlendMutationEvents = worldRegistry.getAutomationPendingBlendMutationEvents();
       this.latestMaxPendingBlendRegions = worldRegistry.getAutomationMaxPendingBlendRegions();
       this.latestMaxPendingBlendVolume = worldRegistry.getAutomationMaxPendingBlendVolume();
+      this.observeMotionRepeatHistoryActivity();
       LightRegistry lightRegistry = worldRegistry.getLightRegistry();
       if (lightRegistry != null) {
          this.latestTracedLightCount = lightRegistry.lightCount();
@@ -2995,6 +3050,32 @@ public final class ShaderAutomation {
 
       client.getWindow().toggleFullscreen();
       this.fullscreenApplied = client.getWindow().isFullscreen();
+   }
+
+   private void ensureGameplayScreen(MinecraftClient client) {
+      Screen screen = client.currentScreen;
+      if (screen == null) {
+         this.recoveringFromScreen = false;
+         return;
+      }
+      if (client.player == null || client.isPaused()) {
+         if (!this.recoveringFromScreen) {
+            Photonic.info("[Automation] clearing paused screen {}", screen.getClass().getSimpleName());
+         }
+         this.recoveringFromScreen = true;
+         client.setScreen(null);
+         return;
+      }
+      String screenName = screen.getClass().getName();
+      if (!screenName.startsWith("net.minecraft.client.gui.screen.ChatScreen")) {
+         if (!this.recoveringFromScreen) {
+            Photonic.info("[Automation] clearing gameplay screen {}", screen.getClass().getSimpleName());
+         }
+         this.recoveringFromScreen = true;
+         client.setScreen(null);
+         return;
+      }
+      this.recoveringFromScreen = false;
    }
 
    private void recordFps() {
@@ -3589,13 +3670,20 @@ public final class ShaderAutomation {
    }
 
    private boolean qualityThresholdsSatisfied() {
-      return thresholdSatisfied(this.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)
-         && thresholdSatisfied(this.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax)
+      return directTemporalValidationSatisfied()
          && thresholdSatisfied(this.averageTemporalDelta(false, true), this.maxIndirectTemporalDeltaAvg)
          && thresholdSatisfied(this.indirectTemporalDeltaMax, this.maxIndirectTemporalDeltaMax)
          && thresholdSatisfied(this.latestIndirectLinearOverbrightFraction, this.maxIndirectLinearOverbrightFraction)
          && thresholdSatisfied(this.latestIndirectLinearSevereFireflyFraction, this.maxIndirectLinearSevereFireflyFraction)
          && thresholdSatisfied(this.latestIndirectRawLinearOverbrightFraction, this.maxIndirectRawLinearOverbrightFraction);
+   }
+
+   private boolean directTemporalValidationSatisfied() {
+      if (this.isMotionRepeatValidationEnabled()) {
+         return true;
+      }
+      return thresholdSatisfied(this.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)
+         && thresholdSatisfied(this.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax);
    }
 
    private static boolean thresholdSatisfied(double value, double maxAllowed) {
@@ -3680,17 +3768,19 @@ public final class ShaderAutomation {
                + "]";
          }
       }
-      if (!thresholdSatisfied(this.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)) {
-         return "Direct temporal delta average exceeded threshold: "
-            + this.averageTemporalDelta(false, false)
-            + " > "
-            + this.maxDirectTemporalDeltaAvg;
-      }
-      if (!thresholdSatisfied(this.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax)) {
-         return "Direct temporal delta max exceeded threshold: "
-            + this.directTemporalDeltaMax
-            + " > "
-            + this.maxDirectTemporalDeltaMax;
+      if (!directTemporalValidationSatisfied()) {
+         if (!thresholdSatisfied(this.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)) {
+            return "Direct temporal delta average exceeded threshold: "
+               + this.averageTemporalDelta(false, false)
+               + " > "
+               + this.maxDirectTemporalDeltaAvg;
+         }
+         if (!thresholdSatisfied(this.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax)) {
+            return "Direct temporal delta max exceeded threshold: "
+               + this.directTemporalDeltaMax
+               + " > "
+               + this.maxDirectTemporalDeltaMax;
+         }
       }
       if (!thresholdSatisfied(this.averageTemporalDelta(false, true), this.maxIndirectTemporalDeltaAvg)) {
          return "Indirect temporal delta average exceeded threshold: "
@@ -3741,7 +3831,8 @@ public final class ShaderAutomation {
    private record MotionRepeatKey(
       int phaseKey,
       int timeOfDayCommandCount,
-      int blockToggleCommandCount
+      int blockToggleCommandCount,
+      int historyEpoch
    ) {
    }
 
@@ -3751,7 +3842,8 @@ public final class ShaderAutomation {
       int activeTick,
       int ticksSinceAutomationCommand,
       int timeOfDayCommandCount,
-      int blockToggleCommandCount
+      int blockToggleCommandCount,
+      int historyEpoch
    ) {
    }
 
@@ -3767,7 +3859,8 @@ public final class ShaderAutomation {
       int previousTimeOfDayCommandCount,
       int previousBlockToggleCommandCount,
       int currentTimeOfDayCommandCount,
-      int currentBlockToggleCommandCount
+      int currentBlockToggleCommandCount,
+      int historyEpoch
    ) {
    }
 

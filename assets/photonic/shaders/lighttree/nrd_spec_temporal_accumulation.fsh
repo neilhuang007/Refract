@@ -9,6 +9,7 @@ layout(location = 3) out vec4 spec_fast_out;
 layout(location = 4) out vec4 spec_history_length_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/common/light_blend_regions.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
 uniform float ph_debug_disable_temporal_reset;
@@ -41,7 +42,7 @@ float spec_compute_parallax_in_pixels(ivec2 currentPixelCoord, vec3 currentPosit
 }
 
 // Project a world position through previous_modelview_projection and return pixel coords.
-// ph_reprojectf returns pixel coords in [0, viewWidth*PH_RENDER_SCALE] x [0, viewHeight*PH_RENDER_SCALE].
+// ph_reprojectf returns pixel coords in [0, viewWidth] x [0, viewHeight].
 // Like the diffuse temporal pass and soft accumulation path, this intentionally uses zero jitter
 // so history lookups stay anchored to the real previous pixel instead of the current TAA phase.
 vec2 spec_project_to_prev_pixels(vec3 worldPos) {
@@ -55,7 +56,7 @@ vec2 spec_project_to_prev_pixels(vec3 worldPos) {
 
 // Convert pixel coords (as used by ph_reprojectf output) to normalized UV [0,1].
 vec2 spec_pixels_to_uv(vec2 px) {
-    return px / (vec2(viewWidth, viewHeight) * PH_RENDER_SCALE);
+    return px / vec2(viewWidth, viewHeight);
 }
 
 // NRD RELAX per-tap disocclusion check using world-space plane distance.
@@ -427,19 +428,14 @@ void main() {
     // -------------------------------------------------------------------------
     // Temporal reset
     // -------------------------------------------------------------------------
-    bool temporalReset = light_reload && (ph_debug_disable_temporal_reset < 0.5);
+    bool temporalReset = (light_reload && (ph_debug_disable_temporal_reset < 0.5))
+        || ph_dirty_region_factor(currentPosition) > 0.0;
     if (temporalReset) historyLength = 1.0;
 
     // -------------------------------------------------------------------------
     // Confidence-scaled max accumulated frame nums
     // -------------------------------------------------------------------------
-    float specConfidence = clamp(nrd_bilinear_custom_float(
-        texelFetch(spec_confidence_input, spec_previous_owner_tap(smbTap00, texSize), 0).g,
-        texelFetch(spec_confidence_input, spec_previous_owner_tap(smbTap10, texSize), 0).g,
-        texelFetch(spec_confidence_input, spec_previous_owner_tap(smbTap01, texSize), 0).g,
-        texelFetch(spec_confidence_input, spec_previous_owner_tap(smbTap11, texSize), 0).g,
-        smbCustomWeights
-    ), 0.0, 1.0);
+    float specConfidence = clamp(textureLod(spec_confidence_input, prevUVSMB, 0.0).g, 0.0, 1.0);
     float specMaxAccumFrameNum  = ph_nrd_max_accumulated_frame_num  * specConfidence;
     float specMaxFastAccumFrame = ph_nrd_max_fast_accumulated_frame_num * specConfidence;
 
@@ -483,7 +479,7 @@ void main() {
         // Build a stable camera-space right/up basis for single-pixel ray offsets.
         // rightWS and upWS are world-space tangent vectors perpendicular to V,
         // scaled so that one unit corresponds to one pixel at the current view distance.
-        float invViewH = 1.0 / max(viewHeight * PH_RENDER_SCALE, 1.0);
+        float invViewH = 1.0 / max(float(viewHeight), 1.0);
         vec3  rightWS;
         if (abs(dot(V, vec3(0.0, 1.0, 0.0))) > 0.99) {
             rightWS = normalize(cross(V, vec3(1.0, 0.0, 0.0)));
@@ -582,8 +578,8 @@ void main() {
             vec3  xvirtTest = nrd_get_xvirtual(hitDist, curvature, currentPosition, currentPosition, currentNormal, V, currentRoughness);
             vec2  uvTest    = spec_pixels_to_uv(spec_project_to_prev_pixels(xvirtTest));
             vec2  uvCurr    = spec_pixels_to_uv(spec_project_to_prev_pixels(currentPosition));
-            float a         = length((uvTest - uvCurr) * vec2(viewWidth, viewHeight) * PH_RENDER_SCALE);
-            if (a >= NRD_MAX_ALLOWED_VMB_ACCEL * smbParallaxInPixelsMax + 1.0 / (viewWidth * PH_RENDER_SCALE)) {
+            float a         = length((uvTest - uvCurr) * vec2(viewWidth, viewHeight));
+            if (a >= NRD_MAX_ALLOWED_VMB_ACCEL * smbParallaxInPixelsMax + 1.0 / float(viewWidth)) {
                 curvature = 0.0;
             }
         }
@@ -697,7 +693,7 @@ void main() {
 
     // Curvature angle and normal weight (NRD ref lines 784-794)
     vec2  uvDiff              = prevUVVMB - prevUVSMB;
-    float uvDiffLengthInPixels = length(uvDiff * vec2(viewWidth, viewHeight) * PH_RENDER_SCALE);
+    float uvDiffLengthInPixels = length(uvDiff * vec2(viewWidth, viewHeight));
 
     float tanCurvature   = abs(curvature * pixelSize);
     tanCurvature        *= max(uvDiffLengthInPixels / max(NoV, 0.01), 1.0);
@@ -723,7 +719,7 @@ void main() {
         }
         // Scale step: saturate(uvDiffLengthInPixels / 0.1) + uvDiffLengthInPixels / 2.0
         // Convert step from pixel-space to UV-space:
-        vec2 uvStep = uvDiffNorm / max(vec2(viewWidth, viewHeight) * PH_RENDER_SCALE, vec2(1.0));
+        vec2 uvStep = uvDiffNorm / max(vec2(viewWidth, viewHeight), vec2(1.0));
         uvStep *= (clamp(uvDiffLengthInPixels / 0.1, 0.0, 1.0) + uvDiffLengthInPixels * 0.5);
 
         vec2 backUV1 = prevUVVMB + 1.0 * uvStep;
@@ -787,7 +783,7 @@ void main() {
 
         float percentOfVolume   = 0.6;
         float lobeTanHalfAngle  = nrd_spec_lobe_tan_half_angle(currentRoughness, percentOfVolume);
-        float pixSizeInv        = 1.0 / max(viewWidth * PH_RENDER_SCALE, 1.0);
+        float pixSizeInv        = 1.0 / max(float(viewWidth), 1.0);
         lobeTanHalfAngle        = max(lobeTanHalfAngle, 0.5 * pixSizeInv);
 
         float virtualPosLen     = length(virtualWorldPos - world_camera_position);
@@ -798,7 +794,7 @@ void main() {
                                   max(pixelSizeAtVirt, 1e-6);
         float lobeRadiusInPixels = lobeTanHalfAngle * unproj1;
 
-        float deltaParallaxPx = length((prevUVVMBTest - prevUVVMB) * vec2(viewWidth, viewHeight) * PH_RENDER_SCALE);
+        float deltaParallaxPx = length((prevUVVMBTest - prevUVVMB) * vec2(viewWidth, viewHeight));
         virtualHistoryHitDistConf *= 1.0 - smoothstep(0.0, lobeRadiusInPixels + 0.25, deltaParallaxPx);
     }
 

@@ -114,11 +114,19 @@ void main() {
             temporalNormalThreshold,
             temporalDepthThreshold
         )) {
-            continue;
+            ivec2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
+            RTXDI_GIReservoir candidateReservoir = RTXDI_LoadPreviousGIReservoir(prevReservoirPos, activeCheckerboardField);
+            if (!gi_sample_is_skylight(candidateReservoir, currentSurface)) {
+                continue;
+            }
         }
 
         if (!lt_materials_similar(currentSurface, candidateSurface)) {
-            continue;
+            ivec2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);
+            RTXDI_GIReservoir candidateReservoir = RTXDI_LoadPreviousGIReservoir(prevReservoirPos, activeCheckerboardField);
+            if (!gi_sample_is_skylight(candidateReservoir, currentSurface)) {
+                continue;
+            }
         }
 
         ivec2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(idx, activeCheckerboardField);

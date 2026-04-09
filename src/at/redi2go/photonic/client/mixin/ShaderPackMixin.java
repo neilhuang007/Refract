@@ -182,7 +182,6 @@ public abstract class ShaderPackMixin {
       @Local(name = "newEnvDefines") List<StringPair> newEnvDefines
    ) {
       PhotonicsProperties properties = (PhotonicsProperties)this.shaderProperties;
-      floatDefine(newEnvDefines, "PH_RENDER_SCALE", PhotonicsStorage.RENDER_SCALE.value >= 0 ? PhotonicsStorage.RENDER_SCALE.value : properties.getRenderScale());
       intDefine(newEnvDefines, "PH_MAX_LIGHTS", properties.getMaxLights());
       properties.getAlphaMode().registerDefines(newEnvDefines);
       if (properties.isGiEnabled().orElse(true)) {

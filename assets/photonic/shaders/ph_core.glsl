@@ -48,7 +48,7 @@ void ph_get_key(vec3 world_pos, vec3 normal, vec3 world_camera_pos, inout ivec3 
         && dist > 16.0f;
 
     // How rough GI is, where resolution is roughly one block.
-    float resolution = max(1.0f + floor(dist / 16.0f), 1.0f) / (4.0f * PH_RENDER_SCALE);
+    float resolution = max(1.0f + floor(dist / 16.0f), 1.0f) / 4.0f;
     if (badAngle) resolution*= 2f;
 
     world_pos = floor(world_pos / resolution) * resolution;
@@ -116,7 +116,7 @@ vec2 ph_reprojectf(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jit
     vec2 xy = viewspace_position.xy;
     xy = (xy/w + jitter) * 0.5f + 0.5f;
 
-    return xy * viewSize * PH_RENDER_SCALE;
+    return xy * viewSize;
 }
 
 bool ph_is_valid_clip_projection(vec4 clipPosition) {
@@ -141,7 +141,7 @@ vec4 ph_compute_temporal_motion(vec3 worldPosition, vec2 currentPixelCenter, vec
     }
 
     vec2 previousPixel = (previousClipPosition.xy / previousClipPosition.w) * 0.5f + 0.5f;
-    previousPixel *= viewSize * PH_RENDER_SCALE;
+    previousPixel *= viewSize;
 
     float currentLinearDepth = ph_linear_view_depth(modelview_projection, worldPosition);
     float previousLinearDepth = ph_linear_view_depth(previous_modelview_projection, worldPosition);

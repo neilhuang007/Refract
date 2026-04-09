@@ -218,6 +218,8 @@ public class LightTreeRenderer extends MainRenderer {
    private long lastCpuRELAXSpecularTemporalAccumulationNanos;
    private long lastCpuRELAXSpecularHistoryFixNanos;
    private long lastCpuRELAXSpecularHistoryClampingNanos;
+   private float[] cachedRegirPdfPowers;
+   private int cachedRegirPdfLightCount = -1;
    private long lastCpuRELAXSpecularAntiFireflyNanos;
    private long lastCpuRELAXSpecularAtrousNanos;
    private long lastCpuReSTIRGINanos;
@@ -519,7 +521,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "prev_direct_slow_input", () -> this.directAntiFireflyBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_direct_fast_input", () -> this.directClampedFastBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_direct_history_length_input", () -> this.directHistoryLengthBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "direct_firefly_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "direct_firefly_input", () -> this.directClampedSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "direct_historyfix_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "direct_historyfix_output", () -> this.directClampedSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "nrd_diff_slow_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
@@ -553,7 +555,7 @@ public class LightTreeRenderer extends MainRenderer {
       });
       this.addTextureSampler(samplers, "spec_history_length_clamp_input", () -> this.specularHistoryLengthBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "prev_spec_history_length_input", () -> this.specularHistoryLengthBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "spec_firefly_input", () -> this.specularSlowBuffer.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "spec_firefly_input", () -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "spec_historyfix_input", () -> this.specularSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "spec_historyfix_output", () -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "spec_clamped_slow_input", () -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
@@ -568,6 +570,7 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1i("direct_atrous_step_size", this::getCurrentDirectAtrousStepSize, listener -> {});
       uniforms.uniform1i("direct_atrous_is_last_pass", this::getCurrentDirectAtrousIsLastPass, listener -> {});
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_active_checkerboard_field", this::getActiveCheckerboardField);
+      uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_temporal_frame_index", () -> this.temporalFrameIndex);
       uniforms.uniform1f("ph_direct_sample_budget_scale", this::getDirectSampleBudgetScale, listener -> {});
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_depth_threshold", () -> this.properties.getRestirDepthThreshold());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_normal_threshold", () -> this.properties.getRestirNormalThreshold());
@@ -615,9 +618,6 @@ public class LightTreeRenderer extends MainRenderer {
             }
          }
 
-         // The block-light visibility bridge now uses emitter-hit semantics matching the
-         // stable local implementation, so proposal-time visibility can stay aligned with
-         // RTXDI's default behavior instead of carrying occluded samples into reuse.
          return 1.0f;
       });
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_brdf_cutoff", () -> 0.0001f);
@@ -633,8 +633,8 @@ public class LightTreeRenderer extends MainRenderer {
          String configuredMode = PhotonicsStorage.normalizeRestirLocalLightSamplingMode(PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.value);
          return switch (configuredMode) {
             case "uniform" -> 0.0f;
-            case "power_ris" -> 1.0f;
             case "regir_ris" -> 2.0f;
+            case "power_ris" -> 1.0f;
             default -> 1.0f;
          };
       });
@@ -776,9 +776,18 @@ public class LightTreeRenderer extends MainRenderer {
          return 0;
       }
 
-      int frameParity = this.temporalFrameIndex & 1;
-      boolean evenFrameUsesBlackField = "black".equals(checkerboardMode);
-      return ((frameParity == 0) == evenFrameUsesBlackField) ? 1 : 2;
+      // Match RTXDI ReSTIRDIContext::UpdateCheckerboardField exactly:
+      //   Black: odd frameIndex -> 1, even frameIndex -> 2
+      //   White: odd frameIndex -> 2, even frameIndex -> 1
+      // Temporal passes interpret previousFrame=true using that exact parity shift,
+      // so inverting the field assignment makes temporal reprojection walk to the
+      // wrong checkerboard owner every other frame and shows up as shimmer/swimming.
+      boolean oddFrame = (this.temporalFrameIndex & 1) != 0;
+      return switch (checkerboardMode) {
+         case "black" -> oddFrame ? 1 : 2;
+         case "white" -> oddFrame ? 2 : 1;
+         default -> 0;
+      };
    }
 
    @Override
@@ -1138,7 +1147,7 @@ public class LightTreeRenderer extends MainRenderer {
 
    private RoutingFramebuffer createDirectHistoryClampingFramebuffer() {
       return this.createRoutingFramebuffer(
-         () -> this.directSlowBuffer.getWriteAttachment("data"),
+         () -> this.directClampedSlowBuffer.getWriteAttachment("data"),
          () -> this.directClampedFastBuffer.getWriteAttachment("data")
       );
    }
@@ -1167,7 +1176,7 @@ public class LightTreeRenderer extends MainRenderer {
 
    private RoutingFramebuffer createSpecHistoryClampingFramebuffer() {
       return this.createRoutingFramebuffer(
-         () -> this.specularSlowBuffer.getWriteAttachment("data"),
+         () -> this.specularClampedSlowBuffer.getWriteAttachment("data"),
          () -> this.specularClampedFastBuffer.getWriteAttachment("data")
       );
    }
@@ -1572,15 +1581,22 @@ public class LightTreeRenderer extends MainRenderer {
          return;
       }
       LightRegistry lightRegistry = this.worldRegistry.getLightRegistry();
-      if (lightRegistry.lightCount() <= 0) {
+      int lightCount = lightRegistry.lightCount();
+      if (lightCount <= 0) {
+         this.cachedRegirPdfPowers = null;
+         this.cachedRegirPdfLightCount = 0;
          return;
       }
 
-      // Update PDF mipmap texture with current per-light power values
+      // Update PDF mipmap texture only when per-light power values or the light count change.
       float[] powers = lightRegistry.getLightPowers();
       if (powers.length > 0) {
-         this.regirComputeProgram.createPdfTexture(lightRegistry.lightCount());
-         this.regirComputeProgram.updatePdfTexture(powers, lightRegistry.lightCount());
+         this.regirComputeProgram.createPdfTexture(lightCount);
+         if (this.shouldRefreshRegirPdfTexture(powers, lightCount)) {
+            this.regirComputeProgram.updatePdfTexture(powers, lightCount);
+            this.cachedRegirPdfPowers = powers.clone();
+            this.cachedRegirPdfLightCount = lightCount;
+         }
       }
 
       // RTXDI defaults: numBuildSamples = 8 (ReGIR.h:141). The FullSample uploads
@@ -1597,12 +1613,26 @@ public class LightTreeRenderer extends MainRenderer {
          new Vector3i(gridRes, gridRes, gridRes),
          lightRegistry.getRegirLightsPerCell(),
          32.0f,
-         lightRegistry.lightCount(),
+         lightCount,
          this.resolveRegirPresampleFrameSeed(),
          this.resolveRegirBuildFrameSeed(),
          8,    // numBuildSamples — RTXDI default from ReGIR.h:141
          lightRegistry.getRegirSamplingJitter()
       );
+   }
+
+   private boolean shouldRefreshRegirPdfTexture(float[] powers, int lightCount) {
+      if (lightCount != this.cachedRegirPdfLightCount || this.cachedRegirPdfPowers == null || this.cachedRegirPdfPowers.length != powers.length) {
+         return true;
+      }
+
+      for (int i = 0; i < powers.length; i++) {
+         if (Float.floatToIntBits(this.cachedRegirPdfPowers[i]) != Float.floatToIntBits(powers[i])) {
+            return true;
+         }
+      }
+
+      return false;
    }
 
    private void renderProfiled(int regionIndex, @Nullable CompositeRenderer renderer) {

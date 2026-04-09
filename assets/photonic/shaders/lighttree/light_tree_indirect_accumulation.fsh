@@ -83,11 +83,19 @@ void main() {
 
         RAB_Surface neighborSurface = lt_load_surface(neighborUv);
         if (!lt_surface_matches(currentSurface, neighborSurface, spatialDepthThreshold, spatialNormalThreshold)) {
-            continue;
+            ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
+            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
+            if (!gi_sample_is_skylight(neighborReservoir, currentSurface)) {
+                continue;
+            }
         }
 
         if (!lt_materials_similar(currentSurface, neighborSurface)) {
-            continue;
+            ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
+            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
+            if (!gi_sample_is_skylight(neighborReservoir, currentSurface)) {
+                continue;
+            }
         }
 
         ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);

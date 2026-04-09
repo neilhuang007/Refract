@@ -55,27 +55,27 @@ void main() {
             restirDI.bufferIndices.initialSamplingOutputBufferIndex
         );
 
-        vec4 motionData = texelFetch(radiosity_motion, pixelPosition, 0);
-        vec3 motionVector = motionData.xyz;
-        if (motionData.w > 0.5f)
+        if (ph_debug_enable_direct_temporal_reuse < 0.5f)
         {
-            // ph_compute_temporal_motion stores previousPixel - currentPixelCenter.
-            // RTXDI DI temporal resampling expects previousPixel - pixelPosition.
-            motionVector.xy += vec2(0.5f);
+            temporalResult = curSample;
         }
+        else
+        {
+            vec3 motionVector = texelFetch(radiosity_motion, pixelPosition, 0).xyz;
 
-        uint sourceBufferIndex = restirDI.bufferIndices.temporalResamplingInputBufferIndex;
+            uint sourceBufferIndex = restirDI.bufferIndices.temporalResamplingInputBufferIndex;
 
-        RTXDI_DITemporalResamplingParameters tParams = restirDI.temporalResamplingParams;
-        tParams.enablePermutationSampling = usePermutationSampling ? 1u : 0u;
+            RTXDI_DITemporalResamplingParameters tParams = restirDI.temporalResamplingParams;
+            tParams.enablePermutationSampling = usePermutationSampling ? 1u : 0u;
 
-        RAB_LightSample selectedLightSample = RAB_EmptyLightSample();
+            RAB_LightSample selectedLightSample = RAB_EmptyLightSample();
 
-        temporalResult = RTXDI_DITemporalResampling(
-            uvec2(pixelPosition), surface, curSample,
-            rng, params, restirDI.reservoirBufferParams,
-            motionVector, sourceBufferIndex, tParams,
-            temporalSamplePixelPos, selectedLightSample);
+            temporalResult = RTXDI_DITemporalResampling(
+                uvec2(pixelPosition), surface, curSample,
+                rng, params, restirDI.reservoirBufferParams,
+                motionVector, sourceBufferIndex, tParams,
+                temporalSamplePixelPos, selectedLightSample);
+        }
     }
 
     storeDIReservoir(temporalResult);

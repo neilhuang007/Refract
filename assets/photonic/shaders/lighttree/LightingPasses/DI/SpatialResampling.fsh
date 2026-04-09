@@ -47,12 +47,19 @@ void main() {
             restirDI.bufferIndices.spatialResamplingInputBufferIndex
         );
 
-        uint sourceBufferIndex = restirDI.bufferIndices.spatialResamplingInputBufferIndex;
-        RAB_LightSample lightSample = RAB_EmptyLightSample();
-        spatialResult = RTXDI_DISpatialResampling(
-            uvec2(pixelPosition), surface, centerSample,
-            rng, params, restirDI.reservoirBufferParams,
-            sourceBufferIndex, restirDI.spatialResamplingParams, lightSample);
+        if (ph_debug_enable_direct_spatial_reuse < 0.5f)
+        {
+            spatialResult = centerSample;
+        }
+        else
+        {
+            uint sourceBufferIndex = restirDI.bufferIndices.spatialResamplingInputBufferIndex;
+            RAB_LightSample lightSample = RAB_EmptyLightSample();
+            spatialResult = RTXDI_DISpatialResampling(
+                uvec2(pixelPosition), surface, centerSample,
+                rng, params, restirDI.reservoirBufferParams,
+                sourceBufferIndex, restirDI.spatialResamplingParams, lightSample);
+        }
     }
 
     storeDIReservoir(spatialResult);

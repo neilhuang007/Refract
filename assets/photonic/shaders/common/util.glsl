@@ -83,11 +83,11 @@ void jitter_sample_position(inout vec3 position) {
 bool is_bad_angle(vec3 world_pos, vec3 normal) {
     float dist = distance(floor(world_pos), floor(world_camera_position));
 
-    float resolution = ceil((dist / 16)) / (4 * PH_RENDER_SCALE);
+    float resolution = ceil((dist / 16)) / 4.0f;
     ray_normal_scale = 0.01f + (0.04f * resolution);
 
     vec3 offset_dir = normalize(rt_pos - rt_camera_position);
-    ray_local_offset = offset_dir * ray_normal_scale * (-1f / PH_RENDER_SCALE);
+    ray_local_offset = offset_dir * ray_normal_scale * -1.0f;
 
     return dot(normal, normalize(world_pos - world_camera_position)) > -0.2f && dist > 16.0f;
 }
