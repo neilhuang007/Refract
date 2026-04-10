@@ -559,23 +559,16 @@ void RTXDI_StoreGIReservoir(RTXDI_GIReservoir reservoir, out vec4 positionData, 
 }
 
 uniform float ph_restir_indirect_enable_final_mis;
-uniform float ph_restir_indirect_temporal_permutation_sampling;
-uniform float ph_restir_temporal_fallback_sampling_mode;
-uniform float ph_restir_temporal_max_reservoir_age;
+
 uniform float ph_restir_indirect_boiling_filter_strength;
 
 const int gi_buffer_index_initial = 0;
-const int gi_buffer_index_temporal = 1;
-const int gi_buffer_index_spatial = 2;
+const int gi_buffer_index_spatial = 1;
 
 const int gi_bias_correction_mode_off = 0;
 const int gi_bias_correction_mode_basic = 1;
 const int gi_bias_correction_mode_ray_traced = 3;
 const int gi_default_bias_correction_mode = gi_bias_correction_mode_basic;
-const float gi_default_temporal_max_history = 8.0f;
-const float gi_default_temporal_depth_threshold = 0.1f;
-const float gi_default_temporal_normal_threshold = 0.6f;
-const float gi_default_temporal_max_reservoir_age = 30.0f;
 const float gi_default_spatial_depth_threshold = 0.1f;
 const float gi_default_spatial_normal_threshold = 0.6f;
 const float gi_default_spatial_sampling_radius = 32.0f;
@@ -598,41 +591,6 @@ int gi_runtime_bias_correction_mode(float configuredMode) {
     return gi_default_bias_correction_mode;
 }
 
-bool gi_runtime_enable_permutation_sampling() {
-    if (ph_restir_indirect_temporal_permutation_sampling > 0.5f) {
-        return true;
-    }
-    if (ph_restir_indirect_temporal_permutation_sampling < -0.5f) {
-        return false;
-    }
-    return false;
-}
-
-bool gi_runtime_enable_fallback_sampling() {
-    if (ph_restir_temporal_fallback_sampling_mode < -0.5f) {
-        return false;
-    }
-    if (ph_restir_temporal_fallback_sampling_mode < 0.5f) {
-        return true;
-    }
-    return ph_restir_temporal_fallback_sampling_mode >= 0.5f;
-}
-
-float gi_runtime_temporal_max_history() {
-    return ph_restir_temporal_max_history > 0.0f ? ph_restir_temporal_max_history : gi_default_temporal_max_history;
-}
-
-float gi_runtime_temporal_depth_threshold() {
-    return ph_restir_temporal_depth_threshold > 0.0f ? ph_restir_temporal_depth_threshold : gi_default_temporal_depth_threshold;
-}
-
-float gi_runtime_temporal_normal_threshold() {
-    return ph_restir_temporal_normal_threshold > 0.0f ? ph_restir_temporal_normal_threshold : gi_default_temporal_normal_threshold;
-}
-
-float gi_runtime_temporal_max_reservoir_age() {
-    return ph_restir_temporal_max_reservoir_age > 0.0f ? ph_restir_temporal_max_reservoir_age : gi_default_temporal_max_reservoir_age;
-}
 
 int gi_runtime_spatial_sample_count() {
     return ph_restir_spatial_sample_count > 0.0f ? clamp(int(ph_restir_spatial_sample_count), 1, 32) : 2;
@@ -664,16 +622,6 @@ RTXDI_GIReservoir RTXDI_LoadGIReservoir(int bufferIndex, ivec2 uv) {
             texelFetch(radiosity_indirect_initial_normal, uv, 0).y,
             floatBitsToUint(texelFetch(radiosity_indirect_initial_normal, uv, 0).z),
             floatBitsToUint(texelFetch(radiosity_indirect_initial_normal, uv, 0).w)
-        ));
-    }
-    if (bufferIndex == gi_buffer_index_temporal) {
-        return gi_unpack_reservoir(RTXDI_PackedGIReservoir(
-            texelFetch(radiosity_indirect_temporal_position, uv, 0).xyz,
-            floatBitsToUint(texelFetch(radiosity_indirect_temporal_position, uv, 0).w),
-            floatBitsToUint(texelFetch(radiosity_indirect_temporal_normal, uv, 0).x),
-            texelFetch(radiosity_indirect_temporal_normal, uv, 0).y,
-            floatBitsToUint(texelFetch(radiosity_indirect_temporal_normal, uv, 0).z),
-            floatBitsToUint(texelFetch(radiosity_indirect_temporal_normal, uv, 0).w)
         ));
     }
     return gi_unpack_reservoir(RTXDI_PackedGIReservoir(
@@ -744,11 +692,6 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 samplePosition) {
     ray_min_trace_distance = 0.0f;
     ray_max_trace_distance = -1.0f;
     return lt_visibility_trace_is_unoccluded();
-}
-
-bool RAB_GetTemporalConservativeVisibility(RAB_Surface surface, RAB_Surface temporalSurface, vec3 samplePosition) {
-    return RAB_GetConservativeVisibility(surface, samplePosition)
-        && RAB_GetConservativeVisibility(temporalSurface, samplePosition);
 }
 
 vec3 GetFinalVisibility(RAB_Surface surface, RTXDI_GISample giSample) {

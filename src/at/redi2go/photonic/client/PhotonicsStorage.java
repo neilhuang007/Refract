@@ -41,7 +41,6 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_FREEZE_RNG = boolParam("debug_freeze_rng", false);
    public static final Parameter<String> DEBUG_DIRECT_STAGE_VIEW = stringParam("debug_direct_stage_view", "final");
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_PROPOSAL_RESERVOIR = boolParam("debug_enable_direct_proposal_reservoir", true);
-   public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE = boolParam("debug_enable_direct_temporal_reuse", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_SPATIAL_REUSE = boolParam("debug_enable_direct_spatial_reuse", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_SHADE_SAMPLES = boolParam("debug_enable_direct_shade_samples", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_FINAL_VISIBILITY = boolParam("debug_enable_direct_final_visibility", true);
@@ -115,7 +114,6 @@ public final class PhotonicsStorage {
    public static void applySystemPropertyOverrides() {
       applyBooleanSystemPropertyOverride("photonics.profilerEnabled", PROFILER_ENABLED);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectProposalReservoir", DEBUG_ENABLE_DIRECT_PROPOSAL_RESERVOIR);
-      applyBooleanSystemPropertyOverride("photonics.debugEnableDirectTemporalReuse", DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectSpatialReuse", DEBUG_ENABLE_DIRECT_SPATIAL_REUSE);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectShadeSamples", DEBUG_ENABLE_DIRECT_SHADE_SAMPLES);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectFinalVisibility", DEBUG_ENABLE_DIRECT_FINAL_VISIBILITY);

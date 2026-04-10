@@ -326,7 +326,7 @@ void main() {
     bool enableFinalVisibility = restirDI.shadingParams.enableFinalVisibility != 0u;
     bool reuseFinalVisibility = restirDI.shadingParams.reuseFinalVisibility != 0u;
     bool enableVisibilityTransmittance = true;
-    bool discardIfInvisible = restirDI.temporalResamplingParams.enableVisibilityShortcut != 0u;
+    bool discardIfInvisible = false;
 
     if (RTXDI_IsValidDIReservoir(reservoir))
     {

@@ -169,7 +169,7 @@ void main() {
     gi_shade_reservoir(currentSurface, state, initialReservoir, shadedDiffuse, shadedSpecular);
 
     vec3 resolvedIndirectDiffuse = max(shadedDiffuse, vec3(0.0f));
-    float history = min(state.age + 1.0f, gi_runtime_temporal_max_history());
+    float history = min(state.age + 1.0f, 8.0f);
     float luma = ph_luminance(resolvedIndirectDiffuse);
     float secondMoment = luma * luma;
     float variance = max(secondMoment / max(history, 1.0f), 1e-6f);

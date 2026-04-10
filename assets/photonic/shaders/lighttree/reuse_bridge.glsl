@@ -45,7 +45,6 @@ Light lt_invalid_light() {
     );
 }
 
-// Load a light from the previous-frame buffer.
 // Uses the exact same decoding as load_light() in ph_core.glsl but reads from
 // ph_lights_array_previous instead of ph_lights_array.
 // RTXDI equivalent: RAB_LoadLightInfo(index, true)
@@ -89,22 +88,11 @@ uniform float ph_restir_depth_threshold;           // RTXDI: depthThreshold (sha
 uniform float ph_restir_normal_threshold;          // RTXDI: normalThreshold (shared, default 0.5)
 uniform float ph_restir_visibility_max_age;        // RTXDI: finalVisibilityMaxAge (default 4)
 uniform float ph_restir_visibility_max_distance;   // RTXDI: finalVisibilityMaxDistance (default 16)
-uniform float ph_restir_temporal_max_history;      // RTXDI: maxHistoryLength (default 20)
-uniform float ph_restir_temporal_bias_mode;        // RTXDI: biasCorrectionMode
-uniform float ph_restir_temporal_depth_threshold;  // RTXDI: temporal depthThreshold (default 0.1)
-uniform float ph_restir_temporal_normal_threshold; // RTXDI: temporal normalThreshold (default 0.5)
-#ifndef PH_RESTIR_TEMPORAL_PARAMS_DECLARED
-#define PH_RESTIR_TEMPORAL_PARAMS_DECLARED
-uniform float ph_restir_temporal_permutation_sampling; // RTXDI: enablePermutationSampling
-uniform float ph_restir_temporal_visibility_shortcut;  // RTXDI: enableVisibilityShortcut
-uniform int ph_restir_temporal_uniform_random;         // RTXDI: uniformRandomNumber
-uniform int ph_restir_temporal_frame_index;            // Renderer-managed temporal frame counter for DI parity/rng
-#endif
 uniform float ph_restir_spatial_sample_count;      // RTXDI: numSamples (default 1)
 uniform float ph_restir_spatial_radius;            // RTXDI: samplingRadius (default 32.0)
 // RTXDI: params.activeCheckerboardField (0 = off, 1/2 = alternating fields).
 // SDK default (ReSTIRDI.cpp UpdateCheckerboardField): 0 (off) for CheckerboardMode::Off.
-// Shared across temporal and spatial passes — declared here so reuse_resolve.fsh can read it.
+// Shared across spatial/shading passes and NRD helpers.
 #ifndef PH_RESTIR_CHECKERBOARD_DECLARED
 #define PH_RESTIR_CHECKERBOARD_DECLARED
 uniform int ph_restir_active_checkerboard_field;
@@ -122,7 +110,6 @@ uniform float ph_restir_spatial_target_history;    // RTXDI: targetHistoryLength
 uniform float ph_restir_enable_final_visibility;   // RTXDI: enableFinalVisibility
 uniform float ph_restir_reuse_final_visibility;    // RTXDI: reuseFinalVisibility
 uniform float ph_restir_enable_denoiser_packing;   // RTXDI: enableDenoiserInputPacking
-uniform float ph_debug_enable_direct_temporal_reuse;
 uniform float ph_debug_enable_direct_spatial_reuse;
 uniform float ph_debug_enable_direct_final_visibility;
 uniform float ph_debug_enable_direct_visibility_transmittance;
@@ -238,23 +225,6 @@ vec2 lt_load_neighbor_offset(int sampleIdx) {
         float(lt_unpack_neighbor_offset_byte(packedIndex + 1))
     ) / 127.0f;
     return clamp(offset, vec2(-1.0f), vec2(1.0f));
-}
-
-// RTXDI TemporalResampling.hlsli:
-//   0 4 3
-//   6 x 7
-//   2 5 1
-ivec2 lt_calculate_temporal_resampling_offset(int sampleIdx, int radius) {
-    sampleIdx &= 7;
-
-    int mask2 = (sampleIdx >> 1) & 0x01;
-    int mask4 = 1 - ((sampleIdx >> 2) & 0x01);
-    int tmp0 = -1 + 2 * (sampleIdx & 0x01);
-    int tmp1 = 1 - 2 * mask2;
-    int tmp2 = mask4 | mask2;
-    int tmp3 = mask4 | (1 - mask2);
-
-    return ivec2(tmp0, tmp0 * tmp1) * ivec2(tmp2, tmp3) * radius;
 }
 
 ivec2 lt_calculate_spatial_resampling_offset(int sampleIdx, float radius) {
@@ -610,25 +580,6 @@ bool RTXDI_IsValidNeighbor(
         candidateNormal,
         referenceDepth,
         candidateDepth,
-        normalThreshold,
-        depthThreshold
-    );
-}
-
-// RTXDI-style temporal neighbor validation with explicitly-provided expected depth.
-// Matches RTXDI_IsValidNeighbor called in DITemporalResampling with expectedPrevLinearDepth.
-bool RTXDI_IsValidTemporalNeighbor(
-    RAB_Surface currentSurface,
-    RAB_Surface candidateSurface,
-    float expectedPrevLinearDepth,
-    float normalThreshold,
-    float depthThreshold
-) {
-    return RTXDI_IsValidNeighbor(
-        currentSurface.normal,
-        candidateSurface.normal,
-        expectedPrevLinearDepth,
-        candidateSurface.viewDepth,
         normalThreshold,
         depthThreshold
     );
@@ -1432,8 +1383,6 @@ bool lt_is_valid_surface(RAB_Surface surface) {
 }
 
 void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 color, vec4 sampleData, vec4 meta, RAB_Surface surface, bool remap);
-void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 color, vec4 meta, RAB_Surface surface, bool remap);
-void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 color, RAB_Surface surface, bool remap);
 vec3 rtxdi_unpack_visibility(uint packedVisibility);
 uint rtxdi_pack_visibility(vec3 visibility);
 
@@ -1459,18 +1408,6 @@ struct RTXDI_BoilingFilterParameters
     float boilingFilterStrength;
     uint pad1;
     uint pad2;
-};
-
-struct RTXDI_DITemporalResamplingParameters
-{
-    uint maxHistoryLength;
-    uint biasCorrectionMode;
-    float depthThreshold;
-    float normalThreshold;
-    uint enableVisibilityShortcut;
-    uint enablePermutationSampling;
-    uint uniformRandomNumber;
-    float permutationSamplingThreshold;
 };
 
 struct RTXDI_DIInitialSamplingParameters
@@ -1523,32 +1460,16 @@ struct RTXDI_VisibilityReuseParameters
     float maxDistance;
 };
 
-struct RTXDI_DISpatioTemporalResamplingParameters
-{
-    float depthThreshold;
-    float normalThreshold;
-    uint biasCorrectionMode;
-    uint maxHistoryLength;
-    uint enablePermutationSampling;
-    uint uniformRandomNumber;
-    uint enableVisibilityShortcut;
-    uint numSamples;
-    uint numDisocclusionBoostSamples;
-    float samplingRadius;
-    uint enableMaterialSimilarityTest;
-    uint discountNaiveSamples;
-};
-
 struct RTXDI_DIBufferIndices
 {
     uint initialSamplingOutputBufferIndex;
-    uint temporalResamplingInputBufferIndex;
-    uint temporalResamplingOutputBufferIndex;
     uint spatialResamplingInputBufferIndex;
     uint spatialResamplingOutputBufferIndex;
     uint shadingInputBufferIndex;
     uint pad1;
     uint pad2;
+    uint pad3;
+    uint pad4;
 };
 
 struct RTXDI_Parameters
@@ -1556,31 +1477,27 @@ struct RTXDI_Parameters
     RTXDI_ReservoirBufferParameters reservoirBufferParams;
     RTXDI_DIBufferIndices bufferIndices;
     RTXDI_DIInitialSamplingParameters initialSamplingParams;
-    RTXDI_DITemporalResamplingParameters temporalResamplingParams;
     RTXDI_BoilingFilterParameters boilingFilterParams;
     RTXDI_DISpatialResamplingParameters spatialResamplingParams;
-    RTXDI_DISpatioTemporalResamplingParameters spatioTemporalResamplingParams;
     RTXDI_ShadingParameters shadingParams;
 };
 
 const uint RTXDI_DI_BUFFER_INDEX_INITIAL_SAMPLING_OUTPUT = 0u;
-const uint RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_INPUT = 1u;
-const uint RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_OUTPUT = 2u;
-const uint RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_INPUT = 2u;
-const uint RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_OUTPUT = 3u;
-const uint RTXDI_DI_BUFFER_INDEX_SHADING_INPUT = 3u;
+const uint RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_OUTPUT = 1u;
+const uint RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_INPUT = RTXDI_DI_BUFFER_INDEX_INITIAL_SAMPLING_OUTPUT;
+const uint RTXDI_DI_BUFFER_INDEX_SHADING_INPUT = RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_OUTPUT;
 
 RTXDI_DIBufferIndices lt_build_di_buffer_indices()
 {
     RTXDI_DIBufferIndices bufferIndices;
     bufferIndices.initialSamplingOutputBufferIndex = RTXDI_DI_BUFFER_INDEX_INITIAL_SAMPLING_OUTPUT;
-    bufferIndices.temporalResamplingInputBufferIndex = RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_INPUT;
-    bufferIndices.temporalResamplingOutputBufferIndex = RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_OUTPUT;
     bufferIndices.spatialResamplingInputBufferIndex = RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_INPUT;
     bufferIndices.spatialResamplingOutputBufferIndex = RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_OUTPUT;
     bufferIndices.shadingInputBufferIndex = RTXDI_DI_BUFFER_INDEX_SHADING_INPUT;
     bufferIndices.pad1 = 0u;
     bufferIndices.pad2 = 0u;
+    bufferIndices.pad3 = 0u;
+    bufferIndices.pad4 = 0u;
     return bufferIndices;
 }
 
@@ -1594,7 +1511,7 @@ RTXDI_RuntimeParameters lt_build_runtime_parameters()
     RTXDI_RuntimeParameters params;
     params.neighborOffsetMask = uint(lt_neighbor_offset_count - 1);
     params.activeCheckerboardField = uint(ph_restir_active_checkerboard_field);
-    params.frameIndex = uint(max(ph_restir_temporal_frame_index, 0));
+    params.frameIndex = 0u;
     params.pad2 = 0u;
     return params;
 }
@@ -1634,27 +1551,6 @@ RTXDI_DIInitialSamplingParameters lt_build_di_initial_sampling_parameters()
     initialSamplingParams.pad2 = 0u;
     initialSamplingParams.pad3 = 0u;
     return initialSamplingParams;
-}
-
-RTXDI_DITemporalResamplingParameters lt_build_di_temporal_resampling_parameters()
-{
-    RTXDI_DITemporalResamplingParameters temporalResamplingParams;
-    temporalResamplingParams.maxHistoryLength = uint(ph_restir_temporal_max_history > 0.0f ? ph_restir_temporal_max_history : 20.0f);
-
-    if (ph_restir_temporal_bias_mode < -0.5f) {
-        temporalResamplingParams.biasCorrectionMode = 0u;
-    } else {
-        int resolvedMode = int(round(ph_restir_temporal_bias_mode));
-        temporalResamplingParams.biasCorrectionMode = uint((resolvedMode == 0 || resolvedMode == 1 || resolvedMode == 3) ? resolvedMode : 1);
-    }
-
-    temporalResamplingParams.depthThreshold = ph_restir_temporal_depth_threshold > 0.0f ? ph_restir_temporal_depth_threshold : 0.1f;
-    temporalResamplingParams.normalThreshold = ph_restir_temporal_normal_threshold > 0.0f ? ph_restir_temporal_normal_threshold : 0.5f;
-    temporalResamplingParams.enableVisibilityShortcut = (ph_restir_temporal_visibility_shortcut >= 0.5f) ? 1u : 0u;
-    temporalResamplingParams.enablePermutationSampling = (ph_restir_temporal_permutation_sampling >= 0.5f) ? 1u : 0u;
-    temporalResamplingParams.uniformRandomNumber = uint(ph_restir_temporal_uniform_random);
-    temporalResamplingParams.permutationSamplingThreshold = 0.0f;
-    return temporalResamplingParams;
 }
 
 RTXDI_DISpatialResamplingParameters lt_build_di_spatial_resampling_parameters()
@@ -1711,27 +1607,6 @@ RTXDI_BoilingFilterParameters lt_build_di_boiling_filter_parameters()
     return boilingFilterParams;
 }
 
-RTXDI_DISpatioTemporalResamplingParameters lt_build_di_spatiotemporal_resampling_parameters()
-{
-    RTXDI_DITemporalResamplingParameters temporalResamplingParams = lt_build_di_temporal_resampling_parameters();
-    RTXDI_DISpatialResamplingParameters spatialResamplingParams = lt_build_di_spatial_resampling_parameters();
-
-    RTXDI_DISpatioTemporalResamplingParameters spatioTemporalResamplingParams;
-    spatioTemporalResamplingParams.depthThreshold = temporalResamplingParams.depthThreshold;
-    spatioTemporalResamplingParams.normalThreshold = temporalResamplingParams.normalThreshold;
-    spatioTemporalResamplingParams.biasCorrectionMode = spatialResamplingParams.biasCorrectionMode;
-    spatioTemporalResamplingParams.maxHistoryLength = temporalResamplingParams.maxHistoryLength;
-    spatioTemporalResamplingParams.enablePermutationSampling = temporalResamplingParams.enablePermutationSampling;
-    spatioTemporalResamplingParams.uniformRandomNumber = temporalResamplingParams.uniformRandomNumber;
-    spatioTemporalResamplingParams.enableVisibilityShortcut = temporalResamplingParams.enableVisibilityShortcut;
-    spatioTemporalResamplingParams.numSamples = spatialResamplingParams.numSamples;
-    spatioTemporalResamplingParams.numDisocclusionBoostSamples = spatialResamplingParams.numDisocclusionBoostSamples;
-    spatioTemporalResamplingParams.samplingRadius = spatialResamplingParams.samplingRadius;
-    spatioTemporalResamplingParams.enableMaterialSimilarityTest = spatialResamplingParams.enableMaterialSimilarityTest;
-    spatioTemporalResamplingParams.discountNaiveSamples = spatialResamplingParams.discountNaiveSamples;
-    return spatioTemporalResamplingParams;
-}
-
 RTXDI_ShadingParameters lt_build_shading_parameters()
 {
     RTXDI_ShadingParameters shadingParams;
@@ -1760,10 +1635,8 @@ RTXDI_Parameters lt_build_restir_di_parameters()
     restirDI.reservoirBufferParams = lt_build_reservoir_buffer_parameters();
     restirDI.bufferIndices = lt_build_di_buffer_indices();
     restirDI.initialSamplingParams = lt_build_di_initial_sampling_parameters();
-    restirDI.temporalResamplingParams = lt_build_di_temporal_resampling_parameters();
     restirDI.boilingFilterParams = lt_build_di_boiling_filter_parameters();
     restirDI.spatialResamplingParams = lt_build_di_spatial_resampling_parameters();
-    restirDI.spatioTemporalResamplingParams = lt_build_di_spatiotemporal_resampling_parameters();
     restirDI.shadingParams = lt_build_shading_parameters();
     return restirDI;
 }
@@ -1931,15 +1804,6 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample lightSam
     return lt_trace_conservative_visibility(lightSampleCopy, surface);
 }
 
-bool RAB_GetTemporalConservativeVisibility(RAB_Surface surface, RAB_Surface temporalSurface, RAB_LightSample lightSample)
-{
-    RAB_LightSample lightSampleCopy = lightSample;
-    // RTXDI fallback contract: when no previous-frame AS is available, trace against the
-    // current frame using the current receiver surface instead of mixing a previous-frame
-    // receiver with current-frame geometry.
-    return lt_trace_conservative_visibility(lightSampleCopy, surface);
-}
-
 RTXDI_DIReservoir RTXDI_LoadDIReservoir(
     RTXDI_ReservoirBufferParameters reservoirParams,
     uvec2 reservoirPosition,
@@ -1955,28 +1819,6 @@ RTXDI_DIReservoir RTXDI_LoadDIReservoir(
             texelFetch(radiosity_proposal_reservoirs, reservoirPositionInt, 0),
             texelFetch(radiosity_proposal_reservoir_samples, reservoirPositionInt, 0),
             texelFetch(radiosity_proposal_reservoir_meta, reservoirPositionInt, 0),
-            RAB_EmptySurface(),
-            false
-        );
-    }
-    else if (reservoirArrayIndex == RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_INPUT)
-    {
-        rtxdi_unpack_reservoir_at_surface(
-            reservoir,
-            texelFetch(prev_radiosity_reservoirs, reservoirPositionInt, 0),
-            texelFetch(prev_radiosity_reservoir_samples, reservoirPositionInt, 0),
-            texelFetch(prev_radiosity_reservoir_meta, reservoirPositionInt, 0),
-            RAB_EmptySurface(),
-            false
-        );
-    }
-    else if (reservoirArrayIndex == RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_OUTPUT)
-    {
-        rtxdi_unpack_reservoir_at_surface(
-            reservoir,
-            texelFetch(radiosity_temporal_reservoirs, reservoirPositionInt, 0),
-            texelFetch(radiosity_temporal_reservoir_samples, reservoirPositionInt, 0),
-            texelFetch(radiosity_temporal_reservoir_meta, reservoirPositionInt, 0),
             RAB_EmptySurface(),
             false
         );
@@ -2006,12 +1848,6 @@ void rtxdi_prepare_spatial_reuse(inout RTXDI_DIReservoir reservoir, ivec2 spatia
     // RTXDI SpatialResampling.hlsli line 87: neighborSample.spatialDistance += spatialOffset;
     // Unconditional — no visibility guard. Always track accumulated spatial distance.
     reservoir.spatialDistance += spatialOffset;
-}
-
-void rtxdi_prepare_temporal_reuse(inout RTXDI_DIReservoir reservoir, ivec2 spatialOffset) {
-    // RTXDI: unconditional update — no visibility guard, no age cap here
-    reservoir.spatialDistance += spatialOffset;
-    reservoir.age += 1u;
 }
 
 bool rtxdi_has_reusable_visibility(RTXDI_DIReservoir reservoir) {
@@ -2482,202 +2318,6 @@ void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 c
     if (isinf(reservoir.weightSum) || isnan(reservoir.weightSum)) {
         reservoir = RTXDI_EmptyDIReservoir();
     }
-}
-
-void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 color, vec4 meta, RAB_Surface surface, bool remap) {
-    rtxdi_unpack_reservoir_at_surface(reservoir, color, vec4(0.0f), meta, surface, remap);
-}
-
-void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 color, RAB_Surface surface, bool remap) {
-    rtxdi_unpack_reservoir_at_surface(reservoir, color, vec4(0.0f), vec4(-1.0f, 0.0f, 0.0f, 0.0f), surface, remap);
-}
-
-void rtxdi_unpack_reservoir(inout RTXDI_DIReservoir reservoir, vec4 color, vec4 meta, vec3 sample_pos, bool remap) {
-    RAB_Surface surface = lt_make_surface(
-        sample_pos + world_offset,
-        block_normal,
-        normal,
-        clamp(albedo, vec3(0.0f), vec3(1.0f)),
-        lt_extract_material_at_uv((vec2(tex_coord) + vec2(0.5f)) / vec2(viewWidth, viewHeight)),
-        ph_linear_view_depth(modelview_projection, sample_pos + world_offset)
-    );
-    rtxdi_unpack_reservoir_at_surface(reservoir, color, meta, surface, remap);
-}
-
-void rtxdi_unpack_reservoir(inout RTXDI_DIReservoir reservoir, vec4 color, vec3 sample_pos, bool remap) {
-    rtxdi_unpack_reservoir(reservoir, color, vec4(-1.0f, 0.0f, 0.0f, 0.0f), sample_pos, remap);
-}
-
-RTXDI_DIReservoir RTXDI_DITemporalResampling(
-    uvec2 pixelPosition,
-    RAB_Surface surface,
-    RTXDI_DIReservoir curSample,
-    inout RTXDI_RandomSamplerState rng,
-    RTXDI_RuntimeParameters params,
-    RTXDI_ReservoirBufferParameters reservoirParams,
-    vec3 screenSpaceMotion,
-    uint sourceBufferIndex,
-    RTXDI_DITemporalResamplingParameters tparams,
-    out ivec2 temporalSamplePixelPos,
-    inout RAB_LightSample selectedLightSample)
-{
-    uint historyLimit = min(RTXDI_PackedDIReservoir_MaxM, uint(float(tparams.maxHistoryLength) * curSample.M));
-
-    int selectedLightPrevID = -1;
-
-    if (RTXDI_IsValidDIReservoir(curSample))
-    {
-        selectedLightPrevID = RAB_TranslateLightIndex(RTXDI_GetDIReservoirLightIndex(curSample), true);
-    }
-
-    temporalSamplePixelPos = ivec2(-1, -1);
-
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    RTXDI_CombineDIReservoirs(state, curSample, 0.5f, curSample.targetPdf);
-
-    vec3 motion = screenSpaceMotion;
-
-    if (tparams.enablePermutationSampling == 0u)
-    {
-        motion.xy += vec2(RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng)) - 0.5f;
-    }
-
-    vec2 reprojectedSamplePosition = vec2(pixelPosition) + motion.xy;
-    ivec2 prevPos = ivec2(round(reprojectedSamplePosition));
-
-    float expectedPrevLinearDepth = RAB_GetSurfaceLinearDepth(surface) + motion.z;
-
-    RAB_Surface temporalSurface = RAB_EmptySurface();
-    bool foundNeighbor = false;
-    ivec2 spatialOffset = ivec2(0, 0);
-
-    const float radius = (params.activeCheckerboardField == 0u) ? 4.0f : 8.0f;
-
-    for (int i = 0; i < 9; i++)
-    {
-        ivec2 offset = ivec2(0, 0);
-        if (i > 0)
-        {
-            offset.x = int((RTXDI_GetNextRandom(rng) - 0.5f) * radius);
-            offset.y = int((RTXDI_GetNextRandom(rng) - 0.5f) * radius);
-        }
-
-        ivec2 idx = prevPos + offset;
-        if (tparams.enablePermutationSampling != 0u && i == 0)
-        {
-            RTXDI_ApplyPermutationSampling(idx, tparams.uniformRandomNumber);
-        }
-
-        RTXDI_ActivateCheckerboardPixel(idx, true, int(params.activeCheckerboardField));
-
-        temporalSurface = RAB_GetGBufferSurface(idx, true);
-        if (!RAB_IsSurfaceValid(temporalSurface))
-            continue;
-
-        if (!RTXDI_IsValidNeighbor(
-            RAB_GetSurfaceNormal(surface), RAB_GetSurfaceNormal(temporalSurface),
-            expectedPrevLinearDepth, RAB_GetSurfaceLinearDepth(temporalSurface),
-            tparams.normalThreshold, tparams.depthThreshold))
-            continue;
-
-        spatialOffset = idx - prevPos;
-        prevPos = idx;
-        foundNeighbor = true;
-
-        break;
-    }
-
-    bool selectedPreviousSample = false;
-    float previousM = 0.0f;
-
-    if (foundNeighbor)
-    {
-        uvec2 prevReservoirPos = uvec2(RTXDI_PixelPosToReservoirPos(prevPos, int(params.activeCheckerboardField)));
-        RTXDI_DIReservoir prevSample = RTXDI_LoadDIReservoir(reservoirParams, prevReservoirPos, sourceBufferIndex);
-        prevSample.M = min(prevSample.M, float(historyLimit));
-        prevSample.spatialDistance += spatialOffset;
-        prevSample.age += 1u;
-
-        uint originalPrevLightID = uint(RTXDI_GetDIReservoirLightIndex(prevSample));
-
-        if (RTXDI_IsValidDIReservoir(prevSample))
-        {
-            if (prevSample.age <= 1u)
-            {
-                temporalSamplePixelPos = prevPos;
-            }
-
-            int mappedLightID = RAB_TranslateLightIndex(RTXDI_GetDIReservoirLightIndex(prevSample), false);
-
-            if (mappedLightID < 0)
-            {
-                prevSample.weightSum = 0.0f;
-                prevSample.lightData = 0u;
-            }
-            else
-            {
-                prevSample.lightData = uint(mappedLightID) | RTXDI_DIReservoir_LightValidBit;
-            }
-        }
-
-        previousM = prevSample.M;
-
-        float weightAtCurrent = 0.0f;
-        RAB_LightSample candidateLightSample = RAB_EmptyLightSample();
-        if (RTXDI_IsValidDIReservoir(prevSample))
-        {
-            Light candidateLight = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(prevSample), false);
-
-            candidateLightSample = RAB_SamplePolymorphicLight(
-                candidateLight, surface, RTXDI_GetDIReservoirSampleUV(prevSample));
-
-            weightAtCurrent = RAB_GetLightSampleTargetPdfForSurface(candidateLightSample, surface);
-        }
-
-        bool sampleSelected = RTXDI_CombineDIReservoirs(state, prevSample, RTXDI_GetNextRandom(rng), weightAtCurrent);
-        if (sampleSelected)
-        {
-            selectedPreviousSample = true;
-            selectedLightPrevID = int(originalPrevLightID);
-            selectedLightSample = candidateLightSample;
-        }
-    }
-
-    if (tparams.biasCorrectionMode >= 1)
-    {
-        float pi = state.targetPdf;
-        float piSum = state.targetPdf * curSample.M;
-
-        if (RTXDI_IsValidDIReservoir(state) && selectedLightPrevID >= 0 && previousM > 0.0f)
-        {
-            float temporalP = 0.0f;
-
-            Light selectedLightPrev = RAB_LoadLightInfo(selectedLightPrevID, true);
-            RAB_LightSample selectedSampleAtTemporal = RAB_SamplePolymorphicLight(
-                selectedLightPrev, temporalSurface, RTXDI_GetDIReservoirSampleUV(state));
-
-            temporalP = RAB_GetLightSampleTargetPdfForSurface(selectedSampleAtTemporal, temporalSurface);
-
-            if (tparams.biasCorrectionMode == 3 && temporalP > 0.0f && (!selectedPreviousSample || tparams.enableVisibilityShortcut == 0u))
-            {
-                if (!RAB_GetTemporalConservativeVisibility(surface, temporalSurface, selectedSampleAtTemporal))
-                {
-                    temporalP = 0.0f;
-                }
-            }
-
-            pi = selectedPreviousSample ? temporalP : pi;
-            piSum += temporalP * previousM;
-        }
-
-        RTXDI_FinalizeResampling(state, pi, piSum);
-    }
-    else
-    {
-        RTXDI_FinalizeResampling(state, 1.0f, state.M);
-    }
-
-    return state;
 }
 
 RTXDI_DIReservoir RTXDI_DISpatialResamplingWithPairwiseMIS(

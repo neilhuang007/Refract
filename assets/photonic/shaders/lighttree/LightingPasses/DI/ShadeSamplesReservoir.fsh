@@ -46,7 +46,7 @@ void main() {
 
     bool enableFinalVisibility = restirDI.shadingParams.enableFinalVisibility != 0u;
     bool reuseFinalVisibility = restirDI.shadingParams.reuseFinalVisibility != 0u;
-    bool discardIfInvisible = restirDI.temporalResamplingParams.enableVisibilityShortcut != 0u;
+    bool discardIfInvisible = false;
     bool enableVisibilityTransmittance = true;
 
     // Match RTXDI ShadeSamples.hlsl: valid shading / visibility storage is gated

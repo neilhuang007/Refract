@@ -22,6 +22,9 @@ tmp_*
 Euphoria-Patches-photonics-test/
 Insane-Shaders-master/
 
+# Reference repos and papers (local only)
+reference/repos/
+
 # Tools (binary jars)
 tools/
 
@@ -33,3 +36,8 @@ docs/
 AGENTS.md
 CLAUDE.md
 nul
+
+# Stray notes
+check pipeline.md
+world load.md
+{b

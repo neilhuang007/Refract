@@ -35,7 +35,7 @@ void main() {
         return;
     }
 
-    RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, reservoirPos, activeCheckerboardField);
+    RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(gi_buffer_index_initial, reservoirPos, activeCheckerboardField);
     if (RTXDI_IsValidGIReservoir(reservoir)) {
         float nonzeroWeightSum = 0.0f;
         float nonzeroCount = 0.0f;
@@ -53,7 +53,7 @@ void main() {
                 }
 
                 ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborPixel, activeCheckerboardField);
-                RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_temporal, neighborReservoirPos, activeCheckerboardField);
+                RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_initial, neighborReservoirPos, activeCheckerboardField);
                 float neighborWeight = gi_boiling_filter_weight(neighborReservoir);
                 if (neighborWeight > 0.0f) {
                     nonzeroWeightSum += neighborWeight;

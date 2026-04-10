@@ -102,18 +102,12 @@ public class ModSettingsScreen extends Screen {
          directStageView.modified();
          w.setMessage(Text.of("Direct View: " + formatDirectStageView(directStageView.value)));
       }, "Cycles the direct-lighting inspection source:\nRT Raw, Noisy, Responsive, Slow, Fast,\nHist Fix, Clamp Fast, Firefly, Denoised, Atrous, Final.", () -> true));
-      PhotonicsStorage.Parameter<Boolean> directTemporalReuse = PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE;
-      buttons.add(new ModSettingsScreen.PButton("Direct Temporal Reuse: " + (directTemporalReuse.value ? "On" : "Off"), w -> {
-         directTemporalReuse.value = !directTemporalReuse.value;
-         directTemporalReuse.modified();
-         w.setMessage(Text.of("Direct Temporal Reuse: " + (directTemporalReuse.value ? "On" : "Off")));
-      }, "Enables or bypasses ReSTIR DI temporal history reuse.\nTurn this off with spatial still on to isolate spatial-only behavior.", () -> true));
       PhotonicsStorage.Parameter<Boolean> directSpatialReuse = PhotonicsStorage.DEBUG_ENABLE_DIRECT_SPATIAL_REUSE;
       buttons.add(new ModSettingsScreen.PButton("Direct Spatial Reuse: " + (directSpatialReuse.value ? "On" : "Off"), w -> {
          directSpatialReuse.value = !directSpatialReuse.value;
          directSpatialReuse.modified();
          w.setMessage(Text.of("Direct Spatial Reuse: " + (directSpatialReuse.value ? "On" : "Off")));
-      }, "Enables or bypasses ReSTIR DI spatial reuse.\nTurn this off with temporal still on to isolate temporal-only behavior.", () -> true));
+      }, "Enables or bypasses ReSTIR DI spatial reuse.\nTurn this off to isolate proposal-only direct-lighting behavior.", () -> true));
       PhotonicsStorage.Parameter<Boolean> directFinalVisibility = PhotonicsStorage.DEBUG_ENABLE_DIRECT_FINAL_VISIBILITY;
       buttons.add(new ModSettingsScreen.PButton("Direct Final Visibility: " + (directFinalVisibility.value ? "On" : "Off"), w -> {
          directFinalVisibility.value = !directFinalVisibility.value;

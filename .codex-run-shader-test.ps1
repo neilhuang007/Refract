@@ -6,6 +6,7 @@ param(
 $stdout = Join-Path (Get-Location) 'run/shaderGameTest.stdout.log'
 $stderr = Join-Path (Get-Location) 'run/shaderGameTest.stderr.log'
 $latestLog = Join-Path (Get-Location) 'run/logs/latest.log'
+$reportFile = Join-Path (Get-Location) 'run/automation/shader-report.properties'
 $fatalPatterns = @('Failed to create shader rendering pipeline', 'The shaderpack failed to load!')
 
 function Stop-ProcessTree {
@@ -68,6 +69,16 @@ function Get-FatalReason {
   return $null
 }
 
+function Write-FailureDiagnostics {
+  param([string]$Reason)
+
+  Write-Output "watchdogResult=$Reason"
+  if (Test-Path $stdout) { Write-Output '--- stdout tail ---'; Get-Content $stdout -Tail 60 }
+  if (Test-Path $stderr) { Write-Output '--- stderr tail ---'; Get-Content $stderr -Tail 60 }
+  if (Test-Path $latestLog) { Write-Output '--- latest.log tail ---'; Get-Content $latestLog -Tail 140 }
+  if (Test-Path $reportFile) { Write-Output '--- shader-report ---'; Get-Content $reportFile }
+}
+
 foreach ($path in @($stdout, $stderr)) {
   if (Test-Path $path) {
     try {
@@ -105,9 +116,6 @@ while (-not $proc.HasExited) {
     }
   }
 
-  $remaining = [int][Math]::Max(0, ($deadline - (Get-Date)).TotalSeconds)
-  Write-Output ("watchdog: pid={0} remaining={1}s" -f $proc.Id, $remaining)
-
   $chunks = @(
     @{ Name = 'stdout'; Content = (Read-NewContent -Path $stdout -Position ([ref]$stdoutPosition)) },
     @{ Name = 'stderr'; Content = (Read-NewContent -Path $stderr -Position ([ref]$stderrPosition)) },
@@ -117,12 +125,6 @@ while (-not $proc.HasExited) {
   foreach ($chunk in $chunks) {
     if ([string]::IsNullOrEmpty($chunk.Content)) {
       continue
-    }
-
-    $lines = @($chunk.Content -split "\r?\n" | Where-Object { $_.Length -gt 0 })
-    $automation = $lines | Select-String -Pattern '\[Automation\] capture=|\[Automation\] reservoir capture='
-    foreach ($line in ($automation | Select-Object -Last 4)) {
-      Write-Output $line.Line
     }
 
     $fatalReason = Get-FatalReason -Content $chunk.Content -ChunkName $chunk.Name
@@ -145,8 +147,15 @@ while (-not $proc.HasExited) {
 }
 
 try { Wait-Process -Id $proc.Id -Timeout 10 -ErrorAction SilentlyContinue } catch {}
-Write-Output "watchdogResult=$reason"
-if (Test-Path $stdout) { Write-Output '--- stdout tail ---'; Get-Content $stdout -Tail 60 }
-if (Test-Path $stderr) { Write-Output '--- stderr tail ---'; Get-Content $stderr -Tail 60 }
-if (Test-Path $latestLog) { Write-Output '--- latest.log tail ---'; Get-Content $latestLog -Tail 140 }
-if (Test-Path 'run/automation/shader-report.properties') { Write-Output '--- shader-report ---'; Get-Content 'run/automation/shader-report.properties' }
+
+if ($reason -ne 'completed') {
+  Write-FailureDiagnostics -Reason $reason
+  exit 1
+}
+
+if (-not (Test-Path $reportFile)) {
+  Write-FailureDiagnostics -Reason 'missing-report'
+  exit 1
+}
+
+exit 0

@@ -1738,12 +1738,6 @@ public final class ShaderAutomation {
          TextureObject directRawTexture = textures.get("direct_raw");
          TextureObject specDenoisedTexture = textures.get("spec_denoised");
          TextureObject specRawTexture = textures.get("spec_raw");
-         TextureObject directTemporalReservoirTexture = textures.get("direct_temporal_reservoir");
-         TextureObject directTemporalReservoirPreviousTexture = textures.get("direct_temporal_reservoir_prev");
-         TextureObject directTemporalReservoirSampleTexture = textures.get("direct_temporal_reservoir_sample");
-         TextureObject directTemporalReservoirSamplePreviousTexture = textures.get("direct_temporal_reservoir_sample_prev");
-         TextureObject directTemporalReservoirMetaTexture = textures.get("direct_temporal_reservoir_meta");
-         TextureObject directTemporalReservoirMetaPreviousTexture = textures.get("direct_temporal_reservoir_meta_prev");
          TextureObject directInitialDebugTexture = textures.get("direct_initial_debug");
          TextureObject lightingTexture = textures.get("lighting");
          TextureObject stageAlbedoTexture = textures.get("stage_albedo");
@@ -1775,12 +1769,6 @@ public final class ShaderAutomation {
          BufferedImage directRawImage = this.captureTexture("direct_raw", directRawTexture, captureIndex);
          this.captureTexture("spec_denoised", specDenoisedTexture, captureIndex);
          this.captureTexture("spec_raw", specRawTexture, captureIndex);
-         this.captureTexture("direct_temporal_reservoir", directTemporalReservoirTexture, captureIndex);
-         this.captureTexture("direct_temporal_reservoir_prev", directTemporalReservoirPreviousTexture, captureIndex);
-         this.captureTexture("direct_temporal_reservoir_sample", directTemporalReservoirSampleTexture, captureIndex);
-         this.captureTexture("direct_temporal_reservoir_sample_prev", directTemporalReservoirSamplePreviousTexture, captureIndex);
-         this.captureTexture("direct_temporal_reservoir_meta", directTemporalReservoirMetaTexture, captureIndex);
-         this.captureTexture("direct_temporal_reservoir_meta_prev", directTemporalReservoirMetaPreviousTexture, captureIndex);
          this.captureTexture("direct_initial_debug", directInitialDebugTexture, captureIndex);
          BufferedImage lightingImage = this.captureTexture("lighting", lightingTexture, captureIndex);
          this.captureTexture("stage_albedo", stageAlbedoTexture, captureIndex);
@@ -1811,10 +1799,6 @@ public final class ShaderAutomation {
             indirectTexture == null ? TextureObject.TextureStats.EMPTY : indirectTexture.readStats();
          TextureObject.TextureStats stageIndirectLinearStats =
             stageIndirectTexture == null ? TextureObject.TextureStats.EMPTY : stageIndirectTexture.readStats();
-         ReservoirSampleDebugStats temporalSampleStats = computeReservoirSampleDebugStats(directTemporalReservoirSampleTexture);
-         ReservoirSampleDebugStats temporalSamplePreviousStats = computeReservoirSampleDebugStats(directTemporalReservoirSamplePreviousTexture);
-         ReservoirMetaDebugStats temporalMetaStats = computeReservoirMetaDebugStats(directTemporalReservoirMetaTexture);
-         ReservoirMetaDebugStats temporalMetaPreviousStats = computeReservoirMetaDebugStats(directTemporalReservoirMetaPreviousTexture);
          FireflyStats directRawFireflyStats = computeFireflyStats(directRawTexture);
          FireflyStats directDenoisedFireflyStats = computeFireflyStats(directDenoisedTexture);
          FireflyStats specRawFireflyStats = computeFireflyStats(specRawTexture);
@@ -1824,14 +1808,11 @@ public final class ShaderAutomation {
          WorldRegistry worldRegistry = Raytracer.INSTANCE.getWorldRegistry();
          LightRegistry lightRegistry = worldRegistry.getLightRegistry();
          ReservoirDebugStats proposalReservoirStats = computeReservoirDebugStats(directReservoirTexture);
-         ReservoirDebugStats temporalReservoirStats = computeReservoirDebugStats(directTemporalReservoirTexture);
-         ReservoirDebugStats temporalReservoirPreviousStats = computeReservoirDebugStats(directTemporalReservoirPreviousTexture);
          InitialSamplingDebugStats initialSamplingDebugStats = computeInitialSamplingDebugStats(directInitialDebugTexture);
          ReservoirDebugStats resolvedReservoirStats = computeReservoirDebugStats(directResolvedReservoirTexture);
          PositionDebugStats stagePositionStats = computePositionDebugStats(stagePositionTexture);
          RowJumpStats directRawRowJump = computeHdrLumaRowJumpStats(directRawTexture);
          ReservoirRowJumpStats proposalReservoirRowJumps = computeReservoirRowJumpStats(directReservoirTexture);
-         ReservoirRowJumpStats temporalReservoirRowJumps = computeReservoirRowJumpStats(directTemporalReservoirTexture);
          ReservoirRowJumpStats resolvedReservoirRowJumps = computeReservoirRowJumpStats(directResolvedReservoirTexture);
          RowJumpStats stageLinearDepthRowJump = computeStageLinearDepthRowJumpStats(stagePositionTexture, lightRegistry.getRegirGridCenter());
          RowJumpStats regirCellZRowJump = computeReGIRCellZRowJumpStats(
@@ -2103,16 +2084,12 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(false, true)),
             String.format(Locale.ROOT, "%.5f", this.indirectTemporalDeltaMax));
          Photonic.info(
-            "[Automation] reservoir capture={} proposal(lightValid={}, strict={}, meanWeight={}, meanM={}) temporal(lightValid={}, strict={}, meanWeight={}, meanM={}) resolved(lightValid={}, strict={}, meanWeight={}, meanM={}) stagePosition(mean=({}, {}, {}), min=({}, {}, {}), max=({}, {}, {}))",
+            "[Automation] reservoir capture={} proposal(lightValid={}, strict={}, meanWeight={}, meanM={}) resolved(lightValid={}, strict={}, meanWeight={}, meanM={}) stagePosition(mean=({}, {}, {}), min=({}, {}, {}), max=({}, {}, {}))",
             this.capturesTaken,
             String.format(Locale.ROOT, "%.5f", proposalReservoirStats.lightValidFraction()),
             String.format(Locale.ROOT, "%.5f", proposalReservoirStats.strictValidFraction()),
             String.format(Locale.ROOT, "%.5f", proposalReservoirStats.meanWeight()),
             String.format(Locale.ROOT, "%.2f", proposalReservoirStats.meanM()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.lightValidFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.strictValidFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.meanWeight()),
-            String.format(Locale.ROOT, "%.2f", temporalReservoirStats.meanM()),
             String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.lightValidFraction()),
             String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.strictValidFraction()),
             String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.meanWeight()),
@@ -2128,7 +2105,7 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.3f", stagePositionStats.maxZ())
          );
          Photonic.info(
-            "[Automation] capture-path capture={} directSoft(currentMax={}, currentMean={}, currentAlpha={}, currentZeroAlpha={}, previousMax={}, previousMean={}, previousAlpha={}, previousZeroAlpha={}) temporalData(currentLightValid={}, currentStrict={}, currentMeanWeight={}, currentMeanM={}, previousLightValid={}, previousStrict={}, previousMeanWeight={}, previousMeanM={}) temporalSample(currentNonZero={}, currentMeanU={}, currentMeanV={}, previousNonZero={}, previousMeanU={}, previousMeanV={}) temporalMeta(currentNonZero={}, currentMeanAge={}, currentMeanAbsDistanceX={}, currentMeanAbsDistanceY={}, previousNonZero={}, previousMeanAge={}, previousMeanAbsDistanceX={}, previousMeanAbsDistanceY={})",
+            "[Automation] capture-path capture={} directSoft(currentMax={}, currentMean={}, currentAlpha={}, currentZeroAlpha={}, previousMax={}, previousMean={}, previousAlpha={}, previousZeroAlpha={})",
             this.capturesTaken,
             String.format(Locale.ROOT, "%.5f", directSoftLinearStats.maxLuma()),
             String.format(Locale.ROOT, "%.5f", directSoftLinearStats.meanLuma()),
@@ -2137,29 +2114,7 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.maxLuma()),
             String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.meanLuma()),
             String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.meanAlpha()),
-            String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.zeroAlphaFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.lightValidFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.strictValidFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirStats.meanWeight()),
-            String.format(Locale.ROOT, "%.2f", temporalReservoirStats.meanM()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirPreviousStats.lightValidFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirPreviousStats.strictValidFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalReservoirPreviousStats.meanWeight()),
-            String.format(Locale.ROOT, "%.2f", temporalReservoirPreviousStats.meanM()),
-            String.format(Locale.ROOT, "%.5f", temporalSampleStats.nonZeroFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalSampleStats.meanU()),
-            String.format(Locale.ROOT, "%.5f", temporalSampleStats.meanV()),
-            String.format(Locale.ROOT, "%.5f", temporalSamplePreviousStats.nonZeroFraction()),
-            String.format(Locale.ROOT, "%.5f", temporalSamplePreviousStats.meanU()),
-            String.format(Locale.ROOT, "%.5f", temporalSamplePreviousStats.meanV()),
-            String.format(Locale.ROOT, "%.5f", temporalMetaStats.nonZeroFraction()),
-            String.format(Locale.ROOT, "%.2f", temporalMetaStats.meanAge()),
-            String.format(Locale.ROOT, "%.2f", temporalMetaStats.meanAbsDistanceX()),
-            String.format(Locale.ROOT, "%.2f", temporalMetaStats.meanAbsDistanceY()),
-            String.format(Locale.ROOT, "%.5f", temporalMetaPreviousStats.nonZeroFraction()),
-            String.format(Locale.ROOT, "%.2f", temporalMetaPreviousStats.meanAge()),
-            String.format(Locale.ROOT, "%.2f", temporalMetaPreviousStats.meanAbsDistanceX()),
-            String.format(Locale.ROOT, "%.2f", temporalMetaPreviousStats.meanAbsDistanceY())
+            String.format(Locale.ROOT, "%.5f", directSoftPreviousLinearStats.zeroAlphaFraction())
          );
          Photonic.info(
             "[Automation] initial-sampling capture={} reasons(invalidSurface={}, noLights={}, noLocalSamples={}, invalidLightSelection={}, invalidLightSample={}, zeroRadiance={}, zeroSourcePdf={}, zeroTargetPdf={}, nonFiniteSourcePdf={}, nonFiniteTargetPdf={}, success={}) debug(meanPositiveCandidateFraction={}, proposalValidFraction={}, meanProposalWeight={}) row(successBoundaryRowFromBottom={} successBoundaryRowFromTop={} successDelta={} zeroTargetBoundaryRowFromBottom={} zeroTargetBoundaryRowFromTop={} zeroTargetDelta={} proposalValidBoundaryRowFromBottom={} proposalValidBoundaryRowFromTop={} proposalValidDelta={} proposalWeightBoundaryRowFromBottom={} proposalWeightBoundaryRowFromTop={} proposalWeightDelta={})",
@@ -2192,7 +2147,7 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.6f", initialSamplingDebugStats.proposalWeightRowJump().delta())
          );
          Photonic.info(
-            "[Automation] row-debug capture={} directRawLuma(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalValid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalWeight(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalTargetPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalWeightTimesPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalM(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalValid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalWeight(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalTargetPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalWeightTimesPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) temporalM(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedValid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedWeight(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedTargetPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedWeightTimesPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedM(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) stageLinearDepth(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCellZ(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCoverage(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCoverageWithJitter(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={})",
+            "[Automation] row-debug capture={} directRawLuma(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalValid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalWeight(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalTargetPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalWeightTimesPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) proposalM(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedValid(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedWeight(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedTargetPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedWeightTimesPdf(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) resolvedM(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) stageLinearDepth(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCellZ(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCoverage(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={}) regirCoverageWithJitter(boundaryRowFromBottom={} boundaryRowFromTop={} delta={} prev={} next={})",
             this.capturesTaken,
             directRawRowJump.rowFromBottom(),
             directRawRowJump.rowFromTop(),
@@ -2224,31 +2179,6 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.meanMJump().delta()),
             String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.meanMJump().previousMean()),
             String.format(Locale.ROOT, "%.6f", proposalReservoirRowJumps.meanMJump().nextMean()),
-            temporalReservoirRowJumps.validFractionJump().rowFromBottom(),
-            temporalReservoirRowJumps.validFractionJump().rowFromTop(),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.validFractionJump().delta()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.validFractionJump().previousMean()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.validFractionJump().nextMean()),
-            temporalReservoirRowJumps.weightJump().rowFromBottom(),
-            temporalReservoirRowJumps.weightJump().rowFromTop(),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightJump().delta()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightJump().previousMean()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightJump().nextMean()),
-            temporalReservoirRowJumps.targetPdfJump().rowFromBottom(),
-            temporalReservoirRowJumps.targetPdfJump().rowFromTop(),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.targetPdfJump().delta()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.targetPdfJump().previousMean()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.targetPdfJump().nextMean()),
-            temporalReservoirRowJumps.weightTimesTargetPdfJump().rowFromBottom(),
-            temporalReservoirRowJumps.weightTimesTargetPdfJump().rowFromTop(),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightTimesTargetPdfJump().delta()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightTimesTargetPdfJump().previousMean()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.weightTimesTargetPdfJump().nextMean()),
-            temporalReservoirRowJumps.meanMJump().rowFromBottom(),
-            temporalReservoirRowJumps.meanMJump().rowFromTop(),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.meanMJump().delta()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.meanMJump().previousMean()),
-            String.format(Locale.ROOT, "%.6f", temporalReservoirRowJumps.meanMJump().nextMean()),
             resolvedReservoirRowJumps.validFractionJump().rowFromBottom(),
             resolvedReservoirRowJumps.validFractionJump().rowFromTop(),
             String.format(Locale.ROOT, "%.6f", resolvedReservoirRowJumps.validFractionJump().delta()),
