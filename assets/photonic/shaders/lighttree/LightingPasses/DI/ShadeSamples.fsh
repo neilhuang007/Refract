@@ -9,6 +9,7 @@ layout(location = 3) out vec4 reservoir_sample_frag_out;
 layout(location = 4) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
@@ -95,7 +96,7 @@ bool lt_debug_load_selected_light_sample(
     reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(reservoirPos),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        lt_get_final_shading_input_buffer_index()
     );
     if (!RTXDI_IsValidDIReservoir(reservoir)) {
         lightSample = RAB_EmptyLightSample();
@@ -151,7 +152,7 @@ vec3 lt_debug_color_reservoir_inv_pdf(ivec2 reservoirPos) {
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(reservoirPos),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        lt_get_final_shading_input_buffer_index()
     );
     if (!RTXDI_IsValidDIReservoir(reservoir)) {
         return vec3(0.2f, 0.0f, 0.4f);
@@ -166,7 +167,7 @@ vec3 lt_debug_color_reservoir_target_pdf(ivec2 reservoirPos) {
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(reservoirPos),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        lt_get_final_shading_input_buffer_index()
     );
     if (!RTXDI_IsValidDIReservoir(reservoir)) {
         return vec3(0.2f, 0.0f, 0.4f);
@@ -320,11 +321,12 @@ void main() {
 
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
     const RTXDI_VisibilityReuseParameters visibilityReuseParams = lt_build_visibility_reuse_parameters();
+    const uint shadingInputBufferIndex = lt_get_final_shading_input_buffer_index();
 
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(GlobalIndex),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        shadingInputBufferIndex
     );
 
     vec3 shadedDiffuse = vec3(0.0f);
@@ -373,11 +375,9 @@ void main() {
                 float hitDist = 0.0f;
                 vec3 tracedVisibility = lt_trace_final_visibility_with_offset(lightSample, surface, 0.01f, hitDist);
                 bool isVisible = ph_luminance(tracedVisibility) > 0.0f && lightSample.index >= 0;
-                vec3 storedVisibility = enableVisibilityTransmittance ? tracedVisibility : (isVisible ? vec3(1.0f) : vec3(0.0f));
-                RTXDI_StoreVisibilityInDIReservoir(reservoir, storedVisibility, discardIfInvisible);
 
                 if (isVisible) {
-                    vec3 shadingVisibility = enableVisibilityTransmittance ? tracedVisibility : storedVisibility;
+                    vec3 shadingVisibility = enableVisibilityTransmittance ? tracedVisibility : vec3(1.0f);
                     lightSample.color *= shadingVisibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
                     LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
                     shadedDiffuse = splitShade.diffuse;

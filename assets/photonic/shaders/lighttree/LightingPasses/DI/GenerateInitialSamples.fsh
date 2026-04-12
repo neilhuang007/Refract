@@ -8,6 +8,7 @@ layout(location = 2) out vec4 reservoir_meta_frag_out;
 layout(location = 3) out vec4 initial_debug_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 
 void storeDIReservoir(RTXDI_DIReservoir reservoir) {
@@ -215,6 +216,11 @@ void main() {
         restirDI.initialSamplingParams,
         lightSample
     );
+
+    if (RTXDI_IsValidDIReservoir(reservoir)) {
+        lt_area_seed_domain_samples(reservoir, pixelPosition, reservoir.pathSample);
+        reservoir.targetPdf = lt_area_effective_target_pdf(reservoir, surface);
+    }
 
     debugInfo.proposalValid = RTXDI_IsValidDIReservoir(reservoir) ? 1.0f : 0.0f;
     debugInfo.proposalWeight = max(reservoir.weightSum, 0.0f);

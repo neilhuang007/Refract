@@ -28,7 +28,7 @@ public class ProgramBuilderMixin {
          args.set(2, shaderSource);
       }
 
-      if (shaderName.contains("ShadeSamplesLighting")) {
+      if (shaderName.contains("lighttree/LightingPasses/DI")) {
          photonics$dumpShaderSource(shaderName, shaderSource);
       }
    }

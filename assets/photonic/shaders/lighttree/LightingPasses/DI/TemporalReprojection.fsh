@@ -18,50 +18,45 @@ void storeDIReservoir(RTXDI_DIReservoir reservoir) {
 
 void main() {
     ivec2 GlobalIndex = lt_current_reservoir_pos();
+    RTXDI_DIReservoir stageOutput;
+    lt_temporal_scatter_emit_empty_stage_output(stageOutput);
     if (!lt_is_active_reservoir_lane(GlobalIndex)) {
-        storeDIReservoir(RTXDI_EmptyDIReservoir());
+        storeDIReservoir(stageOutput);
         return;
     }
 
     const RTXDI_RuntimeParameters params = lt_build_runtime_parameters();
     ivec2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, int(params.activeCheckerboardField));
     if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
-        storeDIReservoir(RTXDI_EmptyDIReservoir());
+        storeDIReservoir(stageOutput);
         return;
     }
+
+    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
+    RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
+    if (!RAB_IsSurfaceValid(surface)) {
+        storeDIReservoir(stageOutput);
+        return;
+    }
+
+    RTXDI_DIReservoir currentSample = RTXDI_LoadDIReservoir(
+        restirDI.reservoirBufferParams,
+        uvec2(GlobalIndex),
+        restirDI.bufferIndices.initialSamplingOutputBufferIndex
+    );
 
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
         uvec2(pixelPosition),
         params.frameIndex,
-        RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED
+        RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED + 13u
     );
 
-    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
-    RTXDI_DIReservoir spatialResult = RTXDI_EmptyDIReservoir();
+    stageOutput = lt_area_temporal_reprojection_stage(
+        pixelPosition,
+        surface,
+        currentSample,
+        rng
+    );
 
-    if (RAB_IsSurfaceValid(surface))
-    {
-        RTXDI_DIReservoir centerSample = RTXDI_LoadDIReservoir(
-            restirDI.reservoirBufferParams,
-            uvec2(GlobalIndex),
-            restirDI.bufferIndices.spatialResamplingInputBufferIndex
-        );
-
-        if (ph_debug_enable_direct_spatial_reuse < 0.5f || !RTXDI_IsValidDIReservoir(centerSample))
-        {
-            spatialResult = centerSample;
-        }
-        else
-        {
-            spatialResult = lt_area_spatial_resampling(
-                pixelPosition,
-                surface,
-                centerSample,
-                rng
-            );
-        }
-    }
-
-    storeDIReservoir(spatialResult);
+    storeDIReservoir(stageOutput);
 }

@@ -6,12 +6,16 @@ uniform sampler2D radiosity_normal;
 uniform sampler2D radiosity_mapped_normal;
 uniform sampler2D radiosity_albedo;
 uniform sampler2D radiosity_material;
+uniform sampler2D radiosity_identity;
 uniform sampler2D radiosity_proposal_reservoirs;
 uniform sampler2D radiosity_proposal_reservoir_samples;
 uniform sampler2D radiosity_proposal_reservoir_meta;
 uniform sampler2D radiosity_reservoirs;
 uniform sampler2D radiosity_reservoir_samples;
 uniform sampler2D radiosity_reservoir_meta;
+uniform sampler2D radiosity_spatial_reservoirs;
+uniform sampler2D radiosity_spatial_reservoir_samples;
+uniform sampler2D radiosity_spatial_reservoir_meta;
 uniform sampler2D radiosity_direct;
 uniform sampler2D radiosity_direct_soft;
 uniform sampler2D radiosity_handheld;
@@ -30,11 +34,28 @@ uniform sampler2D radiosity_indirect_initial_radiance;
 uniform sampler2D radiosity_indirect_initial_meta;
 uniform sampler2D radiosity_motion;
 
+// Scatter temporal resampling: reconnection data (primary hit preservation)
+uniform sampler2D scatter_reconnection0;
+uniform sampler2D scatter_reconnection1;
+uniform sampler2D scatter_reconnection2;
+uniform sampler2D scatter_reconnection3;
+uniform sampler2D scatter_reconnection4;
+// Single-buffered temporal resampling staging/output consumed within the same frame
+uniform sampler2D temporal_reprojection_data;
+uniform sampler2D temporal_reprojection_sample;
+uniform sampler2D temporal_reprojection_meta;
+uniform sampler2D temporal_binning_data;
+uniform sampler2D temporal_binning_sample;
+uniform sampler2D temporal_binning_meta;
+uniform sampler2D temporal_reservoir_data;
+uniform sampler2D temporal_reservoir_sample;
+uniform sampler2D temporal_reservoir_meta;
 uniform sampler2D prev_radiosity_position;
 uniform sampler2D prev_radiosity_normal;
 uniform sampler2D prev_radiosity_mapped_normal;
 uniform sampler2D prev_radiosity_albedo;
 uniform sampler2D prev_radiosity_material;
+uniform sampler2D prev_radiosity_identity;
 uniform sampler2D prev_radiosity_reservoirs;
 uniform sampler2D prev_radiosity_reservoir_meta;
 uniform sampler2D prev_radiosity_direct;
@@ -50,6 +71,13 @@ uniform sampler2D prev_radiosity_indirect_reservoir_meta;
 uniform sampler2D prev_radiosity_lighting;
 uniform sampler2D prev_radiosity_lighting_variance;
 uniform sampler2D prev_radiosity_motion;
+// Previous-frame scatter reconnection data
+uniform sampler2D prev_scatter_reconnection0;
+uniform sampler2D prev_scatter_reconnection1;
+uniform sampler2D prev_scatter_reconnection2;
+uniform sampler2D prev_scatter_reconnection3;
+uniform sampler2D prev_scatter_reconnection4;
+
 uniform sampler2D prev_spec_slow_input;
 uniform sampler2D prev_spec_fast_input;
 uniform sampler2D prev_spec_history_length_input;
@@ -68,6 +96,7 @@ uniform sampler2D stage_radiosity_direct_specular;
 uniform sampler2D stage_radiosity_mapped_normal;
 uniform sampler2D stage_radiosity_albedo;
 uniform sampler2D stage_radiosity_material;
+uniform sampler2D stage_radiosity_identity;
 uniform sampler2D stage_radiosity_handheld;
 uniform sampler2D stage_radiosity_indirect;
 

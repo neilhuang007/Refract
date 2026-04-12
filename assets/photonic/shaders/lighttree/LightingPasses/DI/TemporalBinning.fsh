@@ -30,38 +30,31 @@ void main() {
         return;
     }
 
+    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
+    RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
+    if (!RAB_IsSurfaceValid(surface)) {
+        storeDIReservoir(RTXDI_EmptyDIReservoir());
+        return;
+    }
+
+    RTXDI_DIReservoir currentSample = RTXDI_LoadDIReservoir(
+        restirDI.reservoirBufferParams,
+        uvec2(GlobalIndex),
+        restirDI.bufferIndices.initialSamplingOutputBufferIndex
+    );
+
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
         uvec2(pixelPosition),
         params.frameIndex,
-        RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED
+        RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED + 29u
     );
 
-    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
-    RTXDI_DIReservoir spatialResult = RTXDI_EmptyDIReservoir();
+    RTXDI_DIReservoir binnedCandidate = lt_area_temporal_binning_stage(
+        pixelPosition,
+        surface,
+        currentSample,
+        rng
+    );
 
-    if (RAB_IsSurfaceValid(surface))
-    {
-        RTXDI_DIReservoir centerSample = RTXDI_LoadDIReservoir(
-            restirDI.reservoirBufferParams,
-            uvec2(GlobalIndex),
-            restirDI.bufferIndices.spatialResamplingInputBufferIndex
-        );
-
-        if (ph_debug_enable_direct_spatial_reuse < 0.5f || !RTXDI_IsValidDIReservoir(centerSample))
-        {
-            spatialResult = centerSample;
-        }
-        else
-        {
-            spatialResult = lt_area_spatial_resampling(
-                pixelPosition,
-                surface,
-                centerSample,
-                rng
-            );
-        }
-    }
-
-    storeDIReservoir(spatialResult);
+    storeDIReservoir(binnedCandidate);
 }

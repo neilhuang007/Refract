@@ -7,8 +7,9 @@ layout(location = 1) out vec4 normal_frag_out;
 layout(location = 2) out vec4 mapped_normal_frag_out;
 layout(location = 3) out vec4 albedo_frag_out;
 layout(location = 4) out vec4 material_frag_out;
-layout(location = 5) out vec4 direct_frag_out;
-layout(location = 6) out vec4 direct_soft_frag_out;
+layout(location = 5) out vec4 identity_frag_out;
+layout(location = 6) out vec4 direct_frag_out;
+layout(location = 7) out vec4 direct_soft_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/common/light_blend_regions.glsl"
@@ -117,6 +118,7 @@ void main() {
         mapped_normal_frag_out = vec4(0.0f);
         albedo_frag_out = vec4(0.0f);
         material_frag_out = vec4(0.0f);
+        identity_frag_out = vec4(0.0f);
         direct_frag_out = vec4(0.0f);
         direct_soft_frag_out = vec4(0.0f);
         return;
@@ -138,6 +140,7 @@ void main() {
     vec4 stageAlbedo = lt_load_stage_gbuffer_like(stage_radiosity_albedo, tex_coord);
     vec2 uv = (vec2(ownerCoord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
     vec4 stageMaterial = lt_extract_accumulation_material(uv);
+    vec4 stageIdentity = lt_load_stage_gbuffer_like(stage_radiosity_identity, tex_coord);
     vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord);
     vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
@@ -170,6 +173,7 @@ void main() {
     mapped_normal_frag_out = stageMappedNormal;
     albedo_frag_out = stageAlbedo;
     material_frag_out = stageMaterial;
+    identity_frag_out = stageIdentity;
     direct_frag_out = vec4(accumulatedDirect, directHitDistance);
     direct_soft_frag_out = vec4(prevSoft.rgb + directCombined, prevSoft.a + 1.0f);
 }

@@ -12,6 +12,7 @@ layout(location = 6) out vec4 reservoir_sample_frag_out;
 layout(location = 7) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 
 void storeEmptySurfaceOutputs() {

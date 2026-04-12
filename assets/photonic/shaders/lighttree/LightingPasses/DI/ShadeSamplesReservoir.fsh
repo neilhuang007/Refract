@@ -7,6 +7,7 @@ layout(location = 1) out vec4 reservoir_sample_frag_out;
 layout(location = 2) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 
 void storeReservoirOutputs(RTXDI_DIReservoir reservoir) {
@@ -37,20 +38,25 @@ void main() {
 
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
     const RTXDI_VisibilityReuseParameters visibilityReuseParams = lt_build_visibility_reuse_parameters();
+    const uint promotionInputBufferIndex = restirDI.bufferIndices.spatialResamplingOutputBufferIndex;
 
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(GlobalIndex),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        promotionInputBufferIndex
     );
+
+    if (RTXDI_IsValidDIReservoir(reservoir)) {
+        lt_area_finalize_candidate(reservoir, pixelPosition, reservoir.pathSample);
+        reservoir.targetPdf = lt_area_effective_target_pdf(reservoir, surface);
+    }
 
     bool enableFinalVisibility = restirDI.shadingParams.enableFinalVisibility != 0u;
     bool reuseFinalVisibility = restirDI.shadingParams.reuseFinalVisibility != 0u;
     bool discardIfInvisible = false;
     bool enableVisibilityTransmittance = true;
 
-    // Match RTXDI ShadeSamples.hlsl: valid shading / visibility storage is gated
-    // only by lightData, not by weightSum.
+    // Promotion owns persistent visibility reuse. Final lighting resolve remains read-only.
     bool hasValidReservoir = RTXDI_IsValidDIReservoir(reservoir);
     vec3 visibility = vec3(0.0f);
     bool hasStoredVisibility = reuseFinalVisibility && RTXDI_GetDIReservoirVisibility(reservoir, visibilityReuseParams, visibility);
@@ -58,7 +64,6 @@ void main() {
         RAB_LightInfo lightInfo = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(reservoir), false);
         RAB_LightSample traceSample = RAB_SamplePolymorphicLight(lightInfo, surface, RTXDI_GetDIReservoirSampleUV(reservoir));
         if (traceSample.index >= 0 && traceSample.solidAnglePdf > 0.0f) {
-            // RTXDI GetFinalVisibility uses a 0.01 ray offset for final shading.
             float hitDist = 0.0f;
             vec3 visRgb = lt_trace_final_visibility_with_offset(traceSample, surface, 0.01f, hitDist);
             bool isVisible = ph_luminance(visRgb) > 0.0f && traceSample.index >= 0;

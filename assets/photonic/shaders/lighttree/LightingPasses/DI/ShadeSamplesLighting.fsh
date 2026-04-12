@@ -6,6 +6,7 @@ layout(location = 0) out vec4 direct_diffuse_frag_out;
 layout(location = 1) out vec4 direct_specular_frag_out;
 
 #include "/photonics/common/header.glsl"
+#include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
@@ -93,7 +94,7 @@ bool lt_debug_load_selected_light_sample(
     reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(reservoirPos),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        lt_get_final_shading_input_buffer_index()
     );
     if (!RTXDI_IsValidDIReservoir(reservoir)) {
         lightSample = RAB_EmptyLightSample();
@@ -149,7 +150,7 @@ vec3 lt_debug_color_reservoir_inv_pdf(ivec2 reservoirPos) {
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(reservoirPos),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        lt_get_final_shading_input_buffer_index()
     );
     if (!RTXDI_IsValidDIReservoir(reservoir)) {
         return vec3(0.2f, 0.0f, 0.4f);
@@ -164,7 +165,7 @@ vec3 lt_debug_color_reservoir_target_pdf(ivec2 reservoirPos) {
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(reservoirPos),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        lt_get_final_shading_input_buffer_index()
     );
     if (!RTXDI_IsValidDIReservoir(reservoir)) {
         return vec3(0.2f, 0.0f, 0.4f);
@@ -204,6 +205,77 @@ vec3 lt_debug_color_selected_brdf_response(ivec2 reservoirPos, RAB_Surface surfa
     LightBrdf brdf = lt_evaluate_surface_brdf(surface, lightSample.dir);
     float brdfLuma = ph_luminance(max(brdf.demodulatedDiffuse * surface.material.diffuseAlbedo + brdf.specular, vec3(0.0f)));
     return lt_debug_heat_ramp(lt_debug_encode_positive_metric(brdfLuma, 4.0f));
+}
+
+bool lt_area_evaluate_final_sample(
+    ivec2 pixelPosition,
+    RAB_Surface surface,
+    RTXDI_DIReservoir reservoir,
+    bool enableFinalVisibility,
+    bool reuseFinalVisibility,
+    bool enableVisibilityTransmittance,
+    bool discardIfInvisible,
+    RTXDI_VisibilityReuseParameters visibilityReuseParams,
+    out vec3 shadedDiffuse,
+    out vec3 shadedSpecular,
+    out float directHitDistance)
+{
+    shadedDiffuse = vec3(0.0f);
+    shadedSpecular = vec3(0.0f);
+    directHitDistance = 0.0f;
+
+    if (!RTXDI_IsValidDIReservoir(reservoir)) {
+        return false;
+    }
+
+    lt_area_finalize_candidate(reservoir, pixelPosition, reservoir.pathSample);
+    reservoir.targetPdf = lt_area_effective_target_pdf(reservoir, surface);
+
+    RAB_LightInfo lightInfo = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(reservoir), false);
+    RAB_LightSample lightSample = RAB_SamplePolymorphicLight(
+        lightInfo,
+        surface,
+        RTXDI_GetDIReservoirSampleUV(reservoir)
+    );
+    if (lightSample.index < 0 || lightSample.solidAnglePdf <= 0.0f) {
+        return false;
+    }
+
+    float sampleTargetPdf = max(lt_area_effective_target_pdf(reservoir, surface), 0.0f);
+    float sampleWeight = max(reservoir.weightSum, 0.0f);
+    if (!(sampleTargetPdf > 0.0f) || !(sampleWeight > 0.0f)) {
+        return false;
+    }
+
+    vec3 visibility = vec3(1.0f);
+    if (enableFinalVisibility) {
+        bool hasStoredVisibility = reuseFinalVisibility && RTXDI_GetDIReservoirVisibility(reservoir, visibilityReuseParams, visibility);
+        if (!hasStoredVisibility) {
+            float hitDist = 0.0f;
+            vec3 tracedVisibility = lt_trace_final_visibility_with_offset(lightSample, surface, 0.01f, hitDist);
+            bool isVisible = ph_luminance(tracedVisibility) > 0.0f && lightSample.index >= 0;
+            visibility = enableVisibilityTransmittance ? tracedVisibility : (isVisible ? vec3(1.0f) : vec3(0.0f));
+            if (!isVisible) {
+                return false;
+            }
+        } else if (!enableVisibilityTransmittance && rtxdi_is_visible(reservoir)) {
+            visibility = vec3(1.0f);
+        }
+
+        if (hasStoredVisibility && !rtxdi_is_visible(reservoir)) {
+            return false;
+        }
+    }
+
+    vec3 incidentRadiance = lt_light_sample_incident_radiance(surface, lightSample) * visibility;
+    vec3 weightedRadiance = incidentRadiance * (sampleWeight / sampleTargetPdf);
+    lightSample.color = weightedRadiance;
+
+    LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
+    shadedDiffuse = splitShade.diffuse;
+    shadedSpecular = splitShade.specular;
+    directHitDistance = length(lightSample.position + world_offset - surface.worldPos);
+    return true;
 }
 
 void storeEmptyShadeOutputs() {
@@ -312,11 +384,12 @@ void main() {
 
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
     const RTXDI_VisibilityReuseParameters visibilityReuseParams = lt_build_visibility_reuse_parameters();
+    const uint shadingInputBufferIndex = lt_get_final_shading_input_buffer_index();
 
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(
         restirDI.reservoirBufferParams,
         uvec2(GlobalIndex),
-        restirDI.bufferIndices.shadingInputBufferIndex
+        shadingInputBufferIndex
     );
 
     vec3 shadedDiffuse = vec3(0.0f);
@@ -330,54 +403,19 @@ void main() {
 
     if (RTXDI_IsValidDIReservoir(reservoir))
     {
-        RAB_LightInfo lightInfo = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(reservoir), false);
-        RAB_LightSample lightSample = RAB_SamplePolymorphicLight(
-            lightInfo,
+        lt_area_evaluate_final_sample(
+            shadingPixelPosition,
             surface,
-            RTXDI_GetDIReservoirSampleUV(reservoir)
+            reservoir,
+            enableFinalVisibility,
+            reuseFinalVisibility,
+            enableVisibilityTransmittance,
+            discardIfInvisible,
+            visibilityReuseParams,
+            shadedDiffuse,
+            shadedSpecular,
+            directHitDistance
         );
-
-        if (!enableFinalVisibility) {
-            if (lightSample.index >= 0 && lightSample.solidAnglePdf > 0.0f) {
-                lightSample.color *= RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf;
-                LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
-                shadedDiffuse = splitShade.diffuse;
-                shadedSpecular = splitShade.specular;
-                directHitDistance = length(lightSample.position + world_offset - surface.worldPos);
-            }
-        } else {
-            vec3 visibility = vec3(0.0f);
-            bool hasStoredVisibility = reuseFinalVisibility && RTXDI_GetDIReservoirVisibility(reservoir, visibilityReuseParams, visibility);
-
-            if (!enableVisibilityTransmittance && hasStoredVisibility && rtxdi_is_visible(reservoir)) {
-                visibility = vec3(1.0f);
-            }
-
-            if (hasStoredVisibility && rtxdi_is_visible(reservoir)) {
-                if (lightSample.index >= 0 && lightSample.solidAnglePdf > 0.0f) {
-                    lightSample.color *= visibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
-                    LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
-                    shadedDiffuse = splitShade.diffuse;
-                    shadedSpecular = splitShade.specular;
-                    directHitDistance = length(lightSample.position + world_offset - surface.worldPos);
-                }
-            } else if (lightSample.index >= 0 && lightSample.solidAnglePdf > 0.0f) {
-                float hitDist = 0.0f;
-                vec3 tracedVisibility = lt_trace_final_visibility_with_offset(lightSample, surface, 0.01f, hitDist);
-                bool isVisible = ph_luminance(tracedVisibility) > 0.0f && lightSample.index >= 0;
-                vec3 storedVisibility = enableVisibilityTransmittance ? tracedVisibility : (isVisible ? vec3(1.0f) : vec3(0.0f));
-                RTXDI_StoreVisibilityInDIReservoir(reservoir, storedVisibility, discardIfInvisible);
-
-                if (isVisible) {
-                    vec3 shadingVisibility = enableVisibilityTransmittance ? tracedVisibility : storedVisibility;
-                    lightSample.color *= shadingVisibility * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf);
-                    LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
-                    shadedDiffuse = splitShade.diffuse;
-                    shadedSpecular = splitShade.specular;
-                    directHitDistance = length(lightSample.position + world_offset - surface.worldPos);
-                }
-            }
-        }
     }
 
     if (restirDI.shadingParams.enableDenoiserInputPacking != 0u) {

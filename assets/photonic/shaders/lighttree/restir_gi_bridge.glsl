@@ -1,6 +1,7 @@
 #ifndef PHOTONICS_RESTIR_GI_BRIDGE_GLSL
 #define PHOTONICS_RESTIR_GI_BRIDGE_GLSL
 
+#include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
