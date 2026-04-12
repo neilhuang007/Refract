@@ -268,7 +268,7 @@ bool lt_area_evaluate_final_sample(
     }
 
     vec3 incidentRadiance = lt_light_sample_incident_radiance(surface, lightSample) * visibility;
-    vec3 weightedRadiance = incidentRadiance * (sampleWeight / sampleTargetPdf);
+    vec3 weightedRadiance = incidentRadiance * sampleWeight;
     lightSample.color = weightedRadiance;
 
     LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);

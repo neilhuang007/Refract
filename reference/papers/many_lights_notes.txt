@@ -1,8 +1,0 @@
-Lightcuts (Walter et al., 2005): hierarchical grouping of many lights to reduce evaluation cost; representative clusters can replace many raw lights when error is controlled.
-Source landing page: https://www.cs.cornell.edu/~kb/projects/lightcuts/
-
-Dynamic Many-Light Sampling for Real-Time Ray Tracing (NVIDIA, SIGGRAPH 2019): maintain/update hierarchical many-light sampling data incrementally for dynamic scenes rather than rebuilding flat structures every frame.
-Source landing/reference trail: https://research.nvidia.com/publication/2019-07_dynamic-many-light-sampling-real-time-ray-tracing
-
-Virtual Spherical Lights (Hasan et al., 2009): use aggregated proxy lights to approximate many local emitters efficiently, supporting the primitive/proxy-light direction.
-PDF saved locally as SIGAsia09VSL.pdf
