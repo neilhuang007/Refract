@@ -5,6 +5,27 @@
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
+RTXDI_DIReservoir RTXDI_DISpatialResampling(
+    uvec2 pixelPosition,
+    RAB_Surface centerSurface,
+    RTXDI_DIReservoir centerSample,
+    inout RTXDI_RandomSamplerState rng,
+    RTXDI_RuntimeParameters params,
+    RTXDI_ReservoirBufferParameters reservoirParams,
+    uint sourceBufferIndex,
+    RTXDI_DISpatialResamplingParameters sparams,
+    inout RAB_LightSample selectedLightSample);
+
+RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
+    inout RTXDI_RandomSamplerState rng,
+    inout RTXDI_RandomSamplerState coherentRng,
+    RAB_Surface surface,
+    RTXDI_DIInitialSamplingParameters initialSamplingParams,
+    out RAB_LightSample o_lightSample);
+
+bool RAB_SurfaceImportanceSampleBrdf(RAB_Surface surface, inout RTXDI_RandomSamplerState rng, out vec3 dir);
+float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir);
+
 const float lt_indirect_max_history = 8.0f;
 const float lt_gi_pi = 3.14159265359f;
 const float lt_gi_max_brdf_value = 1e4f;

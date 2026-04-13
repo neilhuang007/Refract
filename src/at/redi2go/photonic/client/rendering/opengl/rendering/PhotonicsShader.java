@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 public class PhotonicsShader {
@@ -16,6 +17,7 @@ public class PhotonicsShader {
    private final GLMemoryCollection memoryCollection;
    private final ColorFramebuffer framebuffer;
    private final int[] drawBuffers;
+   private Predicate<GlMemoryManager> memoryFilter;
 
    public PhotonicsShader(String fragmentName, String vertexName, GLMemoryCollection memoryCollection, ColorFramebuffer framebuffer) {
       this(fragmentName, vertexName, memoryCollection, framebuffer, null);
@@ -27,6 +29,13 @@ public class PhotonicsShader {
       this.memoryCollection = memoryCollection;
       this.framebuffer = framebuffer;
       this.drawBuffers = drawBuffers;
+      this.memoryFilter = memoryManager -> true;
+   }
+
+   public PhotonicsShader withMemoryFilter(Predicate<GlMemoryManager> memoryFilter) {
+      this.memoryFilter = memoryFilter != null ? memoryFilter : memoryManager -> true;
+      this.foundGlMemories = null;
+      return this;
    }
 
    public void bindFramebuffer() {
@@ -42,6 +51,9 @@ public class PhotonicsShader {
 
          for (Supplier<GlMemoryManager> glMemoryManagerSupplier : this.memoryCollection) {
             GlMemoryManager glMemoryManager = glMemoryManagerSupplier.get();
+            if (!this.memoryFilter.test(glMemoryManager)) {
+               continue;
+            }
             int blockIndex = glMemoryManager.findInProgram(shaderId);
             if (blockIndex != -1) {
                this.foundGlMemories.add(Map.entry(blockIndex, glMemoryManager));

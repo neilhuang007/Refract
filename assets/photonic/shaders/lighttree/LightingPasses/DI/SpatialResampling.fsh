@@ -48,18 +48,17 @@ void main() {
             restirDI.bufferIndices.spatialResamplingInputBufferIndex
         );
 
-        if (ph_debug_enable_direct_spatial_reuse < 0.5f || !RTXDI_IsValidDIReservoir(centerSample))
+        if (!RTXDI_IsValidDIReservoir(centerSample))
+        {
+            spatialResult = centerSample;
+        }
+        else if (ph_debug_enable_direct_spatial_reuse < 0.5f)
         {
             spatialResult = centerSample;
         }
         else
         {
-            spatialResult = lt_area_spatial_resampling(
-                pixelPosition,
-                surface,
-                centerSample,
-                rng
-            );
+            spatialResult = centerSample;
         }
     }
 

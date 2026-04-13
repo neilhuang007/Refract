@@ -1358,6 +1358,20 @@ public class LightRegistry implements Destructable {
       return this.lightPowers;
    }
 
+   public long getSemanticLayoutHash() {
+      long hash = 1469598103934665603L;
+      hash = hash * 1099511628211L + this.regirActiveCellCount;
+      hash = hash * 1099511628211L + this.regirActiveLightSlotCount;
+      for (LightInstance light : this.tracedLights) {
+         hash = hash * 1099511628211L + Integer.toUnsignedLong(light.blockId());
+         hash = hash * 1099511628211L + Float.floatToIntBits(light.position().x);
+         hash = hash * 1099511628211L + Float.floatToIntBits(light.position().y);
+         hash = hash * 1099511628211L + Float.floatToIntBits(light.position().z);
+         hash = hash * 1099511628211L + semanticLightDescriptorHash(light.type());
+      }
+      return hash;
+   }
+
    private LightInstance[] toLightInstanceArray() {
       List<LightInstance> lights = new ArrayList<>(this.tracedLightPositions.size());
       for (Entry<Vector3f, TracedLightPosition> e : this.tracedLightPositions.entrySet()) {

@@ -83,6 +83,10 @@ public class GlMemoryManager implements MemoryManager {
       };
    }
 
+   public String getName() {
+      return this.name;
+   }
+
    public boolean upload() {
       this.ensureAllocated();
       GL15.glBindBuffer(this.target.target, this.id);

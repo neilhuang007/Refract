@@ -3,11 +3,42 @@ param(
   [string[]]$GradleArgs
 )
 
+# Force console output to UTF-8 so Write-Output never hits
+# "Windows stdio does not support writing non-UTF-8 byte sequences".
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding            = [System.Text.Encoding]::UTF8
+
 $stdout = Join-Path (Get-Location) 'run/shaderGameTest.stdout.log'
 $stderr = Join-Path (Get-Location) 'run/shaderGameTest.stderr.log'
 $latestLog = Join-Path (Get-Location) 'run/logs/latest.log'
 $reportFile = Join-Path (Get-Location) 'run/automation/shader-report.properties'
 $fatalPatterns = @('Failed to create shader rendering pipeline', 'The shaderpack failed to load!')
+
+function Convert-ToCleanUtf8Text {
+  param([string]$Text)
+
+  if ([string]::IsNullOrEmpty($Text)) {
+    return ''
+  }
+
+  # Keep only characters that are guaranteed safe for a UTF-8 console:
+  #   - Tab (0x09), LF (0x0A), CR (0x0D)
+  #   - Printable ASCII (0x20 .. 0x7E)
+  # Everything else (high bytes from locale encodings, surrogates,
+  # control chars) is replaced with '?' so the message stays readable
+  # without ever producing non-UTF-8 byte sequences on output.
+  $cleanBuilder = New-Object System.Text.StringBuilder($Text.Length)
+  foreach ($char in $Text.ToCharArray()) {
+    $code = [int][char]$char
+    if ($char -eq "`r" -or $char -eq "`n" -or $char -eq "`t" -or ($code -ge 0x20 -and $code -le 0x7E)) {
+      [void]$cleanBuilder.Append($char)
+    } else {
+      [void]$cleanBuilder.Append('?')
+    }
+  }
+
+  return $cleanBuilder.ToString()
+}
 
 function Stop-ProcessTree {
   param([int[]]$ProcessIds)
@@ -37,11 +68,13 @@ function Read-NewContent {
     }
 
     $null = $stream.Seek($Position.Value, [System.IO.SeekOrigin]::Begin)
-    $reader = New-Object System.IO.StreamReader($stream)
+    # Use Latin-1 (ISO-8859-1) so every byte round-trips without
+    # throwing on invalid UTF-8 sequences produced by Java / native code.
+    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::GetEncoding('iso-8859-1'))
     try {
       $content = $reader.ReadToEnd()
       $Position.Value = $stream.Position
-      return $content
+      return (Convert-ToCleanUtf8Text -Text $content)
     } finally {
       $reader.Dispose()
     }
@@ -70,13 +103,24 @@ function Get-FatalReason {
 }
 
 function Write-FailureDiagnostics {
-  param([string]$Reason)
+  param(
+    [string]$Reason,
+    [string]$FatalContent
+  )
 
   Write-Output "watchdogResult=$Reason"
-  if (Test-Path $stdout) { Write-Output '--- stdout tail ---'; Get-Content $stdout -Tail 60 }
-  if (Test-Path $stderr) { Write-Output '--- stderr tail ---'; Get-Content $stderr -Tail 60 }
-  if (Test-Path $latestLog) { Write-Output '--- latest.log tail ---'; Get-Content $latestLog -Tail 140 }
-  if (Test-Path $reportFile) { Write-Output '--- shader-report ---'; Get-Content $reportFile }
+
+  if (-not [string]::IsNullOrEmpty($FatalContent)) {
+    Write-Output '--- fatal shader output ---'
+    Write-Output $FatalContent
+    return
+  }
+
+  # Only fall back to generic tails when there is no captured fatal chunk.
+  if (Test-Path $stdout) { Write-Output '--- stdout tail ---'; Get-Content $stdout -Tail 60 -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ } }
+  if (Test-Path $stderr) { Write-Output '--- stderr tail ---'; Get-Content $stderr -Tail 60 -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ } }
+  if (Test-Path $latestLog) { Write-Output '--- latest.log tail ---'; Get-Content $latestLog -Tail 140 -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ } }
+  if (Test-Path $reportFile) { Write-Output '--- shader-report ---'; Get-Content $reportFile -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ } }
 }
 
 foreach ($path in @($stdout, $stderr)) {
@@ -94,6 +138,7 @@ $stdoutPosition = 0L
 $stderrPosition = 0L
 $deadline = (Get-Date).AddSeconds(200)
 $reason = 'completed'
+$fatalChunkContent = ''
 
 $gradleArgumentList = @('shaderGameTest', '--no-daemon')
 if ($GradleArgs) {
@@ -130,6 +175,7 @@ while (-not $proc.HasExited) {
     $fatalReason = Get-FatalReason -Content $chunk.Content -ChunkName $chunk.Name
     if ($null -ne $fatalReason) {
       $reason = $fatalReason
+      $fatalChunkContent = $chunk.Content
       Stop-ProcessTree -ProcessIds $processIds
       break
     }
@@ -149,7 +195,7 @@ while (-not $proc.HasExited) {
 try { Wait-Process -Id $proc.Id -Timeout 10 -ErrorAction SilentlyContinue } catch {}
 
 if ($reason -ne 'completed') {
-  Write-FailureDiagnostics -Reason $reason
+  Write-FailureDiagnostics -Reason $reason -FatalContent $fatalChunkContent
   exit 1
 }
 
