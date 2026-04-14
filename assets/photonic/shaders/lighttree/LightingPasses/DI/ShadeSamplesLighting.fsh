@@ -7,7 +7,7 @@ layout(location = 1) out vec4 direct_specular_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_di_bridge.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
 uniform sampler2D direct_initial_debug_input;

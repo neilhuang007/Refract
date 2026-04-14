@@ -3,6 +3,7 @@
 
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_gi_initial_sampling_impl.glsl"
 #include "/photonics/lighttree/restir_di_temporal.glsl"
 #include "/photonics/lighttree/restir_di_spatial.glsl"
 #include "/photonics/lighttree/restir_di_spatial_impl.glsl"

@@ -9,24 +9,16 @@ layout(location = 1) out vec4 reservoir_sample_frag_out;
 layout(location = 2) out vec4 reservoir_meta_frag_out;
 layout(location = 3) out vec4 reconnection0_frag_out;
 layout(location = 4) out vec4 reconnection1_frag_out;
-layout(location = 5) out vec4 reconnection2_frag_out;
-layout(location = 6) out vec4 reconnection3_frag_out;
-layout(location = 7) out vec4 reconnection4_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
 
 void storeTemporalResult(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
-    scatter_pack_reconnection(reconnection,
-        reconnection0_frag_out,
-        reconnection1_frag_out,
-        reconnection2_frag_out,
-        reconnection3_frag_out,
-        reconnection4_frag_out);
+    scatter_pack_reconnection(reconnection, reconnection0_frag_out, reconnection1_frag_out);
 }
 
 void storeEmptyResult() {

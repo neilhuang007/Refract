@@ -123,7 +123,7 @@ Light lt_invalid_light() {
 // Uses the exact same decoding as load_light() in ph_core.glsl but reads from
 // ph_lights_array_previous instead of ph_lights_array.
 // RTXDI equivalent: RAB_LoadLightInfo(index, true)
-RAB_LightInfo load_previous_light(int index) {
+Light load_previous_light(int index) {
     // RTXDI: RAB_LoadLightInfo(selectedLightPrevID, true) loads unconditionally.
     // Validate against the previous-frame buffer capacity (maxLights), NOT ph_light_count.
     if (index < 0 || index * light_size + 3 >= ph_lights_array_previous.length()) {
@@ -132,22 +132,22 @@ RAB_LightInfo load_previous_light(int index) {
 
     int base = index * light_size;
 
-    vec4 positionFull    = ph_lights_array_previous[base + 0];
-    vec4 colorFull       = ph_lights_array_previous[base + 1];
-    vec4 attenuationFull = ph_lights_array_previous[base + 2];
-    vec4 orientationFull = ph_lights_array_previous[base + 3];
+    vec4 position_full    = ph_lights_array_previous[base + 0];
+    vec4 color_full       = ph_lights_array_previous[base + 1];
+    vec4 attenuation_full = ph_lights_array_previous[base + 2];
+    vec4 orientation_full = ph_lights_array_previous[base + 3];
 
     return Light(
         index,
-        floatBitsToInt(positionFull.w),
-        positionFull.xyz - world_offset,
-        colorFull.xyz,
-        colorFull.w,
-        attenuationFull.xy,
-        attenuationFull.z,
-        attenuationFull.w,
-        normalize(orientationFull.xyz + vec3(1e-6f)),
-        orientationFull.w
+        floatBitsToInt(position_full.w),
+        position_full.xyz - world_offset,
+        color_full.xyz,
+        color_full.w,
+        attenuation_full.xy,
+        attenuation_full.z,
+        attenuation_full.w,
+        normalize(orientation_full.xyz + vec3(1e-6f)),
+        orientation_full.w
     );
 }
 
@@ -658,72 +658,19 @@ RAB_Material RAB_GetMaterial(RAB_Surface surface);
 // before the actual scatter passes are implemented.
 struct ScatterReconnectionData {
     vec3  worldPos;                  // Primary hit world-space position (first hit)
-    float subPixelX;                 // Current-frame fractional pixel x
+    float confidence;               // Reservoir confidence / history proxy
 
-    vec3  firstWi;                   // Incoming direction at the first hit
-    float subPixelY;                 // Current-frame fractional pixel y
-
-    vec2  lensSample;                // Lens sample (0,0 for current pinhole camera)
-    float time;                      // Frame-time / shutter sample
-    float subPixelJacobian;          // Reprojection Jacobian for subpixel shift
-
-    vec3  secondWo;                  // Outgoing direction at second vertex back toward the first hit
-    float secondaryPathJacobian;     // Secondary-path Jacobian
-
-    vec3  secondPos;                 // Second-vertex position (current emitter sample position)
-    float lightPdf;                  // Effective selected-light PDF proxy from the reservoir
-
-    vec3  irradiance;                // Irradiance proxy at the first hit
-    float confidence;                // Reservoir confidence / history proxy
-
-    vec3  earlyThroughput;           // Early-throughput proxy carried for future scatter weighting
-    float viewDepth;                 // Linear view depth of first hit
-
-    float lensVertexJacobian;        // Lens Jacobian (1.0 for current pinhole camera)
-    uint  pathLength;                // Current DI path length convention (camera->surface->light)
-    uint  lightFlags;                // Bit 0 = lightIsNEE, Bit 1 = lightIsDistant
-    uint  firstBSDFComponentType;    // Heuristic first-hit BSDF component classification
-    uint  secondBSDFComponentType;   // Heuristic second-hit component classification
-    uint  eventFlags;                // Bit 0 = transmissionEvent
-    uint  faceId;                    // Dominant signed face identifier for stable block matching
+    float viewDepth;                // Linear view depth of first hit
+    uint  faceId;                   // Dominant signed face identifier for stable block matching
 };
 
 ScatterReconnectionData scatter_empty_reconnection() {
     ScatterReconnectionData d;
     d.worldPos = vec3(0.0f);
-    d.subPixelX = 0.5f;
-    d.firstWi = vec3(0.0f);
-    d.subPixelY = 0.5f;
-    d.lensSample = vec2(0.0f);
-    d.time = 0.0f;
-    d.subPixelJacobian = 0.0f;
-    d.secondWo = vec3(0.0f);
-    d.secondaryPathJacobian = 0.0f;
-    d.secondPos = vec3(0.0f);
-    d.lightPdf = 0.0f;
-    d.irradiance = vec3(0.0f);
     d.confidence = 0.0f;
-    d.earlyThroughput = vec3(0.0f);
     d.viewDepth = 0.0f;
-    d.lensVertexJacobian = 1.0f;
-    d.pathLength = 0u;
-    d.lightFlags = 0u;
-    d.firstBSDFComponentType = 0u;
-    d.secondBSDFComponentType = 0u;
-    d.eventFlags = 0u;
     d.faceId = 0u;
     return d;
-}
-
-uint scatter_encode_surface_face(vec3 geoNormal) {
-    vec3 absNormal = abs(geoNormal);
-    if (absNormal.x >= absNormal.y && absNormal.x >= absNormal.z) {
-        return geoNormal.x >= 0.0f ? 0u : 1u;
-    }
-    if (absNormal.y >= absNormal.z) {
-        return geoNormal.y >= 0.0f ? 2u : 3u;
-    }
-    return geoNormal.z >= 0.0f ? 4u : 5u;
 }
 
 vec4 scatter_load_surface_identity(ivec2 uv, bool previousFrame) {
@@ -749,6 +696,12 @@ const uint SCATTER_RECONNECTION_FLAG_LIGHT_IS_DISTANT = 1u << 1u;
 const uint SCATTER_RECONNECTION_EVENT_TRANSMISSION = 1u << 0u;
 const uint SCATTER_BSDF_COMPONENT_DIFFUSE = 0u;
 const uint SCATTER_BSDF_COMPONENT_SPECULAR = 1u;
+const float SCATTER_RECONNECTION_CONFIDENCE_MAX = 20.0f;
+const uint SCATTER_RECONNECTION_VIEW_DEPTH_MASK = 0x0000FFFFu;
+const uint SCATTER_RECONNECTION_CONFIDENCE_MASK = 0x00000FFFu;
+const uint SCATTER_RECONNECTION_CONFIDENCE_SHIFT = 16u;
+const uint SCATTER_RECONNECTION_FACE_MASK = 0xFu;
+const uint SCATTER_RECONNECTION_FACE_SHIFT = 28u;
 
 float scatter_pack_half2(vec2 value) {
     return uintBitsToFloat(packHalf2x16(value));
@@ -787,98 +740,48 @@ vec3 scatter_unpack_relative_second_pos(vec3 worldPos, vec3 packedSecondPos) {
     return worldPos + packedSecondPos;
 }
 
-// Pack reconnection data into 5 vec4 values for framebuffer output.
+float scatter_clamp_reconnection_confidence(float confidence) {
+    return clamp(confidence, 0.0f, SCATTER_RECONNECTION_CONFIDENCE_MAX);
+}
+
+float scatter_encode_reconnection_face(uint faceId) {
+    return float(faceId & SCATTER_RECONNECTION_FACE_MASK);
+}
+
+uint scatter_decode_reconnection_face(float encodedFace) {
+    return uint(clamp(round(encodedFace), 0.0f, float(SCATTER_RECONNECTION_FACE_MASK)));
+}
+
+// Pack the temporal-history reconnection data into two finite-float vec4 values.
 void scatter_pack_reconnection(
     ScatterReconnectionData d,
-    out vec4 out0, out vec4 out1, out vec4 out2, out vec4 out3, out vec4 out4
+    out vec4 out0,
+    out vec4 out1
 ) {
-    uint packedMetaFlags = (d.pathLength & 0xFu)
-        | ((d.lightFlags & 0xFu) << 4u)
-        | ((d.firstBSDFComponentType & 0xFu) << 8u)
-        | ((d.secondBSDFComponentType & 0xFu) << 12u)
-        | ((d.eventFlags & 0xFu) << 16u)
-        | ((d.faceId & 0xFu) << 20u);
-    vec3 relativeSecondPos = scatter_pack_relative_second_pos(d.worldPos, d.secondPos);
-    out0 = vec4(d.worldPos, scatter_pack_half2(vec2(d.viewDepth, d.lensVertexJacobian)));
+    out0 = vec4(d.worldPos, d.viewDepth);
     out1 = vec4(
-        scatter_pack_half2(vec2(d.subPixelX, d.subPixelY)),
-        scatter_pack_unit_vector(d.firstWi),
-        scatter_pack_unit_vector(d.secondWo),
-        scatter_pack_half2(d.lensSample)
-    );
-    out2 = vec4(d.time, d.subPixelJacobian, d.secondaryPathJacobian, d.lightPdf);
-    out3 = vec4(
-        scatter_pack_half2(relativeSecondPos.xy),
-        scatter_pack_half2(vec2(relativeSecondPos.z, d.confidence)),
-        scatter_pack_half2(d.irradiance.xy),
-        scatter_pack_half2(vec2(d.irradiance.z, d.earlyThroughput.x))
-    );
-    out4 = vec4(
-        scatter_pack_half2(d.earlyThroughput.yz),
-        uintBitsToFloat(packedMetaFlags),
+        scatter_clamp_reconnection_confidence(d.confidence),
+        scatter_encode_reconnection_face(d.faceId),
         0.0f,
         0.0f
     );
 }
 
-// Unpack reconnection data from 5 texel fetches.
-ScatterReconnectionData scatter_unpack_reconnection(
-    vec4 data0, vec4 data1, vec4 data2, vec4 data3, vec4 data4
-) {
+// Unpack reconnection data from two texel fetches.
+ScatterReconnectionData scatter_unpack_reconnection(vec4 data0, vec4 data1) {
     ScatterReconnectionData d;
-    uint packedMetaFlags = floatBitsToUint(data4.y);
-    vec2 viewDepthLensJ = scatter_unpack_half2(data0.w);
-    vec2 subPixel = scatter_unpack_half2(data1.x);
-    vec2 relativeSecondPosXY = scatter_unpack_half2(data3.x);
-    vec2 relativeSecondPosZConfidence = scatter_unpack_half2(data3.y);
-    vec2 irradianceXY = scatter_unpack_half2(data3.z);
-    vec2 irradianceZEarlyX = scatter_unpack_half2(data3.w);
-    vec2 earlyYZ = scatter_unpack_half2(data4.x);
-    vec3 relativeSecondPos = vec3(relativeSecondPosXY, relativeSecondPosZConfidence.x);
     d.worldPos = data0.xyz;
-    d.viewDepth = viewDepthLensJ.x;
-    d.lensVertexJacobian = viewDepthLensJ.y;
-    d.subPixelX = subPixel.x;
-    d.subPixelY = subPixel.y;
-    d.firstWi = scatter_unpack_unit_vector(data1.y);
-    d.secondWo = scatter_unpack_unit_vector(data1.z);
-    d.lensSample = scatter_unpack_half2(data1.w);
-    d.time = data2.x;
-    d.subPixelJacobian = data2.y;
-    d.secondaryPathJacobian = data2.z;
-    d.lightPdf = data2.w;
-    d.secondPos = scatter_unpack_relative_second_pos(d.worldPos, relativeSecondPos);
-    d.confidence = relativeSecondPosZConfidence.y;
-    d.irradiance = vec3(irradianceXY, irradianceZEarlyX.x);
-    d.earlyThroughput = vec3(irradianceZEarlyX.y, earlyYZ.x, earlyYZ.y);
-    d.pathLength = packedMetaFlags & 0xFu;
-    d.lightFlags = (packedMetaFlags >> 4u) & 0xFu;
-    d.firstBSDFComponentType = (packedMetaFlags >> 8u) & 0xFu;
-    d.secondBSDFComponentType = (packedMetaFlags >> 12u) & 0xFu;
-    d.eventFlags = (packedMetaFlags >> 16u) & 0xFu;
-    d.faceId = (packedMetaFlags >> 20u) & 0xFu;
+    d.viewDepth = data0.w;
+    d.confidence = scatter_clamp_reconnection_confidence(data1.x);
+    d.faceId = scatter_decode_reconnection_face(data1.y);
     return d;
-}
-
-// Load reconnection data from current-frame textures.
-ScatterReconnectionData scatter_load_reconnection(ivec2 uv) {
-    return scatter_unpack_reconnection(
-        texelFetch(scatter_reconnection0, uv, 0),
-        texelFetch(scatter_reconnection1, uv, 0),
-        texelFetch(scatter_reconnection2, uv, 0),
-        texelFetch(scatter_reconnection3, uv, 0),
-        texelFetch(scatter_reconnection4, uv, 0)
-    );
 }
 
 // Load reconnection data from previous-frame textures.
 ScatterReconnectionData scatter_load_prev_reconnection(ivec2 uv) {
     return scatter_unpack_reconnection(
         texelFetch(prev_scatter_reconnection0, uv, 0),
-        texelFetch(prev_scatter_reconnection1, uv, 0),
-        texelFetch(prev_scatter_reconnection2, uv, 0),
-        texelFetch(prev_scatter_reconnection3, uv, 0),
-        texelFetch(prev_scatter_reconnection4, uv, 0)
+        texelFetch(prev_scatter_reconnection1, uv, 0)
     );
 }
 
@@ -1963,7 +1866,7 @@ float lt_scatter_compute_history_confidence(ivec2 pixelPosition, RAB_Surface cur
     }
 
     vec2 motionVector = texelFetch(radiosity_motion, pixelPosition, 0).xy;
-    vec2 backprojF = vec2(pixelPosition) + motionVector * vec2(viewWidth, viewHeight);
+    vec2 backprojF = vec2(pixelPosition) - motionVector * vec2(viewWidth, viewHeight);
     ivec2 basePixel = ivec2(floor(backprojF));
     vec2 fracOffset = backprojF - vec2(basePixel);
 
@@ -2025,7 +1928,7 @@ bool lt_area_is_temporal_neighbor_valid(RAB_Surface currentSurface, RAB_Surface 
 
 ivec2 lt_area_reproject_pixel(ivec2 pixelPosition) {
     vec2 motion = texelFetch(radiosity_motion, pixelPosition, 0).xy;
-    ivec2 prevPixel = ivec2(floor(vec2(pixelPosition) + motion * vec2(viewWidth, viewHeight)));
+    ivec2 prevPixel = ivec2(floor(vec2(pixelPosition) - motion * vec2(viewWidth, viewHeight)));
     return clamp(prevPixel, ivec2(0), ivec2(int(viewWidth) - 1, int(viewHeight) - 1));
 }
 
@@ -2165,12 +2068,17 @@ RTXDI_DIBufferIndices lt_build_di_buffer_indices()
 {
     RTXDI_DIBufferIndices bufferIndices;
     bufferIndices.initialSamplingOutputBufferIndex = RTXDI_DI_BUFFER_INDEX_INITIAL_SAMPLING_OUTPUT;
-    bufferIndices.spatialResamplingInputBufferIndex =
-        (ph_scatter_temporal_enabled > 0.5f)
-            ? RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_OUTPUT
-            : RTXDI_DI_BUFFER_INDEX_INITIAL_SAMPLING_OUTPUT;
-    bufferIndices.spatialResamplingOutputBufferIndex = RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_OUTPUT;
-    bufferIndices.shadingInputBufferIndex = RTXDI_DI_BUFFER_INDEX_SHADING_INPUT;
+
+    uint temporalOutputBufferIndex = (ph_scatter_temporal_enabled > 0.5f)
+        ? RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_OUTPUT
+        : RTXDI_DI_BUFFER_INDEX_INITIAL_SAMPLING_OUTPUT;
+    bool enableSpatialReuse = ph_debug_enable_direct_spatial_reuse >= 0.5f;
+
+    bufferIndices.spatialResamplingInputBufferIndex = temporalOutputBufferIndex;
+    bufferIndices.spatialResamplingOutputBufferIndex = enableSpatialReuse
+        ? RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_OUTPUT
+        : temporalOutputBufferIndex;
+    bufferIndices.shadingInputBufferIndex = bufferIndices.spatialResamplingOutputBufferIndex;
     bufferIndices.pad1 = 0u;
     bufferIndices.pad2 = 0u;
     bufferIndices.pad3 = 0u;
@@ -2185,7 +2093,7 @@ RTXDI_DIBufferIndices RTXDI_GetDIBufferIndices()
 
 uint lt_get_final_shading_input_buffer_index()
 {
-    return RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_OUTPUT;
+    return lt_build_di_buffer_indices().shadingInputBufferIndex;
 }
 
 RTXDI_RuntimeParameters lt_build_runtime_parameters()
@@ -2525,53 +2433,13 @@ uint scatter_resolve_second_bsdf_component_type(RAB_LightSample lightSample) {
 ScatterReconnectionData scatter_build_reconnection(
     RAB_Surface surface,
     ivec2 pixelPosition,
-    RTXDI_DIReservoir reservoir,
     float confidence
 ) {
     ScatterReconnectionData d;
-    int selectedLightIndex = rtxdi_get_light_index(reservoir);
     vec4 identityData = scatter_load_surface_identity(pixelPosition, false);
-    Light selectedLight = RAB_LoadLightInfo(selectedLightIndex, false);
-    RAB_LightSample selectedLightSample = RAB_SamplePolymorphicLight(selectedLight, surface, rtxdi_get_sample_uv(reservoir));
-    vec2 subPixel = scatter_resolve_reservoir_subpixel(reservoir, pixelPosition);
-    vec2 lensSample = lt_area_has_valid_domain(reservoir)
-        ? clamp(reservoir.lensSampleUV, vec2(0.0f), vec2(1.0f))
-        : lt_area_default_lens_sample();
-    vec3 secondPos = selectedLightSample.index >= 0 ? selectedLightSample.position + world_offset : vec3(0.0f);
-    vec3 secondWo = selectedLightSample.index >= 0 ? (-selectedLightSample.dir) : vec3(0.0f);
-    uint lightFlags = 0u;
-    if (selectedLightSample.index >= 0 && reservoir.pathSample != 1u) {
-        lightFlags |= SCATTER_RECONNECTION_FLAG_LIGHT_IS_NEE;
-    }
-
-    // Compute sub-pixel Jacobian from surface geometry (Equation 15 from Reservoir Splatting).
-    // Reference: ShiftMapping.slang:141, PathTracer.slang:821-826
-    //   J_subpixel = |cos(theta_normal)| / (d^2 * |cos(theta_sensor)|^3)
-    vec3 cameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
-    float computedSubPixelJacobian = scatter_compute_subpixel_jacobian(
-        surface.worldPos, surface.geoNormal, world_camera_position, cameraForward);
-
     d.worldPos = surface.worldPos;
-    d.subPixelX = subPixel.x;
-    d.firstWi = surface.viewDir;
-    d.subPixelY = subPixel.y;
-    d.lensSample = lensSample;
-    d.time = 0.0f;
-    d.subPixelJacobian = computedSubPixelJacobian;
-    d.secondWo = secondWo;
-    d.secondaryPathJacobian = 1.0f; // Correct for point lights (no area light geometry term)
-    d.secondPos = secondPos;
-    d.lightPdf = scatter_resolve_light_pdf(reservoir, selectedLightSample);
-    d.irradiance = scatter_resolve_irradiance(surface, selectedLightSample);
     d.confidence = confidence;
-    d.earlyThroughput = scatter_resolve_early_throughput(surface, selectedLightSample);
     d.viewDepth = surface.viewDepth;
-    d.lensVertexJacobian = 1.0f;
-    d.pathLength = selectedLightSample.index >= 0 ? 2u : 0u;
-    d.lightFlags = lightFlags;
-    d.firstBSDFComponentType = scatter_resolve_first_bsdf_component_type(surface);
-    d.secondBSDFComponentType = scatter_resolve_second_bsdf_component_type(selectedLightSample);
-    d.eventFlags = 0u;
     d.faceId = uint(round(identityData.w));
     return d;
 }
@@ -2941,9 +2809,9 @@ bool rtxdi_internal_simple_resample(
     return selectSample;
 }
 
-// Primary — matches RTXDI_StreamNeighborWithPairwiseMIS exactly (PairwiseStreaming.hlsli lines 35-72).
-// Takes explicit random value (RTXDI passes lt_next_random(rng) at the call site).
-// Uses RTXDI_InternalSimpleResample (unguarded) matching the reference exactly.
+// Primary pairwise MIS helpers shared by DI/GI include paths.
+// Keep these as the single owned entry points so downstream bridges link against
+// one canonical implementation surface without legacy wrapper drift.
 bool RTXDI_StreamNeighborWithPairwiseMIS(
     inout RTXDI_DIReservoir reservoir,
     float random,
@@ -2977,7 +2845,7 @@ bool RTXDI_StreamNeighborWithPairwiseMIS(
     );
 
     reservoir.canonicalWeight += 1.0f - canonicalMisWeight;
-    return RTXDI_InternalSimpleResample(
+    return rtxdi_internal_simple_resample(
         reservoir,
         neighborSample,
         random,
@@ -2987,57 +2855,19 @@ bool RTXDI_StreamNeighborWithPairwiseMIS(
     );
 }
 
-// Backward-compat alias — generates its own random, delegates to RTXDI_StreamNeighborWithPairwiseMIS.
-// Old call sites that do not pass an explicit random continue to work unchanged.
-bool rtxdi_stream_neighbor_with_pairwise_mis(
-    inout RTXDI_DIReservoir reservoir,
-    RTXDI_DIReservoir neighborReservoir,
-    RAB_Surface neighborSurface,
-    RTXDI_DIReservoir canonicalReservoir,
-    RAB_Surface canonicalSurface,
-    float neighborsInStream
-) {
-    return RTXDI_StreamNeighborWithPairwiseMIS(
-        reservoir,
-        rand_next_float(),
-        neighborReservoir,
-        neighborSurface,
-        canonicalReservoir,
-        canonicalSurface,
-        neighborsInStream
-    );
-}
-
-// Primary — matches RTXDI_StreamCanonicalWithPairwiseStep exactly (PairwiseStreaming.hlsli lines 77-86).
-// Takes explicit random and centerSurface (centerSurface unused in body but present for signature parity).
-// Uses RTXDI_InternalSimpleResample (unguarded) matching the reference exactly.
 bool RTXDI_StreamCanonicalWithPairwiseStep(
     inout RTXDI_DIReservoir reservoir,
     float random,
     RTXDI_DIReservoir centerSample,
     RAB_Surface centerSurface
 ) {
-    return RTXDI_InternalSimpleResample(
+    return rtxdi_internal_simple_resample(
         reservoir,
         centerSample,
         random,
         centerSample.targetPdf,
         centerSample.weightSum * reservoir.canonicalWeight,
         centerSample.M
-    );
-}
-
-// Backward-compat alias — generates its own random, delegates to RTXDI_StreamCanonicalWithPairwiseStep.
-bool rtxdi_stream_canonical_with_pairwise_step(
-    inout RTXDI_DIReservoir reservoir,
-    RTXDI_DIReservoir canonicalReservoir
-) {
-    // centerSurface is unused in the body; pass empty surface for signature parity.
-    return RTXDI_StreamCanonicalWithPairwiseStep(
-        reservoir,
-        rand_next_float(),
-        canonicalReservoir,
-        lt_empty_surface()
     );
 }
 
@@ -3048,30 +2878,19 @@ void RTXDI_FinalizeResampling(inout RTXDI_DIReservoir reservoir, float normaliza
     reservoir.weightSum = (denominator == 0.0f) ? 0.0f : (reservoir.weightSum * normalizationNumerator) / denominator;
 }
 
-// 4-parameter extended version kept for callers that supply an explicit selectedTargetPdf
+// 4-parameter helper kept for callers that supply an explicit selectedTargetPdf
 // (e.g. reuse_resolve.fsh pairwise-MIS path).
 // Matches RTXDI_FinalizeResampling exactly: the only guard is denominator == 0.0.
-// No extra NaN/Inf clamps or targetPdf clamping — those diverge from RTXDI reference behavior.
-void rtxdi_finalize_resampling_ex(inout RTXDI_DIReservoir reservoir, float normalizationNumerator, float normalizationDenominator, float selectedTargetPdf) {
+void ph_rtxdi_finalize_resampling_explicit(inout RTXDI_DIReservoir reservoir, float normalizationNumerator, float normalizationDenominator, float selectedTargetPdf) {
     float denominator = selectedTargetPdf * normalizationDenominator;
     reservoir.weightSum = (denominator == 0.0f) ? 0.0f : (reservoir.weightSum * normalizationNumerator) / denominator;
     reservoir.targetPdf = selectedTargetPdf;
 }
 
-// Backward-compatible alias so existing callers of rtxdi_finalize_resampling(..., selectedTargetPdf)
-// continue to compile without modification.
-void rtxdi_finalize_resampling(inout RTXDI_DIReservoir reservoir, float normalizationNumerator, float normalizationDenominator, float selectedTargetPdf) {
-    rtxdi_finalize_resampling_ex(reservoir, normalizationNumerator, normalizationDenominator, selectedTargetPdf);
-}
-
-void rtxdi_finalize_initial(inout RTXDI_DIReservoir reservoir) {
-    // Legacy helper used by old call sites; RTXDI_SampleLocalLights uses RTXDI_FinalizeResampling
-    // with misData.numMisSamples (local + environment + BRDF) directly. Keep this for compat.
-    rtxdi_finalize_resampling(reservoir, 1.0, float(max(PH_LIGHTTREE_INITIAL_SAMPLES, 1)), reservoir.targetPdf);
-}
-
-float light_sample_encode_index(int lightIndex) {
-    return uintBitsToFloat(rtxdi_make_light_data(lightIndex));
+void ph_rtxdi_finalize_initial(inout RTXDI_DIReservoir reservoir) {
+    // Legacy helper used by old call sites; keep the finalize path simple to avoid
+    // macro-dependent parse drift in include-expanded shader builds.
+    ph_rtxdi_finalize_resampling_explicit(reservoir, 1.0, reservoir.M > 0.0 ? reservoir.M : 1.0, reservoir.targetPdf);
 }
 
 // Matches RTXDI_DIReservoir::packedVisibility reuse semantics.
@@ -3542,10 +3361,11 @@ void splat_resample_temporal_pairwise_mis(
     }
 
     float weightedCandidateConfidence = c_i * supportWeight;
+    float weightedCandidateNormalization = candidateNormalization * pHatPrev;
 
     // --- Eq 11: Non-canonical MIS weight for the splatted sample ---
-    float m0Denominator = c_star * pHatCurrent + candidateNormalization;
-    float m0 = (m0Denominator > 0.0f) ? (candidateNormalization / m0Denominator) : 0.0f;
+    float m0Denominator = c_star * pHatCurrent + weightedCandidateNormalization;
+    float m0 = (m0Denominator > 0.0f) ? (weightedCandidateNormalization / m0Denominator) : 0.0f;
 
     // --- Eq 13: Canonical MIS weight contribution ---
     // For the reverse direction: evaluate canonical sample's light at the previous surface.
@@ -3640,7 +3460,7 @@ float lt_temporal_scatter_support_denominator(
                 sourcePrevSurface.worldPos, sourcePrevSurface.geoNormal, prevCameraPos, prevCameraForward);
             float jCurr = scatter_compute_subpixel_jacobian(
                 neighborSurface.worldPos, neighborSurface.geoNormal, world_camera_position, currCameraForward);
-            float supportJacobian = (jPrev > 1e-10f) ? clamp(jCurr / jPrev, 1e-4f, 1e4f) : 1.0f;
+            float supportJacobian = scatter_compute_scatter_jacobian(jPrev, jCurr, 1.0f, 1.0f);
             float invSupportJ = (supportJacobian > 1e-8f) ? (1.0f / supportJacobian) : 0.0f;
 
             denominator += bilinearWeight * sourcePrevReservoir.M * sourcePHatPrev * invSupportJ;
@@ -3688,6 +3508,38 @@ RTXDI_DIReservoir lt_area_temporal_reprojection_stage(
         uvec2(reservoirPos)
     );
     if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
+        return RTXDI_EmptyDIReservoir();
+    }
+
+    ivec2 basePixel = ivec2(floor(projectedPixelF));
+    vec2 frac = projectedPixelF - vec2(basePixel);
+    bool hasValidDestination = false;
+    for (int dy = 0; dy <= 1 && !hasValidDestination; ++dy) {
+        for (int dx = 0; dx <= 1; ++dx) {
+            ivec2 targetPixel = basePixel + ivec2(dx, dy);
+            if (!lt_is_viewport_uv_in_bounds(targetPixel)) {
+                continue;
+            }
+
+            float bilinearWeight = lt_scatter_bilinear_weight(frac, dx, dy);
+            if (bilinearWeight <= 1e-5f) {
+                continue;
+            }
+
+            RAB_Surface targetSurface = RAB_GetGBufferSurface(targetPixel, false);
+            if (!RAB_IsSurfaceValid(targetSurface)) {
+                continue;
+            }
+
+            if (scatter_reconnection_matches_surface(prevReconnection, targetPixel, targetSurface)
+                && lt_area_is_temporal_neighbor_valid(targetSurface, prevSurface)) {
+                hasValidDestination = true;
+                break;
+            }
+        }
+    }
+
+    if (!hasValidDestination) {
         return RTXDI_EmptyDIReservoir();
     }
 
@@ -3753,7 +3605,6 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
     inout RTXDI_RandomSamplerState rng,
     out ScatterReconnectionData reconnection)
 {
-    const float CONFIDENCE_CAP = 20.0f;
     float maxHistoryLength = (ph_area_restir_max_history_length > 0.0f)
         ? ph_area_restir_max_history_length : 20.0f;
 
@@ -3797,7 +3648,7 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
     backupCandidate.valid = false;
 
     vec2 motionVector = texelFetch(radiosity_motion, pixelPosition, 0).xy;
-    ivec2 backprojectedPixel = ivec2(floor(vec2(pixelPosition) + motionVector * vec2(viewWidth, viewHeight)));
+    ivec2 backprojectedPixel = ivec2(floor(vec2(pixelPosition) - motionVector * vec2(viewWidth, viewHeight)));
     if (lt_is_viewport_uv_in_bounds(backprojectedPixel)) {
         RAB_Surface prevSurface = lt_load_previous_surface(backprojectedPixel);
         if (RAB_IsSurfaceValid(prevSurface) && lt_area_is_temporal_neighbor_valid(currentSurface, prevSurface)) {
@@ -3820,7 +3671,7 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
 
                     float jPrev = scatter_compute_subpixel_jacobian(
                         prevSurface.worldPos, prevSurface.geoNormal, prevCameraPos, prevCameraForward);
-                    float splatJ = (jPrev > 1e-10f) ? clamp(jSubPixelCurrent / jPrev, 1e-4f, 1e4f) : 1.0f;
+                    float splatJ = scatter_compute_scatter_jacobian(jPrev, jSubPixelCurrent, 1.0f, 1.0f);
 
                     backupCandidate.reservoir = shiftedBackup;
                     backupCandidate.prevSurface = prevSurface;
@@ -3838,6 +3689,23 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
     float confidenceWeightSum = max(canonicalReservoir.M, 1.0f);
     if (backupCandidate.valid) {
         confidenceWeightSum += backupCandidate.reservoir.M * backupCandidate.contributionWeight;
+    }
+    for (uint contributorIdx = 0u; contributorIdx < contributorCount; ++contributorIdx) {
+        float contributorSupportWeight = uintBitsToFloat(ph_temporal_scatter_sorted_weights_data[contributorOffset + contributorIdx]);
+        if (contributorSupportWeight <= 0.0f) {
+            continue;
+        }
+
+        ivec2 sourceReservoirPos = ivec2(ph_temporal_scatter_sorted_reservoirs_data[contributorOffset + contributorIdx]);
+        RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
+            lt_build_restir_di_parameters().reservoirBufferParams,
+            uvec2(sourceReservoirPos)
+        );
+        if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
+            continue;
+        }
+
+        confidenceWeightSum += max(prevReservoir.M, 0.0f) * contributorSupportWeight;
     }
 
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
@@ -3913,9 +3781,7 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
 
         float jSubPixelPrev = scatter_compute_subpixel_jacobian(
             prevSurface.worldPos, prevSurface.geoNormal, prevCameraPos, prevCameraForward);
-        float splatJacobian = (jSubPixelPrev > 1e-10f)
-            ? clamp(jSubPixelCurrent / jSubPixelPrev, 1e-4f, 1e4f)
-            : 1.0f;
+        float splatJacobian = scatter_compute_scatter_jacobian(jSubPixelPrev, jSubPixelCurrent, 1.0f, 1.0f);
 
         prevWeightSum = state.weightSum;
         splat_resample_temporal_pairwise_mis(
@@ -3955,20 +3821,22 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
     reconnection = scatter_build_reconnection(
         currentSurface,
         pixelPosition,
-        result,
-        min(propagatedConfidence, CONFIDENCE_CAP)
+        scatter_clamp_reconnection_confidence(propagatedConfidence)
     );
 
     if (selectedFromPrev && scatter_reconnection_matches_surface(selectedPrevReconnection, pixelPosition, currentSurface)) {
-        reconnection.confidence = min(propagatedConfidence, CONFIDENCE_CAP);
+        reconnection.confidence = scatter_clamp_reconnection_confidence(propagatedConfidence);
     }
 
     return result;
 }
 #endif
+#endif // PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS (opened at line 3222)
 
 // Legacy fused temporal resampling path removed.
 // The active implementation is the explicit reprojection -> binning -> scatter stage chain.
+#include "/photonics/lighttree/restir_di_temporal.glsl"
+
 //  Area-ReSTIR Core: Shift Mappings, Jacobians, and Pairwise MIS
 //  Adapted from NVIDIA Area-ReSTIR (Resampling.slang, Params.slang)
 //  for our GLSL 430 / Minecraft ray tracing context.
@@ -4581,6 +4449,7 @@ void area_resample_reservoir_pairwise_mis(
 }
 
 // --- Streaming resample finalize MIS (Resampling.slang lines 703-721) ---
+
 bool area_streaming_resample_finalize_mis(
     inout RTXDI_DIReservoir state,
     RTXDI_DIReservoir canonicalReservoir,
@@ -4615,328 +4484,6 @@ bool area_streaming_resample_finalize_mis(
 //  End of Area-ReSTIR Core Functions
 // ============================================================================
 
-RTXDI_DIReservoir lt_area_spatial_resampling(
-    ivec2 pixelPosition,
-    RAB_Surface centerSurface,
-    RTXDI_DIReservoir centerSample,
-    inout RTXDI_RandomSamplerState rng)
-{
-    // ============================================================================
-    // Area-ReSTIR Spatial Resampling (Phase 3 rewrite)
-    //
-    // Reference: SpatialResampling.cs.slang lines 163-267 (Area ReSTIR part)
-    //
-    // Algorithm:
-    //   1. Neighbor selection from offset buffer with validation (normal/depth/material)
-    //   2. Two-pass confidence weight computation (first pass collects, second resamples)
-    //   3. For each valid neighbor: area_resample_reservoir_pairwise_mis with
-    //      isTemporalReusing=false (defensive MIS), candidateBilinearWeight=1.0
-    //   4. Finalize with canonical: area_streaming_resample_finalize_mis
-    //   5. UCW: weight = targetPdf > 0 ? weightSum / targetPdf : 0
-    //   6. M capping: risState.M = currentReservoir.M (preserve history)
-    // ============================================================================
-
-    if (!RAB_IsSurfaceValid(centerSurface) || !RTXDI_IsValidDIReservoir(centerSample)) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    // Resolve spatial shift mode from uniform (default: OnlyReconnection = 1)
-    uint spatialShiftMode = (ph_area_restir_spatial_shift_mode > 0.5f)
-        ? uint(round(ph_area_restir_spatial_shift_mode))
-        : AREA_RESTIR_SHIFT_MODE_ONLY_RECONNECTION;
-
-    RTXDI_RuntimeParameters params = lt_build_runtime_parameters();
-    RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    RTXDI_ReservoirBufferParameters reservoirParams = restirDI.reservoirBufferParams;
-    uint sourceBufferIndex = restirDI.bufferIndices.spatialResamplingInputBufferIndex;
-    RTXDI_DISpatialResamplingParameters sparams = restirDI.spatialResamplingParams;
-
-    lt_area_finalize_candidate(centerSample, pixelPosition, centerSample.pathSample);
-
-    uint numSpatialSamples = (centerSample.M < float(sparams.targetHistoryLength))
-        ? max(sparams.numDisocclusionBoostSamples, sparams.numSamples)
-        : sparams.numSamples;
-    numSpatialSamples = min(numSpatialSamples, 32u);
-
-    // === Pass 1: Collect valid neighbors and compute confidence weight sum ===
-    // Reference: SpatialResampling.cs.slang lines 181-207
-    // Spatial reuse must consume the authoritative temporal reservoir result and emit the
-    // frame-final pre-shading reservoir. Neighbor fetches therefore come from the same
-    // temporal/spatial source selection, not from the post-shading history buffer.
-    uint startIdx = uint(lt_next_random(rng) * float(max(params.neighborOffsetMask, 1u)));
-    float confidenceWeightSum = centerSample.M;
-    uint validNeighborCount = 0u;
-    uint validNeighborCache = 0u;  // Bitmask for up to 32 neighbors
-
-    RTXDI_DIReservoir neighbors[32];
-    RAB_Surface neighborSurfaces[32];
-    ivec2 neighborPixels[32];
-
-    for (uint i = 0u; i < numSpatialSamples; ++i)
-    {
-        uint sampleIdx = (startIdx + i) & max(params.neighborOffsetMask, 1u);
-        ivec2 spatialOffset = ivec2(lt_load_neighbor_offset(int(sampleIdx)) * sparams.samplingRadius);
-        ivec2 idx = RAB_ClampSamplePositionIntoView(pixelPosition + spatialOffset, false);
-        RTXDI_ActivateCheckerboardPixel(idx, false, int(params.activeCheckerboardField));
-
-        RAB_Surface neighborSurface = RAB_GetGBufferSurface(idx, false);
-        if (!RAB_IsSurfaceValid(neighborSurface)) {
-            continue;
-        }
-
-        // Normal/depth validation
-        // Reference: SpatialResampling.cs.slang line 114
-        if (!RTXDI_IsValidNeighbor(RAB_GetSurfaceNormal(centerSurface), RAB_GetSurfaceNormal(neighborSurface),
-            RAB_GetSurfaceLinearDepth(centerSurface), RAB_GetSurfaceLinearDepth(neighborSurface),
-            sparams.normalThreshold, sparams.depthThreshold)) {
-            continue;
-        }
-
-        // Material similarity test
-        if (sparams.enableMaterialSimilarityTest != 0u && !RAB_AreMaterialsSimilar(RAB_GetMaterial(centerSurface), RAB_GetMaterial(neighborSurface))) {
-            continue;
-        }
-
-        RTXDI_DIReservoir neighborSample = RTXDI_LoadDIReservoir(
-            reservoirParams,
-            uvec2(RTXDI_PixelPosToReservoirPos(idx, int(params.activeCheckerboardField))),
-            sourceBufferIndex
-        );
-        if (!RTXDI_IsValidDIReservoir(neighborSample)) {
-            continue;
-        }
-
-        lt_area_finalize_candidate(neighborSample, idx, neighborSample.pathSample);
-        neighborSample.spatialDistance += spatialOffset;
-
-        // Accumulate confidence weight sum
-        // Reference: SpatialResampling.cs.slang line 203
-        confidenceWeightSum += neighborSample.M;
-
-        neighbors[i] = neighborSample;
-        neighborSurfaces[i] = neighborSurface;
-        neighborPixels[i] = idx;
-        validNeighborCache |= (1u << i);
-        validNeighborCount++;
-    }
-
-    if (validNeighborCount == 0u) {
-        return centerSample;
-    }
-
-    // === Initialize RIS state with defensive canonical weight ===
-    // Reference: SpatialResampling.cs.slang line 208
-    // risState.canonicalWeight = centerM / confidenceWeightSum (defensive pairwise MIS)
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    state.canonicalWeight = (confidenceWeightSum > 0.0f)
-        ? (centerSample.M / confidenceWeightSum)
-        : 0.0f;
-
-    // === Pass 2: Resample valid neighbors using pairwise MIS ===
-    // Reference: SpatialResampling.cs.slang lines 211-247
-    for (uint i = 0u; i < numSpatialSamples; ++i)
-    {
-        if ((validNeighborCache & (1u << i)) == 0u) {
-            continue;
-        }
-
-        RTXDI_DIReservoir neighborSample = neighbors[i];
-        RAB_Surface neighborSurface = neighborSurfaces[i];
-        ivec2 neighborPixel = neighborPixels[i];
-
-        // Resample neighbor (candidate) reservoir with pairwise MIS
-        // Reference: SpatialResampling.cs.slang lines 228-229 or 244-245
-        //   isTemporalReusing = false  (uses defensive MIS weights)
-        //   candidateBilinearWeight = 1.0  (spatial has equal weighting)
-        area_resample_reservoir_pairwise_mis(
-            state,                   // inout RIS state accumulator
-            centerSample,            // canonical reservoir (center pixel)
-            centerSurface,           // canonical surface
-            pixelPosition,           // canonical pixel
-            neighborSample,          // candidate reservoir (neighbor)
-            neighborSurface,         // candidate surface
-            neighborPixel,           // candidate pixel
-            true,                    // useMFactor
-            confidenceWeightSum,     // total confidence weight sum
-            1.0f,                    // candidateBilinearWeight (spatial = 1.0)
-            false,                   // isTemporalReusing = false (defensive MIS)
-            spatialShiftMode,        // shift mapping mode
-            rng
-        );
-    }
-
-    // === Finalize with canonical reservoir ===
-    // Reference: SpatialResampling.cs.slang lines 249-252
-    area_streaming_resample_finalize_mis(
-        state,
-        centerSample,
-        centerSample.targetPdf,
-        rng
-    );
-
-    // === M capping: preserve center history length ===
-    // Reference: SpatialResampling.cs.slang line 254
-    state.M = centerSample.M;
-
-    // === UCW computation ===
-    // Reference: SpatialResampling.cs.slang line 255
-    state.weightSum = (state.targetPdf > 0.0f)
-        ? (state.weightSum / state.targetPdf)
-        : 0.0f;
-
-    lt_area_finalize_candidate(state, pixelPosition, state.pathSample);
-
-    return state;
-}
-
-RTXDI_DIReservoir RTXDI_DISpatialResampling(
-    uvec2 pixelPosition,
-    RAB_Surface centerSurface,
-    RTXDI_DIReservoir centerSample,
-    inout RTXDI_RandomSamplerState rng,
-    RTXDI_RuntimeParameters params,
-    RTXDI_ReservoirBufferParameters reservoirParams,
-    uint sourceBufferIndex,
-    RTXDI_DISpatialResamplingParameters sparams,
-    inout RAB_LightSample selectedLightSample)
-{
-    if (sparams.biasCorrectionMode == uint(RTXDI_BIAS_CORRECTION_PAIRWISE))
-    {
-        return RTXDI_DISpatialResamplingWithPairwiseMIS(pixelPosition, centerSurface,
-            centerSample, rng, params, reservoirParams, sourceBufferIndex, sparams, selectedLightSample);
-    }
-
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    int selected = -1;
-    RAB_LightInfo selectedLight = RAB_EmptyLightInfo();
-
-    if (RTXDI_IsValidDIReservoir(centerSample))
-    {
-        selectedLight = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(centerSample), false);
-    }
-
-    RTXDI_CombineDIReservoirs(state, centerSample, 0.5f, centerSample.targetPdf);
-
-    uint startIdx = uint(lt_next_random(rng) * float(params.neighborOffsetMask));
-
-    uint numSpatialSamples = sparams.numSamples;
-    if (centerSample.M < float(sparams.targetHistoryLength))
-        numSpatialSamples = max(sparams.numDisocclusionBoostSamples, numSpatialSamples);
-
-    numSpatialSamples = min(numSpatialSamples, 32u);
-
-    uint cachedResult = 0u;
-
-    for (uint i = 0u; i < numSpatialSamples; ++i)
-    {
-        uint sampleIdx = (startIdx + i) & params.neighborOffsetMask;
-        ivec2 spatialOffset = ivec2(lt_load_neighbor_offset(int(sampleIdx)) * sparams.samplingRadius);
-        ivec2 idx = ivec2(pixelPosition) + spatialOffset;
-
-        idx = RAB_ClampSamplePositionIntoView(idx, false);
-
-        RTXDI_ActivateCheckerboardPixel(idx, false, int(params.activeCheckerboardField));
-
-        RAB_Surface neighborSurface = RAB_GetGBufferSurface(idx, false);
-
-        if (!RAB_IsSurfaceValid(neighborSurface))
-            continue;
-
-        if (!RTXDI_IsValidNeighbor(RAB_GetSurfaceNormal(centerSurface), RAB_GetSurfaceNormal(neighborSurface),
-            RAB_GetSurfaceLinearDepth(centerSurface), RAB_GetSurfaceLinearDepth(neighborSurface),
-            sparams.normalThreshold, sparams.depthThreshold))
-            continue;
-
-        if (sparams.enableMaterialSimilarityTest != 0u && !RAB_AreMaterialsSimilar(RAB_GetMaterial(centerSurface), RAB_GetMaterial(neighborSurface)))
-            continue;
-
-        uvec2 neighborReservoirPos = uvec2(RTXDI_PixelPosToReservoirPos(idx, int(params.activeCheckerboardField)));
-
-        RTXDI_DIReservoir neighborSample = RTXDI_LoadDIReservoir(reservoirParams,
-            neighborReservoirPos, sourceBufferIndex);
-        neighborSample.spatialDistance += spatialOffset;
-
-        cachedResult |= (1u << i);
-
-        RAB_LightInfo candidateLight = RAB_EmptyLightInfo();
-
-        float neighborWeight = 0.0f;
-        RAB_LightSample candidateLightSample = RAB_EmptyLightSample();
-        if (RTXDI_IsValidDIReservoir(neighborSample))
-        {
-            if (sparams.discountNaiveSamples != 0u && neighborSample.M <= 2.0f)
-                continue;
-
-            candidateLight = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(neighborSample), false);
-
-            candidateLightSample = RAB_SamplePolymorphicLight(
-                candidateLight, centerSurface, RTXDI_GetDIReservoirSampleUV(neighborSample));
-
-            neighborWeight = RAB_GetLightSampleTargetPdfForSurface(candidateLightSample, centerSurface);
-        }
-
-        if (RTXDI_CombineDIReservoirs(state, neighborSample, lt_next_random(rng), neighborWeight))
-        {
-            selected = int(i);
-            selectedLight = candidateLight;
-            selectedLightSample = candidateLightSample;
-        }
-    }
-
-    if (RTXDI_IsValidDIReservoir(state))
-    {
-        if (sparams.biasCorrectionMode >= uint(RTXDI_BIAS_CORRECTION_BASIC))
-        {
-            float pi = state.targetPdf;
-            float piSum = state.targetPdf * centerSample.M;
-
-            for (uint i = 0u; i < numSpatialSamples; ++i)
-            {
-                if ((cachedResult & (1u << i)) == 0u)
-                    continue;
-
-                uint sampleIdx = (startIdx + i) & params.neighborOffsetMask;
-                ivec2 idx = ivec2(pixelPosition) + ivec2(lt_load_neighbor_offset(int(sampleIdx)) * sparams.samplingRadius);
-
-                idx = RAB_ClampSamplePositionIntoView(idx, false);
-
-                RTXDI_ActivateCheckerboardPixel(idx, false, int(params.activeCheckerboardField));
-
-                RAB_Surface neighborSurface = RAB_GetGBufferSurface(idx, false);
-
-                const RAB_LightSample selectedSampleAtNeighbor = RAB_SamplePolymorphicLight(
-                    selectedLight, neighborSurface, RTXDI_GetDIReservoirSampleUV(state));
-
-                float ps = RAB_GetLightSampleTargetPdfForSurface(selectedSampleAtNeighbor, neighborSurface);
-
-                if (sparams.biasCorrectionMode == uint(RTXDI_BIAS_CORRECTION_RAY_TRACED) && ps > 0.0f)
-                {
-                    if (!RAB_GetConservativeVisibility(neighborSurface, selectedSampleAtNeighbor))
-                    {
-                        ps = 0.0f;
-                    }
-                }
-
-                uvec2 neighborReservoirPos = uvec2(RTXDI_PixelPosToReservoirPos(idx, int(params.activeCheckerboardField)));
-
-                RTXDI_DIReservoir neighborSample = RTXDI_LoadDIReservoir(reservoirParams,
-                    neighborReservoirPos, sourceBufferIndex);
-
-                pi = (selected == int(i)) ? ps : pi;
-                piSum += ps * neighborSample.M;
-            }
-
-            RTXDI_FinalizeResampling(state, pi, piSum);
-        }
-        else
-        {
-            RTXDI_FinalizeResampling(state, 1.0f, state.M);
-        }
-    }
-
-    return state;
-}
-
 struct RTXDI_InitialSamplingMisData {
     int numMisSamples;              // total candidates across all techniques
     float localLightMisWeight;      // fraction of candidates from local-light sampling
@@ -4945,6 +4492,13 @@ struct RTXDI_InitialSamplingMisData {
 };
 
 RTXDI_DIReservoir RTXDI_SampleLocalLights(
+    inout RTXDI_RandomSamplerState rng,
+    inout RTXDI_RandomSamplerState coherentRng,
+    RAB_Surface surface,
+    RTXDI_DIInitialSamplingParameters initialSamplingParams,
+    out RAB_LightSample o_selectedSample);
+
+RTXDI_DIReservoir rtxdi_stream_local_light(
     inout RTXDI_RandomSamplerState rng,
     inout RTXDI_RandomSamplerState coherentRng,
     RAB_Surface surface,
@@ -4960,130 +4514,12 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
     RTXDI_DIInitialSamplingParameters initialSamplingParams,
     out RAB_LightSample o_lightSample);
 
-// RTXDI: RTXDI_InitialSamplingMisData (InitialSampling.hlsli:33-39)
+bool RAB_SurfaceImportanceSampleBrdf(RAB_Surface surface, inout RTXDI_RandomSamplerState rng, out vec3 dir);
+float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir);
+float RTXDI_BrdfMaxDistanceFromPdf(float brdfCutoff, float pdf);
+
 // Tracks per-technique sample counts and their MIS weights for blended source PDF computation.
 // Defined here so RTXDI_LightBrdfMisWeight and rtxdi_stream_local_light can reference it.
-
-// RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)
-// RTXDI does NOT guard numMisSamples against zero here — the early-exit in RTXDI_SampleLocalLights
-// ensures numMisSamples > 0 before this is used in division.
-// numMisSamples includes local + environment + BRDF sample counts (InitialSampling.hlsli line 45).
-// Environment samples are included even when the environment stub returns M=0 so MIS weights
-// remain consistent with the SDK reference.
-RTXDI_InitialSamplingMisData RTXDI_ComputeInitialSamplingMisData(RTXDI_DIInitialSamplingParameters initialSamplingParams) {
-    RTXDI_InitialSamplingMisData result;
-    result.numMisSamples = int(initialSamplingParams.numLocalLightSamples + initialSamplingParams.numEnvironmentSamples + initialSamplingParams.numBrdfSamples);
-    result.localLightMisWeight = float(initialSamplingParams.numLocalLightSamples) / float(result.numMisSamples);
-    result.environmentMapMisWeight = float(initialSamplingParams.numEnvironmentSamples) / float(result.numMisSamples);
-    result.brdfMisWeight = float(initialSamplingParams.numBrdfSamples) / float(result.numMisSamples);
-    return result;
-}
-
-// RTXDI: RTXDI_BrdfMaxDistanceFromPdf (InitialSampling.hlsli:57-61)
-// Heuristic max ray length from BRDF PDF, controlling the MIS cutoff region.
-// brdfCutoff == 0 disables shortening (returns +infinity sentinel).
-float RTXDI_BrdfMaxDistanceFromPdf(float brdfCutoff, float pdf) {
-    const float kRayTMax = 3.402823466e+38;
-    return brdfCutoff > 0.0 ? sqrt((1.0 / brdfCutoff - 1.0) * pdf) : kRayTMax;
-}
-
-// GGX VNDF PDF for a sampled light direction L given view direction V.
-// Matches the sampling distribution of ph_sample_ggx_vndf (ph_core.glsl).
-// Derivation: pdf_H = D(H) * G1(V) * dot(V,H) / max(dot(V,N), eps)
-//             pdf_L = pdf_H / (4 * dot(V,H)) = D(H) * G1(V) / (4 * max(dot(V,N), eps))
-float lt_evaluate_ggx_vndf_pdf(RAB_Surface surface, vec3 lightDir, vec3 viewDir) {
-    vec3 N = surface.normal;
-    float nDotL = dot(N, lightDir);
-    float nDotV = dot(N, viewDir);
-    if (nDotL <= 0.0 || nDotV <= 0.0) {
-        return 0.0;
-    }
-
-    vec3 H = normalize(viewDir + lightDir);
-    float nDotH = max(dot(N, H), 0.0);
-
-    float roughness = clamp(surface.material.roughness, lt_min_roughness, 1.0);
-    float D = lt_distribution_ggx(nDotH, roughness);
-
-    // G1(V) -- Smith-GGX masking, matching lt_geometry_schlick_ggx
-    float a = max(roughness * roughness, 0.02);
-    float k = a * 0.5;
-    float G1 = nDotV / max(nDotV * (1.0 - k) + k, 1e-6);
-
-    // VNDF PDF wrt solid angle: D * G1 / (4 * nDotV)
-    return D * G1 / max(4.0 * nDotV, 1e-6);
-}
-
-vec3 lt_sample_cosine_hemisphere_rtxdi(vec3 normal, vec2 rnd) {
-    float phi = rnd.x * (2.0f * lt_pi);
-    float r = sqrt(rnd.y);
-    float x = r * cos(phi);
-    float y = r * sin(phi);
-    float z = sqrt(max(0.0f, 1.0f - rnd.y));
-
-    vec3 tangent = ph_build_tangent(normal);
-    vec3 bitangent = cross(normal, tangent);
-    return normalize(tangent * x + bitangent * y + normal * z);
-}
-
-vec3 lt_sample_ggx_vndf_rtxdi(vec3 viewDir, vec3 normal, float roughness, vec2 rnd) {
-    float a = max(roughness * roughness, 0.02f);
-
-    vec3 tangent = ph_build_tangent(normal);
-    vec3 bitangent = cross(normal, tangent);
-    mat3 basis = mat3(tangent, bitangent, normal);
-
-    vec3 Ve = transpose(basis) * normalize(viewDir);
-    vec3 Vh = normalize(vec3(a * Ve.x, a * Ve.y, max(Ve.z, 1e-4f)));
-
-    float lensq = Vh.x * Vh.x + Vh.y * Vh.y;
-    vec3 T1 = lensq > 1e-7f ? vec3(-Vh.y, Vh.x, 0.0f) * inversesqrt(lensq) : vec3(1.0f, 0.0f, 0.0f);
-    vec3 T2 = cross(Vh, T1);
-
-    float r = sqrt(rnd.x);
-    float phi = 2.0f * lt_pi * rnd.y;
-    float t1 = r * cos(phi);
-    float t2 = r * sin(phi);
-    float s = 0.5f * (1.0f + Vh.z);
-    t2 = mix(sqrt(max(0.0f, 1.0f - t1 * t1)), t2, s);
-
-    vec3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0f, 1.0f - t1 * t1 - t2 * t2)) * Vh;
-    vec3 Ne = normalize(vec3(a * Nh.x, a * Nh.y, max(0.0f, Nh.z)));
-    vec3 H = normalize(basis * Ne);
-    return normalize(reflect(-viewDir, H));
-}
-
-bool RAB_SurfaceImportanceSampleBrdf(RAB_Surface surface, inout RTXDI_RandomSamplerState rng, out vec3 dir) {
-    vec3 rand = vec3(lt_next_random(rng), lt_next_random(rng), lt_next_random(rng));
-    float diffuseProbability = lt_surface_diffuse_probability(surface);
-    if (rand.x < diffuseProbability) {
-        dir = lt_sample_cosine_hemisphere_rtxdi(surface.normal, rand.yz);
-    } else {
-        dir = lt_sample_ggx_vndf_rtxdi(
-            normalize(surface.viewDir),
-            surface.normal,
-            max(surface.material.roughness, lt_min_roughness),
-            rand.yz
-        );
-    }
-
-    return dot(surface.normal, dir) > 0.0f;
-}
-
-// RTXDI: RAB_SurfaceEvaluateBrdfPdf -- evaluates the PDF of the diffuse/specular
-// mixture used by RAB_SurfaceImportanceSampleBrdf.
-float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir) {
-    float nDotL = max(dot(surface.normal, lightDir), 0.0);
-    if (nDotL <= 0.0) {
-        return 0.0;
-    }
-
-    vec3 viewDir = normalize(surface.viewDir);
-    float pdfCosine = nDotL / lt_pi;
-    float pdfGgx = lt_evaluate_ggx_vndf_pdf(surface, lightDir, viewDir);
-    float diffuseProbability = lt_surface_diffuse_probability_with_view(surface, viewDir);
-    return mix(pdfGgx, pdfCosine, diffuseProbability);
-}
 
 bool lt_bridge_supports_environment_sampling() {
     return false;
@@ -5145,7 +4581,7 @@ float RTXDI_LightBrdfMisWeight(
 
     // RTXDI InitialSampling.hlsli:78-86: evaluate BRDF PDF and apply MIS distance cutoff.
     float brdfPdf = RAB_SurfaceEvaluateBrdfPdf(surface, lightSample.dir);
-        float maxDistance = RTXDI_BrdfMaxDistanceFromPdf(brdfCutoff, brdfPdf);
+    float maxDistance = RTXDI_BrdfMaxDistanceFromPdf(brdfCutoff, brdfPdf);
     float lightDistance = length(lightSample.position - lt_surface_rt_pos(surface));
     if (lightDistance > maxDistance) {
         brdfPdf = 0.0;
@@ -5500,451 +4936,6 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextRIS(
 {
     return RTXDI_InitializeLocalLightSelectionContextRIS(
         RTXDI_RandomlySelectRISTile(coherentRng, risBufferSegmentParams));
-}
-
-RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIRRIS(
-    inout RTXDI_RandomSamplerState coherentRng,
-    RTXDI_LightBufferRegion localLightBufferRegion,
-    RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams,
-    RAB_Surface surface)
-{
-    int cellIndex = -1;
-    if (regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0)
-    {
-        return RTXDI_InitializeLocalLightSelectionContextRIS(
-            RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
-    }
-
-    if (localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u)
-    {
-        return RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
-    }
-
-    return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
-}
-
-RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
-    inout RTXDI_RandomSamplerState coherentRng,
-    int localLightSamplingMode,
-    RTXDI_LightBufferRegion localLightBufferRegion,
-    RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams,
-    RAB_Surface surface)
-{
-    if (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_REGIR_RIS)
-    {
-        return RTXDI_InitializeLocalLightSelectionContextReGIRRIS(
-            coherentRng,
-            localLightBufferRegion,
-            localLightRISBufferSegmentParams,
-            surface);
-    }
-
-    if (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_POWER_RIS)
-    {
-        if (localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u)
-        {
-            return RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
-        }
-        return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
-    }
-
-    return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
-}
-
-void RTXDI_UnpackLocalLightFromRISLightData(
-    uvec2 tileData,
-    uint risBufferPtr,
-    out RAB_LightInfo lightInfo,
-    out uint lightIndex,
-    out float invSourcePdf)
-{
-    lightInfo = RAB_EmptyLightInfo();
-    lightIndex = tileData.x & RTXDI_LIGHT_INDEX_MASK;
-    invSourcePdf = uintBitsToFloat(tileData.y);
-
-    // Match RTXDI's actual invalid payload contract: empty RIS/ReGIR entries are uint2(0,0).
-    // Do not reinterpret such an entry as legal light 0.
-    bool invalidEntry = (tileData.x == 0u && tileData.y == 0u) || invSourcePdf <= 0.0f;
-    if (invalidEntry)
-    {
-        lightIndex = 0u;
-        invSourcePdf = 0.0f;
-        return;
-    }
-
-    if ((tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u)
-    {
-        lightInfo = RAB_LoadCompactLightInfo(risBufferPtr, int(lightIndex));
-    }
-    else
-    {
-        lightInfo = RAB_LoadLightInfo(int(lightIndex), false);
-    }
-}
-
-void RTXDI_RandomlySelectLocalLightFromRISTile(
-    float rnd,
-    const RTXDI_RISTileInfo risTileInfo,
-    out RAB_LightInfo lightInfo,
-    out uint lightIndex,
-    out float invSourcePdf)
-{
-    uvec2 risTileData;
-    uint risBufferPtr;
-    RTXDI_RandomlySelectLightDataFromRISTile(rnd, risTileInfo, risTileData, risBufferPtr);
-    RTXDI_UnpackLocalLightFromRISLightData(risTileData, risBufferPtr, lightInfo, lightIndex, invSourcePdf);
-}
-
-void RTXDI_SelectNextLocalLight(
-    RTXDI_LocalLightSelectionContext ctx,
-    float rnd,
-    out RAB_LightInfo lightInfo,
-    out uint lightIndex,
-    out float invSourcePdf)
-{
-    if (ctx.mode == RTXDI_LocalLightContextSamplingMode_RIS)
-    {
-        RTXDI_RandomlySelectLocalLightFromRISTile(rnd, ctx.risTileInfo, lightInfo, lightIndex, invSourcePdf);
-        return;
-    }
-
-    RTXDI_RandomlySelectLightUniformly(rnd, ctx.lightBufferRegion, lightInfo, lightIndex, invSourcePdf);
-}
-
-vec2 RTXDI_RandomlySelectLocalLightUV(inout RTXDI_RandomSamplerState rng)
-{
-    vec2 uv;
-    uv.x = lt_next_random(rng);
-    uv.y = lt_next_random(rng);
-    return uv;
-}
-
-RTXDI_DIReservoir RTXDI_SampleLocalLights(
-    inout RTXDI_RandomSamplerState rng,
-    inout RTXDI_RandomSamplerState coherentRng,
-    RAB_Surface surface,
-    RTXDI_DIInitialSamplingParameters initialSamplingParams,
-    out RAB_LightSample o_selectedSample)
-{
-    o_selectedSample = RAB_EmptyLightSample();
-
-    RTXDI_LightBufferRegion localLightBufferRegion = RTXDI_GetLocalLightBufferRegion();
-    if (localLightBufferRegion.numLights == 0u)
-    {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    if (initialSamplingParams.numLocalLightSamples == 0u)
-    {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
-    RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams = RTXDI_GetLocalLightRISBufferSegmentParameters();
-    int localLightSamplingMode = int(initialSamplingParams.localLightSamplingMode);
-    RTXDI_LocalLightSelectionContext lightSelectionContext = RTXDI_InitializeLocalLightSelectionContext(
-        coherentRng,
-        localLightSamplingMode,
-        localLightBufferRegion,
-        localLightRISBufferSegmentParams,
-        surface);
-
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-
-    for (uint i = 0u; i < initialSamplingParams.numLocalLightSamples; i++)
-    {
-        uint lightIndex = 0u;
-        RAB_LightInfo lightInfo = RAB_EmptyLightInfo();
-        float invSourcePdf = 0.0f;
-
-        float rnd = lt_next_random(rng);
-        rnd = (rnd + float(i)) / float(initialSamplingParams.numLocalLightSamples);
-
-        RTXDI_SelectNextLocalLight(lightSelectionContext, rnd, lightInfo, lightIndex, invSourcePdf);
-        if (lightInfo.index < 0 || invSourcePdf <= 0.0f)
-        {
-            continue;
-        }
-
-        vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
-        RAB_LightSample candidateSample = RAB_SamplePolymorphicLight(lightInfo, surface, uv);
-        float blendedSourcePdf = RTXDI_LightBrdfMisWeight(
-            surface,
-            candidateSample,
-            1.0f / invSourcePdf,
-            misData.localLightMisWeight,
-            misData.brdfMisWeight,
-            initialSamplingParams.brdfCutoff);
-        float targetPdf = RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface);
-        float risRnd = lt_next_random(rng);
-
-        if (blendedSourcePdf == 0.0f)
-        {
-            continue;
-        }
-
-        bool selected = RTXDI_StreamSample(state, int(lightIndex), uv, risRnd, targetPdf, 1.0f / blendedSourcePdf);
-        if (selected)
-        {
-            o_selectedSample = candidateSample;
-        }
-    }
-
-    RTXDI_FinalizeResampling(state, 1.0f, float(misData.numMisSamples));
-    state.M = 1.0f;
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), 2u);
-    return state;
-}
-
-// RTXDI_SampleInfiniteLights (InitialSampling.hlsli lines 368-400)
-// Stub: Minecraft sun/moon handled by base shader pack.
-// Returns empty reservoir with M=0 so it contributes nothing to the merger.
-RTXDI_DIReservoir RTXDI_SampleInfiniteLights(RAB_Surface surface, int numSamples) {
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    // TODO: When integrating sun/moon into ReSTIR pipeline:
-    // - Sample directional light with random UV on virtual disk
-    // - Evaluate target PDF at surface
-    // - Stream into reservoir
-    // For now, no infinite lights in the ReSTIR pipeline.
-    // state.M is 0, so RTXDI_CombineDIReservoirs will skip this.
-    return state;
-}
-
-// RTXDI_SampleEnvironmentMap (InitialSampling.hlsli lines 458-493)
-// Stub: Environment map sampling not yet integrated.
-// Returns empty reservoir with M=0.
-RTXDI_DIReservoir RTXDI_SampleEnvironmentMap(RAB_Surface surface, int numSamples) {
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    // TODO: When integrating sky radiance:
-    // - Sample environment cubemap with importance-presampled UV
-    // - Evaluate target PDF at surface
-    // - Apply MIS weighting against BRDF samples
-    return state;
-}
-
-// RTXDI_SampleBrdf (InitialSampling.hlsli lines 501-589)
-// BRDF importance sampling: traces a ray in a BRDF-sampled direction and streams any
-// emissive block hit into the reservoir.  Matching the reference structure:
-//   for each sample:
-//     1. Importance-sample a BRDF direction (cosine-weighted + GGX via ph_sample_brdf_direction).
-//     2. Evaluate the BRDF PDF for that direction.
-//     3. Trace a ray; check lightEmittance to detect emissive-block hits.
-//     4. If an emissive block was hit, locate the nearest light in the array.
-//     5. Evaluate targetPdf and MIS-blended source PDF, then stream into reservoir.
-//   FinalizeResampling with misData.numMisSamples matching the reference.
-//
-// numSamples: number of BRDF candidates to generate (matches RTXDI numBrdfSamples).
-// misData:    MIS weight data shared with RTXDI_SampleLocalLights (same frame draw).
-// brdfCutoff: RTXDI brdfCutoff — disables BRDF blend when 0.
-RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surface surface, int numSamples, RTXDI_InitialSamplingMisData misData, float brdfCutoff, out RAB_LightSample o_selectedSample) {
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    o_selectedSample = lt_null_sample();
-    if (numSamples <= 0 || ph_light_count <= 0 || !lt_bridge_supports_brdf_local_light_replay()) {
-        return state;
-    }
-
-    vec3 viewDir = normalize(surface.viewDir);
-
-    // Match RTXDI DI initial sampling default (ReSTIRDI.cpp line 42).
-    const float brdfRayMinT = 0.001f;
-
-    vec3 rayOrigin = lt_surface_ray_origin(lt_surface_rt_pos(surface), surface.geoNormal);
-
-    for (int i = 0; i < numSamples; i++) {
-        // Step 1: importance-sample a BRDF direction using RTXDI's random-sampler-driven
-        // diffuse/specular mixture (RAB_SurfaceImportanceSampleBrdf).
-        vec3 sampleDir = vec3(0.0f);
-        if (!RAB_SurfaceImportanceSampleBrdf(surface, rng, sampleDir)) {
-            continue;
-        }
-
-        // Step 2: evaluate BRDF PDF for the sampled direction.
-        // Fix 1: RAB_SurfaceEvaluateBrdfPdf now evaluates the Fresnel-weighted GGX+cosine
-        // mixture PDF, matching the sampling distribution of ph_sample_brdf_direction exactly.
-        float brdfPdf = RAB_SurfaceEvaluateBrdfPdf(surface, sampleDir);
-        if (brdfPdf <= 0.0) {
-            continue;
-        }
-
-        // Fix 2: RTXDI_BrdfMaxDistanceFromPdf (InitialSampling.hlsli line 525).
-        // Limits trace distance based on PDF to control MIS cutoff region.
-        // High PDF (specular peak) -> large maxDistance; low PDF (diffuse tail) -> shorter.
-        float maxDistance = RTXDI_BrdfMaxDistanceFromPdf(brdfCutoff, brdfPdf);
-
-        // Step 3: trace ray in sampled direction with brdfRayMinT and maxDistance limits.
-        // breakOnEmpty stops traversal at the first empty block (sky), matching
-        // the early-exit semantics of RAB_TraceRayForLocalLight.
-        lightEmittance = vec3(0.0f);
-        breakOnEmpty = true;
-        ray.origin = rayOrigin + sampleDir * brdfRayMinT;
-        ray.direction = sampleDir;
-        trace_ray(ray, true);
-        breakOnEmpty = false;
-
-        // lightEmittance is set by trace_ray when the terminating block is emissive.
-        // A zero lightEmittance means either air/opaque non-emitter or sky miss.
-        if (!ray.result_hit || ph_luminance(lightEmittance) <= 1e-6f) {
-            continue;
-        }
-
-        // Fix 2: discard hits beyond maxDistance (reference lines 535-546).
-        float hitDistance = length(ray.result_position - rayOrigin);
-        if (hitDistance > maxDistance) {
-            continue;
-        }
-
-        // Step 4: identify the exact emitter cell that was hit.
-        // RTXDI's bridge receives the exact hit light from RAB_TraceRayForLocalLight.
-        // For Minecraft block lights, the bridge equivalent is: require the traced hit
-        // cell to match the candidate light's block cell exactly, and when the voxel
-        // tracer resolved a host block id, require that to match the light's host block
-        // too. Without the block-id guard, a BRDF hit can be rebound to a different
-        // light proxy occupying the same cell, which leaks unrelated emitter color into
-        // the direct pass.
-        int lightIndex = -1;
-        float bestDistSq = 3.402823466e+38f;
-        ivec3 hitCell = ivec3(floor(ray.result_position));
-        for (int j = 0; j < ph_light_count; j++) {
-            Light candidate = load_light(j);
-            if (any(notEqual(ivec3(floor(candidate.position)), hitCell))) {
-                continue;
-            }
-
-            if (candidate.blockId >= 0 && result_block_id >= 0 && candidate.blockId != result_block_id) {
-                continue;
-            }
-
-            vec3 delta = candidate.position - ray.result_position;
-            float distSq = dot(delta, delta);
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                lightIndex = j;
-            }
-        }
-
-        if (lightIndex < 0) {
-            continue;
-        }
-
-        // Step 5: evaluate target PDF and blended source PDF, then stream.
-        Light hitLight = load_light(lightIndex);
-        vec3 sampledPosition = hitLight.position;
-        vec2 sampleUv = vec2(0.0f);
-        RAB_LightSample brdfSample = light_sample_new_at_position(hitLight, sampledPosition, surface);
-        float targetPdf = brdfSample.weight;
-        if (targetPdf <= 0.0) {
-            continue;
-        }
-
-        // Fix 3: use power-CDF probability for lightSelectionPdf (RAB_EvaluateLocalLightSourcePdf).
-        // This is the probability of picking the specific light via the global importance CDF,
-        // matching RTXDI's RAB_EvaluateLocalLightSourcePdf which uses the actual source distribution.
-        float lightSelectionPdf;
-        float totalCdfWeight = ph_global_light_cdf_data[ph_light_count - 1];
-        if (totalCdfWeight > 1e-6) {
-            float prevCdf = lightIndex > 0 ? ph_global_light_cdf_data[lightIndex - 1] : 0.0;
-            float lightWeight = ph_global_light_cdf_data[lightIndex] - prevCdf;
-            lightSelectionPdf = lightWeight / totalCdfWeight;
-        } else {
-            lightSelectionPdf = 1.0 / float(max(ph_light_count, 1));
-        }
-
-        if (lightSelectionPdf <= 0.0) {
-            continue;
-        }
-
-        // RTXDI_LightBrdfMisWeight blends lightSelectionPdf (converted to solid-angle domain)
-        // with brdfPdf using balance-heuristic MIS, matching reference lines 573-576.
-        float blendedSourcePdf = RTXDI_LightBrdfMisWeight(
-            surface,
-            brdfSample,
-            lightSelectionPdf,
-            misData.localLightMisWeight,
-            misData.brdfMisWeight,
-            brdfCutoff
-        );
-
-        if (blendedSourcePdf <= 0.0) {
-            continue;
-        }
-
-        // Stream into reservoir -- reference line 579.
-        bool selected = RTXDI_StreamSample(state, brdfSample.index, sampleUv, lt_next_random(rng), targetPdf, 1.0f / blendedSourcePdf);
-        if (selected) {
-            o_selectedSample = brdfSample;
-        }
-    }
-
-    // Reference line 585: FinalizeResampling(state, 1.0, misData.numMisSamples).
-    RTXDI_FinalizeResampling(state, 1.0, float(misData.numMisSamples));
-    // Reference line 586: state.M = 1.
-    state.M = 1.0;
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), 1u);
-    return state;
-}
-
-// RTXDI_SampleLightsForSurface (InitialSampling.hlsli lines 592-671)
-// Combines local, infinite, environment, and BRDF sub-reservoirs into one.
-// Stubs for infinite/environment return M=0 reservoirs, which are no-ops
-// in RTXDI_CombineDIReservoirs (weightSum contribution is 0*M=0).
-RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
-    inout RTXDI_RandomSamplerState rng,
-    inout RTXDI_RandomSamplerState coherentRng,
-    RAB_Surface surface,
-    RTXDI_DIInitialSamplingParameters initialSamplingParams,
-    out RAB_LightSample o_lightSample)
-{
-    if (!RAB_IsSurfaceValid(surface)) {
-        o_lightSample = RAB_EmptyLightSample();
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
-
-    RAB_LightSample localSample = lt_null_sample();
-    RTXDI_DIReservoir localReservoir = RTXDI_SampleLocalLights(rng, coherentRng, surface, initialSamplingParams, localSample);
-
-    RAB_LightSample infiniteSample = lt_null_sample();
-    RTXDI_DIReservoir infiniteReservoir = RTXDI_SampleInfiniteLights(surface, int(initialSamplingParams.numInfiniteLightSamples));
-
-    RAB_LightSample environmentSample = lt_null_sample();
-    RTXDI_DIReservoir environmentReservoir = RTXDI_SampleEnvironmentMap(surface, int(initialSamplingParams.numEnvironmentSamples));
-
-    RAB_LightSample brdfSample = lt_null_sample();
-    RTXDI_DIReservoir brdfReservoir = RTXDI_SampleBrdf(
-        rng,
-        surface,
-        int(initialSamplingParams.numBrdfSamples),
-        misData,
-        initialSamplingParams.brdfCutoff,
-        brdfSample);
-
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    RTXDI_CombineDIReservoirs(state, localReservoir, 0.5, localReservoir.targetPdf);
-    bool selectInfinite = RTXDI_CombineDIReservoirs(state, infiniteReservoir, lt_next_random(rng), infiniteReservoir.targetPdf);
-    bool selectEnvironment = RTXDI_CombineDIReservoirs(state, environmentReservoir, lt_next_random(rng), environmentReservoir.targetPdf);
-    bool selectBrdf = RTXDI_CombineDIReservoirs(state, brdfReservoir, lt_next_random(rng), brdfReservoir.targetPdf);
-
-    RTXDI_FinalizeResampling(state, 1.0, 1.0);
-    state.M = 1.0;
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), selectBrdf ? 1u : 2u);
-
-    o_lightSample = localSample;
-    if (selectBrdf) {
-        o_lightSample = brdfSample;
-    } else if (selectEnvironment) {
-        o_lightSample = environmentSample;
-    } else if (selectInfinite) {
-        o_lightSample = infiniteSample;
-    }
-
-    if (initialSamplingParams.enableInitialVisibility != 0u && RTXDI_IsValidDIReservoir(state) && o_lightSample.index >= 0) {
-        if (!RAB_GetConservativeVisibility(surface, o_lightSample)) {
-            RTXDI_StoreVisibilityInDIReservoir(state, vec3(0.0f), true);
-        }
-    }
-
-    return state;
 }
 
 bool lt_is_complex_surface(RAB_Surface surface) {

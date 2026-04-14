@@ -127,6 +127,7 @@ public class ModSettingsScreen extends Screen {
          localLightSamplingMode.value = getNextRestirLocalLightSamplingMode(localLightSamplingMode.value);
          localLightSamplingMode.modified();
          w.setMessage(Text.of("Local Light Sampling: " + formatRestirLocalLightSamplingMode(localLightSamplingMode.value)));
+         this.reloadShaders();
       }, "Cycles the RTXDI/ReSTIR DI local-light proposal mode:\nUniform, Power RIS, and ReGIR RIS.", () -> true));
       PhotonicsStorage.Parameter<String> spatialMisMode = PhotonicsStorage.RESTIR_SPATIAL_MIS_MODE;
       spatialMisMode.value = PhotonicsStorage.normalizeRestirSpatialMisMode(spatialMisMode.value);

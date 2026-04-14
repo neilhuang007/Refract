@@ -1,5 +1,6 @@
 package at.redi2go.photonic.client.mixin;
 
+import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ShaderUtil;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -28,9 +29,7 @@ public class ProgramBuilderMixin {
          args.set(2, shaderSource);
       }
 
-      if (shaderName.contains("lighttree/LightingPasses/DI")) {
-         photonics$dumpShaderSource(shaderName, shaderSource);
-      }
+      photonics$dumpShaderSource(shaderName, shaderSource);
    }
 
    private static void photonics$dumpShaderSource(String shaderName, String shaderSource) {
@@ -39,7 +38,9 @@ public class ProgramBuilderMixin {
          Files.createDirectories(outDir);
          String fileName = shaderName.replace('/', '_').replace('\\', '_').replace(':', '_');
          Files.writeString(outDir.resolve(fileName + ".dump.glsl"), shaderSource);
-      } catch (IOException ignored) {
+         Files.writeString(Path.of("E:/cache_redirects/Temp", fileName + ".dump.glsl"), shaderSource);
+      } catch (IOException e) {
+         Photonic.warn("[ShaderDump] Failed to dump shader {}: {}", shaderName, e.getMessage());
       }
    }
 }

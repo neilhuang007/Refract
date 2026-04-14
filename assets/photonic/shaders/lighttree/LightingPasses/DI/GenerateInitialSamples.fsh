@@ -8,8 +8,7 @@ layout(location = 2) out vec4 reservoir_meta_frag_out;
 layout(location = 3) out vec4 initial_debug_frag_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/reuse_bridge.glsl"
+ #include "/photonics/lighttree/restir_di_bridge.glsl"
 
 void storeDIReservoir(RTXDI_DIReservoir reservoir) {
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
@@ -54,6 +53,7 @@ LtInitialSamplingDebugInfo lt_debug_diagnose_initial_local_samples(
     inout RTXDI_RandomSamplerState rng,
     inout RTXDI_RandomSamplerState coherentRng,
     RAB_Surface surface,
+    ivec2 pixelPosition,
     RTXDI_DIInitialSamplingParameters initialSamplingParams)
 {
     LtInitialSamplingDebugInfo debugInfo;
@@ -66,99 +66,59 @@ LtInitialSamplingDebugInfo lt_debug_diagnose_initial_local_samples(
         return debugInfo;
     }
 
-    uint localLightCount = uint(max(ph_light_count, 0));
-    if (localLightCount == 0u) {
+    RTXDI_LightBufferRegion localLightBufferRegion = RTXDI_GetLocalLightBufferRegion();
+    if (localLightBufferRegion.numLights == 0u) {
         debugInfo.reason = LT_INITIAL_DEBUG_NO_LIGHTS;
         return debugInfo;
     }
 
-    uint sampleCount = initialSamplingParams.numLocalLightSamples;
-    if (sampleCount == 0u) {
-        sampleCount = 4u;
-    }
-    if (sampleCount == 0u) {
+    if (initialSamplingParams.numLocalLightSamples == 0u) {
         debugInfo.reason = LT_INITIAL_DEBUG_NO_LOCAL_SAMPLES;
         return debugInfo;
     }
 
-    int positiveCandidateCount = 0;
-    bool sawInvalidLightSelection = false;
-    bool sawInvalidLightSample = false;
-    bool sawZeroRadiance = false;
-    bool sawZeroSourcePdf = false;
-    bool sawNonFiniteSourcePdf = false;
-    bool sawZeroTargetPdf = false;
-    bool sawNonFiniteTargetPdf = false;
-    RTXDI_DIReservoir debugState = RTXDI_EmptyDIReservoir();
+    RTXDI_RandomSamplerState previewRng = rng;
+    RTXDI_RandomSamplerState previewCoherentRng = coherentRng;
+    RAB_LightSample selectedSample = RAB_EmptyLightSample();
+    RTXDI_DIReservoir previewReservoir = RTXDI_SampleLightsForSurface(
+        previewRng,
+        previewCoherentRng,
+        surface,
+        initialSamplingParams,
+        selectedSample
+    );
 
-    for (uint i = 0u; i < sampleCount; i++) {
-        uint lightIndex = min(uint(floor(lt_next_random(coherentRng) * float(localLightCount))), localLightCount - 1u);
-        RAB_LightInfo lightInfo = RAB_LoadLightInfo(int(lightIndex), false);
-        if (lightInfo.index < 0) {
-            sawInvalidLightSelection = true;
-            continue;
-        }
+    debugInfo.proposalValid = RTXDI_IsValidDIReservoir(previewReservoir) ? 1.0f : 0.0f;
+    debugInfo.proposalWeight = previewReservoir.weightSum;
 
-        vec2 uv = vec2(lt_next_random(rng), lt_next_random(rng));
-        RAB_LightSample candidateSample = RAB_SamplePolymorphicLight(lightInfo, surface, uv);
-        if (candidateSample.index < 0 || candidateSample.solidAnglePdf <= 0.0f) {
-            sawInvalidLightSample = true;
-            continue;
-        }
-
-        float radianceLuma = ph_luminance(max(candidateSample.color, vec3(0.0f)));
-        if (radianceLuma <= 0.0f) {
-            sawZeroRadiance = true;
-            continue;
-        }
-
-        float sourcePdf = 1.0f / float(localLightCount);
-        if (sourcePdf <= 0.0f) {
-            sawZeroSourcePdf = true;
-            continue;
-        }
-        if (!lt_is_finite_float(sourcePdf)) {
-            sawNonFiniteSourcePdf = true;
-            continue;
-        }
-
-        float targetPdf = lt_surface_target_pdf(surface, candidateSample);
-        if (targetPdf <= 0.0f) {
-            sawZeroTargetPdf = true;
-            continue;
-        }
-        if (!lt_is_finite_float(targetPdf)) {
-            sawNonFiniteTargetPdf = true;
-            continue;
-        }
-
-        positiveCandidateCount++;
-        debugState.M += 1.0f;
-        debugState.weightSum += targetPdf / sourcePdf;
-    }
-
-    debugInfo.positiveCandidateFraction = float(positiveCandidateCount) / float(sampleCount);
-    debugInfo.proposalValid = RTXDI_IsValidDIReservoir(debugState) ? 1.0f : 0.0f;
-    debugInfo.proposalWeight = debugState.weightSum;
-
-    if (positiveCandidateCount > 0) {
+    if (RTXDI_IsValidDIReservoir(previewReservoir)) {
         debugInfo.reason = LT_INITIAL_DEBUG_SUCCESS;
-    } else if (sawInvalidLightSelection) {
-        debugInfo.reason = LT_INITIAL_DEBUG_INVALID_LIGHT_SELECTION;
-    } else if (sawInvalidLightSample) {
-        debugInfo.reason = LT_INITIAL_DEBUG_INVALID_LIGHT_SAMPLE;
-    } else if (sawZeroRadiance) {
-        debugInfo.reason = LT_INITIAL_DEBUG_ZERO_RADIANCE;
-    } else if (sawZeroSourcePdf) {
-        debugInfo.reason = LT_INITIAL_DEBUG_ZERO_SOURCE_PDF;
-    } else if (sawNonFiniteSourcePdf) {
-        debugInfo.reason = LT_INITIAL_DEBUG_NONFINITE_SOURCE_PDF;
-    } else if (sawZeroTargetPdf) {
-        debugInfo.reason = LT_INITIAL_DEBUG_ZERO_TARGET_PDF;
-    } else if (sawNonFiniteTargetPdf) {
-        debugInfo.reason = LT_INITIAL_DEBUG_NONFINITE_TARGET_PDF;
+        debugInfo.positiveCandidateFraction = 1.0f;
+        return debugInfo;
     }
 
+    if (selectedSample.index < 0) {
+        debugInfo.reason = LT_INITIAL_DEBUG_INVALID_LIGHT_SAMPLE;
+        return debugInfo;
+    }
+
+    float radianceLuma = ph_luminance(max(selectedSample.color, vec3(0.0f)));
+    if (radianceLuma <= 0.0f) {
+        debugInfo.reason = LT_INITIAL_DEBUG_ZERO_RADIANCE;
+        return debugInfo;
+    }
+
+    float targetPdf = lt_surface_target_pdf(surface, selectedSample);
+    if (!lt_is_finite_float(targetPdf)) {
+        debugInfo.reason = LT_INITIAL_DEBUG_NONFINITE_TARGET_PDF;
+        return debugInfo;
+    }
+    if (targetPdf <= 0.0f) {
+        debugInfo.reason = LT_INITIAL_DEBUG_ZERO_TARGET_PDF;
+        return debugInfo;
+    }
+
+    debugInfo.reason = LT_INITIAL_DEBUG_ZERO_SOURCE_PDF;
     return debugInfo;
 }
 
@@ -187,67 +147,20 @@ void main() {
         debugRng,
         debugTileRng,
         surface,
+        pixelPosition,
         restirDI.initialSamplingParams
     );
     RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
 
     if (RAB_IsSurfaceValid(surface)) {
-        reservoir = RTXDI_EmptyDIReservoir();
-
-        uint localLightCount = uint(max(ph_light_count, 0));
         RAB_LightSample selectedLightSample = RAB_EmptyLightSample();
-
-        if (localLightCount > 0u) {
-            uint sampleCount = restirDI.initialSamplingParams.numLocalLightSamples;
-            if (sampleCount == 0u) {
-                sampleCount = 4u;
-            }
-
-            for (uint i = 0u; i < sampleCount; ++i) {
-                uint lightIndex = min(uint(floor(lt_next_random(tileRng) * float(localLightCount))), localLightCount - 1u);
-                RAB_LightInfo lightInfo = RAB_LoadLightInfo(int(lightIndex), false);
-                if (lightInfo.index < 0) {
-                    continue;
-                }
-
-                vec2 uv = vec2(lt_next_random(rng), lt_next_random(rng));
-                RAB_LightSample candidateSample = RAB_SamplePolymorphicLight(lightInfo, surface, uv);
-                if (candidateSample.index < 0 || candidateSample.solidAnglePdf <= 0.0f) {
-                    continue;
-                }
-
-                float targetPdf = lt_surface_target_pdf(surface, candidateSample);
-                float sourcePdf = 1.0f / float(localLightCount);
-                if (targetPdf <= 0.0f || sourcePdf <= 0.0f) {
-                    continue;
-                }
-
-                bool selected = RTXDI_StreamSample(
-                    reservoir,
-                    candidateSample.index,
-                    uv,
-                    lt_next_random(rng),
-                    targetPdf,
-                    1.0f / sourcePdf
-                );
-                if (selected) {
-                    selectedLightSample = candidateSample;
-                }
-            }
-
-            RTXDI_FinalizeResampling(reservoir, 1.0f, max(reservoir.M, 1.0f));
-            reservoir.M = 1.0f;
-            lt_area_finalize_candidate(reservoir, lt_fragment_pixel_pos(), 2u);
-
-            if (restirDI.initialSamplingParams.enableInitialVisibility != 0u
-                && RTXDI_IsValidDIReservoir(reservoir)
-                && selectedLightSample.index >= 0)
-            {
-                if (!RAB_GetConservativeVisibility(surface, selectedLightSample)) {
-                    RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0.0f), true);
-                }
-            }
-        }
+        reservoir = RTXDI_SampleLightsForSurface(
+            rng,
+            tileRng,
+            surface,
+            restirDI.initialSamplingParams,
+            selectedLightSample
+        );
         reservoir.spatialDistance = ivec2(0);
     }
 

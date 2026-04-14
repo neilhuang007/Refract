@@ -8,7 +8,7 @@ layout(location = 2) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_di_bridge.glsl"
 
 void storeDIReservoir(RTXDI_DIReservoir reservoir) {
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
@@ -35,7 +35,6 @@ void main() {
         params.frameIndex,
         RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED
     );
-
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
     RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
     RTXDI_DIReservoir spatialResult = RTXDI_EmptyDIReservoir();
@@ -48,17 +47,26 @@ void main() {
             restirDI.bufferIndices.spatialResamplingInputBufferIndex
         );
 
-        if (!RTXDI_IsValidDIReservoir(centerSample))
+        if (RTXDI_IsValidDIReservoir(centerSample))
         {
-            spatialResult = centerSample;
-        }
-        else if (ph_debug_enable_direct_spatial_reuse < 0.5f)
-        {
-            spatialResult = centerSample;
-        }
-        else
-        {
-            spatialResult = centerSample;
+            if (ph_debug_enable_direct_spatial_reuse >= 0.5f)
+            {
+                spatialResult = lt_area_spatial_resampling(
+                    pixelPosition,
+                    surface,
+                    centerSample,
+                    rng
+                );
+
+                if (!RTXDI_IsValidDIReservoir(spatialResult))
+                {
+                    spatialResult = centerSample;
+                }
+            }
+            else
+            {
+                spatialResult = centerSample;
+            }
         }
     }
 

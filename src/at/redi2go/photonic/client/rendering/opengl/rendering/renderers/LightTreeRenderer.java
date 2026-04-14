@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
@@ -218,6 +219,7 @@ public class LightTreeRenderer extends MainRenderer {
   @Nullable
   private RegirComputeProgram regirComputeProgram;
   private final int[] directAtrousStepSizes;
+  private final Consumer<String> localLightSamplingModeObserver;
   private int directAtrousIteration = 0;
   private int specAtrousIteration = 0;
   private boolean compatDirectSoftDirty = true;
@@ -323,6 +325,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.temporalReservoirFramebuffer = this.createTemporalReservoirRoutingFramebuffer();
       this.gpuTimerQuery = this.createGpuTimerQuery();
       this.regirComputeProgram = new RegirComputeProgram();
+      this.localLightSamplingModeObserver = ignored -> this.invalidateDirectReuseHistory();
+      PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.addObserver(this.localLightSamplingModeObserver);
    }
 
    @Override
@@ -538,17 +542,11 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "prev_radiosity_reservoirs", () -> this.directReservoirBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_radiosity_reservoir_samples", () -> this.directReservoirBuffer.getReadAttachment("sample"));
       this.addTextureSampler(samplers, "prev_radiosity_reservoir_meta", () -> this.directReservoirBuffer.getReadAttachment("meta"));
-      // Scatter temporal resampling: reconnection data (current + previous frame)
+      // Scatter temporal resampling: robust reconnection history (current + previous frame)
       this.addTextureSampler(samplers, "scatter_reconnection0", () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"));
       this.addTextureSampler(samplers, "scatter_reconnection1", () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"));
-      this.addTextureSampler(samplers, "scatter_reconnection2", () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"));
-      this.addTextureSampler(samplers, "scatter_reconnection3", () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"));
-      this.addTextureSampler(samplers, "scatter_reconnection4", () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection0", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection0"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection1", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection1"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection2", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection2"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection3", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection3"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection4", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection4"));
       // Scatter temporal resampling output: consumed by spatial resampling
       this.addTextureSampler(samplers, "temporal_reservoir_data", () -> this.temporalReservoirBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "temporal_reservoir_sample", () -> this.temporalReservoirBuffer.getWriteAttachment("sample"));
@@ -673,14 +671,6 @@ public class LightTreeRenderer extends MainRenderer {
       });
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_brdf_cutoff", () -> 0.0001f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> {
-         String override = System.getProperty("photonics.restirLocalLightSamplingMode");
-         if (override != null && !override.isBlank()) {
-            try {
-               return Float.parseFloat(override.trim());
-            } catch (NumberFormatException ignored) {
-            }
-         }
-
          String configuredMode = PhotonicsStorage.normalizeRestirLocalLightSamplingMode(PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.value);
          return switch (configuredMode) {
             case "uniform" -> 0.0f;
@@ -1097,12 +1087,12 @@ public class LightTreeRenderer extends MainRenderer {
       this.recalculateRenderer(this.shadeSamplesMonolithicRenderer);
       this.recalculateRenderer(this.shadeSamplesReservoirRenderer);
       this.recalculateRenderer(this.shadeSamplesRenderer);
-      this.compatDirectSoftDirty = true;
-      this.reservoirHistoryDirty = true;
+      this.invalidateDirectReuseHistory();
    }
 
    @Override
    public void free() {
+      PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.removeObserver(this.localLightSamplingModeObserver);
       this.proposalFramebuffer.destroy();
       this.proposalReservoirFramebuffer.destroy();
       this.reuseResolveFramebuffer.destroy();
@@ -1218,19 +1208,11 @@ public class LightTreeRenderer extends MainRenderer {
 
    private ColorFramebuffer createScatterReconnectionFramebuffer(float renderScale) {
       ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
-      // Reconnection data packed across 5 RGBA32F textures:
-      // reconnection0: worldPos.xyz, packed(viewDepth, lensVertexJacobian)
-      // reconnection1: packed(subPixel.xy), packed(firstWi), packed(secondWo), packed(lensSample)
-      // reconnection2: time, subPixelJacobian, secondaryPathJacobian, lightPdf
-      // reconnection3: packed(relativeSecondPos.xy), packed(relativeSecondPos.z, confidence),
-      //                packed(irradiance.xy), packed(irradiance.z, earlyThroughput.x)
-      // reconnection4: packed(earlyThroughput.yz), packed(pathLength | lightFlags<<4 | firstBsdf<<8 |
-      //                secondBsdf<<12 | event<<16 | faceId<<20), reserved, reserved
+      // Robust temporal-history reconnection payload split across two finite-float targets:
+      // reconnection0: worldPos.xyz, viewDepth
+      // reconnection1: confidence, faceId, reserved, reserved
       framebuffer.createAttachment("reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("reconnection1", "RGBA32F", false);
-      framebuffer.createAttachment("reconnection2", "RGBA32F", false);
-      framebuffer.createAttachment("reconnection3", "RGBA32F", false);
-      framebuffer.createAttachment("reconnection4", "RGBA32F", false);
       return framebuffer;
    }
 
@@ -1245,7 +1227,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createTemporalReservoirRoutingFramebuffer() {
-      // Outputs 8 textures: 3 reservoir (data/sample/meta) + 5 reconnection data.
+      // Outputs 5 textures: 3 reservoir (data/sample/meta) + 2 reconnection history payloads.
       // The reconnection data writes go to the current-frame scatterReconnectionBuffer
       // (write side), which will be ping-ponged at the start of the next frame to become
       // the previous-frame reconnection data for the next scatter temporal pass.
@@ -1254,10 +1236,7 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.temporalReservoirBuffer.getWriteAttachment("sample"),
          () -> this.temporalReservoirBuffer.getWriteAttachment("meta"),
          () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1")
       );
    }
 
@@ -2108,6 +2087,11 @@ public class LightTreeRenderer extends MainRenderer {
       Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
       this.shadeSamplesFramebuffer.clear(clearColor);
       this.shadeSamplesReservoirFramebuffer.clear(clearColor);
+   }
+
+   private void invalidateDirectReuseHistory() {
+      this.compatDirectSoftDirty = true;
+      this.reservoirHistoryDirty = true;
    }
 
    private void ensureCompatDirectSoftCleared() {

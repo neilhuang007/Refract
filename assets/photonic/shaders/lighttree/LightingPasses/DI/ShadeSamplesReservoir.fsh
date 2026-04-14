@@ -8,7 +8,7 @@ layout(location = 2) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_di_bridge.glsl"
 
 void storeReservoirOutputs(RTXDI_DIReservoir reservoir) {
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);

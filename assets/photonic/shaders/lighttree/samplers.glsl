@@ -34,12 +34,9 @@ uniform sampler2D radiosity_indirect_initial_radiance;
 uniform sampler2D radiosity_indirect_initial_meta;
 uniform sampler2D radiosity_motion;
 
-// Scatter temporal resampling: reconnection data (primary hit preservation)
+// Scatter temporal resampling: robust reconnection history (finite-float encoded)
 uniform sampler2D scatter_reconnection0;
 uniform sampler2D scatter_reconnection1;
-uniform sampler2D scatter_reconnection2;
-uniform sampler2D scatter_reconnection3;
-uniform sampler2D scatter_reconnection4;
 // Single-buffered temporal resampling staging/output consumed within the same frame
 uniform sampler2D temporal_reprojection_data;
 uniform sampler2D temporal_reprojection_sample;
@@ -74,9 +71,6 @@ uniform sampler2D prev_radiosity_motion;
 // Previous-frame scatter reconnection data
 uniform sampler2D prev_scatter_reconnection0;
 uniform sampler2D prev_scatter_reconnection1;
-uniform sampler2D prev_scatter_reconnection2;
-uniform sampler2D prev_scatter_reconnection3;
-uniform sampler2D prev_scatter_reconnection4;
 
 uniform sampler2D prev_spec_slow_input;
 uniform sampler2D prev_spec_fast_input;
