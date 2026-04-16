@@ -49,10 +49,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private static final int ROOT_UPLOAD_BATCH_SIZE = 2048;
    private static final int LIGHT_BLEND_EXPANSION_BLOCKS = 16;
    static final int MAX_LIGHT_BLEND_REGIONS = 8;
-   private static final int RT_VISIBILITY_KEEP_ALIVE_FRAMES = 24;
+   private static final int RT_VISIBILITY_KEEP_ALIVE_FRAMES = 96;
    private static final float RT_ALWAYS_KEEP_DISTANCE_BLOCKS = 48.0F;
-   private static final float RT_MAX_RESIDENT_DISTANCE_BLOCKS = 64.0F;
-   private static final int RT_MAX_RESIDENT_CHUNKS = 96;
+   private static final float RT_MAX_RESIDENT_DISTANCE_BLOCKS = 96.0F;
+   private static final int RT_MAX_RESIDENT_CHUNKS = 192;
    private final IRenderDispatcher renderDispatcher;
    private final WorldCompilerThread worldCompilerThread;
    private final LightRegistry lightRegistry;
@@ -445,7 +445,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return false;
       });
 
-      this.trimResidentChunksToCameraBudget(inboundNonEmptyChunks);
+      int trimmedChunkCount = this.trimResidentChunksToCameraBudget(inboundNonEmptyChunks);
+      if (trimmedChunkCount > 0) {
+         changed = true;
+      }
 
       int residentBudgetRemaining = Math.max(0, RT_MAX_RESIDENT_CHUNKS - this.chunks.size());
       int chunkLoadBudget = Math.min(this.chunks.isEmpty() ? INITIAL_CHUNK_LOAD_BUDGET : CHUNK_LOAD_BUDGET, residentBudgetRemaining);
@@ -529,17 +532,20 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       return true;
    }
 
-   private void trimResidentChunksToCameraBudget(Set<PChunkPos> inboundNonEmptyChunks) {
+   private int trimResidentChunksToCameraBudget(Set<PChunkPos> inboundNonEmptyChunks) {
       if (this.chunks.size() <= RT_MAX_RESIDENT_CHUNKS) {
-         return;
+         return 0;
       }
 
       List<PChunkPos> loadedChunks = new ArrayList<>(this.chunks.keySet());
       loadedChunks.sort(Comparator.comparingDouble(this::chunkRetentionPriority).reversed());
+      int trimmedChunkCount = 0;
       for (PChunkPos chunkPos : collectTrimEligibleChunks(loadedChunks, RT_MAX_RESIDENT_CHUNKS, inboundNonEmptyChunks)) {
          this.unloadChunk(chunkPos);
          this.profUnloadedChunkCount++;
+         trimmedChunkCount++;
       }
+      return trimmedChunkCount;
    }
 
    static List<PChunkPos> collectTrimEligibleChunks(List<PChunkPos> loadedChunks, int residentChunkBudget, Set<PChunkPos> inboundNonEmptyChunks) {

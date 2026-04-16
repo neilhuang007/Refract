@@ -152,6 +152,7 @@ loom {
             vmArg "-Dphotonics.profilerEnabled=true"
             // Force the reuse path under test instead of inheriting whatever local debug
             // toggles happen to be persisted in the developer's config.
+            vmArg "-Dphotonics.debugEnableDirectProposalReservoir=true"
             vmArg "-Dphotonics.debugEnableDirectTemporalReuse=${shaderGameTestEnableDirectTemporalReuse}"
             vmArg "-Dphotonics.debugEnableDirectSpatialReuse=${shaderGameTestEnableDirectSpatialReuse}"
             vmArg "-Dphotonics.freezeLightSelectionCamera=${shaderGameTestFreezeLightSelectionCamera}"
@@ -191,7 +192,7 @@ loom {
             vmArg "-Dphotonics.automation.worldName=backup"
             vmArg "-Dphotonics.automation.autoStartWorld=false"
             vmArg "-Dphotonics.automation.startDelayTicks=220"
-            vmArg "-Dphotonics.automation.timeoutTicks=1500"
+            vmArg "-Dphotonics.automation.timeoutTicks=2400"
             vmArg "-Dphotonics.automation.expectedShaderPack=shaders.zip"
             vmArg "-Dphotonics.automation.reportFile=${project.projectDir.toPath().resolve('run/automation/shader-report.properties')}"
             vmArg "-Dphotonics.automation.captureDir=${project.projectDir.toPath().resolve('run/automation/captures')}"

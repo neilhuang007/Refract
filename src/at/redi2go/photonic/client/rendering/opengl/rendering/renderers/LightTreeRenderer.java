@@ -722,6 +722,11 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_normal_threshold", () -> this.properties.getRestirSpatialNormalThreshold());
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
+         "ph_debug_enable_direct_temporal_reuse",
+         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE.value ? 1.0f : 0.0f
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
          "ph_debug_enable_direct_spatial_reuse",
          () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_SPATIAL_REUSE.value ? 1.0f : 0.0f
       );
@@ -1210,7 +1215,7 @@ public class LightTreeRenderer extends MainRenderer {
       ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
       // Robust temporal-history reconnection payload split across two finite-float targets:
       // reconnection0: worldPos.xyz, viewDepth
-      // reconnection1: confidence, faceId, reserved, reserved
+      // reconnection1: packed confidence/lightPdf, packed meta flags, subPixel, packed Jacobians
       framebuffer.createAttachment("reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("reconnection1", "RGBA32F", false);
       return framebuffer;
@@ -1414,6 +1419,8 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
          () -> this.directInitialDebugBuffer.getWriteAttachment("data")
       );
    }

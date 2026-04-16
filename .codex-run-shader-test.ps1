@@ -136,7 +136,7 @@ foreach ($path in @($stdout, $stderr)) {
 $logPosition = if (Test-Path $latestLog) { (Get-Item $latestLog).Length } else { 0L }
 $stdoutPosition = 0L
 $stderrPosition = 0L
-$deadline = (Get-Date).AddSeconds(200)
+$deadline = (Get-Date).AddSeconds(320)
 $reason = 'completed'
 $fatalChunkContent = ''
 

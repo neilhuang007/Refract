@@ -1194,9 +1194,6 @@ public class LightRegistry implements Destructable {
    }
 
    public void synchronizeChunkLights(ClientWorld level, PChunkPos chunkPos) {
-      if (ShaderAutomation.suppressWorldMutationIngress()) {
-         return;
-      }
       this.lock.writeLock().lock();
       try {
          this.loadedLightChunks.add(chunkKey(chunkPos));
@@ -1216,9 +1213,6 @@ public class LightRegistry implements Destructable {
    }
 
    public void clearChunkLights(PChunkPos chunkPos) {
-      if (ShaderAutomation.suppressWorldMutationIngress()) {
-         return;
-      }
       this.lock.writeLock().lock();
       try {
          this.loadedLightChunks.remove(chunkKey(chunkPos));

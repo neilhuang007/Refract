@@ -207,6 +207,26 @@ vec3 lt_debug_color_selected_brdf_response(ivec2 reservoirPos, RAB_Surface surfa
     return lt_debug_heat_ramp(lt_debug_encode_positive_metric(brdfLuma, 4.0f));
 }
 
+bool lt_resolve_final_sample_surface(
+    ivec2 pixelPosition,
+    RAB_Surface baseSurface,
+    RTXDI_DIReservoir reservoir,
+    out RAB_Surface resolvedSurface)
+{
+    resolvedSurface = baseSurface;
+    if (!lt_area_has_valid_domain(reservoir)) {
+        return RAB_IsSurfaceValid(resolvedSurface);
+    }
+
+    ivec2 domainPixel = lt_area_pixel_from_sample_uv(reservoir.pixelSampleUV);
+    RAB_Surface domainSurface = RAB_GetGBufferSurface(domainPixel, false);
+    if (RAB_IsSurfaceValid(domainSurface)) {
+        resolvedSurface = domainSurface;
+    }
+
+    return RAB_IsSurfaceValid(resolvedSurface);
+}
+
 bool lt_area_evaluate_final_sample(
     ivec2 pixelPosition,
     RAB_Surface surface,
@@ -229,19 +249,25 @@ bool lt_area_evaluate_final_sample(
     }
 
     lt_area_finalize_candidate(reservoir, pixelPosition, reservoir.pathSample);
-    reservoir.targetPdf = lt_area_effective_target_pdf(reservoir, surface);
+
+    RAB_Surface shadingSurface;
+    if (!lt_resolve_final_sample_surface(pixelPosition, surface, reservoir, shadingSurface)) {
+        return false;
+    }
+
+    reservoir.targetPdf = lt_area_effective_target_pdf(reservoir, shadingSurface);
 
     RAB_LightInfo lightInfo = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(reservoir), false);
     RAB_LightSample lightSample = RAB_SamplePolymorphicLight(
         lightInfo,
-        surface,
+        shadingSurface,
         RTXDI_GetDIReservoirSampleUV(reservoir)
     );
     if (lightSample.index < 0 || lightSample.solidAnglePdf <= 0.0f) {
         return false;
     }
 
-    float sampleTargetPdf = max(lt_area_effective_target_pdf(reservoir, surface), 0.0f);
+    float sampleTargetPdf = max(lt_area_effective_target_pdf(reservoir, shadingSurface), 0.0f);
     float sampleWeight = max(reservoir.weightSum, 0.0f);
     if (!(sampleTargetPdf > 0.0f) || !(sampleWeight > 0.0f)) {
         return false;
@@ -252,7 +278,7 @@ bool lt_area_evaluate_final_sample(
         bool hasStoredVisibility = reuseFinalVisibility && RTXDI_GetDIReservoirVisibility(reservoir, visibilityReuseParams, visibility);
         if (!hasStoredVisibility) {
             float hitDist = 0.0f;
-            vec3 tracedVisibility = lt_trace_final_visibility_with_offset(lightSample, surface, 0.01f, hitDist);
+            vec3 tracedVisibility = lt_trace_final_visibility_with_offset(lightSample, shadingSurface, 0.01f, hitDist);
             bool isVisible = ph_luminance(tracedVisibility) > 0.0f && lightSample.index >= 0;
             visibility = enableVisibilityTransmittance ? tracedVisibility : (isVisible ? vec3(1.0f) : vec3(0.0f));
             if (!isVisible) {
@@ -267,14 +293,14 @@ bool lt_area_evaluate_final_sample(
         }
     }
 
-    vec3 incidentRadiance = lt_light_sample_incident_radiance(surface, lightSample) * visibility;
+    vec3 incidentRadiance = lt_light_sample_incident_radiance(shadingSurface, lightSample) * visibility;
     vec3 weightedRadiance = incidentRadiance * sampleWeight;
     lightSample.color = weightedRadiance;
 
-    LtSplitRadiance splitShade = lt_shade_surface_split(surface, lightSample);
+    LtSplitRadiance splitShade = lt_shade_surface_split(shadingSurface, lightSample);
     shadedDiffuse = splitShade.diffuse;
     shadedSpecular = splitShade.specular;
-    directHitDistance = length(lightSample.position + world_offset - surface.worldPos);
+    directHitDistance = length(lightSample.position + world_offset - shadingSurface.worldPos);
     return true;
 }
 

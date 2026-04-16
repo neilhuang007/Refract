@@ -5,12 +5,21 @@ in vec4 direction_vert_out;
 layout(location = 0) out vec4 reservoir_frag_out;
 layout(location = 1) out vec4 reservoir_sample_frag_out;
 layout(location = 2) out vec4 reservoir_meta_frag_out;
-layout(location = 3) out vec4 initial_debug_frag_out;
+layout(location = 3) out vec4 reconnection0_frag_out;
+layout(location = 4) out vec4 reconnection1_frag_out;
+layout(location = 5) out vec4 initial_debug_frag_out;
 
 #include "/photonics/common/header.glsl"
  #include "/photonics/lighttree/restir_di_bridge.glsl"
 
-void storeDIReservoir(RTXDI_DIReservoir reservoir) {
+void storeDIReservoir(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
+    scatter_pack_reconnection(
+        reconnection,
+        reservoir.transportAux0,
+        reservoir.transportAux1,
+        reconnection0_frag_out,
+        reconnection1_frag_out
+    );
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
@@ -39,8 +48,12 @@ bool lt_is_finite_float(float value) {
     return value == value && abs(value) < 3.402823466e+38f;
 }
 
-void storeDIReservoir(RTXDI_DIReservoir reservoir, LtInitialSamplingDebugInfo debugInfo) {
-    storeDIReservoir(reservoir);
+void storeDIReservoir(
+    RTXDI_DIReservoir reservoir,
+    ScatterReconnectionData reconnection,
+    LtInitialSamplingDebugInfo debugInfo
+) {
+    storeDIReservoir(reservoir, reconnection);
     initial_debug_frag_out = vec4(
         float(debugInfo.reason),
         debugInfo.positiveCandidateFraction,
@@ -77,67 +90,34 @@ LtInitialSamplingDebugInfo lt_debug_diagnose_initial_local_samples(
         return debugInfo;
     }
 
-    RTXDI_RandomSamplerState previewRng = rng;
-    RTXDI_RandomSamplerState previewCoherentRng = coherentRng;
-    RAB_LightSample selectedSample = RAB_EmptyLightSample();
-    RTXDI_DIReservoir previewReservoir = RTXDI_SampleLightsForSurface(
-        previewRng,
-        previewCoherentRng,
-        surface,
-        initialSamplingParams,
-        selectedSample
-    );
-
-    debugInfo.proposalValid = RTXDI_IsValidDIReservoir(previewReservoir) ? 1.0f : 0.0f;
-    debugInfo.proposalWeight = previewReservoir.weightSum;
-
-    if (RTXDI_IsValidDIReservoir(previewReservoir)) {
-        debugInfo.reason = LT_INITIAL_DEBUG_SUCCESS;
-        debugInfo.positiveCandidateFraction = 1.0f;
-        return debugInfo;
-    }
-
-    if (selectedSample.index < 0) {
-        debugInfo.reason = LT_INITIAL_DEBUG_INVALID_LIGHT_SAMPLE;
-        return debugInfo;
-    }
-
-    float radianceLuma = ph_luminance(max(selectedSample.color, vec3(0.0f)));
-    if (radianceLuma <= 0.0f) {
-        debugInfo.reason = LT_INITIAL_DEBUG_ZERO_RADIANCE;
-        return debugInfo;
-    }
-
-    float targetPdf = lt_surface_target_pdf(surface, selectedSample);
-    if (!lt_is_finite_float(targetPdf)) {
-        debugInfo.reason = LT_INITIAL_DEBUG_NONFINITE_TARGET_PDF;
-        return debugInfo;
-    }
-    if (targetPdf <= 0.0f) {
-        debugInfo.reason = LT_INITIAL_DEBUG_ZERO_TARGET_PDF;
-        return debugInfo;
-    }
-
-    debugInfo.reason = LT_INITIAL_DEBUG_ZERO_SOURCE_PDF;
+    debugInfo.reason = LT_INITIAL_DEBUG_INVALID_LIGHT_SELECTION;
     return debugInfo;
 }
 
 void main() {
     ivec2 GlobalIndex = lt_current_reservoir_pos();
     if (!lt_is_active_reservoir_lane(GlobalIndex)) {
-        storeDIReservoir(RTXDI_EmptyDIReservoir(), LtInitialSamplingDebugInfo(LT_INITIAL_DEBUG_INVALID_SURFACE, 0.0f, 0.0f, 0.0f));
+        storeDIReservoir(
+            RTXDI_EmptyDIReservoir(),
+            scatter_empty_reconnection(),
+            LtInitialSamplingDebugInfo(LT_INITIAL_DEBUG_INVALID_SURFACE, 0.0f, 0.0f, 0.0f)
+        );
         return;
     }
 
     const RTXDI_RuntimeParameters params = lt_build_runtime_parameters();
     ivec2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, int(params.activeCheckerboardField));
     if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
-        storeDIReservoir(RTXDI_EmptyDIReservoir(), LtInitialSamplingDebugInfo(LT_INITIAL_DEBUG_INVALID_SURFACE, 0.0f, 0.0f, 0.0f));
+        storeDIReservoir(
+            RTXDI_EmptyDIReservoir(),
+            scatter_empty_reconnection(),
+            LtInitialSamplingDebugInfo(LT_INITIAL_DEBUG_INVALID_SURFACE, 0.0f, 0.0f, 0.0f)
+        );
         return;
     }
 
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(uvec2(pixelPosition), params.frameIndex, RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
-    RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(uvec2(pixelPosition / RTXDI_TILE_SIZE_IN_PIXELS), params.frameIndex, RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+    RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(uvec2(pixelPosition / RTXDI_TILE_SIZE_IN_PIXELS), 0u, RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
 
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
     RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, false);
@@ -151,9 +131,10 @@ void main() {
         restirDI.initialSamplingParams
     );
     RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
+    ScatterReconnectionData reconnection = scatter_empty_reconnection();
+    RAB_LightSample selectedLightSample = RAB_EmptyLightSample();
 
     if (RAB_IsSurfaceValid(surface)) {
-        RAB_LightSample selectedLightSample = RAB_EmptyLightSample();
         reservoir = RTXDI_SampleLightsForSurface(
             rng,
             tileRng,
@@ -162,10 +143,48 @@ void main() {
             selectedLightSample
         );
         reservoir.spatialDistance = ivec2(0);
+        // Keep the DI area-domain seed deterministic for now. The current Area ReSTIR
+        // integration is still stabilizing shift/reuse behavior, and injecting an extra
+        // per-frame pixel/lens jitter here materially increases motion-repeat error.
+        // We still preserve the domain payload fields required by future reservoir
+        // splatting, but we seed them from the canonical pixel center until splatting's
+        // temporal gather is integrated.
+        lt_area_seed_domain_samples(reservoir, pixelPosition, reservoir.pathSample);
+
+        vec3 currCameraPos = world_camera_position;
+        vec3 currCameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
+        float subPixelJacobian = scatter_compute_subpixel_jacobian(
+            surface.worldPos,
+            surface.geoNormal,
+            currCameraPos,
+            currCameraForward
+        );
+        reconnection = scatter_build_reconnection(
+            surface,
+            reservoir,
+            selectedLightSample,
+            pixelPosition,
+            scatter_clamp_reconnection_confidence(lt_area_confidence_from_samples(reservoir.M)),
+            subPixelJacobian
+        );
     }
 
     debugInfo.proposalValid = RTXDI_IsValidDIReservoir(reservoir) ? 1.0f : 0.0f;
     debugInfo.proposalWeight = reservoir.weightSum;
+    debugInfo.positiveCandidateFraction = debugInfo.proposalValid;
+    if (RAB_IsSurfaceValid(surface)) {
+        if (RTXDI_IsValidDIReservoir(reservoir)) {
+            debugInfo.reason = LT_INITIAL_DEBUG_SUCCESS;
+        } else if (selectedLightSample.index < 0) {
+            debugInfo.reason = LT_INITIAL_DEBUG_INVALID_LIGHT_SELECTION;
+        } else if (!lt_is_finite_float(selectedLightSample.weight)) {
+            debugInfo.reason = LT_INITIAL_DEBUG_NONFINITE_TARGET_PDF;
+        } else if (selectedLightSample.weight <= 0.0f) {
+            debugInfo.reason = LT_INITIAL_DEBUG_ZERO_TARGET_PDF;
+        } else {
+            debugInfo.reason = LT_INITIAL_DEBUG_INVALID_LIGHT_SAMPLE;
+        }
+    }
 
-    storeDIReservoir(reservoir, debugInfo);
+    storeDIReservoir(reservoir, reconnection, debugInfo);
 }

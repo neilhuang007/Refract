@@ -186,6 +186,7 @@ uniform float ph_restir_spatial_target_history;    // RTXDI: targetHistoryLength
 uniform float ph_restir_enable_final_visibility;   // RTXDI: enableFinalVisibility
 uniform float ph_restir_reuse_final_visibility;    // RTXDI: reuseFinalVisibility
 uniform float ph_restir_enable_denoiser_packing;   // RTXDI: enableDenoiserInputPacking
+uniform float ph_debug_enable_direct_temporal_reuse;
 uniform float ph_debug_enable_direct_spatial_reuse;
 uniform float ph_debug_enable_direct_final_visibility;
 uniform float ph_debug_enable_direct_visibility_transmittance;
@@ -338,6 +339,13 @@ bool RTXDI_IsActiveCheckerboardPixel(ivec2 pixelPosition, bool previousFrame, in
     if (activeCheckerboardField == 0)
         return true;
     return ((pixelPosition.x + pixelPosition.y + int(previousFrame)) & 1) == (activeCheckerboardField & 1);
+}
+
+int lt_previous_checkerboard_field(int activeCheckerboardField) {
+    if (activeCheckerboardField == 0) {
+        return 0;
+    }
+    return 3 - activeCheckerboardField;
 }
 
 // RTXDI: RTXDI_ActivateCheckerboardPixel (Checkerboard.hlsli lines 27-43).
@@ -645,23 +653,32 @@ RAB_Material RAB_GetMaterial(RAB_Surface surface);
 // Scatter Temporal Resampling: Reconnection Data
 // ============================================================================
 // Stores per-pixel primary-hit / shift state needed for reservoir splatting.
-// This is a photonics-oriented approximation of Reservoir-Splatting's
-// ReconnectionData. It carries the sidecar data that is not already present in
-// the DI reservoir itself. Reservoir-owned data such as the selected light
-// identity / sample UV remain in the reservoir and are intentionally not
-// duplicated here.
-//
-// We intentionally do NOT store the paper's full exact path-space payload here
-// yet (exact HitInfo, traced second-hit state), because the current photonics
-// direct-light path does not produce those values. The goal of this sidecar is
-// to ensure the algorithm-required inputs have a concrete home in the pipeline
-// before the actual scatter passes are implemented.
+// This sidecar complements the DI reservoir with transport metadata that the
+// reservoir itself does not own, while avoiding duplication of fields already
+// persisted in the reservoir (selected light identity, sampled-light UV,
+// pixel/lens-domain UVs, target PDF, etc.).
 struct ScatterReconnectionData {
     vec3  worldPos;                  // Primary hit world-space position (first hit)
     float confidence;               // Reservoir confidence / history proxy
 
     float viewDepth;                // Linear view depth of first hit
     uint  faceId;                   // Dominant signed face identifier for stable block matching
+    uint  flags;                    // Light / event classification flags
+    uint  pathLength;               // Current path length (DI = 1)
+    uint  firstBsdfComponentType;   // First BSDF event classification
+    uint  secondBsdfComponentType;  // Second BSDF / light-side event classification
+    uint  proposalFamily;           // Proposal-family provenance for temporal replay
+
+    vec2  subPixel;                 // Fractional sub-pixel location for scatter support tests
+    vec2  lensSample;               // Lens-domain sample carried with the selected path
+    float lightPdf;                 // Proposal/source PDF associated with the selected sample
+    float time;                     // Frame-local temporal coordinate for transport replay
+    float subPixelJacobian;         // Camera-vertex / sub-pixel Jacobian for splatting MIS
+    float secondaryPathJacobian;    // Secondary-path Jacobian for the current light transport
+    vec3  firstWi;                  // Incoming direction at the first hit (toward camera)
+    vec3  secondPos;                // Light-side/secondary transport endpoint for reconnection
+    vec3  irradiance;               // Incident radiance context at the selected first hit
+    vec3  earlyThroughput;          // Prefix throughput before final radiance accumulation
 };
 
 ScatterReconnectionData scatter_empty_reconnection() {
@@ -670,6 +687,21 @@ ScatterReconnectionData scatter_empty_reconnection() {
     d.confidence = 0.0f;
     d.viewDepth = 0.0f;
     d.faceId = 0u;
+    d.flags = 0u;
+    d.pathLength = 0u;
+    d.firstBsdfComponentType = 0u;
+    d.secondBsdfComponentType = 0u;
+    d.proposalFamily = 0u;
+    d.subPixel = vec2(0.5f);
+    d.lensSample = vec2(0.5f);
+    d.lightPdf = 0.0f;
+    d.time = 0.0f;
+    d.subPixelJacobian = 1.0f;
+    d.secondaryPathJacobian = 1.0f;
+    d.firstWi = vec3(0.0f, 0.0f, 1.0f);
+    d.secondPos = vec3(0.0f);
+    d.irradiance = vec3(0.0f);
+    d.earlyThroughput = vec3(0.0f);
     return d;
 }
 
@@ -701,7 +733,15 @@ const uint SCATTER_RECONNECTION_VIEW_DEPTH_MASK = 0x0000FFFFu;
 const uint SCATTER_RECONNECTION_CONFIDENCE_MASK = 0x00000FFFu;
 const uint SCATTER_RECONNECTION_CONFIDENCE_SHIFT = 16u;
 const uint SCATTER_RECONNECTION_FACE_MASK = 0xFu;
-const uint SCATTER_RECONNECTION_FACE_SHIFT = 28u;
+const uint SCATTER_RECONNECTION_FACE_SHIFT = 0u;
+const uint SCATTER_RECONNECTION_FLAGS_MASK = 0x3u;
+const uint SCATTER_RECONNECTION_FLAGS_SHIFT = 4u;
+const uint SCATTER_RECONNECTION_PATH_LENGTH_MASK = 0x3Fu;
+const uint SCATTER_RECONNECTION_PATH_LENGTH_SHIFT = 6u;
+const uint SCATTER_RECONNECTION_FIRST_BSDF_MASK = 0x3u;
+const uint SCATTER_RECONNECTION_FIRST_BSDF_SHIFT = 12u;
+const uint SCATTER_RECONNECTION_SECOND_BSDF_MASK = 0x3u;
+const uint SCATTER_RECONNECTION_SECOND_BSDF_SHIFT = 14u;
 
 float scatter_pack_half2(vec2 value) {
     return uintBitsToFloat(packHalf2x16(value));
@@ -710,6 +750,17 @@ float scatter_pack_half2(vec2 value) {
 vec2 scatter_unpack_half2(float packedValue) {
     return unpackHalf2x16(floatBitsToUint(packedValue));
 }
+
+float scatter_pack_reconnection_proposal_pdf(float proposalPdf) {
+    return max(proposalPdf, 0.0f);
+}
+
+float scatter_unpack_reconnection_proposal_pdf(float packedValue) {
+    return max(packedValue, 0.0f);
+}
+
+vec2 rtxdi_unpack_sample_uv(uint packedUv);
+uint lt_path_sample_proposal_family(uint pathSample);
 
 float scatter_pack_unit_vector(vec3 direction) {
     float directionLengthSq = dot(direction, direction);
@@ -752,36 +803,85 @@ uint scatter_decode_reconnection_face(float encodedFace) {
     return uint(clamp(round(encodedFace), 0.0f, float(SCATTER_RECONNECTION_FACE_MASK)));
 }
 
-// Pack the temporal-history reconnection data into two finite-float vec4 values.
+uint scatter_pack_reconnection_meta(ScatterReconnectionData d) {
+    return ((d.faceId & SCATTER_RECONNECTION_FACE_MASK) << SCATTER_RECONNECTION_FACE_SHIFT)
+        | ((d.flags & SCATTER_RECONNECTION_FLAGS_MASK) << SCATTER_RECONNECTION_FLAGS_SHIFT)
+        | ((d.pathLength & SCATTER_RECONNECTION_PATH_LENGTH_MASK) << SCATTER_RECONNECTION_PATH_LENGTH_SHIFT)
+        | ((d.firstBsdfComponentType & SCATTER_RECONNECTION_FIRST_BSDF_MASK) << SCATTER_RECONNECTION_FIRST_BSDF_SHIFT)
+        | ((d.secondBsdfComponentType & SCATTER_RECONNECTION_SECOND_BSDF_MASK) << SCATTER_RECONNECTION_SECOND_BSDF_SHIFT);
+}
+
+void scatter_unpack_reconnection_meta(uint packedMeta, inout ScatterReconnectionData d) {
+    d.faceId = (packedMeta >> SCATTER_RECONNECTION_FACE_SHIFT) & SCATTER_RECONNECTION_FACE_MASK;
+    d.flags = (packedMeta >> SCATTER_RECONNECTION_FLAGS_SHIFT) & SCATTER_RECONNECTION_FLAGS_MASK;
+    d.pathLength = (packedMeta >> SCATTER_RECONNECTION_PATH_LENGTH_SHIFT) & SCATTER_RECONNECTION_PATH_LENGTH_MASK;
+    d.firstBsdfComponentType = (packedMeta >> SCATTER_RECONNECTION_FIRST_BSDF_SHIFT) & SCATTER_RECONNECTION_FIRST_BSDF_MASK;
+    d.secondBsdfComponentType = (packedMeta >> SCATTER_RECONNECTION_SECOND_BSDF_SHIFT) & SCATTER_RECONNECTION_SECOND_BSDF_MASK;
+}
+
+// Pack the temporal-history reconnection data into the sidecar plus
+// widened reservoir meta channels. The float outputs remain finite.
 void scatter_pack_reconnection(
     ScatterReconnectionData d,
+    out float transportAux0,
+    out float transportAux1,
     out vec4 out0,
     out vec4 out1
 ) {
+    transportAux0 = scatter_pack_reconnection_proposal_pdf(d.lightPdf);
+    transportAux1 = scatter_pack_half2(vec2(
+        clamp(d.time, 0.0f, 1.0f),
+        clamp(ph_luminance(max(d.irradiance, vec3(0.0f))), 0.0f, 65504.0f)
+    ));
+
     out0 = vec4(d.worldPos, d.viewDepth);
     out1 = vec4(
-        scatter_clamp_reconnection_confidence(d.confidence),
-        scatter_encode_reconnection_face(d.faceId),
-        0.0f,
-        0.0f
+        scatter_pack_half2(vec2(
+            scatter_clamp_reconnection_confidence(d.confidence),
+            0.0f
+        )),
+        uintBitsToFloat(scatter_pack_reconnection_meta(d)),
+        scatter_pack_half2(clamp(d.subPixel, vec2(0.0f), vec2(1.0f))),
+        scatter_pack_half2(vec2(
+            clamp(d.subPixelJacobian, 0.0f, 65504.0f),
+            clamp(d.secondaryPathJacobian, 0.0f, 65504.0f)
+        ))
     );
 }
 
-// Unpack reconnection data from two texel fetches.
-ScatterReconnectionData scatter_unpack_reconnection(vec4 data0, vec4 data1) {
+// Unpack reconnection data from two texel fetches plus widened reservoir metadata.
+ScatterReconnectionData scatter_unpack_reconnection(vec4 data0, vec4 data1, vec4 sampleData, float transportAux0, float transportAux1) {
     ScatterReconnectionData d;
     d.worldPos = data0.xyz;
     d.viewDepth = data0.w;
-    d.confidence = scatter_clamp_reconnection_confidence(data1.x);
-    d.faceId = scatter_decode_reconnection_face(data1.y);
+    vec2 packedConfidenceUnused = scatter_unpack_half2(data1.x);
+    d.confidence = scatter_clamp_reconnection_confidence(packedConfidenceUnused.x);
+    d.lightPdf = scatter_unpack_reconnection_proposal_pdf(transportAux0);
+    scatter_unpack_reconnection_meta(floatBitsToUint(data1.y), d);
+    d.subPixel = clamp(scatter_unpack_half2(data1.z), vec2(0.0f), vec2(1.0f));
+    d.lensSample = clamp(rtxdi_unpack_sample_uv(floatBitsToUint(sampleData.z)), vec2(0.0f), vec2(1.0f));
+    d.proposalFamily = lt_path_sample_proposal_family(floatBitsToUint(sampleData.w));
+    vec2 packedTimeIrradiance = scatter_unpack_half2(transportAux1);
+    d.time = clamp(packedTimeIrradiance.x, 0.0f, 1.0f);
+    vec2 packedJacobians = scatter_unpack_half2(data1.w);
+    d.subPixelJacobian = max(packedJacobians.x, 1e-10f);
+    d.secondaryPathJacobian = max(packedJacobians.y, 1e-10f);
+    d.firstWi = normalize(world_camera_position - d.worldPos);
+    d.secondPos = d.worldPos;
+    d.irradiance = vec3(max(packedTimeIrradiance.y, 0.0f));
+    d.earlyThroughput = vec3(1.0f);
     return d;
 }
 
 // Load reconnection data from previous-frame textures.
 ScatterReconnectionData scatter_load_prev_reconnection(ivec2 uv) {
+    vec4 prevReservoirMeta = texelFetch(prev_radiosity_reservoir_meta, uv, 0);
     return scatter_unpack_reconnection(
         texelFetch(prev_scatter_reconnection0, uv, 0),
-        texelFetch(prev_scatter_reconnection1, uv, 0)
+        texelFetch(prev_scatter_reconnection1, uv, 0),
+        texelFetch(prev_radiosity_reservoir_samples, uv, 0),
+        prevReservoirMeta.y,
+        prevReservoirMeta.z
     );
 }
 
@@ -857,6 +957,31 @@ float scatter_compute_scatter_jacobian(
     float dstJ = dstSubPixelJacobian * dstSecondaryPathJacobian;
     if (srcJ < 1e-10f) return 1.0f;
     return clamp(dstJ / srcJ, 1e-4f, 1e4f);
+}
+
+float scatter_resolve_stored_subpixel_jacobian(
+    ScatterReconnectionData reconnection,
+    RAB_Surface fallbackSurface,
+    vec3 fallbackCameraPos,
+    vec3 fallbackCameraForward)
+{
+    bool hasStoredJacobian = reconnection.viewDepth > 0.0f
+        && any(greaterThan(abs(reconnection.worldPos), vec3(0.0f)))
+        && reconnection.subPixelJacobian > 1e-10f;
+    if (hasStoredJacobian) {
+        return reconnection.subPixelJacobian;
+    }
+
+    return scatter_compute_subpixel_jacobian(
+        fallbackSurface.worldPos,
+        fallbackSurface.geoNormal,
+        fallbackCameraPos,
+        fallbackCameraForward
+    );
+}
+
+float scatter_resolve_stored_secondary_jacobian(ScatterReconnectionData reconnection) {
+    return max(reconnection.secondaryPathJacobian, 1e-10f);
 }
 
 // ============================================================================
@@ -1327,11 +1452,24 @@ bool lt_visibility_trace_hit_matches_light(Light light, vec3 targetPosition) {
 
     ivec3 targetCell = ivec3(floor(targetPosition));
     ivec3 hitCell = ivec3(floor(ray.result_position));
-    if (any(notEqual(hitCell, targetCell))) {
+    bool hostBlockCompatible = light.blockId < 0 || result_block_id < 0 || light.blockId == result_block_id;
+
+    // Old strict ownership kept for reference:
+    // if (any(notEqual(hitCell, targetCell))) {
+    //     return false;
+    // }
+    // return light.blockId < 0 || result_block_id < 0 || light.blockId == result_block_id;
+
+    if (!hostBlockCompatible) {
         return false;
     }
 
-    return light.blockId < 0 || result_block_id < 0 || light.blockId == result_block_id;
+    if (all(equal(hitCell, targetCell))) {
+        return true;
+    }
+
+    float hitToTargetDistance = length(ray.result_position - targetPosition);
+    return hitToTargetDistance <= 0.75f;
 }
 
 // RTXDI visibility succeeds when the bounded segment reaches TMax without committing a hit.
@@ -1488,6 +1626,8 @@ struct RTXDI_DIReservoir {
     ivec2 spatialDistance;
     uint age;
     float canonicalWeight;
+    float transportAux0;
+    float transportAux1;
     vec2 pixelSampleUV;
     vec2 lensSampleUV;
     uint pathSample;
@@ -1526,6 +1666,8 @@ uint rtxdi_pack_sample_uv(vec2 sampleUv) {
 vec2 rtxdi_unpack_sample_uv(uint packedUv) {
     return vec2(float(packedUv & 0xffffu), float((packedUv >> 16u) & 0xffffu)) / 65535.0f;
 }
+
+uint lt_path_sample_proposal_family(uint pathSample);
 
 int rtxdi_get_light_index(RTXDI_DIReservoir reservoir) {
     return rtxdi_decode_light_index(reservoir.lightData);
@@ -1668,6 +1810,8 @@ RAB_LightSample light_sample_decode_at(float value, vec2 sampleUv, RAB_Surface s
     replayReservoir.age = 0u;
     replayReservoir.spatialDistance = ivec2(0);
     replayReservoir.canonicalWeight = 0.0;
+    replayReservoir.transportAux0 = 0.0;
+    replayReservoir.transportAux1 = 0.0;
     replayReservoir.pixelSampleUV = vec2(0.5f);
     replayReservoir.lensSampleUV = vec2(0.5f);
     replayReservoir.pathSample = 2u;
@@ -1741,6 +1885,8 @@ RTXDI_DIReservoir RTXDI_EmptyDIReservoir() {
     r.age = 0u;
     r.spatialDistance = ivec2(0);
     r.canonicalWeight = 0.0;
+    r.transportAux0 = 0.0;
+    r.transportAux1 = 0.0;
     r.pixelSampleUV = vec2(-1.0f);
     r.lensSampleUV = vec2(-1.0f);
     r.pathSample = 2u;
@@ -1754,12 +1900,47 @@ bool RTXDI_IsValidDIReservoir(RTXDI_DIReservoir reservoir) {
     return reservoir.lightData != 0u;
 }
 
+vec2 scatter_resolve_reservoir_subpixel(RTXDI_DIReservoir reservoir, ivec2 pixelPosition);
+ivec2 lt_area_pixel_from_sample_uv(vec2 pixelSampleUV);
+
 vec2 lt_area_default_pixel_sample(ivec2 pixelPosition) {
     return (vec2(pixelPosition) + vec2(0.5f)) / vec2(max(viewWidth, 1.0), max(viewHeight, 1.0));
 }
 
+vec2 lt_area_random_pixel_sample(inout RTXDI_RandomSamplerState rng, ivec2 pixelPosition) {
+    vec2 jitter = vec2(lt_next_random(rng), lt_next_random(rng));
+    return (vec2(pixelPosition) + jitter) / vec2(max(viewWidth, 1.0), max(viewHeight, 1.0));
+}
+
 vec2 lt_area_default_lens_sample() {
     return vec2(0.5f);
+}
+
+vec2 lt_area_sample_lens_sample(inout RTXDI_RandomSamplerState rng) {
+    return lt_area_default_lens_sample();
+}
+
+const uint LT_PATH_SAMPLE_MASK = 0xFFu;
+const uint LT_PATH_SAMPLE_PROPOSAL_SHIFT = 8u;
+const uint LT_PATH_SAMPLE_PROPOSAL_MASK = 0xFu;
+const uint LT_PROPOSAL_FAMILY_UNKNOWN = 0u;
+const uint LT_PROPOSAL_FAMILY_UNIFORM = 1u;
+const uint LT_PROPOSAL_FAMILY_POWER_RIS = 2u;
+const uint LT_PROPOSAL_FAMILY_REGIR_RIS = 3u;
+const uint LT_PROPOSAL_FAMILY_REGIR_FALLBACK = 4u;
+const uint LT_PROPOSAL_FAMILY_BRDF = 5u;
+
+uint lt_make_path_sample(uint basePathSample, uint proposalFamily) {
+    return (basePathSample & LT_PATH_SAMPLE_MASK)
+        | ((proposalFamily & LT_PATH_SAMPLE_PROPOSAL_MASK) << LT_PATH_SAMPLE_PROPOSAL_SHIFT);
+}
+
+uint lt_path_sample_base(uint pathSample) {
+    return pathSample & LT_PATH_SAMPLE_MASK;
+}
+
+uint lt_path_sample_proposal_family(uint pathSample) {
+    return (pathSample >> LT_PATH_SAMPLE_PROPOSAL_SHIFT) & LT_PATH_SAMPLE_PROPOSAL_MASK;
 }
 
 bool lt_area_has_valid_domain(RTXDI_DIReservoir reservoir) {
@@ -1831,6 +2012,41 @@ vec2 lt_area_clamp_pixel_sample_uv(vec2 pixelSampleUV) {
     return clamp(pixelSampleUV, pixelSize * 0.5f, vec2(1.0f) - pixelSize * 0.5f);
 }
 
+vec2 lt_area_pixel_sample_from_subpixel(ivec2 pixelPosition, vec2 subPixel) {
+    return lt_area_clamp_pixel_sample_uv(
+        (vec2(pixelPosition) + clamp(subPixel, vec2(0.0f), vec2(1.0f))) / vec2(viewWidth, viewHeight)
+    );
+}
+
+bool lt_area_try_shift_temporal_domain(
+    inout RTXDI_DIReservoir reservoir,
+    ivec2 sourcePixel,
+    ivec2 targetPixel,
+    vec2 previousFloatingPixel)
+{
+    const float overlapEpsilon = 1e-4f;
+    vec2 prevSubPixel = scatter_resolve_reservoir_subpixel(reservoir, sourcePixel);
+    vec2 shiftedSubPixel = (vec2(sourcePixel) + prevSubPixel) - previousFloatingPixel;
+    if (any(lessThan(shiftedSubPixel, vec2(-overlapEpsilon)))
+        || any(greaterThan(shiftedSubPixel, vec2(1.0f + overlapEpsilon))))
+    {
+        return false;
+    }
+
+    shiftedSubPixel = clamp(shiftedSubPixel, vec2(0.0f), vec2(1.0f - 1e-5f));
+
+    vec2 lensSampleUV = lt_area_has_valid_domain(reservoir)
+        ? clamp(reservoir.lensSampleUV, vec2(0.0f), vec2(1.0f))
+        : lt_area_default_lens_sample();
+    lt_area_set_domain_samples(
+        reservoir,
+        lt_area_pixel_sample_from_subpixel(targetPixel, shiftedSubPixel),
+        lensSampleUV,
+        reservoir.pathSample
+    );
+    return lt_area_pixel_from_sample_uv(reservoir.pixelSampleUV) == targetPixel;
+}
+
 ivec2 lt_area_pixel_from_sample_uv(vec2 pixelSampleUV) {
     vec2 scaled = lt_area_clamp_pixel_sample_uv(pixelSampleUV) * vec2(viewWidth, viewHeight) - vec2(0.5f);
     return clamp(ivec2(floor(scaled)), ivec2(0), ivec2(int(viewWidth) - 1, int(viewHeight) - 1));
@@ -1845,6 +2061,20 @@ void lt_area_seed_domain_samples(inout RTXDI_DIReservoir reservoir, ivec2 pixelP
         reservoir,
         lt_area_default_pixel_sample(pixelPosition),
         lt_area_default_lens_sample(),
+        pathSample
+    );
+}
+
+void lt_area_seed_domain_samples(
+    inout RTXDI_DIReservoir reservoir,
+    inout RTXDI_RandomSamplerState rng,
+    ivec2 pixelPosition,
+    uint pathSample)
+{
+    lt_area_set_domain_samples(
+        reservoir,
+        lt_area_random_pixel_sample(rng, pixelPosition),
+        lt_area_sample_lens_sample(rng),
         pathSample
     );
 }
@@ -2069,7 +2299,8 @@ RTXDI_DIBufferIndices lt_build_di_buffer_indices()
     RTXDI_DIBufferIndices bufferIndices;
     bufferIndices.initialSamplingOutputBufferIndex = RTXDI_DI_BUFFER_INDEX_INITIAL_SAMPLING_OUTPUT;
 
-    uint temporalOutputBufferIndex = (ph_scatter_temporal_enabled > 0.5f)
+    bool enableTemporalReuse = ph_debug_enable_direct_temporal_reuse >= 0.5f;
+    uint temporalOutputBufferIndex = enableTemporalReuse
         ? RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_OUTPUT
         : RTXDI_DI_BUFFER_INDEX_INITIAL_SAMPLING_OUTPUT;
     bool enableSpatialReuse = ph_debug_enable_direct_spatial_reuse >= 0.5f;
@@ -2357,12 +2588,12 @@ RAB_LightInfo RAB_LoadLightInfo(int lightIndex, bool previousFrame)
 
 RAB_LightInfo RAB_LoadCompactLightInfo(uint risBufferPtr, int lightIndex)
 {
-    if (lightIndex < 0 || lightIndex >= ph_light_count)
+    if (lightIndex < 0)
     {
         return RAB_EmptyLightInfo();
     }
 
-    return load_light(lightIndex);
+    return load_compact_light(risBufferPtr, lightIndex);
 }
 
 RAB_LightSample RAB_SamplePolymorphicLight(Light light, RAB_Surface surface, vec2 sampleUv)
@@ -2410,6 +2641,30 @@ vec3 scatter_resolve_early_throughput(RAB_Surface surface, RAB_LightSample light
     return vec3(1.0f);
 }
 
+float scatter_resolve_secondary_path_jacobian(
+    RAB_Surface surface,
+    RAB_LightSample lightSample,
+    vec3 secondPos,
+    vec3 earlyThroughput,
+    vec3 irradiance)
+{
+    if (lightSample.index < 0) {
+        return 1.0f;
+    }
+
+    vec3 surfaceToSecond = secondPos - surface.worldPos;
+    float distanceSq = dot(surfaceToSecond, surfaceToSecond);
+    if (distanceSq <= 1e-6f) {
+        return 1.0f;
+    }
+
+    vec3 directionToSecond = surfaceToSecond * inversesqrt(distanceSq);
+    float cosSurface = max(abs(dot(surface.geoNormal, directionToSecond)), 1e-4f);
+    float throughputScale = max(ph_luminance(max(earlyThroughput, vec3(0.0f))), 1e-4f);
+    float irradianceScale = max(ph_luminance(max(irradiance, vec3(0.0f))), 1e-4f);
+    return clamp((cosSurface * irradianceScale) / (distanceSq * throughputScale), 1e-4f, 1e4f);
+}
+
 vec2 scatter_resolve_reservoir_subpixel(RTXDI_DIReservoir reservoir, ivec2 pixelPosition) {
     vec2 pixelSampleUV = lt_area_has_valid_domain(reservoir)
         ? lt_area_clamp_pixel_sample_uv(reservoir.pixelSampleUV)
@@ -2428,19 +2683,61 @@ uint scatter_resolve_second_bsdf_component_type(RAB_LightSample lightSample) {
     return lightSample.index >= 0 ? SCATTER_BSDF_COMPONENT_DIFFUSE : 0u;
 }
 
+uint scatter_resolve_reconnection_flags(RAB_LightSample lightSample) {
+    uint flags = 0u;
+    if (RAB_IsAnalyticLightSample(lightSample)) {
+        flags |= SCATTER_RECONNECTION_FLAG_LIGHT_IS_NEE;
+    } else if (lightSample.solidAnglePdf > 0.0f
+        && ph_luminance(max(lightSample.color, vec3(0.0f))) > 0.0f)
+    {
+        // Preserve a semantic distinction between analytic/NEE selections and
+        // non-analytic distant samples (e.g. future environment-map reuse).
+        flags |= SCATTER_RECONNECTION_FLAG_LIGHT_IS_DISTANT;
+    }
+    return flags;
+}
+
 // Build reconnection data from current surface + reservoir state.
 // Computes real sub-pixel Jacobian from surface geometry instead of accepting a stub.
 ScatterReconnectionData scatter_build_reconnection(
     RAB_Surface surface,
+    RTXDI_DIReservoir reservoir,
+    RAB_LightSample lightSample,
     ivec2 pixelPosition,
-    float confidence
+    float confidence,
+    float subPixelJacobian
 ) {
     ScatterReconnectionData d;
     vec4 identityData = scatter_load_surface_identity(pixelPosition, false);
+    vec3 irradiance = scatter_resolve_irradiance(surface, lightSample);
+    vec3 earlyThroughput = scatter_resolve_early_throughput(surface, lightSample);
+    vec3 secondPos = (lightSample.index >= 0) ? lightSample.position : surface.worldPos;
     d.worldPos = surface.worldPos;
     d.confidence = confidence;
     d.viewDepth = surface.viewDepth;
     d.faceId = uint(round(identityData.w));
+    d.flags = scatter_resolve_reconnection_flags(lightSample);
+    d.pathLength = (lightSample.index >= 0) ? 2u : 1u;
+    d.firstBsdfComponentType = scatter_resolve_first_bsdf_component_type(surface);
+    d.secondBsdfComponentType = scatter_resolve_second_bsdf_component_type(lightSample);
+    d.subPixel = scatter_resolve_reservoir_subpixel(reservoir, pixelPosition);
+    d.lensSample = lt_area_has_valid_domain(reservoir)
+        ? clamp(reservoir.lensSampleUV, vec2(0.0f), vec2(1.0f))
+        : lt_area_default_lens_sample();
+    d.lightPdf = scatter_resolve_light_pdf(reservoir, lightSample);
+    d.time = fract(float(max(ph_restir_frame_index, 0)) * 0.61803398875f);
+    d.subPixelJacobian = max(subPixelJacobian, 1e-10f);
+    d.firstWi = normalize(world_camera_position - surface.worldPos);
+    d.secondPos = secondPos;
+    d.irradiance = irradiance;
+    d.earlyThroughput = earlyThroughput;
+    d.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
+        surface,
+        lightSample,
+        secondPos,
+        earlyThroughput,
+        irradiance
+    );
     return d;
 }
 
@@ -2635,6 +2932,8 @@ void rtxdi_copy_visibility(inout RTXDI_DIReservoir reservoir, RTXDI_DIReservoir 
     reservoir.packedVisibility = sourceReservoir.packedVisibility;
     reservoir.age = sourceReservoir.age;
     reservoir.spatialDistance = sourceReservoir.spatialDistance;
+    reservoir.transportAux0 = sourceReservoir.transportAux0;
+    reservoir.transportAux1 = sourceReservoir.transportAux1;
     reservoir.pixelSampleUV = sourceReservoir.pixelSampleUV;
     reservoir.lensSampleUV = sourceReservoir.lensSampleUV;
     reservoir.pathSample = sourceReservoir.pathSample;
@@ -2651,6 +2950,8 @@ void rtxdi_inherit_visibility(
     reservoir.age = sourceReservoir.age;
     reservoir.spatialDistance = sourceReservoir.spatialDistance;
     reservoir.age = sourceReservoir.age + 1u;
+    reservoir.transportAux0 = sourceReservoir.transportAux0;
+    reservoir.transportAux1 = sourceReservoir.transportAux1;
     reservoir.pixelSampleUV = sourceReservoir.pixelSampleUV;
     reservoir.lensSampleUV = sourceReservoir.lensSampleUV;
     reservoir.pathSample = sourceReservoir.pathSample;
@@ -2673,6 +2974,8 @@ bool RTXDI_StreamSample(inout RTXDI_DIReservoir reservoir, int lightIndex, vec2 
         rtxdi_set_light_index(reservoir, lightIndex);
         rtxdi_set_sample_uv(reservoir, sampleUv);
         reservoir.targetPdf = targetPdf;
+        reservoir.transportAux0 = 0.0f;
+        reservoir.transportAux1 = 0.0f;
         reservoir.pixelSampleUV = vec2(-1.0f);
         reservoir.lensSampleUV = vec2(-1.0f);
         reservoir.pathSample = 2u;
@@ -2680,7 +2983,6 @@ bool RTXDI_StreamSample(inout RTXDI_DIReservoir reservoir, int lightIndex, vec2 
     return selectSample;
 }
 
-// Backward-compat alias — preserves original RAB_LightSample-based call sites.
 bool rtxdi_stream_sample(inout RTXDI_DIReservoir reservoir, RAB_LightSample smple, float weight, float samples) {
     reservoir.M += max(samples, 0.0f);
 
@@ -2692,6 +2994,8 @@ bool rtxdi_stream_sample(inout RTXDI_DIReservoir reservoir, RAB_LightSample smpl
     if (rand_next_float() * reservoir.weightSum < weight) {
         rtxdi_set_light_index(reservoir, smple.index);
         reservoir.targetPdf = smple.weight;
+        reservoir.transportAux0 = 0.0f;
+        reservoir.transportAux1 = 0.0f;
         rtxdi_set_sample_uv(reservoir, lt_encode_light_sample_uv(load_light(smple.index), smple.position));
         reservoir.pixelSampleUV = vec2(-1.0f);
         reservoir.lensSampleUV = vec2(-1.0f);
@@ -2752,6 +3056,11 @@ bool RTXDI_InternalSimpleResample(
         reservoir.packedVisibility = candidateReservoir.packedVisibility;
         reservoir.age = candidateReservoir.age;
         reservoir.spatialDistance = candidateReservoir.spatialDistance;
+        reservoir.transportAux0 = candidateReservoir.transportAux0;
+        reservoir.transportAux1 = candidateReservoir.transportAux1;
+        reservoir.pixelSampleUV = candidateReservoir.pixelSampleUV;
+        reservoir.lensSampleUV = candidateReservoir.lensSampleUV;
+        reservoir.pathSample = candidateReservoir.pathSample;
     }
     return selectSample;
 }
@@ -2804,6 +3113,11 @@ bool rtxdi_internal_simple_resample(
         reservoir.packedVisibility = candidateReservoir.packedVisibility;
         reservoir.age = candidateReservoir.age;
         reservoir.spatialDistance = candidateReservoir.spatialDistance;
+        reservoir.transportAux0 = candidateReservoir.transportAux0;
+        reservoir.transportAux1 = candidateReservoir.transportAux1;
+        reservoir.pixelSampleUV = candidateReservoir.pixelSampleUV;
+        reservoir.lensSampleUV = candidateReservoir.lensSampleUV;
+        reservoir.pathSample = candidateReservoir.pathSample;
     }
 
     return selectSample;
@@ -2966,7 +3280,12 @@ void rtxdi_unpack_age_distance(uint packedValue, out uint age, out ivec2 sd) {
 }
 
 vec4 rtxdi_pack_reservoir_meta(RTXDI_DIReservoir reservoir) {
-    return vec4(reservoir.canonicalWeight, 0.0f, 0.0f, uintBitsToFloat(rtxdi_pack_age_distance(reservoir.age, reservoir.spatialDistance)));
+    return vec4(
+        reservoir.canonicalWeight,
+        reservoir.transportAux0,
+        reservoir.transportAux1,
+        uintBitsToFloat(rtxdi_pack_age_distance(reservoir.age, reservoir.spatialDistance))
+    );
 }
 
 void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 color, vec4 sampleData, vec4 meta, RAB_Surface surface, bool remap) {
@@ -3002,6 +3321,8 @@ void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 c
     reservoir.packedVisibility = packedVisibilityAndM & RTXDI_PackedDIReservoir_VisibilityMask;
     rtxdi_unpack_age_distance(packedDistanceAge, reservoir.age, reservoir.spatialDistance);
     reservoir.canonicalWeight = meta.x;
+    reservoir.transportAux0 = meta.y;
+    reservoir.transportAux1 = meta.z;
 
     if (!lt_area_has_valid_domain(reservoir)) {
         reservoir.pixelSampleUV = vec2(-1.0f);
@@ -3405,6 +3726,90 @@ void splat_resample_temporal_pairwise_mis(
     }
 }
 
+float lt_temporal_proposal_pdf(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
+    float storedProposalPdf = max(reconnection.lightPdf, 0.0f);
+    if (storedProposalPdf > 0.0f) {
+        return storedProposalPdf;
+    }
+
+    // Old fallback kept for reference:
+    // float fallbackProposalPdf = (reservoir.transportAux0 > 0.0f) ? (1.0f / reservoir.transportAux0) : 0.0f;
+    float fallbackProposalPdf = max(reservoir.transportAux0, 0.0f);
+    return fallbackProposalPdf;
+}
+
+float lt_temporal_proposal_weight(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
+    float proposalPdf = lt_temporal_proposal_pdf(reservoir, reconnection);
+    if (proposalPdf <= 0.0f) {
+        return 0.0f;
+    }
+
+    return 1.0f / proposalPdf;
+}
+
+float lt_temporal_candidate_confidence_weight(
+    RTXDI_DIReservoir reservoir,
+    ScatterReconnectionData reconnection,
+    float supportWeight)
+{
+    // Old confidence amplification kept for reference:
+    // return max(reservoir.M, 0.0f)
+    //     * max(supportWeight, 0.0f)
+    //     * lt_temporal_proposal_weight(reservoir, reconnection);
+    float proposalWeight = lt_temporal_proposal_weight(reservoir, reconnection);
+    float clampedProposalWeight = clamp(proposalWeight, 0.25f, 4.0f);
+    return max(reservoir.M, 0.0f)
+        * max(supportWeight, 0.0f)
+        * clampedProposalWeight;
+}
+
+float lt_temporal_proposal_match_weight(
+    ScatterReconnectionData canonicalReconnection,
+    ScatterReconnectionData candidateReconnection)
+{
+    // Old hard mismatch penalties kept for reference:
+    // float weight = 1.0f;
+    // if (canonicalReconnection.proposalFamily != 0u
+    //     && candidateReconnection.proposalFamily != 0u
+    //     && canonicalReconnection.proposalFamily != candidateReconnection.proposalFamily)
+    // {
+    //     weight *= 0.2f;
+    // }
+    // if (canonicalReconnection.pathLength > 0u
+    //     && candidateReconnection.pathLength > 0u
+    //     && canonicalReconnection.pathLength != candidateReconnection.pathLength)
+    // {
+    //     weight *= 0.5f;
+    // }
+    // if (canonicalReconnection.firstBsdfComponentType > 0u
+    //     && candidateReconnection.firstBsdfComponentType > 0u
+    //     && canonicalReconnection.firstBsdfComponentType != candidateReconnection.firstBsdfComponentType)
+    // {
+    //     weight *= 0.5f;
+    // }
+    // if (canonicalReconnection.secondBsdfComponentType > 0u
+    //     && candidateReconnection.secondBsdfComponentType > 0u
+    //     && canonicalReconnection.secondBsdfComponentType != candidateReconnection.secondBsdfComponentType)
+    // {
+    //     weight *= 0.5f;
+    // }
+    // uint sharedFlags = canonicalReconnection.flags & candidateReconnection.flags;
+    // uint combinedFlags = canonicalReconnection.flags | candidateReconnection.flags;
+    // if (combinedFlags != 0u && sharedFlags == 0u) {
+    //     weight *= 0.35f;
+    // }
+
+    float weight = 1.0f;
+    float lightPdfA = max(canonicalReconnection.lightPdf, 0.0f);
+    float lightPdfB = max(candidateReconnection.lightPdf, 0.0f);
+    if (lightPdfA > 0.0f && lightPdfB > 0.0f) {
+        float pdfRatio = max(lightPdfA, lightPdfB) / max(min(lightPdfA, lightPdfB), 1e-6f);
+        weight *= clamp(1.0f / sqrt(pdfRatio), 0.35f, 1.0f);
+    }
+
+    return clamp(weight, 0.0f, 1.0f);
+}
+
 float lt_temporal_scatter_support_denominator(
     ivec2 basePixel,
     vec2 frac,
@@ -3420,6 +3825,7 @@ float lt_temporal_scatter_support_denominator(
 #else
     float denominator = 0.0f;
     vec3 currCameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
+    float sourceProposalWeight = lt_temporal_proposal_weight(sourcePrevReservoir, sourceReconnection);
 
     for (int dy = 0; dy <= 1; ++dy) {
         for (int dx = 0; dx <= 1; ++dx) {
@@ -3456,14 +3862,19 @@ float lt_temporal_scatter_support_denominator(
                 continue;
             }
 
-            float jPrev = scatter_compute_subpixel_jacobian(
-                sourcePrevSurface.worldPos, sourcePrevSurface.geoNormal, prevCameraPos, prevCameraForward);
+            float jPrev = scatter_resolve_stored_subpixel_jacobian(
+                sourceReconnection, sourcePrevSurface, prevCameraPos, prevCameraForward);
             float jCurr = scatter_compute_subpixel_jacobian(
                 neighborSurface.worldPos, neighborSurface.geoNormal, world_camera_position, currCameraForward);
-            float supportJacobian = scatter_compute_scatter_jacobian(jPrev, jCurr, 1.0f, 1.0f);
+            float supportJacobian = scatter_compute_scatter_jacobian(
+                jPrev,
+                jCurr,
+                scatter_resolve_stored_secondary_jacobian(sourceReconnection),
+                1.0f
+            );
             float invSupportJ = (supportJacobian > 1e-8f) ? (1.0f / supportJacobian) : 0.0f;
 
-            denominator += bilinearWeight * sourcePrevReservoir.M * sourcePHatPrev * invSupportJ;
+            denominator += bilinearWeight * sourcePrevReservoir.M * sourceProposalWeight * sourcePHatPrev * invSupportJ;
         }
     }
 
@@ -3477,7 +3888,7 @@ RTXDI_DIReservoir lt_area_temporal_reprojection_stage(
     RTXDI_DIReservoir currentReservoir,
     inout RTXDI_RandomSamplerState rng)
 {
-    if (ph_scatter_temporal_enabled <= 0.5f) {
+    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
         return RTXDI_EmptyDIReservoir();
     }
 
@@ -3609,12 +4020,13 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
         ? ph_area_restir_max_history_length : 20.0f;
 
     reconnection = scatter_empty_reconnection();
-    if (!RAB_IsSurfaceValid(currentSurface)) {
+    if (!RAB_IsSurfaceValid(currentSurface) || ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
         return RTXDI_EmptyDIReservoir();
     }
 
     RTXDI_RuntimeParameters params = lt_build_runtime_parameters();
     ivec2 reservoirPos = lt_current_reservoir_pos();
+    int previousCheckerboardField = lt_previous_checkerboard_field(int(params.activeCheckerboardField));
     uint cellLinearIndex = lt_temporal_scatter_linear_index(reservoirPos);
     uint contributorCount = ph_temporal_scatter_cell_counters_data[cellLinearIndex];
     uint contributorOffset = ph_temporal_scatter_cell_offsets_data[cellLinearIndex];
@@ -3622,16 +4034,24 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
     RTXDI_DIReservoir canonicalReservoir = currentReservoir;
     lt_area_finalize_candidate(canonicalReservoir, pixelPosition, canonicalReservoir.pathSample);
 
-    RTXDI_DIReservoir result = canonicalReservoir;
-    ScatterReconnectionData selectedPrevReconnection = scatter_empty_reconnection();
-    bool selectedFromPrev = false;
-
     vec3 currCameraPos = world_camera_position;
     vec3 currCameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
     vec3 prevCameraPos = previous_world_camera_position;
     vec3 prevCameraForward = normalize(mat3(gbufferPreviousModelView) * vec3(0.0f, 0.0f, -1.0f));
     float jSubPixelCurrent = scatter_compute_subpixel_jacobian(
         currentSurface.worldPos, currentSurface.geoNormal, currCameraPos, currCameraForward);
+
+    RTXDI_DIReservoir result = canonicalReservoir;
+    ScatterReconnectionData selectedPrevReconnection = scatter_empty_reconnection();
+    ScatterReconnectionData canonicalReconnection = scatter_build_reconnection(
+        currentSurface,
+        canonicalReservoir,
+        lt_decode_reservoir_sample_for_frame(canonicalReservoir, currentSurface, false, false),
+        pixelPosition,
+        scatter_clamp_reconnection_confidence(lt_scatter_compute_history_confidence(pixelPosition, currentSurface, canonicalReservoir)),
+        jSubPixelCurrent
+    );
+    bool selectedFromPrev = false;
 
     struct TemporalScatterCandidate {
         RTXDI_DIReservoir reservoir;
@@ -3641,84 +4061,154 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
         float pHatPrev;
         float splatJacobian;
         float contributionWeight;
+        float selectionScore;
         bool valid;
     };
 
-    TemporalScatterCandidate backupCandidate;
-    backupCandidate.valid = false;
+    TemporalScatterCandidate backupCandidates[4];
+    int backupCandidateCount = 0;
 
     vec2 motionVector = texelFetch(radiosity_motion, pixelPosition, 0).xy;
-    ivec2 backprojectedPixel = ivec2(floor(vec2(pixelPosition) - motionVector * vec2(viewWidth, viewHeight)));
-    if (lt_is_viewport_uv_in_bounds(backprojectedPixel)) {
-        RAB_Surface prevSurface = lt_load_previous_surface(backprojectedPixel);
-        if (RAB_IsSurfaceValid(prevSurface) && lt_area_is_temporal_neighbor_valid(currentSurface, prevSurface)) {
-            ivec2 backupReservoirPos = RTXDI_PixelPosToReservoirPos(backprojectedPixel, int(params.activeCheckerboardField));
+    vec2 backprojectedPixelF = vec2(pixelPosition) - motionVector * vec2(viewWidth, viewHeight);
+    ivec2 backprojectedBasePixel = ivec2(floor(backprojectedPixelF));
+    vec2 backprojectedFrac = fract(backprojectedPixelF);
+    for (int dy = 0; dy <= 1; ++dy) {
+        for (int dx = 0; dx <= 1; ++dx) {
+            ivec2 backprojectedPixel = backprojectedBasePixel + ivec2(dx, dy);
+            if (!lt_is_viewport_uv_in_bounds(backprojectedPixel)) {
+                continue;
+            }
+            RTXDI_ActivateCheckerboardPixel(backprojectedPixel, true, previousCheckerboardField);
+            if (!lt_is_viewport_uv_in_bounds(backprojectedPixel)) {
+                continue;
+            }
+
+            float bilinearWeight = lt_scatter_bilinear_weight(backprojectedFrac, dx, dy);
+            if (bilinearWeight <= 1e-5f) {
+                continue;
+            }
+
+            RAB_Surface prevSurface = lt_load_previous_surface(backprojectedPixel);
+            if (!RAB_IsSurfaceValid(prevSurface) || !lt_area_is_temporal_neighbor_valid(currentSurface, prevSurface)) {
+                continue;
+            }
+
+            ivec2 backupReservoirPos = RTXDI_PixelPosToReservoirPos(backprojectedPixel, previousCheckerboardField);
             RTXDI_DIReservoir backupReservoir = RTXDI_LoadPreviousDIReservoir(
                 lt_build_restir_di_parameters().reservoirBufferParams, uvec2(backupReservoirPos));
-
-            if (RTXDI_IsValidDIReservoir(backupReservoir)) {
-                float pHatPrev = backupReservoir.targetPdf;
-                RTXDI_DIReservoir shiftedBackup = lt_translate_reservoir_between_frames(backupReservoir, true, false);
-                if (RTXDI_IsValidDIReservoir(shiftedBackup)) {
-                    shiftedBackup.age = min(backupReservoir.age + 1u, RTXDI_PackedDIReservoir_MaxAge);
-                    shiftedBackup.M = min(shiftedBackup.M, max(canonicalReservoir.M, 1.0f) * maxHistoryLength);
-                    shiftedBackup.spatialDistance = pixelPosition - backprojectedPixel;
-                    lt_area_finalize_candidate(shiftedBackup, pixelPosition, shiftedBackup.pathSample);
-
-                    RAB_LightSample backupLight = lt_decode_reservoir_sample_for_frame(
-                        shiftedBackup, currentSurface, false, false);
-                    shiftedBackup.targetPdf = lt_surface_target_pdf(currentSurface, backupLight);
-
-                    float jPrev = scatter_compute_subpixel_jacobian(
-                        prevSurface.worldPos, prevSurface.geoNormal, prevCameraPos, prevCameraForward);
-                    float splatJ = scatter_compute_scatter_jacobian(jPrev, jSubPixelCurrent, 1.0f, 1.0f);
-
-                    backupCandidate.reservoir = shiftedBackup;
-                    backupCandidate.prevSurface = prevSurface;
-                    backupCandidate.reconnection = scatter_load_prev_reconnection(backprojectedPixel);
-                    backupCandidate.prevPixel = backprojectedPixel;
-                    backupCandidate.pHatPrev = pHatPrev;
-                    backupCandidate.splatJacobian = splatJ;
-                    backupCandidate.contributionWeight = 1.0f;
-                    backupCandidate.valid = true;
-                }
+            if (!RTXDI_IsValidDIReservoir(backupReservoir)) {
+                continue;
             }
+
+            float pHatPrev = backupReservoir.targetPdf;
+            RTXDI_DIReservoir temporalBackup = backupReservoir;
+            if (!lt_area_try_shift_temporal_domain(temporalBackup, backprojectedPixel, pixelPosition, backprojectedPixelF)) {
+                continue;
+            }
+            temporalBackup.age = min(backupReservoir.age + 1u, RTXDI_PackedDIReservoir_MaxAge);
+            temporalBackup.M = min(temporalBackup.M, max(canonicalReservoir.M, 1.0f) * maxHistoryLength);
+            temporalBackup.spatialDistance = pixelPosition - backprojectedPixel;
+
+            if (pHatPrev <= 0.0f) {
+                continue;
+            }
+
+            ScatterReconnectionData backupReconnection = scatter_load_prev_reconnection(backprojectedPixel);
+            float jPrev = scatter_resolve_stored_subpixel_jacobian(
+                backupReconnection,
+                prevSurface,
+                prevCameraPos,
+                prevCameraForward
+            );
+            float splatJ = scatter_compute_scatter_jacobian(
+                jPrev,
+                jSubPixelCurrent,
+                scatter_resolve_stored_secondary_jacobian(backupReconnection),
+                1.0f
+            );
+            TemporalScatterCandidate candidate;
+            candidate.reservoir = temporalBackup;
+            candidate.prevSurface = prevSurface;
+            candidate.reconnection = backupReconnection;
+            candidate.prevPixel = backprojectedPixel;
+            candidate.pHatPrev = pHatPrev;
+            candidate.splatJacobian = splatJ;
+            candidate.contributionWeight = bilinearWeight * lt_temporal_proposal_match_weight(canonicalReconnection, backupReconnection);
+            candidate.selectionScore = candidate.contributionWeight
+                * lt_temporal_candidate_confidence_weight(temporalBackup, backupReconnection, 1.0f)
+                * max(pHatPrev, 1e-5f);
+            candidate.valid = true;
+            backupCandidates[backupCandidateCount++] = candidate;
         }
     }
 
-    float confidenceWeightSum = max(canonicalReservoir.M, 1.0f);
-    if (backupCandidate.valid) {
-        confidenceWeightSum += backupCandidate.reservoir.M * backupCandidate.contributionWeight;
-    }
-    for (uint contributorIdx = 0u; contributorIdx < contributorCount; ++contributorIdx) {
-        float contributorSupportWeight = uintBitsToFloat(ph_temporal_scatter_sorted_weights_data[contributorOffset + contributorIdx]);
-        if (contributorSupportWeight <= 0.0f) {
-            continue;
-        }
-
-        ivec2 sourceReservoirPos = ivec2(ph_temporal_scatter_sorted_reservoirs_data[contributorOffset + contributorIdx]);
-        RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
-            lt_build_restir_di_parameters().reservoirBufferParams,
-            uvec2(sourceReservoirPos)
+    float canonicalConfidenceWeight = max(canonicalReservoir.M, 1.0f);
+    float totalGatheredPreviousConfidenceWeight = 0.0f;
+    for (int backupIdx = 0; backupIdx < backupCandidateCount; ++backupIdx) {
+        TemporalScatterCandidate backupCandidate = backupCandidates[backupIdx];
+        totalGatheredPreviousConfidenceWeight += lt_temporal_candidate_confidence_weight(
+            backupCandidate.reservoir,
+            backupCandidate.reconnection,
+            backupCandidate.contributionWeight
         );
-        if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
-            continue;
-        }
-
-        confidenceWeightSum += max(prevReservoir.M, 0.0f) * contributorSupportWeight;
     }
+
+    float gatheredPreviousConfidenceWeight = 0.0f;
+
+    bool allowScatterContributorMerge = true;
+    float scatterConfidenceWeightSum = 0.0f;
+    if (allowScatterContributorMerge) {
+        for (uint contributorIdx = 0u; contributorIdx < contributorCount; ++contributorIdx) {
+            float contributorSupportWeight = uintBitsToFloat(ph_temporal_scatter_sorted_weights_data[contributorOffset + contributorIdx]);
+            if (contributorSupportWeight <= 0.0f) {
+                continue;
+            }
+
+            ivec2 sourceReservoirPos = ivec2(ph_temporal_scatter_sorted_reservoirs_data[contributorOffset + contributorIdx]);
+            ivec2 sourcePixel = RTXDI_ReservoirPosToPixelPos(sourceReservoirPos, previousCheckerboardField);
+            RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
+                lt_build_restir_di_parameters().reservoirBufferParams,
+                uvec2(sourceReservoirPos)
+            );
+            if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
+                continue;
+            }
+
+            ScatterReconnectionData sourceReconnection = scatter_load_prev_reconnection(sourcePixel);
+            scatterConfidenceWeightSum += lt_temporal_candidate_confidence_weight(
+                prevReservoir,
+                sourceReconnection,
+                contributorSupportWeight * lt_temporal_proposal_match_weight(canonicalReconnection, sourceReconnection)
+            );
+        }
+    }
+
+    float scatterConfidenceCap = max(canonicalConfidenceWeight * 0.25f, 1.0f);
+    float recoveryScatterConfidenceWeight = allowScatterContributorMerge
+        ? min(scatterConfidenceWeightSum, scatterConfidenceCap)
+        : 0.0f;
+    float sharedScatterStabilizationWeight = 0.0f;
+    float confidenceWeightSum = canonicalConfidenceWeight
+        + totalGatheredPreviousConfidenceWeight
+        + sharedScatterStabilizationWeight;
 
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    state.canonicalWeight = (confidenceWeightSum > 0.0f)
-        ? (canonicalReservoir.M / confidenceWeightSum)
-        : 1.0f;
     float prevWeightSum = 0.0f;
 
-    if (backupCandidate.valid) {
+    uint temporalShiftMappingMode = (ph_area_restir_temporal_shift_mode <= 0.0f)
+        ? AREA_RESTIR_SHIFT_MODE_ONLY_RECONNECTION
+        : uint(clamp(ph_area_restir_temporal_shift_mode, 0.0f, 2.0f));
+
+    for (int backupIdx = 0; backupIdx < backupCandidateCount; ++backupIdx) {
+        TemporalScatterCandidate backupCandidate = backupCandidates[backupIdx];
         RTXDI_DIReservoir weightedBackup = backupCandidate.reservoir;
-        weightedBackup.M *= backupCandidate.contributionWeight;
+        gatheredPreviousConfidenceWeight += lt_temporal_candidate_confidence_weight(
+            weightedBackup,
+            backupCandidate.reconnection,
+            backupCandidate.contributionWeight
+        );
         prevWeightSum = state.weightSum;
-        splat_resample_temporal_pairwise_mis(
+        area_resample_reservoir_pairwise_mis(
             state,
             canonicalReservoir,
             currentSurface,
@@ -3726,11 +4216,11 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
             weightedBackup,
             backupCandidate.prevSurface,
             backupCandidate.prevPixel,
-            backupCandidate.pHatPrev,
+            false,
             confidenceWeightSum,
             backupCandidate.contributionWeight,
-            backupCandidate.splatJacobian,
-            backupCandidate.contributionWeight,
+            true,
+            temporalShiftMappingMode,
             rng
         );
 
@@ -3740,10 +4230,14 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
         }
     }
 
-    for (uint contributorIdx = 0u; contributorIdx < contributorCount; ++contributorIdx) {
+    state.canonicalWeight = (backupCandidateCount == 0) ? 1.0f : state.canonicalWeight;
+    confidenceWeightSum = canonicalConfidenceWeight + recoveryScatterConfidenceWeight;
+
+    for (uint contributorIdx = 0u; allowScatterContributorMerge && gatheredPreviousConfidenceWeight <= 0.0f && contributorIdx < contributorCount; ++contributorIdx) {
         ivec2 sourceReservoirPos = ivec2(ph_temporal_scatter_sorted_reservoirs_data[contributorOffset + contributorIdx]);
         float contributorSupportWeight = uintBitsToFloat(ph_temporal_scatter_sorted_weights_data[contributorOffset + contributorIdx]);
-        ivec2 sourcePixel = RTXDI_ReservoirPosToPixelPos(sourceReservoirPos, int(params.activeCheckerboardField));
+        if (contributorSupportWeight <= 0.0f) continue;
+        ivec2 sourcePixel = RTXDI_ReservoirPosToPixelPos(sourceReservoirPos, previousCheckerboardField);
         RAB_Surface prevSurface = lt_load_previous_surface(sourcePixel);
         if (!lt_area_is_temporal_neighbor_valid(currentSurface, prevSurface)) continue;
 
@@ -3756,6 +4250,7 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
         ScatterReconnectionData contributorReconnection = scatter_load_prev_reconnection(sourcePixel);
         float pHatPrev = prevReservoir.targetPdf;
         vec2 contributorProjectedPixelF = scatter_forward_project_to_current_frame(contributorReconnection.worldPos);
+        float contributorProposalMatch = lt_temporal_proposal_match_weight(canonicalReconnection, contributorReconnection);
         float contributorNormalization = lt_temporal_scatter_support_denominator(
             ivec2(floor(contributorProjectedPixelF)),
             fract(contributorProjectedPixelF),
@@ -3765,6 +4260,12 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
             prevCameraPos,
             prevCameraForward,
             pHatPrev);
+        if (contributorNormalization <= 0.0f) continue;
+
+        float scatterNormalizationScale = (scatterConfidenceWeightSum > 0.0f)
+            ? min(1.0f, scatterConfidenceCap / scatterConfidenceWeightSum)
+            : 0.0f;
+        contributorNormalization *= scatterNormalizationScale;
         if (contributorNormalization <= 0.0f) continue;
 
         RTXDI_DIReservoir shiftedReservoir = lt_translate_reservoir_between_frames(prevReservoir, true, false);
@@ -3779,9 +4280,18 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
             shiftedReservoir, currentSurface, false, false);
         shiftedReservoir.targetPdf = lt_surface_target_pdf(currentSurface, splatLight);
 
-        float jSubPixelPrev = scatter_compute_subpixel_jacobian(
-            prevSurface.worldPos, prevSurface.geoNormal, prevCameraPos, prevCameraForward);
-        float splatJacobian = scatter_compute_scatter_jacobian(jSubPixelPrev, jSubPixelCurrent, 1.0f, 1.0f);
+        float jSubPixelPrev = scatter_resolve_stored_subpixel_jacobian(
+            contributorReconnection,
+            prevSurface,
+            prevCameraPos,
+            prevCameraForward
+        );
+        float splatJacobian = scatter_compute_scatter_jacobian(
+            jSubPixelPrev,
+            jSubPixelCurrent,
+            scatter_resolve_stored_secondary_jacobian(contributorReconnection),
+            1.0f
+        );
 
         prevWeightSum = state.weightSum;
         splat_resample_temporal_pairwise_mis(
@@ -3794,9 +4304,9 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
             sourcePixel,
             pHatPrev,
             confidenceWeightSum,
-            contributorNormalization * contributorSupportWeight,
+            contributorNormalization * contributorSupportWeight * contributorProposalMatch,
             splatJacobian,
-            contributorSupportWeight,
+            contributorSupportWeight * contributorProposalMatch,
             rng
         );
 
@@ -3804,6 +4314,12 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
             selectedPrevReconnection = contributorReconnection;
             selectedFromPrev = true;
         }
+    }
+
+    if (backupCandidateCount > 0 && state.weightSum <= 0.0f) {
+        state = canonicalReservoir;
+        selectedPrevReconnection = scatter_empty_reconnection();
+        selectedFromPrev = false;
     }
 
     area_streaming_resample_finalize_mis(
@@ -3818,10 +4334,19 @@ RTXDI_DIReservoir lt_area_temporal_scatter_stage(
     }
 
     float propagatedConfidence = lt_scatter_compute_history_confidence(pixelPosition, currentSurface, result);
+    RAB_LightSample resultLight = lt_decode_reservoir_sample_for_frame(
+        result,
+        currentSurface,
+        false,
+        false
+    );
     reconnection = scatter_build_reconnection(
         currentSurface,
+        result,
+        resultLight,
         pixelPosition,
-        scatter_clamp_reconnection_confidence(propagatedConfidence)
+        scatter_clamp_reconnection_confidence(propagatedConfidence),
+        jSubPixelCurrent
     );
 
     if (selectedFromPrev && scatter_reconnection_matches_surface(selectedPrevReconnection, pixelPosition, currentSurface)) {
@@ -3975,7 +4500,7 @@ float area_compute_confidence_weight_for_two_shifts(vec3 primaryHitPosW) {
     // With pinhole camera (CoC=0), both shifts get equal weight.
     // If DoF is added, use the fitted functions from the reference.
     float coc = area_compute_circle_of_confusion(primaryHitPosW);
-    if (coc <= 2.0f) return 1.0f;
+    if (coc <= 2.0f) return 0.5f;
 
     // Fitted function from reference (scalingFunctionIndex=0):
     // coefficients = (8.96701974, -8.27136859, 0.15271796)
@@ -4072,6 +4597,7 @@ void area_eval_phat_and_jacobian_random_replay(
     inout RTXDI_RandomSamplerState rng,
     out float pHatFromShiftedDomain,
     out float jacobian,
+    out vec2 shiftedPixelSampleUV,
     out vec2 shiftedLensSampleUV,
     out RAB_Surface shiftedSurface)
 {
@@ -4091,6 +4617,10 @@ void area_eval_phat_and_jacobian_random_replay(
 
     // Random replay Jacobian is always 1.0
     jacobian = 1.0f;
+
+    shiftedPixelSampleUV = lt_area_has_valid_domain(reservoir)
+        ? lt_area_clamp_pixel_sample_uv(reservoir.pixelSampleUV)
+        : lt_area_default_pixel_sample(shiftedPixel);
 
     // Lens UV is unchanged
     shiftedLensSampleUV = lt_area_has_valid_domain(reservoir)
@@ -4124,6 +4654,7 @@ void area_eval_phat_and_jacobian_reconnection(
     inout RTXDI_RandomSamplerState rng,
     out float pHatFromShiftedDomain,
     out float jacobian,
+    out vec2 shiftedPixelSampleUV,
     out vec2 shiftedLensSampleUV,
     out RAB_Surface shiftedSurface,
     out AreaJacobianEvalData jEvalDataShifted)
@@ -4131,6 +4662,7 @@ void area_eval_phat_and_jacobian_reconnection(
     // Default output values
     pHatFromShiftedDomain = 0.0f;
     jacobian = 1.0f;
+    shiftedPixelSampleUV = lt_area_default_pixel_sample(shiftedPixel);
     shiftedLensSampleUV = vec2(0.0f);
     shiftedSurface = rcSurface;  // Default to the base surface
     jEvalDataShifted = area_jacobian_eval_data_empty();
@@ -4173,13 +4705,16 @@ void area_eval_phat_and_jacobian_reconnection(
     // For our engine, camera forward in world space is -Z transformed by the model-view matrix.
     // The origin camera uses the current model-view; for temporal reuse the shifted camera
     // uses the previous model-view. For spatial reuse (same frame), both use current.
-    vec3 originCameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
+    bool baseIsPrevFrame = !isShiftedToPrevFrame;
+    vec3 originCameraForward = baseIsPrevFrame
+        ? normalize(mat3(gbufferPreviousModelView) * vec3(0.0f, 0.0f, -1.0f))
+        : normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
     vec3 shiftedCameraForward = isShiftedToPrevFrame
         ? normalize(mat3(gbufferPreviousModelView) * vec3(0.0f, 0.0f, -1.0f))
-        : originCameraForward;
+        : normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
 
     // Reconnection-hit normal
-    vec3 rcNormalW = rcSurface.normal;
+    vec3 rcNormalW = rcSurface.geoNormal;
 
     // Compute Jacobian from base to shifted path
     jEvalDataShifted.lensToPixelDist = shiftedLensToPixelDist;
@@ -4233,6 +4768,7 @@ void area_eval_phat_and_jacobian_reconnection(
         pHatFromShiftedDomain = 0.0f;
     }
 
+    shiftedPixelSampleUV = lt_area_default_pixel_sample(shiftedPixel);
     shiftedLensSampleUV = vec2(0.5f); // Pinhole camera: lens center
 }
 
@@ -4263,19 +4799,21 @@ void area_eval_phat_and_jacobian(
     inout RTXDI_RandomSamplerState rng,
     out float pHatFromShiftedDomain,
     out float jacobian,
+    out vec2 shiftedPixelSampleUV,
     out vec2 shiftedLensSampleUV,
     out RAB_Surface shiftedSurface)
 {
     // Default outputs
     pHatFromShiftedDomain = 0.0f;
     jacobian = 1.0f;
+    shiftedPixelSampleUV = lt_area_default_pixel_sample(shiftedPixel);
     shiftedLensSampleUV = vec2(0.0f);
     shiftedSurface = baseSurface;
 
     if (selectedShiftMapping == AREA_RESTIR_SHIFT_RANDOM_REPLAY) {
         area_eval_phat_and_jacobian_random_replay(
             reservoir, baseSurface, shiftedPixel, isShiftedToPrevFrame, rng,
-            pHatFromShiftedDomain, jacobian, shiftedLensSampleUV, shiftedSurface);
+            pHatFromShiftedDomain, jacobian, shiftedPixelSampleUV, shiftedLensSampleUV, shiftedSurface);
     } else if (selectedShiftMapping == AREA_RESTIR_SHIFT_RECONNECTION) {
         AreaJacobianEvalData dummyData;
         area_eval_phat_and_jacobian_reconnection(
@@ -4283,7 +4821,7 @@ void area_eval_phat_and_jacobian(
             baseCameraPosW, basePixel,
             shiftedCameraPosW, shiftedPixel,
             isShiftedToPrevFrame, rng,
-            pHatFromShiftedDomain, jacobian, shiftedLensSampleUV,
+            pHatFromShiftedDomain, jacobian, shiftedPixelSampleUV, shiftedLensSampleUV,
             shiftedSurface, dummyData);
     }
 }
@@ -4328,6 +4866,7 @@ void area_resample_reservoir_pairwise_mis(
 
         float pHatFromCanonicalForCandidate = 0.0f;
         float inJacobianForCandidate = 1.0f;
+        vec2 shiftedCandidatePixelSampleUV = lt_area_default_pixel_sample(canonicalPixel);
         vec2 shiftedCandidateLensSampleUV = vec2(0.0f);
         RAB_Surface shiftedCandidateSurface = RAB_EmptySurface();
 
@@ -4349,12 +4888,14 @@ void area_resample_reservoir_pairwise_mis(
             rng,
             pHatFromCanonicalForCandidate,
             inJacobianForCandidate,
+            shiftedCandidatePixelSampleUV,
             shiftedCandidateLensSampleUV,
             shiftedCandidateSurface
         );
 
         float pHatFromCandidateForCanonical = 0.0f;
         float outJacobianForCanonical = 1.0f;
+        vec2 dummyPixelSampleUV = lt_area_default_pixel_sample(candidatePixel);
         vec2 dummyLensSampleUV = vec2(0.0f);
         RAB_Surface dummySurface = RAB_EmptySurface();
 
@@ -4376,6 +4917,7 @@ void area_resample_reservoir_pairwise_mis(
             rng,
             pHatFromCandidateForCanonical,
             outJacobianForCanonical,
+            dummyPixelSampleUV,
             dummyLensSampleUV,
             dummySurface
         );
@@ -4435,12 +4977,16 @@ void area_resample_reservoir_pairwise_mis(
         }
 
         if (selectSample) {
+            vec2 shiftedPixelSampleUV = shiftedCandidatePixelSampleUV;
             state.targetPdf = pHatFromCanonicalForCandidate;
             state.lightData = candidateReservoir.lightData;
             state.uvData = candidateReservoir.uvData;
-            state.pixelSampleUV = candidateReservoir.pixelSampleUV;
+            state.pixelSampleUV = shiftedPixelSampleUV;
             state.pathSample = candidateReservoir.pathSample;
             state.lensSampleUV = shiftedCandidateLensSampleUV;
+            // Clearing visibility completely kept for reference:
+            // state.packedVisibility = 0u;
+            // Restored reuse keeps convergence while earlier proposal/boundary fixes reduce flicker.
             state.packedVisibility = candidateReservoir.packedVisibility;
             state.age = candidateReservoir.age;
             state.spatialDistance = candidateReservoir.spatialDistance;
@@ -4816,6 +5362,7 @@ const uint RTXDI_LocalLightContextSamplingMode_RIS = 1u;
 struct RTXDI_LocalLightSelectionContext
 {
     uint mode;
+    uint proposalFamily;
     RTXDI_RISTileInfo risTileInfo;
     RTXDI_LightBufferRegion lightBufferRegion;
 };
@@ -4894,7 +5441,7 @@ RTXDI_RISTileInfo RTXDI_RandomlySelectRISTile(
         return risTileInfo;
     }
 
-    float tileRnd = lt_next_random(coherentRng);
+    float tileRnd = RTXDI_GetNextRandom(coherentRng);
     uint tileIndex = min(uint(tileRnd * float(params.tileCount)), params.tileCount - 1u);
     risTileInfo.risTileOffset = tileIndex * params.tileSize + params.bufferOffset;
     return risTileInfo;
@@ -4912,6 +5459,7 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextUnifo
 {
     RTXDI_LocalLightSelectionContext ctx;
     ctx.mode = RTXDI_LocalLightContextSamplingMode_UNIFORM;
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_UNIFORM;
     ctx.lightBufferRegion = lightBufferRegion;
     ctx.risTileInfo.risTileOffset = 0u;
     ctx.risTileInfo.risTileSize = 0u;
@@ -4922,6 +5470,7 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextRIS(R
 {
     RTXDI_LocalLightSelectionContext ctx;
     ctx.mode = RTXDI_LocalLightContextSamplingMode_RIS;
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_POWER_RIS;
     ctx.risTileInfo = risTileInfo;
     ctx.lightBufferRegion.firstLightIndex = 0u;
     ctx.lightBufferRegion.numLights = 0u;
@@ -4945,7 +5494,15 @@ bool lt_is_complex_surface(RAB_Surface surface) {
     return roughness < 0.35f || reflectivity > 0.1f || emission > 0.0f;
 }
 
-
+float lt_spatial_neighbor_history_cap(
+    RTXDI_DIReservoir canonicalReservoir,
+    RTXDI_DIReservoir neighborReservoir,
+    float targetHistoryLength)
+{
+    float canonicalHistory = max(canonicalReservoir.M, 1.0f);
+    float targetHistory = max(targetHistoryLength, canonicalHistory + 1.0f);
+    return min(max(neighborReservoir.M, 0.0f), targetHistory);
+}
 
 bool lt_materials_similar(RAB_Surface a, RAB_Surface b) {
     return RAB_AreMaterialsSimilar(RAB_GetMaterial(a), RAB_GetMaterial(b));

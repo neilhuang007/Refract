@@ -183,9 +183,10 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0;
 }
 
-// Grid origin: continuous, matching RTXDI_ReGIR_WorldPosToCellIndex.
+// Grid origin: snapped to cell boundaries — must match light_tree.glsl::regir_grid_origin().
 vec3 regir_grid_origin() {
-    return ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
+    vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
+    return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
 }
 
 // ---------------------------------------------------------------------------
@@ -369,10 +370,7 @@ void main() {
 
     vec3  cellCenter = gridOrigin
                      + (vec3(float(cx), float(cy), float(cz)) + 0.5) * ph_regir_cell_size;
-    float cellRadius = ph_regir_cell_size * sqrt(3.0);
-
-    // RTXDI: cellRadius *= (regirParams.commonParams.samplingJitter + 1.0)
-    cellRadius *= (ph_regir_sampling_jitter + 1.0);
+    float cellRadius = 0.5f * ph_regir_cell_size * sqrt(3.0);
 
     // RTXDI: rng = RTXDI_InitRandomSampler(uint2(GlobalIndex & 0xfff, GlobalIndex >> 12), frameIndex, 1)
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(

@@ -758,7 +758,7 @@ bool gi_shade_secondary_surface(
     uvec2 reservoirPosition = uvec2(lt_current_reservoir_pos());
     RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(
         reservoirPosition / RTXDI_TILE_SIZE_IN_PIXELS,
-        uint(frameCounter),
+        0u,
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
     );
     RTXDI_DIInitialSamplingParameters initialSamplingParams = lt_build_di_initial_sampling_parameters();

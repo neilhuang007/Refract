@@ -16,6 +16,26 @@ void storeReservoirOutputs(RTXDI_DIReservoir reservoir) {
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 }
 
+bool lt_resolve_promotion_surface(
+    ivec2 pixelPosition,
+    RAB_Surface baseSurface,
+    RTXDI_DIReservoir reservoir,
+    out RAB_Surface resolvedSurface)
+{
+    resolvedSurface = baseSurface;
+    if (!lt_area_has_valid_domain(reservoir)) {
+        return RAB_IsSurfaceValid(resolvedSurface);
+    }
+
+    ivec2 domainPixel = lt_area_pixel_from_sample_uv(reservoir.pixelSampleUV);
+    RAB_Surface domainSurface = RAB_GetGBufferSurface(domainPixel, false);
+    if (RAB_IsSurfaceValid(domainSurface)) {
+        resolvedSurface = domainSurface;
+    }
+
+    return RAB_IsSurfaceValid(resolvedSurface);
+}
+
 void main() {
     ivec2 GlobalIndex = lt_current_reservoir_pos();
     if (!lt_is_active_reservoir_lane(GlobalIndex)) {
@@ -47,8 +67,15 @@ void main() {
     );
 
     if (RTXDI_IsValidDIReservoir(reservoir)) {
+        RAB_Surface promotionSurface;
+        if (!lt_resolve_promotion_surface(pixelPosition, surface, reservoir, promotionSurface)) {
+            storeReservoirOutputs(RTXDI_EmptyDIReservoir());
+            return;
+        }
+
         lt_area_finalize_candidate(reservoir, pixelPosition, reservoir.pathSample);
-        reservoir.targetPdf = lt_area_effective_target_pdf(reservoir, surface);
+        reservoir.targetPdf = lt_area_effective_target_pdf(reservoir, promotionSurface);
+        surface = promotionSurface;
     }
 
     bool enableFinalVisibility = restirDI.shadingParams.enableFinalVisibility != 0u;

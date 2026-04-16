@@ -140,16 +140,44 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIR
     RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams,
     RAB_Surface surface)
 {
+    // Old hard partitioning kept for reference:
+    // int cellIndex = -1;
+    // if (regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0)
+    // {
+    //     RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
+    //         RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
+    //     ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
+    //     return ctx;
+    // }
+
     int cellIndex = -1;
-    if (regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0)
-    {
-        return RTXDI_InitializeLocalLightSelectionContextRIS(
-            RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
+    bool useReGIR = regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0;
+    bool hasFallbackRIS = localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u;
+
+    if (useReGIR && hasFallbackRIS) {
+        vec3 gridOrigin = regir_grid_origin();
+        vec3 scaled = (surface.worldPos - gridOrigin) / ph_regir_cell_size;
+        vec3 frac = fract(scaled);
+        vec3 edgeDistance = min(frac, 1.0f - frac);
+        float minEdgeDistance = min(edgeDistance.x, min(edgeDistance.y, edgeDistance.z));
+        float boundaryBlend = clamp((0.18f - minEdgeDistance) / 0.18f, 0.0f, 1.0f);
+        if (RTXDI_GetNextRandom(coherentRng) < boundaryBlend * 0.35f) {
+            useReGIR = false;
+        }
     }
 
-    if (localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u)
+    if (useReGIR) {
+        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
+            RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
+        ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
+        return ctx;
+    }
+
+    if (hasFallbackRIS)
     {
-        return RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
+        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
+        ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_FALLBACK;
+        return ctx;
     }
 
     return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
@@ -316,13 +344,18 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
         bool selected = RTXDI_StreamSample(state, int(lightIndex), uv, risRnd, targetPdf, 1.0f / blendedSourcePdf);
         if (selected)
         {
+            state.transportAux0 = 1.0f / blendedSourcePdf;
+            state.pathSample = lt_make_path_sample(2u, lightSelectionContext.proposalFamily);
             o_selectedSample = candidateSample;
         }
     }
 
     RTXDI_FinalizeResampling(state, 1.0f, float(misData.numMisSamples));
     state.M = 1.0f;
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), 2u);
+    if (RTXDI_IsValidDIReservoir(state)) {
+        state.pathSample = lt_make_path_sample(2u, lightSelectionContext.proposalFamily);
+    }
+    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), state.pathSample);
     return state;
 }
 
@@ -460,13 +493,18 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surfa
         bool selected = RTXDI_StreamSample(state, brdfSample.index, sampleUv, lt_next_random(rng), targetPdf, 1.0f / blendedSourcePdf);
         if (selected)
         {
+            state.transportAux0 = 1.0f / blendedSourcePdf;
+            state.pathSample = lt_make_path_sample(1u, LT_PROPOSAL_FAMILY_BRDF);
             o_selectedSample = brdfSample;
         }
     }
 
     RTXDI_FinalizeResampling(state, 1.0, float(misData.numMisSamples));
     state.M = 1.0;
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), 1u);
+    if (RTXDI_IsValidDIReservoir(state)) {
+        state.pathSample = lt_make_path_sample(1u, LT_PROPOSAL_FAMILY_BRDF);
+    }
+    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), state.pathSample);
     return state;
 }
 
@@ -511,7 +549,16 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
 
     RTXDI_FinalizeResampling(state, 1.0, 1.0);
     state.M = 1.0;
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), selectBrdf ? 1u : 2u);
+    if (RTXDI_IsValidDIReservoir(state)) {
+        uint selectedProposalFamily = LT_PROPOSAL_FAMILY_UNKNOWN;
+        if (selectBrdf) {
+            selectedProposalFamily = LT_PROPOSAL_FAMILY_BRDF;
+        } else {
+            selectedProposalFamily = (state.pathSample >> LT_PATH_SAMPLE_PROPOSAL_SHIFT) & LT_PATH_SAMPLE_PROPOSAL_MASK;
+        }
+        state.pathSample = lt_make_path_sample(selectBrdf ? 1u : 2u, selectedProposalFamily);
+    }
+    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), state.pathSample);
 
     o_lightSample = localSample;
     if (selectBrdf)

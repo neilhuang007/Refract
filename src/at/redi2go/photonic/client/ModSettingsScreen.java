@@ -102,6 +102,12 @@ public class ModSettingsScreen extends Screen {
          directStageView.modified();
          w.setMessage(Text.of("Direct View: " + formatDirectStageView(directStageView.value)));
       }, "Cycles the direct-lighting inspection source:\nRT Raw, Noisy, Responsive, Slow, Fast,\nHist Fix, Clamp Fast, Firefly, Denoised, Atrous, Final.", () -> true));
+      PhotonicsStorage.Parameter<Boolean> directTemporalReuse = PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE;
+      buttons.add(new ModSettingsScreen.PButton("Direct Temporal Reuse: " + (directTemporalReuse.value ? "On" : "Off"), w -> {
+         directTemporalReuse.value = !directTemporalReuse.value;
+         directTemporalReuse.modified();
+         w.setMessage(Text.of("Direct Temporal Reuse: " + (directTemporalReuse.value ? "On" : "Off")));
+      }, "Enables or bypasses ReSTIR DI temporal reuse.\nTurn this off to isolate overlap and ownership flashing from proposal-only direct lighting.", () -> true));
       PhotonicsStorage.Parameter<Boolean> directSpatialReuse = PhotonicsStorage.DEBUG_ENABLE_DIRECT_SPATIAL_REUSE;
       buttons.add(new ModSettingsScreen.PButton("Direct Spatial Reuse: " + (directSpatialReuse.value ? "On" : "Off"), w -> {
          directSpatialReuse.value = !directSpatialReuse.value;

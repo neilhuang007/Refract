@@ -49,21 +49,14 @@ void main() {
 
         if (RTXDI_IsValidDIReservoir(centerSample))
         {
-            if (ph_debug_enable_direct_spatial_reuse >= 0.5f)
-            {
-                spatialResult = lt_area_spatial_resampling(
-                    pixelPosition,
-                    surface,
-                    centerSample,
-                    rng
-                );
+            spatialResult = lt_area_spatial_resampling(
+                pixelPosition,
+                surface,
+                centerSample,
+                rng
+            );
 
-                if (!RTXDI_IsValidDIReservoir(spatialResult))
-                {
-                    spatialResult = centerSample;
-                }
-            }
-            else
+            if (!RTXDI_IsValidDIReservoir(spatialResult))
             {
                 spatialResult = centerSample;
             }
