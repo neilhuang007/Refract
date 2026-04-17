@@ -46,6 +46,10 @@ public final class ShaderAutomation {
    private static final float REGIR_CELL_SIZE = 32.0f;
    private static final double FIREFLY_LUMA_THRESHOLD = 16.0;
    private static final double SEVERE_FIREFLY_LUMA_THRESHOLD = 64.0;
+   private static final double WHOLE_LIGHT_FLASH_DIRECT_DROP_THRESHOLD = 0.35;
+   private static final double WHOLE_LIGHT_FLASH_VALID_FRACTION_DROP_THRESHOLD = 0.20;
+   private static final double WHOLE_LIGHT_FLASH_LIGHT_COUNT_DROP_THRESHOLD = 0.10;
+   private static final double WHOLE_LIGHT_FLASH_BLEND_FACTOR_JUMP_THRESHOLD = 0.05;
    private static final float FP16_SATURATION_CHANNEL_THRESHOLD = 65500.0f;
    private static final AtomicBoolean FATAL_SHADER_FAILURE_SCHEDULED = new AtomicBoolean(false);
    private static final ShaderAutomation INSTANCE = Photonic.automationEnabled() ? new ShaderAutomation() : null;
@@ -260,6 +264,25 @@ public final class ShaderAutomation {
    private int directTemporalDeltaSamples = 0;
    private double latestDirectTemporalDelta = 0.0;
    private double latestDirectTemporalMaxPixelDelta = 0.0;
+   private double latestWholeLightFlashDirectDrop = 0.0;
+   private double latestWholeLightFlashResolvedValidDrop = 0.0;
+   private double latestWholeLightFlashLightCountDrop = 0.0;
+   private double latestWholeLightFlashBlendFactorJump = 0.0;
+   private double maxWholeLightFlashDirectDrop = 0.0;
+   private double maxWholeLightFlashResolvedValidDrop = 0.0;
+   private double maxWholeLightFlashLightCountDrop = 0.0;
+   private double maxWholeLightFlashBlendFactorJump = 0.0;
+   private int wholeLightFlashSuspectCaptures = 0;
+   private int wholeLightFlashLastCapture = -1;
+   private int wholeLightFlashDirectDropCaptures = 0;
+   private int wholeLightFlashResolvedValidDropCaptures = 0;
+   private int wholeLightFlashLightCountDropCaptures = 0;
+   private int wholeLightFlashBlendJumpCaptures = 0;
+   private double previousCaptureDirectMeanLuma = Double.NaN;
+   private double previousCaptureResolvedStrictValidFraction = Double.NaN;
+   private double previousCaptureResolvedMeanWeight = Double.NaN;
+   private double previousCaptureLightBlendFactor = Double.NaN;
+   private int previousCaptureTracedLightCount = -1;
    private double directTemporalMaxPixelDeltaSum = 0.0;
    private double directTemporalMaxPixelDeltaMax = 0.0;
    private int directTemporalMaxPixelDeltaSamples = 0;
@@ -1997,6 +2020,7 @@ public final class ShaderAutomation {
          this.indirectResolveGainSamples++;
          this.recordMotionRepeatDelta(directTemporalAndRepeatImage, true, captureIndex);
          this.recordMotionRepeatDelta(indirectImage, false, captureIndex);
+         this.updateWholeLightFlashDiagnostics(captureIndex, resolvedReservoirStats);
          this.capturesTaken = captureIndex;
          this.pendingFinalCaptureIndex = captureIndex;
          boolean directThisCapture = directLuma > 0.0 || directSoftLuma > 0.0 || directRawLuma > 0.0 || handheldLuma > 0.0;
@@ -2716,6 +2740,90 @@ public final class ShaderAutomation {
             repeatKey.historyEpoch()
          )
       );
+   }
+
+   private void updateWholeLightFlashDiagnostics(int captureIndex, ReservoirDebugStats resolvedReservoirStats) {
+      double directDrop = 0.0;
+      if (Double.isFinite(this.previousCaptureDirectMeanLuma) && this.previousCaptureDirectMeanLuma > 1.0e-6) {
+         directDrop = Math.max(0.0, (this.previousCaptureDirectMeanLuma - this.latestDirectMeanLuma) / this.previousCaptureDirectMeanLuma);
+      }
+
+      double resolvedValidDrop = 0.0;
+      if (Double.isFinite(this.previousCaptureResolvedStrictValidFraction)) {
+         resolvedValidDrop = Math.max(0.0, this.previousCaptureResolvedStrictValidFraction - resolvedReservoirStats.strictValidFraction());
+      }
+
+      double lightCountDrop = 0.0;
+      if (this.previousCaptureTracedLightCount > 0) {
+         lightCountDrop = Math.max(0.0, (this.previousCaptureTracedLightCount - this.latestTracedLightCount) / (double)this.previousCaptureTracedLightCount);
+      }
+
+      double blendFactorJump = 0.0;
+      if (Double.isFinite(this.previousCaptureLightBlendFactor)) {
+         blendFactorJump = Math.abs(this.latestLightBlendFactor - this.previousCaptureLightBlendFactor);
+      }
+
+      this.latestWholeLightFlashDirectDrop = directDrop;
+      this.latestWholeLightFlashResolvedValidDrop = resolvedValidDrop;
+      this.latestWholeLightFlashLightCountDrop = lightCountDrop;
+      this.latestWholeLightFlashBlendFactorJump = blendFactorJump;
+      this.maxWholeLightFlashDirectDrop = Math.max(this.maxWholeLightFlashDirectDrop, directDrop);
+      this.maxWholeLightFlashResolvedValidDrop = Math.max(this.maxWholeLightFlashResolvedValidDrop, resolvedValidDrop);
+      this.maxWholeLightFlashLightCountDrop = Math.max(this.maxWholeLightFlashLightCountDrop, lightCountDrop);
+      this.maxWholeLightFlashBlendFactorJump = Math.max(this.maxWholeLightFlashBlendFactorJump, blendFactorJump);
+
+      boolean directDropTriggered = directDrop >= WHOLE_LIGHT_FLASH_DIRECT_DROP_THRESHOLD;
+      boolean resolvedValidDropTriggered = resolvedValidDrop >= WHOLE_LIGHT_FLASH_VALID_FRACTION_DROP_THRESHOLD;
+      boolean lightCountDropTriggered = lightCountDrop >= WHOLE_LIGHT_FLASH_LIGHT_COUNT_DROP_THRESHOLD;
+      boolean blendJumpTriggered = blendFactorJump >= WHOLE_LIGHT_FLASH_BLEND_FACTOR_JUMP_THRESHOLD;
+
+      if (directDropTriggered) {
+         this.wholeLightFlashDirectDropCaptures++;
+      }
+      if (resolvedValidDropTriggered) {
+         this.wholeLightFlashResolvedValidDropCaptures++;
+      }
+      if (lightCountDropTriggered) {
+         this.wholeLightFlashLightCountDropCaptures++;
+      }
+      if (blendJumpTriggered) {
+         this.wholeLightFlashBlendJumpCaptures++;
+      }
+
+      if (directDropTriggered || resolvedValidDropTriggered || lightCountDropTriggered || blendJumpTriggered) {
+         this.wholeLightFlashSuspectCaptures++;
+         this.wholeLightFlashLastCapture = captureIndex;
+         Photonic.warn(
+            "[Automation] whole-light-flash capture={} directDrop={} resolvedValidDrop={} resolvedWeightDelta={} lightCountDrop={} blendFactorJump={} directMean={} prevDirectMean={} resolvedStrict={} prevResolvedStrict={} resolvedMeanWeight={} prevResolvedMeanWeight={} tracedLights={}/{} prevTracedLights={} blendFactor={} prevBlendFactor={} triggers(direct={}, resolved={}, lights={}, blend={})",
+            captureIndex,
+            String.format(Locale.ROOT, "%.5f", directDrop),
+            String.format(Locale.ROOT, "%.5f", resolvedValidDrop),
+            String.format(Locale.ROOT, "%.5f", Double.isFinite(this.previousCaptureResolvedMeanWeight) ? resolvedReservoirStats.meanWeight() - this.previousCaptureResolvedMeanWeight : 0.0),
+            String.format(Locale.ROOT, "%.5f", lightCountDrop),
+            String.format(Locale.ROOT, "%.5f", blendFactorJump),
+            String.format(Locale.ROOT, "%.5f", this.latestDirectMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.previousCaptureDirectMeanLuma),
+            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.strictValidFraction()),
+            String.format(Locale.ROOT, "%.5f", this.previousCaptureResolvedStrictValidFraction),
+            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.meanWeight()),
+            String.format(Locale.ROOT, "%.5f", this.previousCaptureResolvedMeanWeight),
+            this.latestTracedLightCount,
+            this.latestTotalLightCount,
+            this.previousCaptureTracedLightCount,
+            String.format(Locale.ROOT, "%.5f", this.latestLightBlendFactor),
+            String.format(Locale.ROOT, "%.5f", this.previousCaptureLightBlendFactor),
+            directDropTriggered,
+            resolvedValidDropTriggered,
+            lightCountDropTriggered,
+            blendJumpTriggered
+         );
+      }
+
+      this.previousCaptureDirectMeanLuma = this.latestDirectMeanLuma;
+      this.previousCaptureResolvedStrictValidFraction = resolvedReservoirStats.strictValidFraction();
+      this.previousCaptureResolvedMeanWeight = resolvedReservoirStats.meanWeight();
+      this.previousCaptureLightBlendFactor = this.latestLightBlendFactor;
+      this.previousCaptureTracedLightCount = this.latestTracedLightCount;
    }
 
    private double averageTemporalDelta(boolean directSoft, boolean indirect) {
@@ -3444,6 +3552,25 @@ public final class ShaderAutomation {
          props.setProperty("latestDirectTemporalMaxPixelDelta", Double.toString(this.latestDirectTemporalMaxPixelDelta));
          props.setProperty("directTemporalMaxPixelDeltaAvg", Double.toString(this.averageDirectTemporalMaxPixelDelta()));
          props.setProperty("directTemporalMaxPixelDeltaMax", Double.toString(this.directTemporalMaxPixelDeltaMax));
+         props.setProperty("latestWholeLightFlashDirectDrop", Double.toString(this.latestWholeLightFlashDirectDrop));
+         props.setProperty("latestWholeLightFlashResolvedValidDrop", Double.toString(this.latestWholeLightFlashResolvedValidDrop));
+         props.setProperty("latestWholeLightFlashLightCountDrop", Double.toString(this.latestWholeLightFlashLightCountDrop));
+         props.setProperty("latestWholeLightFlashBlendFactorJump", Double.toString(this.latestWholeLightFlashBlendFactorJump));
+         props.setProperty("maxWholeLightFlashDirectDrop", Double.toString(this.maxWholeLightFlashDirectDrop));
+         props.setProperty("maxWholeLightFlashResolvedValidDrop", Double.toString(this.maxWholeLightFlashResolvedValidDrop));
+         props.setProperty("maxWholeLightFlashLightCountDrop", Double.toString(this.maxWholeLightFlashLightCountDrop));
+         props.setProperty("maxWholeLightFlashBlendFactorJump", Double.toString(this.maxWholeLightFlashBlendFactorJump));
+         props.setProperty("wholeLightFlashSuspectCaptures", Integer.toString(this.wholeLightFlashSuspectCaptures));
+         props.setProperty("wholeLightFlashLastCapture", Integer.toString(this.wholeLightFlashLastCapture));
+         props.setProperty("wholeLightFlashDirectDropCaptures", Integer.toString(this.wholeLightFlashDirectDropCaptures));
+         props.setProperty("wholeLightFlashResolvedValidDropCaptures", Integer.toString(this.wholeLightFlashResolvedValidDropCaptures));
+         props.setProperty("wholeLightFlashLightCountDropCaptures", Integer.toString(this.wholeLightFlashLightCountDropCaptures));
+         props.setProperty("wholeLightFlashBlendJumpCaptures", Integer.toString(this.wholeLightFlashBlendJumpCaptures));
+         props.setProperty("previousCaptureResolvedMeanWeight", Double.toString(this.previousCaptureResolvedMeanWeight));
+         props.setProperty("previousCaptureResolvedStrictValidFraction", Double.toString(this.previousCaptureResolvedStrictValidFraction));
+         props.setProperty("previousCaptureDirectMeanLuma", Double.toString(this.previousCaptureDirectMeanLuma));
+         props.setProperty("previousCaptureLightBlendFactor", Double.toString(this.previousCaptureLightBlendFactor));
+         props.setProperty("previousCaptureTracedLightCount", Integer.toString(this.previousCaptureTracedLightCount));
          props.setProperty("latestDirectSoftTemporalDelta", Double.toString(this.latestDirectSoftTemporalDelta));
          props.setProperty("directSoftTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(true, false)));
          props.setProperty("directSoftTemporalDeltaMax", Double.toString(this.directSoftTemporalDeltaMax));

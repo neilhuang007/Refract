@@ -129,6 +129,7 @@ public class ModSettingsScreen extends Screen {
          this.reloadShaders();
       }, "Cycles the RTXDI checkerboard field used by the direct-lighting path:\nOff, Black, White.", () -> true));
       PhotonicsStorage.Parameter<String> localLightSamplingMode = PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE;
+      localLightSamplingMode.value = PhotonicsStorage.normalizeRestirLocalLightSamplingMode(localLightSamplingMode.value);
       buttons.add(new ModSettingsScreen.PButton("Local Light Sampling: " + formatRestirLocalLightSamplingMode(localLightSamplingMode.value), w -> {
          localLightSamplingMode.value = getNextRestirLocalLightSamplingMode(localLightSamplingMode.value);
          localLightSamplingMode.modified();
@@ -142,6 +143,13 @@ public class ModSettingsScreen extends Screen {
          spatialMisMode.modified();
          w.setMessage(Text.of("Spatial MIS: " + formatRestirSpatialMisMode(spatialMisMode.value)));
       }, "Chooses the RTXDI spatial reuse bias correction mode:\nBasic MIS or Pairwise MIS. Pairwise MIS is the default and matches the current RTXDI reference intent for spatial reuse.", () -> true));
+      PhotonicsStorage.Parameter<String> temporalScatterIsolationMode = PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE;
+      temporalScatterIsolationMode.value = PhotonicsStorage.normalizeTemporalScatterIsolationMode(temporalScatterIsolationMode.value);
+      buttons.add(new ModSettingsScreen.PButton("Temporal Scatter Isolation: " + formatTemporalScatterIsolationMode(temporalScatterIsolationMode.value), w -> {
+         temporalScatterIsolationMode.value = getNextTemporalScatterIsolationMode(temporalScatterIsolationMode.value);
+         temporalScatterIsolationMode.modified();
+         w.setMessage(Text.of("Temporal Scatter Isolation: " + formatTemporalScatterIsolationMode(temporalScatterIsolationMode.value)));
+      }, "Controls temporal scatter isolation while auditing temporal reuse:\nOff = full Area ReSTIR temporal pipeline, Temporal Off = bypass temporal input entirely and feed spatial reuse from initial samples.", () -> true));
       PhotonicsStorage.Parameter<Float> debugViewMode = PhotonicsStorage.DEBUG_VIEW_MODE;
       buttons.add(new ModSettingsScreen.PButton("Debug View: " + formatDebugViewMode(debugViewMode.value), w -> {
          debugViewMode.value = getNextDebugViewMode(debugViewMode.value);
@@ -317,6 +325,20 @@ public class ModSettingsScreen extends Screen {
       return switch (PhotonicsStorage.normalizeRestirSpatialMisMode(misMode)) {
          case "basic" -> "Basic MIS";
          default -> "Pairwise MIS";
+      };
+   }
+
+   private static String getNextTemporalScatterIsolationMode(String isolationMode) {
+      return switch (PhotonicsStorage.normalizeTemporalScatterIsolationMode(isolationMode)) {
+         case "temporal_off" -> "off";
+         default -> "temporal_off";
+      };
+   }
+
+   private static String formatTemporalScatterIsolationMode(String isolationMode) {
+      return switch (PhotonicsStorage.normalizeTemporalScatterIsolationMode(isolationMode)) {
+         case "temporal_off" -> "Temporal Off";
+         default -> "Off";
       };
    }
 

@@ -190,81 +190,28 @@ bool regir_unpack_slot(int flatCellIndex, int cellSlot,
 
 // RTXDI: RTXDI_CalculateReGIRCellIndex — determines which cell this pixel falls in.
 // Returns true if inside the grid, with flatCellIndex set.
-// Query-time stochastic boundary smoothing created tile-correlated ownership flips,
-// so the live path uses exact cell ownership again. The newer stochastic version is
-// kept below in comments for reference while we let ReSTIR/Area ReSTIR handle reuse.
+// Match RTXDI by using the same sampling jitter parameter that the build path uses.
 bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng, out int flatCellIndex) {
     flatCellIndex = -1;
 
+    vec3 cellJitter = vec3(
+        RTXDI_GetNextRandom(rng),
+        RTXDI_GetNextRandom(rng),
+        RTXDI_GetNextRandom(rng)
+    ) - 0.5f;
+
+    float jitterScale = max(ph_regir_sampling_jitter, 0.0f) * ph_regir_cell_size;
+    vec3 samplingPos = shadingWorldPos + cellJitter * jitterScale;
+
     ivec3 cellCoord;
-    if (!regir_world_to_cell(shadingWorldPos, cellCoord)) {
+    if (!regir_world_to_cell(samplingPos, cellCoord)) {
         return false;
     }
 
     flatCellIndex = regir_flatten_cell(cellCoord);
     return true;
-
-    // Stochastic boundary smoothing kept for reference:
-    // vec3 gridOrigin = regir_grid_origin();
-    // float jitterExtent = max(ph_regir_sampling_jitter, 0.0f) * ph_regir_cell_size * 0.5f;
-    // vec3 jitter = (jitterExtent > 0.0f)
-    //     ? (vec3(RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng)) * 2.0f - 1.0f) * jitterExtent
-    //     : vec3(0.0f);
-    // vec3 jitteredWorldPos = shadingWorldPos + jitter;
-    // vec3 scaled = (jitteredWorldPos - gridOrigin) / ph_regir_cell_size;
-    // ivec3 baseCell = ivec3(floor(scaled));
-    // vec3 frac = clamp(fract(scaled), vec3(0.0f), vec3(1.0f));
-    //
-    // float totalWeight = 0.0f;
-    // for (int dz = 0; dz <= 1; ++dz) {
-    //     float wz = (dz == 0) ? (1.0f - frac.z) : frac.z;
-    //     for (int dy = 0; dy <= 1; ++dy) {
-    //         float wy = (dy == 0) ? (1.0f - frac.y) : frac.y;
-    //         for (int dx = 0; dx <= 1; ++dx) {
-    //             ivec3 candidateCell = baseCell + ivec3(dx, dy, dz);
-    //             if (!regir_cell_in_bounds(candidateCell)) {
-    //                 continue;
-    //             }
-    //
-    //             float wx = (dx == 0) ? (1.0f - frac.x) : frac.x;
-    //             totalWeight += wx * wy * wz;
-    //         }
-    //     }
-    // }
-    //
-    // if (totalWeight <= 1e-5f) {
-    //     return false;
-    // }
-    //
-    // float selectWeight = RTXDI_GetNextRandom(rng) * totalWeight;
-    // float cumulativeWeight = 0.0f;
-    // for (int dz = 0; dz <= 1; ++dz) {
-    //     float wz = (dz == 0) ? (1.0f - frac.z) : frac.z;
-    //     for (int dy = 0; dy <= 1; ++dy) {
-    //         float wy = (dy == 0) ? (1.0f - frac.y) : frac.y;
-    //         for (int dx = 0; dx <= 1; ++dx) {
-    //             ivec3 candidateCell = baseCell + ivec3(dx, dy, dz);
-    //             if (!regir_cell_in_bounds(candidateCell)) {
-    //                 continue;
-    //             }
-    //
-    //             float wx = (dx == 0) ? (1.0f - frac.x) : frac.x;
-    //             float candidateWeight = wx * wy * wz;
-    //             if (candidateWeight <= 1e-5f) {
-    //                 continue;
-    //             }
-    //
-    //             cumulativeWeight += candidateWeight;
-    //             if (selectWeight <= cumulativeWeight || cumulativeWeight >= totalWeight - 1e-5f) {
-    //                 flatCellIndex = regir_flatten_cell(candidateCell);
-    //                 return true;
-    //             }
-    //         }
-    //     }
-    // }
-    //
-    // return false;
 }
+
 
 // RTXDI: RTXDI_SelectLocalLightReGIRRISTile — creates a RISTileInfo from the cell and
 // uses RTXDI_RandomlySelectLightDataFromRISTile, exactly matching the tile path.

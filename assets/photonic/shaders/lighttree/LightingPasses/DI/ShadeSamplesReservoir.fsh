@@ -23,16 +23,6 @@ bool lt_resolve_promotion_surface(
     out RAB_Surface resolvedSurface)
 {
     resolvedSurface = baseSurface;
-    if (!lt_area_has_valid_domain(reservoir)) {
-        return RAB_IsSurfaceValid(resolvedSurface);
-    }
-
-    ivec2 domainPixel = lt_area_pixel_from_sample_uv(reservoir.pixelSampleUV);
-    RAB_Surface domainSurface = RAB_GetGBufferSurface(domainPixel, false);
-    if (RAB_IsSurfaceValid(domainSurface)) {
-        resolvedSurface = domainSurface;
-    }
-
     return RAB_IsSurfaceValid(resolvedSurface);
 }
 

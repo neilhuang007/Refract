@@ -276,6 +276,7 @@ public class LightRegistry implements Destructable {
   private int pendingTracedLightMutations = 0;
   private volatile boolean gpuRegirBuildEnabled = false;
   private float[] lightPowers = new float[0];
+  private float[] regirLightPowers = new float[0];
   private int mutationDebugLogsRemaining = 48;
 
   public LightRegistry(int maxLights, int maxLightsPerNode, float minTracedLightSelectionLuma, int nodeSize, int worldSize) {
@@ -687,23 +688,36 @@ public class LightRegistry implements Destructable {
       int tracedCount = this.tracedLights.length;
       int capacity = this.getLightCapacity();
       this.lightPowers = new float[tracedCount];
+      this.regirLightPowers = new float[tracedCount];
       float cumulativeWeight = 0.0F;
       boolean hasPositiveWeight = false;
+      boolean hasPositiveRegirWeight = false;
       int activeLightCount = 0;
       for (int i = 0; i < capacity; i++) {
          if (i < tracedCount) {
             LightInstance light = this.tracedLights[i];
             float weight = Math.max(selectionSourceScore(light, selectionCamera, this.minTracedLightSelectionLuma), 0.0F);
+            float regirWeight = Math.max(selectionSourceScore(light), 0.0F);
             if (weight > 1.0e-6F) {
                cumulativeWeight += weight;
                hasPositiveWeight = true;
+            }
+            if (regirWeight > 1.0e-6F) {
+               hasPositiveRegirWeight = true;
             }
             if (light.active()) {
                activeLightCount++;
             }
             this.lightPowers[i] = weight;
+            this.regirLightPowers[i] = regirWeight;
          }
          buffer.put(i, cumulativeWeight);
+      }
+
+      if (!hasPositiveRegirWeight && tracedCount > 0 && activeLightCount > 0) {
+         for (int i = 0; i < tracedCount; i++) {
+            this.regirLightPowers[i] = this.tracedLights[i].active() ? 1.0F : 0.0F;
+         }
       }
 
       if (hasPositiveWeight || tracedCount <= 0 || activeLightCount <= 0) {
@@ -1350,6 +1364,10 @@ public class LightRegistry implements Destructable {
 
    public float[] getLightPowers() {
       return this.lightPowers;
+   }
+
+   public float[] getRegirLightPowers() {
+      return this.regirLightPowers;
    }
 
    public long getSemanticLayoutHash() {

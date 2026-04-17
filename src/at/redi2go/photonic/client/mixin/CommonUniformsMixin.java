@@ -107,8 +107,8 @@ public class CommonUniformsMixin {
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_lights_per_cell", () -> worldRegistry.get().getLightRegistry().getRegirLightsPerCell());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_cell_size", () -> 32.0F);
          // ph_regir_build_samples is compute-only (set by RegirComputeProgram.dispatch()).
-         // Upload the RTXDI ReGIR jitter parameter directly in grid-cell units.
-         // A value of 1.0 means plus/minus one cell of query jitter.
+         // Match RTXDI by using the same sampling jitter for build and fragment-side
+         // ReGIR cell lookup.
          uniforms.uniform1f(
             UniformUpdateFrequency.PER_FRAME,
             "ph_regir_sampling_jitter",

@@ -143,13 +143,10 @@ void main() {
             selectedLightSample
         );
         reservoir.spatialDistance = ivec2(0);
-        // Keep the DI area-domain seed deterministic for now. The current Area ReSTIR
-        // integration is still stabilizing shift/reuse behavior, and injecting an extra
-        // per-frame pixel/lens jitter here materially increases motion-repeat error.
-        // We still preserve the domain payload fields required by future reservoir
-        // splatting, but we seed them from the canonical pixel center until splatting's
-        // temporal gather is integrated.
-        lt_area_seed_domain_samples(reservoir, pixelPosition, reservoir.pathSample);
+        // Seed the area-domain payload from the actual per-pixel stochastic sample state.
+        // Area ReSTIR and future reservoir splatting both need stable pixel/lens payloads
+        // that describe the selected proposal domain instead of a canonical placeholder.
+        lt_area_seed_domain_samples(reservoir, rng, pixelPosition, reservoir.pathSample);
 
         vec3 currCameraPos = world_camera_position;
         vec3 currCameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));

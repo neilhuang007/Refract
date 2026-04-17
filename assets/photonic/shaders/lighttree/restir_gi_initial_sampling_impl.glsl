@@ -154,18 +154,6 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIR
     bool useReGIR = regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0;
     bool hasFallbackRIS = localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u;
 
-    if (useReGIR && hasFallbackRIS) {
-        vec3 gridOrigin = regir_grid_origin();
-        vec3 scaled = (surface.worldPos - gridOrigin) / ph_regir_cell_size;
-        vec3 frac = fract(scaled);
-        vec3 edgeDistance = min(frac, 1.0f - frac);
-        float minEdgeDistance = min(edgeDistance.x, min(edgeDistance.y, edgeDistance.z));
-        float boundaryBlend = clamp((0.18f - minEdgeDistance) / 0.18f, 0.0f, 1.0f);
-        if (RTXDI_GetNextRandom(coherentRng) < boundaryBlend * 0.35f) {
-            useReGIR = false;
-        }
-    }
-
     if (useReGIR) {
         RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
             RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
@@ -181,6 +169,23 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIR
     }
 
     return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
+}
+
+RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextFallback(
+    inout RTXDI_RandomSamplerState coherentRng,
+    RTXDI_LightBufferRegion localLightBufferRegion,
+    RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams)
+{
+    if (localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u)
+    {
+        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
+        ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_FALLBACK;
+        return ctx;
+    }
+
+    RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_UNIFORM;
+    return ctx;
 }
 
 RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
@@ -205,10 +210,14 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
         {
             return RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
         }
-        return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
+        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
+        ctx.proposalFamily = LT_PROPOSAL_FAMILY_UNIFORM;
+        return ctx;
     }
 
-    return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
+    RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_UNIFORM;
+    return ctx;
 }
 
 void RTXDI_UnpackLocalLightFromRISLightData(

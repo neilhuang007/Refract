@@ -54,6 +54,7 @@ public final class PhotonicsStorage {
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
    public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "regir_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
+   public static final Parameter<String> RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE = stringParam("restir_temporal_scatter_isolation_mode", "off");
    // Performance tuning — individual per-parameter overrides.
    // A value of -1 means "use shaderpack default" (auto).  Any positive
    // value overrides the shaderpack setting at runtime.
@@ -125,6 +126,8 @@ public final class PhotonicsStorage {
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectHistoryClamping", DEBUG_ENABLE_DIRECT_HISTORY_CLAMPING);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectAntiFirefly", DEBUG_ENABLE_DIRECT_ANTI_FIREFLY);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectAtrous", DEBUG_ENABLE_DIRECT_ATROUS);
+      applyStringSystemPropertyOverride("photonics.restirLocalLightSamplingMode", RESTIR_LOCAL_LIGHT_SAMPLING_MODE);
+      applyStringSystemPropertyOverride("photonics.temporalScatterIsolationMode", RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE);
    }
 
    private static void applyBooleanSystemPropertyOverride(String key, Parameter<Boolean> parameter) {
@@ -134,6 +137,15 @@ public final class PhotonicsStorage {
       }
 
       parameter.value = Boolean.parseBoolean(value);
+   }
+
+   private static void applyStringSystemPropertyOverride(String key, Parameter<String> parameter) {
+      String value = System.getProperty(key);
+      if (value == null || value.isBlank()) {
+         return;
+      }
+
+      parameter.value = value;
    }
 
    public static String normalizeCheckerboardMode(String checkerboardMode) {
@@ -195,6 +207,18 @@ public final class PhotonicsStorage {
          case "", "2", "pairwise", "pairwise_mis", "pairwise-mis", "pairwise mis" -> "pairwise";
          case "1", "basic", "basic_mis", "basic-mis", "basic mis" -> "basic";
          default -> "pairwise";
+      };
+   }
+
+   public static String normalizeTemporalScatterIsolationMode(String isolationMode) {
+      if (isolationMode == null) {
+         return "off";
+      }
+
+      return switch (isolationMode.trim().toLowerCase(Locale.ROOT)) {
+         case "", "0", "off", "disabled", "none", "1", "ownership", "ownership_append", "ownership-append", "disable_ownership_append", "2", "backup", "backup_gather", "backup-gather", "disable_backup_gather", "3", "scatter", "scatter_merge", "scatter-merge", "disable_scatter_merge", "4", "bypass", "resolve", "resolve_bypass", "resolve-bypass", "disable_resolve" -> "off";
+         case "5", "temporal_off", "temporal-off", "disable_temporal", "full_bypass", "full-bypass", "canonical" -> "temporal_off";
+         default -> "off";
       };
    }
 

@@ -31,6 +31,7 @@ import net.irisshaders.iris.pipeline.CompositeRenderer;
 import net.minecraft.client.MinecraftClient;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Vector2f;
+import org.joml.Vector3f;
 import org.joml.Vector3i;
 import org.joml.Vector4f;
 import org.lwjgl.BufferUtils;
@@ -220,6 +221,7 @@ public class LightTreeRenderer extends MainRenderer {
   private RegirComputeProgram regirComputeProgram;
   private final int[] directAtrousStepSizes;
   private final Consumer<String> localLightSamplingModeObserver;
+  private final Consumer<String> temporalScatterIsolationModeObserver;
   private int directAtrousIteration = 0;
   private int specAtrousIteration = 0;
   private boolean compatDirectSoftDirty = true;
@@ -265,12 +267,12 @@ public class LightTreeRenderer extends MainRenderer {
       this.temporalReservoirBuffer = this.createTemporalReservoirFramebuffer(renderScale);
       this.temporalScatterGlobalCountersMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_global_counters", 2 * Integer.BYTES);
       this.temporalScatterCellCountersMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_cell_counters", this.getTemporalScatterPixelCapacity() * Integer.BYTES);
-      this.temporalScatterReservoirIndicesMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_reservoir_indices", this.getTemporalScatterPixelCapacity() * 2 * Integer.BYTES);
-      this.temporalScatterScatteredReservoirsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_scattered_reservoirs", this.getTemporalScatterPixelCapacity() * 2 * Integer.BYTES);
-      this.temporalScatterScatteredWeightsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_scattered_weights", this.getTemporalScatterPixelCapacity() * Integer.BYTES);
+      this.temporalScatterReservoirIndicesMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_reservoir_indices", this.getTemporalScatterContributorCapacity() * 2 * Integer.BYTES);
+      this.temporalScatterScatteredReservoirsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_scattered_reservoirs", this.getTemporalScatterContributorCapacity() * 2 * Integer.BYTES);
+      this.temporalScatterScatteredWeightsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_scattered_weights", this.getTemporalScatterContributorCapacity() * Integer.BYTES);
       this.temporalScatterCellOffsetsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_cell_offsets", this.getTemporalScatterPixelCapacity() * Integer.BYTES);
-      this.temporalScatterSortedReservoirsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_sorted_reservoirs", this.getTemporalScatterPixelCapacity() * 2 * Integer.BYTES);
-      this.temporalScatterSortedWeightsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_sorted_weights", this.getTemporalScatterPixelCapacity() * Integer.BYTES);
+      this.temporalScatterSortedReservoirsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_sorted_reservoirs", this.getTemporalScatterContributorCapacity() * 2 * Integer.BYTES);
+      this.temporalScatterSortedWeightsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_sorted_weights", this.getTemporalScatterContributorCapacity() * Integer.BYTES);
       this.directConfidenceBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.directInitialDebugBuffer = this.createDirectPackedDebugFramebuffer(renderScale);
       this.compatDirectSoftBuffer = new ColorFramebuffer(renderScale);
@@ -326,7 +328,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.gpuTimerQuery = this.createGpuTimerQuery();
       this.regirComputeProgram = new RegirComputeProgram();
       this.localLightSamplingModeObserver = ignored -> this.invalidateDirectReuseHistory();
+      this.temporalScatterIsolationModeObserver = ignored -> this.invalidateDirectReuseHistory();
       PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.addObserver(this.localLightSamplingModeObserver);
+      PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.addObserver(this.temporalScatterIsolationModeObserver);
    }
 
    @Override
@@ -674,9 +678,9 @@ public class LightTreeRenderer extends MainRenderer {
          String configuredMode = PhotonicsStorage.normalizeRestirLocalLightSamplingMode(PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.value);
          return switch (configuredMode) {
             case "uniform" -> 0.0f;
-            case "regir_ris" -> 2.0f;
             case "power_ris" -> 1.0f;
-            default -> 1.0f;
+            case "regir_ris" -> 2.0f;
+            default -> 2.0f;
          };
       });
       uniforms.uniform1f(
@@ -720,6 +724,19 @@ public class LightTreeRenderer extends MainRenderer {
       });
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_depth_threshold", () -> this.properties.getRestirSpatialDepthThreshold());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_normal_threshold", () -> this.properties.getRestirSpatialNormalThreshold());
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_restir_temporal_scatter_isolation_mode",
+         () -> {
+            String isolationMode = PhotonicsStorage.normalizeTemporalScatterIsolationMode(
+               PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.value
+            );
+            return switch (isolationMode) {
+               case "temporal_off" -> 5.0f;
+               default -> 0.0f;
+            };
+         }
+      );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_debug_enable_direct_temporal_reuse",
@@ -851,6 +868,14 @@ public class LightTreeRenderer extends MainRenderer {
    private int getTemporalScatterPixelCapacity() {
       Vector2f resolution = this.getDirectReservoirResolution();
       return Math.max(1, (int)resolution.x) * Math.max(1, (int)resolution.y);
+   }
+
+   private int getTemporalScatterContributorCapacity() {
+      // Reservoir splatting can forward-project one previous-frame owner into up to four
+      // bilinear destination cells. The ownership/sorted contributor buffers therefore need
+      // enough space for 4x the active reservoir count, otherwise whole-light popping can
+      // occur when appendIndex/localCellIndex overflow and contributor ownership gets clobbered.
+      return this.getTemporalScatterPixelCapacity() * 4;
    }
 
    private boolean isTemporalScatterResolveOnlyBuffer(GlMemoryManager memoryManager) {
@@ -1098,6 +1123,7 @@ public class LightTreeRenderer extends MainRenderer {
    @Override
    public void free() {
       PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.removeObserver(this.localLightSamplingModeObserver);
+      PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.removeObserver(this.temporalScatterIsolationModeObserver);
       this.proposalFramebuffer.destroy();
       this.proposalReservoirFramebuffer.destroy();
       this.reuseResolveFramebuffer.destroy();
@@ -1695,7 +1721,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.gpuTimerQuery.resolve();
    }
 
-   private int resolveRegirFrameSeed(String stageProperty, String sharedProperty, String stageName, boolean presampleStage) {
+   private int resolveRegirFrameSeed(String stageProperty, String sharedProperty, String stageName) {
       String override = System.getProperty(stageProperty);
       if (override == null || override.isBlank()) {
          override = System.getProperty(sharedProperty);
@@ -1704,13 +1730,12 @@ public class LightTreeRenderer extends MainRenderer {
       if (override != null && !override.isBlank()) {
          try {
             int parsed = Integer.parseInt(override.trim());
-            boolean alreadyLogged = presampleStage
+            boolean alreadyLogged = "presample".equals(stageName)
                ? this.loggedRegirPresampleFrameSeedOverride
                : this.loggedRegirBuildFrameSeedOverride;
             if (!alreadyLogged) {
-               // Log once so shader-test runs can prove which live ReGIR compute pass is pinned.
                Photonic.info("[RegirCompute] Using fixed {} frame seed override {}", stageName, parsed);
-               if (presampleStage) {
+               if ("presample".equals(stageName)) {
                   this.loggedRegirPresampleFrameSeedOverride = true;
                } else {
                   this.loggedRegirBuildFrameSeedOverride = true;
@@ -1725,11 +1750,11 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int resolveRegirPresampleFrameSeed() {
-      return this.resolveRegirFrameSeed("photonics.regirPresampleFrameSeed", "photonics.regirFrameSeed", "presample", true);
+      return this.resolveRegirFrameSeed("photonics.regirPresampleFrameSeed", "photonics.regirFrameSeed", "presample");
    }
 
    private int resolveRegirBuildFrameSeed() {
-      return this.resolveRegirFrameSeed("photonics.regirBuildFrameSeed", "photonics.regirFrameSeed", "build", false);
+      return this.resolveRegirFrameSeed("photonics.regirBuildFrameSeed", "photonics.regirFrameSeed", "build");
    }
 
    private void dispatchRegirCompute() {
@@ -1751,7 +1776,7 @@ public class LightTreeRenderer extends MainRenderer {
       // Update PDF mipmap texture whenever the live light layout driving ReGIR changes.
       // Reservoir-splatting relies on flashing/tile coverage recovering dark cells after layout shifts,
       // so we must invalidate on semantic/layout churn, not only power-count changes.
-      float[] powers = lightRegistry.getLightPowers();
+      float[] powers = lightRegistry.getRegirLightPowers();
       long semanticLayoutHash = lightRegistry.getSemanticLayoutHash();
       if (powers.length > 0) {
          this.regirComputeProgram.createPdfTexture(lightCount);
@@ -1770,7 +1795,7 @@ public class LightTreeRenderer extends MainRenderer {
       int gridRes = lightRegistry.getRegirGridResolution();
       this.regirComputeProgram.dispatch(
          lightRegistry.getLightsMemoryManager(),
-         lightRegistry.getGlobalLightCdfMemoryManager(),
+         lightRegistry.getRegirLightPdfMemoryManager(),
          lightRegistry.getRegirLightIndexMemoryManager(),
          lightRegistry.getRegirCompactLightDataMemoryManager(),
          lightRegistry.getRegirGridCenter(),

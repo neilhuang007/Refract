@@ -12,26 +12,7 @@ float lt_area_spatial_domain_compatibility(
     RTXDI_DIReservoir canonicalReservoir,
     RTXDI_DIReservoir neighborReservoir)
 {
-    // Fully disabled compatibility kept for reference:
-    // return 1.0f;
-
-    // Original heuristic kept for reference:
-    // if (!lt_area_has_valid_domain(canonicalReservoir) || !lt_area_has_valid_domain(neighborReservoir)) {
-    //     return 1.0f;
-    // }
-    // vec2 pixelDelta = (canonicalReservoir.pixelSampleUV - neighborReservoir.pixelSampleUV) * vec2(viewWidth, viewHeight);
-    // float pixelCompatibility = max(0.0f, 1.0f - length(pixelDelta) / 2.5f);
-    // float lensCompatibility = max(0.0f, 1.0f - length(canonicalReservoir.lensSampleUV - neighborReservoir.lensSampleUV) / 0.5f);
-    // return max(pixelCompatibility * lensCompatibility, 0.0f);
-
-    if (!lt_area_has_valid_domain(canonicalReservoir) || !lt_area_has_valid_domain(neighborReservoir)) {
-        return 1.0f;
-    }
-
-    vec2 pixelDelta = (canonicalReservoir.pixelSampleUV - neighborReservoir.pixelSampleUV) * vec2(viewWidth, viewHeight);
-    float pixelCompatibility = max(0.0f, 1.0f - length(pixelDelta) / 3.5f);
-    float lensCompatibility = max(0.0f, 1.0f - length(canonicalReservoir.lensSampleUV - neighborReservoir.lensSampleUV) / 0.75f);
-    return clamp(max(pixelCompatibility * lensCompatibility, 0.0f), 0.35f, 1.0f);
+    return 1.0f;
 }
 
 RTXDI_DIReservoir lt_area_spatial_resampling(
@@ -132,7 +113,7 @@ RTXDI_DIReservoir lt_area_spatial_resampling(
             idx,
             useMFactor,
             confidenceWeightSum,
-            domainCompatibility,
+            1.0f,
             false,
             shiftMappingMode,
             rng
@@ -153,7 +134,7 @@ RTXDI_DIReservoir lt_area_spatial_resampling(
     lt_area_finalize_candidate(state, pixelPosition, state.pathSample);
 
     if (!RTXDI_IsValidDIReservoir(state)) {
-        return centerSample;
+        return RTXDI_EmptyDIReservoir();
     }
 
     return state;

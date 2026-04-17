@@ -371,6 +371,7 @@ void main() {
     vec3  cellCenter = gridOrigin
                      + (vec3(float(cx), float(cy), float(cz)) + 0.5) * ph_regir_cell_size;
     float cellRadius = 0.5f * ph_regir_cell_size * sqrt(3.0);
+    cellRadius *= (max(ph_regir_sampling_jitter, 0.0) + 1.0);
 
     // RTXDI: rng = RTXDI_InitRandomSampler(uint2(GlobalIndex & 0xfff, GlobalIndex >> 12), frameIndex, 1)
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
