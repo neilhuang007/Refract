@@ -1,6 +1,5 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE 1
 
 in vec4 direction_vert_out;
 
@@ -14,7 +13,7 @@ layout(location = 4) out vec4 reconnection1_frag_out;
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
 
-void storeScatterTemporalResamplingResult(
+void ScatterTemporalResampling_storeResult(
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
 {
@@ -35,22 +34,22 @@ void storeScatterTemporalResamplingResult(
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 }
 
-void storeEmptyScatterTemporalResamplingResult()
+void ScatterTemporalResampling_storeEmptyResult()
 {
-    storeScatterTemporalResamplingResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
+    ScatterTemporalResampling_storeResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
 }
 
-void run(ivec2 pixel)
+void ScatterTemporalResampling_execute(ivec2 pixel)
 {
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
     RTXDI_DIReservoir currReservoir = lt_di_scatter_temporal_resampling_stage(pixel, currReconnectionData);
-    storeScatterTemporalResamplingResult(currReservoir, currReconnectionData);
+    ScatterTemporalResampling_storeResult(currReservoir, currReconnectionData);
 }
 
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    storeEmptyScatterTemporalResamplingResult();
+    ScatterTemporalResampling_storeEmptyResult();
 
     if (!lt_is_viewport_uv_in_bounds(pixel))
     {
@@ -64,5 +63,6 @@ void main()
         return;
     }
 
-    run(pixel);
+    ScatterTemporalResampling_execute(pixel);
 }
+

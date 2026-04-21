@@ -14,17 +14,22 @@ layout(location = 2) out vec4 reservoir_meta_frag_out;
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
 
-void storeEmptyMultiSortReprojectedReservoirDataResult()
+void storeEmptyMultiSortCellDataResult()
 {
     reservoir_frag_out = vec4(0.0f);
     reservoir_sample_frag_out = vec4(0.0f);
     reservoir_meta_frag_out = vec4(0.0f);
 }
 
+void run(uint index)
+{
+    lt_MultiSortReprojectedReservoirs_sort_cell_data(index);
+}
+
 void main()
 {
-    storeEmptyMultiSortReprojectedReservoirDataResult();
+    storeEmptyMultiSortCellDataResult();
 
     uint index = uint(gl_FragCoord.x);
-    lt_di_multi_sort_reprojected_reservoirs(index);
+    run(index);
 }

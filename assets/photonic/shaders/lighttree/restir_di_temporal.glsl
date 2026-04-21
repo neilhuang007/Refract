@@ -11,10 +11,10 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
 void lt_di_reproject_temporal_samples_stage(
     ivec2 pixel);
 
-void lt_di_compute_temporal_cell_offsets_stage(
+void lt_SortReprojectedReservoirs_compute_cell_offsets(
     ivec2 pixel);
 
-void lt_di_sort_temporal_reprojected_reservoirs_stage(
+void lt_SortReprojectedReservoirs_sort_cell_data(
     uint index);
 
 RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
@@ -24,10 +24,10 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
 void lt_di_multi_reproject_temporal_samples_stage(
     ivec2 pixel);
 
-void lt_di_multi_compute_temporal_cell_offsets_stage(
+void lt_MultiSortReprojectedReservoirs_compute_cell_offsets(
     ivec2 pixel);
 
-void lt_di_multi_sort_temporal_reprojected_reservoirs_stage(
+void lt_MultiSortReprojectedReservoirs_sort_cell_data(
     uint index);
 
 RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(

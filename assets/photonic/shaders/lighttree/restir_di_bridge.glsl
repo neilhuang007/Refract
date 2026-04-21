@@ -22,14 +22,19 @@ float lt_spatial_reconnection_phat(ReservoirSplattingReconnectionData reconnecti
     return ph_luminance(lt_spatial_reconnection_integrand(reconnection));
 }
 
+float PathReservoir_computeUCW(RTXDI_DIReservoir pathReservoir)
+{
+    float pHat = pathReservoir.targetPdf;
+    if (pHat <= 0.0f) return 0.0f;
+    float ucw = max(pathReservoir.weightSum, 0.0f) / pHat;
+    return (isnan(ucw) || isinf(ucw) || ucw < 0.0f) ? 0.0f : ucw;
+}
+
 // Unbiased contribution weight recovery.
 // Reference: Reservoir.slang:112-116 PathReservoir::computeUCW = totalWeight / pHat.
 float lt_spatial_reconnection_compute_ucw(RTXDI_DIReservoir reservoir, ReservoirSplattingReconnectionData reconnection)
 {
-    float pHat = lt_spatial_reconnection_phat(reconnection);
-    if (pHat <= 0.0f) return 0.0f;
-    float ucw = max(reservoir.weightSum, 0.0f) / pHat;
-    return (isnan(ucw) || isinf(ucw) || ucw < 0.0f) ? 0.0f : ucw;
+    return PathReservoir_computeUCW(reservoir);
 }
 
 float lt_spatial_reservoir_confidence(RTXDI_DIReservoir reservoir)
@@ -54,14 +59,16 @@ bool lt_spatial_reservoir_add_sample_from_reservoir(
         * lt_spatial_reconnection_compute_ucw(sampleReservoir, sampleReconnectionData)
         * shiftedJacobian;
 
+    // Reference parity (Reservoir.slang PathReservoir::addSampleFromReservoir lines 87-91):
+    //   this.totalWeight = this.totalWeight + w;
+    //   this.confidence  = min(this.confidence + other.confidence, confidenceCap);
+    //   float rng        = sampleNext1D(sg);
+    //   bool  selected   = (rng * this.totalWeight < w);
     dstReservoir.weightSum += risWeight;
     dstReservoir.M = min(dstReservoir.M + lt_spatial_reservoir_confidence(sampleReservoir), SCATTER_RECONNECTION_CONFIDENCE_MAX);
 
-    bool selected = RTXDI_InternalSimpleResample(
-        dstReservoir.weightSum,
-        risWeight,
-        lt_next_random(sg)
-    );
+    float selectionRandom = lt_next_random(sg);
+    bool selected = (selectionRandom * dstReservoir.weightSum < risWeight);
     if (!selected) {
         return false;
     }
@@ -111,7 +118,25 @@ ReservoirSplattingReconnectionData ReconnectionData_update(
     return updated;
 }
 
-ReservoirSplattingReconnectionData SpatialResampling_load_prev_reconnection(ivec2 pixel)
+ReservoirSplattingReconnectionData ScatterTemporalReconnectionData_update(
+    ReservoirSplattingReconnectionData source,
+    SpatialShiftedPathData shifted)
+{
+    ReservoirSplattingReconnectionData updated = source;
+    updated.firstHit.worldPos = shifted.primaryHit;
+    updated.firstHit.viewDepth = length(shifted.primaryHit - world_camera_position);
+    updated.firstWi = -shifted.firstRayDir;
+    updated.subPixel = clamp(shifted.subPixel, vec2(0.0f), vec2(1.0f));
+    updated.lensSample = shifted.lensSample;
+    updated.subPixelJacobian = max(shifted.subPixelJacobian, 1e-10f);
+    updated.lensVertexJacobian = max(shifted.lensVertexJacobian, 1e-10f);
+    updated.secondaryPathJacobian = max(shifted.secondaryPathJacobian, 1e-10f);
+    updated.irradiance = max(shifted.radiance, vec3(0.0f));
+    updated.earlyThroughput = vec3(1.0f);
+    return updated;
+}
+
+ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ivec2 pixel)
 {
     vec4 reservoirMeta = texelFetch(radiosity_reservoir_meta, pixel, 0);
     vec4 sampleData    = texelFetch(radiosity_reservoir_samples, pixel, 0);
@@ -197,7 +222,7 @@ void lt_SpatialResampling_run(
             uvec2(neighborPixel),
             lt_build_restir_di_parameters().bufferIndices.spatialResamplingInputBufferIndex
         );
-        ReservoirSplattingReconnectionData neighborReconnection = SpatialResampling_load_prev_reconnection(neighborPixel);
+        ReservoirSplattingReconnectionData neighborReconnection = SpatialResampling_load_input_reconnection(neighborPixel);
 
         float m1 = 0.0f;
         if (lt_spatial_reconnection_phat(centralReconnection) > 0.0f)
@@ -324,7 +349,7 @@ RTXDI_DIReservoir lt_di_spatial_resampling_stage(
     spatialResampling.pixel = pixel;
     spatialResampling.centerSurface = centerSurface;
     spatialResampling.centralReservoir = centralReservoir;
-    spatialResampling.centralReconnectionData = SpatialResampling_load_prev_reconnection(pixel);
+    spatialResampling.centralReconnectionData = SpatialResampling_load_input_reconnection(pixel);
 
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
     lt_SpatialResampling_run(spatialResampling, sg, currReservoir, currReconnectionData);

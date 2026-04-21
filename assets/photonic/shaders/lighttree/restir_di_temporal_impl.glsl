@@ -13,7 +13,14 @@
 //   MultiSortReprojectedReservoirs     -> stage 2g.1 / 2g.2
 //   MultiScatterTemporalResampling     -> stage 2h
 
+// NOTE:
+// The active temporal stage implementation now lives in reuse_bridge.glsl +
+// restir_di_scatter_impl.glsl. This file is retained as a thin ABI wrapper
+// surface so include ordering remains stable while the reference-structured
+// implementation is consolidated elsewhere.
+
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
+#if 0
 vec2 lt_di_temporal_reprojection_motion_vector(ivec2 pixel)
 {
     vec4 motionSample = texelFetch(radiosity_motion, pixel, 0);
@@ -478,6 +485,15 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling(
 }
 #endif
 
+// Reference stage 2a wrapper: CollectTemporalSamples::run(pixel).
+void lt_di_collect_temporal_samples(
+    ivec2 pixel,
+    RAB_Surface surface,
+    inout RTXDI_RandomSamplerState sg)
+{
+    lt_di_collect_temporal_samples_stage(pixel);
+}
+
 // Reference stage 2c wrapper: ReprojectTemporalSamples::run(pixel).
 void lt_di_reproject_temporal_samples(
     ivec2 pixel,
@@ -488,17 +504,17 @@ void lt_di_reproject_temporal_samples(
 }
 
 // Reference stage 2d half 1 wrapper: SortReprojectedReservoirs::computeCellOffsets(pixel).
-void lt_di_compute_cell_offsets(
+void computeCellOffsets(
     ivec2 pixel)
 {
-    lt_di_compute_temporal_cell_offsets_stage(pixel);
+    computeCellOffsetsStage(pixel);
 }
 
 // Reference stage 2d half 2 wrapper: SortReprojectedReservoirs::sortCellData(index).
-void lt_di_sort_reprojected_reservoirs(
+void sortCellData(
     uint index)
 {
-    lt_di_sort_temporal_reprojected_reservoirs_stage(index);
+    sortCellDataStage(index);
 }
 
 // Reference stage 2e wrapper: ScatterTemporalResampling::run(pixel).
@@ -533,17 +549,17 @@ void lt_di_multi_reproject_temporal_samples(
 }
 
 // Reference stage 2g half 1 wrapper: MultiSortReprojectedReservoirs::computeCellOffsets(pixel).
-void lt_di_multi_compute_cell_offsets(
+void multiComputeCellOffsets(
     ivec2 pixel)
 {
-    lt_di_multi_compute_temporal_cell_offsets_stage(pixel);
+    multiComputeCellOffsetsStage(pixel);
 }
 
 // Reference stage 2g half 2 wrapper: MultiSortReprojectedReservoirs::sortCellData(index).
-void lt_di_multi_sort_reprojected_reservoirs(
+void multiSortCellData(
     uint index)
 {
-    lt_di_multi_sort_temporal_reprojected_reservoirs_stage(index);
+    multiSortCellDataStage(index);
 }
 
 // Reference stage 2h wrapper: MultiScatterTemporalResampling::run(pixel).

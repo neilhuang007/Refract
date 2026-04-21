@@ -14,22 +14,27 @@ layout(location = 2) out vec4 reservoir_meta_frag_out;
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
 
-void storeEmptySortReprojectedReservoirOffsetsResult()
+void storeEmptyComputeCellOffsetsResult()
 {
     reservoir_frag_out = vec4(0.0f);
     reservoir_sample_frag_out = vec4(0.0f);
     reservoir_meta_frag_out = vec4(0.0f);
 }
 
+void run(ivec2 pixel)
+{
+    lt_SortReprojectedReservoirs_compute_cell_offsets(pixel);
+}
+
 void main()
 {
-    storeEmptySortReprojectedReservoirOffsetsResult();
+    storeEmptyComputeCellOffsetsResult();
 
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return;
     }
 
-    lt_di_compute_cell_offsets(pixel);
+    run(pixel);
 }
 

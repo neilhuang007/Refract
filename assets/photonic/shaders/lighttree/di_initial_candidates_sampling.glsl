@@ -1,14 +1,17 @@
 #ifndef PHOTONICS_DI_INITIAL_CANDIDATES_SAMPLING_GLSL
 #define PHOTONICS_DI_INITIAL_CANDIDATES_SAMPLING_GLSL
 
-RTXDI_DIReservoir addCandidateReservoir(
-    RAB_Surface surface,
+void addCandidateReservoir(
     ivec2 pixel,
-    RTXDI_Parameters restirDI,
-    RTXDI_RuntimeParameters runtimeParameters,
-    out ReservoirSplattingReconnectionData reconnectionData)
+    RAB_Surface surface,
+    inout RTXDI_DIReservoir currReservoir,
+    inout ReservoirSplattingReconnectionData currReconnectionData)
 {
+    const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
+    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
     const uint sampleIdx = 0u;
+    const float sampleMIS = 1.0f;
+
     RTXDI_RandomSamplerState sg = RTXDI_InitRandomSampler(
         uvec2(pixel),
         runtimeParameters.frameIndex,
@@ -20,8 +23,11 @@ RTXDI_DIReservoir addCandidateReservoir(
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
     );
 
+    currReservoir = RTXDI_EmptyDIReservoir();
+    currReconnectionData = ReservoirSplattingReconnectionData_init();
+
     RAB_LightSample selectedLightSample = RAB_EmptyLightSample();
-    RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(
+    RTXDI_DIReservoir candidateReservoir = RTXDI_SampleLightsForSurface(
         sg,
         coherentSg,
         surface,
@@ -29,23 +35,22 @@ RTXDI_DIReservoir addCandidateReservoir(
         selectedLightSample
     );
 
-    if (!RTXDI_IsValidDIReservoir(reservoir))
+    if (!RTXDI_IsValidDIReservoir(candidateReservoir))
     {
-        reconnectionData = ReservoirSplattingReconnectionData_init();
-        return RTXDI_EmptyDIReservoir();
+        return;
     }
 
-    vec3 visibilityRgb = max(rtxdi_unpack_visibility(reservoir.packedVisibility), vec3(0.0f));
-    reconnectionData = buildInitialSelectedReconnection(
+    vec3 visibility = max(rtxdi_unpack_visibility(candidateReservoir.packedVisibility), vec3(0.0f));
+    currReservoir = candidateReservoir;
+    currReservoir.weightSum *= sampleMIS;
+    currReservoir.M = 1.0f;
+    currReconnectionData = InitialCandidates_buildSelectedReconnection(
         surface,
-        reservoir,
+        currReservoir,
         selectedLightSample,
         pixel,
-        visibilityRgb
+        visibility
     );
-
-    reservoir.M = 1.0f;
-    return reservoir;
 }
 
 #endif

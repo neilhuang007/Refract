@@ -1,7 +1,7 @@
 #ifndef PHOTONICS_DI_INITIAL_CANDIDATES_OUTPUTS_GLSL
 #define PHOTONICS_DI_INITIAL_CANDIDATES_OUTPUTS_GLSL
 
-void storeInitialCandidatesResult(
+void InitialCandidates_storeReservoir(
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
 {
@@ -22,12 +22,13 @@ void storeInitialCandidatesResult(
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 }
 
-void storeEmptyInitialCandidatesResult()
+void InitialCandidates_storeEmptyReservoir()
 {
-    storeInitialCandidatesResult(
+    InitialCandidates_storeReservoir(
         RTXDI_EmptyDIReservoir(),
         ReservoirSplattingReconnectionData_init()
     );
 }
 
 #endif
+

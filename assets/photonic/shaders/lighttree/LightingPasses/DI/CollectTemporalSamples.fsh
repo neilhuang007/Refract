@@ -16,42 +16,22 @@ layout(location = 2) out vec4 temporal_gather_intermediate_reservoir_sample_frag
 layout(location = 3) out vec4 temporal_gather_intermediate_reservoir_meta_frag_out;
 layout(location = 4) out vec4 temporal_gather_intermediate_reconnection0_frag_out;
 layout(location = 5) out vec4 temporal_gather_intermediate_reconnection1_frag_out;
-layout(location = 6) out vec4 temporal_gather_shifted_path_data0_frag_out;
-layout(location = 7) out vec4 temporal_gather_shifted_path_data1_frag_out;
-layout(location = 8) out vec4 temporal_gather_shifted_path_data2_frag_out;
-layout(location = 9) out vec4 temporal_gather_shifted_path_data3_frag_out;
-layout(location = 10) out vec4 temporal_gather_shifted_path_data4_frag_out;
-layout(location = 11) out vec4 temporal_gather_shifted_path_data5_frag_out;
-layout(location = 12) out vec4 temporal_gather_shifted_path_data6_frag_out;
-layout(location = 13) out vec4 temporal_gather_shifted_path_data7_frag_out;
-layout(location = 14) out vec4 temporal_gather_shifted_path_data8_frag_out;
-layout(location = 15) out vec4 temporal_gather_shifted_path_data9_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
 
-void storeEmptyCollectTemporalSamplesResult()
+void CollectTemporalSamples_storeEmptyResult()
 {
-    floating_coords_frag_out = vec2(-1.0f);
-    intermediate_reservoir_frag_out = rtxdi_pack_reservoir(RTXDI_EmptyDIReservoir());
-    intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(RTXDI_EmptyDIReservoir());
-    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(RTXDI_EmptyDIReservoir());
-    intermediate_reconnection0_frag_out = vec4(0.0f);
-    intermediate_reconnection1_frag_out = vec4(0.0f);
-    temporal_gather_shifted_path_data0_frag_out = vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    temporal_gather_shifted_path_data1_frag_out = vec4(0.0f);
-    temporal_gather_shifted_path_data2_frag_out = vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    temporal_gather_shifted_path_data3_frag_out = vec4(0.0f);
-    temporal_gather_shifted_path_data4_frag_out = vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    temporal_gather_shifted_path_data5_frag_out = vec4(0.0f);
-    temporal_gather_shifted_path_data6_frag_out = vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    temporal_gather_shifted_path_data7_frag_out = vec4(0.0f);
-    temporal_gather_shifted_path_data8_frag_out = vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    temporal_gather_shifted_path_data9_frag_out = vec4(0.0f);
+    temporal_gather_floating_coords_frag_out = vec2(-1.0f);
+    temporal_gather_intermediate_reservoir_frag_out = rtxdi_pack_reservoir(RTXDI_EmptyDIReservoir());
+    temporal_gather_intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(RTXDI_EmptyDIReservoir());
+    temporal_gather_intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(RTXDI_EmptyDIReservoir());
+    temporal_gather_intermediate_reconnection0_frag_out = vec4(0.0f);
+    temporal_gather_intermediate_reconnection1_frag_out = vec4(0.0f);
 }
 
-void execute(ivec2 currPixel)
+void CollectTemporalSamples_execute(ivec2 currPixel)
 {
     lt_di_collect_temporal_samples_stage(currPixel);
 }
@@ -59,7 +39,7 @@ void execute(ivec2 currPixel)
 void main()
 {
     ivec2 currPixel = ivec2(gl_FragCoord.xy);
-    storeEmptyCollectTemporalSamplesResult();
+    CollectTemporalSamples_storeEmptyResult();
 
     if (!lt_is_viewport_uv_in_bounds(currPixel))
     {
@@ -73,5 +53,6 @@ void main()
         return;
     }
 
-    execute(currPixel);
+    CollectTemporalSamples_execute(currPixel);
 }
+

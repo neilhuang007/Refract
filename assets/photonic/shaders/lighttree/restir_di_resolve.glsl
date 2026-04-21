@@ -18,25 +18,20 @@ void ResolveReSTIR_load_curr_reservoir(
         lt_get_final_shading_input_buffer_index()
     );
 
-    vec4 reconnection0 = texelFetch(current_stage_reconnection0, reservoirPosition, 0);
-    vec4 reconnection1 = texelFetch(current_stage_reconnection1, reservoirPosition, 0);
-    vec4 sampleData = texelFetch(radiosity_spatial_reservoir_samples, reservoirPosition, 0);
-
-    currReconnectionData = scatter_unpack_reconnection(
-        reconnection0,
-        reconnection1,
-        sampleData,
-        currReservoir.transportAux0,
-        currReservoir.transportAux1
-    );
+    currReconnectionData = SpatialResampling_load_input_reconnection(reservoirPosition);
 }
 
 float ResolveReSTIR_computeUCW(
     RTXDI_DIReservoir currReservoir,
     ReservoirSplattingReconnectionData currReconnectionData)
 {
-    float pHat = ph_luminance(max(currReconnectionData.integrand, vec3(0.0f)));
+    float pHat = ph_luminance(scatter_reconnection_integrand(currReconnectionData));
     return (pHat == 0.0f) ? 0.0f : max(currReservoir.weightSum, 0.0f) / pHat;
+}
+
+vec3 ResolveReSTIR_load_integrand(ReservoirSplattingReconnectionData currReconnectionData)
+{
+    return scatter_reconnection_integrand(currReconnectionData);
 }
 
 vec3 ResolveReSTIR(
@@ -47,7 +42,7 @@ vec3 ResolveReSTIR(
         return vec3(0.0f);
     }
 
-    vec3 integrand = max(currReconnectionData.integrand, vec3(0.0f));
+    vec3 integrand = ResolveReSTIR_load_integrand(currReconnectionData);
     return integrand * ResolveReSTIR_computeUCW(currReservoir, currReconnectionData);
 }
 

@@ -1,32 +1,29 @@
 #ifndef PHOTONICS_DI_INITIAL_CANDIDATES_RUN_GLSL
 #define PHOTONICS_DI_INITIAL_CANDIDATES_RUN_GLSL
 
-void tracePath(
-    ivec2 pixel,
-    RTXDI_Parameters restirDI,
-    RTXDI_RuntimeParameters runtimeParameters)
+void tracePath(ivec2 pixel)
 {
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(surface))
     {
-        storeEmptyInitialCandidatesResult();
+        InitialCandidates_storeEmptyReservoir();
         return;
     }
 
-    ReservoirSplattingReconnectionData reconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir reservoir = addCandidateReservoir(
-        surface,
+    RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
+    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    addCandidateReservoir(
         pixel,
-        restirDI,
-        runtimeParameters,
-        reconnectionData
+        surface,
+        currReservoir,
+        currReconnectionData
     );
-    storeInitialCandidatesResult(reservoir, reconnectionData);
+    InitialCandidates_storeReservoir(currReservoir, currReconnectionData);
 }
 
-void run(ivec2 pixel)
+void execute(ivec2 pixel)
 {
-    storeEmptyInitialCandidatesResult();
+    InitialCandidates_storeEmptyReservoir();
 
     if (!lt_is_viewport_uv_in_bounds(pixel))
     {
@@ -40,8 +37,13 @@ void run(ivec2 pixel)
         return;
     }
 
-    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    tracePath(pixel, restirDI, runtimeParameters);
+    tracePath(pixel);
+}
+
+void run(ivec2 pixel)
+{
+    execute(pixel);
 }
 
 #endif
+

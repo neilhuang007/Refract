@@ -1,6 +1,26 @@
 #ifndef PHOTONICS_RESTIR_GI_INITIAL_SAMPLING_IMPL_GLSL
 #define PHOTONICS_RESTIR_GI_INITIAL_SAMPLING_IMPL_GLSL
 
+RTXDI_DIReservoir RTXDI_SampleLocalLights(
+    inout RTXDI_RandomSamplerState rng,
+    inout RTXDI_RandomSamplerState coherentRng,
+    RAB_Surface surface,
+    RTXDI_DIInitialSamplingParameters initialSamplingParams,
+    out RAB_LightSample o_selectedSample);
+RTXDI_DIReservoir RTXDI_SampleInfiniteLights(RAB_Surface surface, int numSamples);
+RTXDI_DIReservoir RTXDI_SampleEnvironmentMap(RAB_Surface surface, int numSamples);
+RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surface surface, int numSamples, RTXDI_InitialSamplingMisData misData, float brdfCutoff, out RAB_LightSample o_selectedSample);
+RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
+    inout RTXDI_RandomSamplerState rng,
+    inout RTXDI_RandomSamplerState coherentRng,
+    RAB_Surface surface,
+    RTXDI_DIInitialSamplingParameters initialSamplingParams,
+    out RAB_LightSample o_lightSample);
+
+bool RAB_SurfaceImportanceSampleBrdf(RAB_Surface surface, inout RTXDI_RandomSamplerState rng, out vec3 dir);
+float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir);
+float RTXDI_BrdfMaxDistanceFromPdf(float brdfCutoff, float pdf);
+
 // GI-facing implementation surface for the shared initial-sampling helper chain.
 // This keeps the indirect pipeline independent from late implementation regions in
 // reuse_bridge.glsl while preserving a single implementation owner for these symbols.
@@ -25,8 +45,7 @@
 // These sentinels are consumed by ``lt_make_invalid_local_light_selection_context``
 // and the ``ctx.mode == RTXDI_LocalLightContextSamplingMode_INVALID`` branch in
 // ``RTXDI_SelectNextLocalLight`` (see reuse_bridge.glsl).
-const uint RTXDI_LocalLightContextSamplingMode_INVALID = 0xFFFFFFFFu;
-const uint LT_PROPOSAL_FAMILY_INVALID                  = 0xFFFFFFFFu;
+const uint LT_PROPOSAL_FAMILY_INVALID = 0xFFFFFFFFu;
 
 // ---------------------------------------------------------------------------
 // RTXDI_StreamSampleWithDomain
@@ -39,32 +58,75 @@ const uint LT_PROPOSAL_FAMILY_INVALID                  = 0xFFFFFFFFu;
 // reservoir stores the exact domain coordinate of the winning candidate so
 // downstream stages (scatter temporal reprojection, MIS weighting, shading)
 // can replay the selected path without a pixel-center fallback.
-bool RTXDI_StreamSampleWithDomain(
-    inout RTXDI_DIReservoir reservoir,
+bool CandidateReservoir_addVertex(
+    inout RTXDI_DIReservoir candidateReservoir,
+    float random,
     int lightIndex,
     vec2 sampleUv,
-    float random,
-    float targetPdf,
-    float invSourcePdf,
+    float sampleMIS,
+    float sampleTargetPdf,
+    float sampleInvSourcePdf,
     vec2 pixelSampleUV,
     vec2 lensSampleUV,
     uint pathSample)
 {
-    float risWeight = targetPdf * invSourcePdf;
-    reservoir.M += 1.0f;
-    reservoir.weightSum += risWeight;
-    bool selectSample = (random * reservoir.weightSum < risWeight);
-    if (selectSample) {
-        rtxdi_set_light_index(reservoir, lightIndex);
-        rtxdi_set_sample_uv(reservoir, sampleUv);
-        reservoir.targetPdf = targetPdf;
-        reservoir.transportAux0 = 0.0f;
-        reservoir.transportAux1 = 0.0f;
-        reservoir.pixelSampleUV = pixelSampleUV;
-        reservoir.lensSampleUV  = lensSampleUV;
-        reservoir.pathSample    = pathSample;
+    float samplePHat = sampleTargetPdf;
+    float sampleWeight = sampleMIS * samplePHat;
+    sampleWeight = isnan(sampleWeight) ? 0.0f : sampleWeight;
+
+    candidateReservoir.M += 1.0f;
+    candidateReservoir.weightSum += sampleWeight;
+    bool selected = (random * candidateReservoir.weightSum < sampleWeight);
+    if (selected) {
+        rtxdi_set_light_index(candidateReservoir, lightIndex);
+        rtxdi_set_sample_uv(candidateReservoir, sampleUv);
+        candidateReservoir.targetPdf = sampleTargetPdf;
+        candidateReservoir.transportAux0 = 0.0f;
+        candidateReservoir.transportAux1 = 0.0f;
+        candidateReservoir.pixelSampleUV = pixelSampleUV;
+        candidateReservoir.lensSampleUV  = lensSampleUV;
+        candidateReservoir.pathSample    = pathSample;
     }
-    return selectSample;
+    return selected;
+}
+
+float CandidateReservoir_computeUCW(RTXDI_DIReservoir candidateReservoir)
+{
+    float pHat = candidateReservoir.targetPdf;
+    return (pHat == 0.0f) ? 0.0f : candidateReservoir.weightSum / pHat;
+}
+
+bool PathReservoir_add(
+    inout RTXDI_DIReservoir pathReservoir,
+    float random,
+    float sampleMIS,
+    RTXDI_DIReservoir candidateReservoir)
+{
+    float weight = sampleMIS * candidateReservoir.weightSum;
+    pathReservoir.weightSum += weight;
+    pathReservoir.M = min(pathReservoir.M + 1.0f, SCATTER_RECONNECTION_CONFIDENCE_MAX);
+
+    bool selected = (random * pathReservoir.weightSum < weight);
+    if (selected) {
+        pathReservoir.lightData = candidateReservoir.lightData;
+        pathReservoir.uvData = candidateReservoir.uvData;
+        pathReservoir.targetPdf = candidateReservoir.targetPdf;
+        pathReservoir.packedVisibility = candidateReservoir.packedVisibility;
+        pathReservoir.age = candidateReservoir.age;
+        pathReservoir.spatialDistance = candidateReservoir.spatialDistance;
+        pathReservoir.transportAux0 = candidateReservoir.transportAux0;
+        pathReservoir.transportAux1 = candidateReservoir.transportAux1;
+        pathReservoir.pixelSampleUV = candidateReservoir.pixelSampleUV;
+        pathReservoir.lensSampleUV = candidateReservoir.lensSampleUV;
+        pathReservoir.pathSample = candidateReservoir.pathSample;
+    }
+    return selected;
+}
+
+float PathReservoir_computeUCW(RTXDI_DIReservoir pathReservoir)
+{
+    float pHat = pathReservoir.targetPdf;
+    return (pHat == 0.0f) ? 0.0f : pathReservoir.weightSum / pHat;
 }
 
 // RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)
@@ -73,6 +135,20 @@ bool RTXDI_StreamSampleWithDomain(
 // numMisSamples includes local + environment + BRDF sample counts (InitialSampling.hlsli line 45).
 // Environment samples are included even when the environment stub returns M=0 so MIS weights
 // remain consistent with the SDK reference.
+RTXDI_LocalLightSelectionContext lt_make_invalid_local_light_selection_context()
+{
+    RTXDI_LocalLightSelectionContext ctx;
+    ctx.mode = RTXDI_LocalLightContextSamplingMode_INVALID;
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_INVALID;
+    ctx.risTileInfo.risTileOffset = 0u;
+    ctx.risTileInfo.risTileSize = 0u;
+    ctx.lightBufferRegion.firstLightIndex = 0u;
+    ctx.lightBufferRegion.numLights = 0u;
+    ctx.lightBufferRegion.pad1 = 0u;
+    ctx.lightBufferRegion.pad2 = 0u;
+    return ctx;
+}
+
 RTXDI_InitialSamplingMisData RTXDI_ComputeInitialSamplingMisData(RTXDI_DIInitialSamplingParameters initialSamplingParams)
 {
     RTXDI_InitialSamplingMisData result;
@@ -194,24 +270,6 @@ float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir)
     float pdfGgx = lt_evaluate_ggx_vndf_pdf(surface, lightDir, viewDir);
     float diffuseProbability = lt_surface_diffuse_probability_with_view(surface, viewDir);
     return mix(pdfGgx, pdfCosine, diffuseProbability);
-}
-
-RTXDI_LocalLightSelectionContext lt_make_invalid_local_light_selection_context()
-{
-    // Reference parity: when ReGIR cell resolution or POWER_RIS tiles are
-    // unavailable the initial-candidate stage must NOT silently fall through
-    // to uniform sampling. We emit a selection context explicitly tagged
-    // INVALID so RTXDI_SelectNextLocalLight short-circuits with invSourcePdf=0.
-    RTXDI_LocalLightSelectionContext ctx;
-    ctx.mode = RTXDI_LocalLightContextSamplingMode_INVALID;
-    ctx.proposalFamily = LT_PROPOSAL_FAMILY_INVALID;
-    ctx.risTileInfo.risTileOffset = 0u;
-    ctx.risTileInfo.risTileSize = 0u;
-    ctx.lightBufferRegion.firstLightIndex = 0u;
-    ctx.lightBufferRegion.numLights = 0u;
-    ctx.lightBufferRegion.pad1 = 0u;
-    ctx.lightBufferRegion.pad2 = 0u;
-    return ctx;
 }
 
 RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIRRIS(
@@ -427,11 +485,12 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
         vec2 candidateLensSample = lt_area_sample_lens_sample(rng);
         uint candidatePathSample = lt_make_path_sample(2u, lightSelectionContext.proposalFamily);
 
-        bool selected = RTXDI_StreamSampleWithDomain(
+        bool selected = CandidateReservoir_addVertex(
             state,
+            risRnd,
             int(lightIndex),
             uv,
-            risRnd,
+            1.0f / blendedSourcePdf,
             targetPdf,
             1.0f / blendedSourcePdf,
             candidatePixelSample,
@@ -591,11 +650,12 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surfa
         vec2 candidateLensSample = lt_area_sample_lens_sample(rng);
         uint candidatePathSample = lt_make_path_sample(1u, LT_PROPOSAL_FAMILY_BRDF);
 
-        bool selected = RTXDI_StreamSampleWithDomain(
+        bool selected = CandidateReservoir_addVertex(
             state,
+            lt_next_random(rng),
             brdfSample.index,
             sampleUv,
-            lt_next_random(rng),
+            1.0f / blendedSourcePdf,
             targetPdf,
             1.0f / blendedSourcePdf,
             candidatePixelSample,
@@ -649,14 +709,10 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
         brdfSample);
 
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    // Reference parity: use an RNG draw to combine the local sub-reservoir
-    // rather than a constant bias term. The first combination into an empty
-    // reservoir is invariant over the RNG, but using a fresh draw matches
-    // InitialCandidates.cs.slang's randomized RIS combine (Reservoir.slang:93).
-    bool selectLocal = RTXDI_CombineDIReservoirs(state, localReservoir, lt_next_random(rng), localReservoir.targetPdf);
-    bool selectInfinite = RTXDI_CombineDIReservoirs(state, infiniteReservoir, lt_next_random(rng), infiniteReservoir.targetPdf);
-    bool selectEnvironment = RTXDI_CombineDIReservoirs(state, environmentReservoir, lt_next_random(rng), environmentReservoir.targetPdf);
-    bool selectBrdf = RTXDI_CombineDIReservoirs(state, brdfReservoir, lt_next_random(rng), brdfReservoir.targetPdf);
+    bool selectLocal = PathReservoir_add(state, lt_next_random(rng), 1.0f, localReservoir);
+    bool selectInfinite = PathReservoir_add(state, lt_next_random(rng), 1.0f, infiniteReservoir);
+    bool selectEnvironment = PathReservoir_add(state, lt_next_random(rng), 1.0f, environmentReservoir);
+    bool selectBrdf = PathReservoir_add(state, lt_next_random(rng), 1.0f, brdfReservoir);
 
     RTXDI_FinalizeResampling(state, 1.0, 1.0);
     state.M = 1.0;
