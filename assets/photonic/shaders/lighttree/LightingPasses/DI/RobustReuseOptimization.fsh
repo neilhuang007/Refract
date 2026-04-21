@@ -17,10 +17,6 @@
 #define shifted_path_data8_frag_out temporal_gather_shifted_path_data8_frag_out
 #define shifted_path_data9_frag_out temporal_gather_shifted_path_data9_frag_out
 
-// Reference stage before gather -- RobustReuseOptimization::run
-// Local parity note: this writes the gather-side staging surfaces that the
-// following gather pass consumes, matching the reference orchestration order.
-
 in vec4 direction_vert_out;
 
 layout(location = 0) out vec2 temporal_gather_floating_coords_frag_out;
@@ -94,23 +90,12 @@ void storeRobustReuseOptimizationShiftedPath(int offsetIndex, LtTemporalGatherSh
     }
 }
 
-void main()
+void run(ivec2 pixel)
 {
-    ivec2 pixel = ivec2(gl_FragCoord.xy);
-    storeEmptyRobustReuseOptimizationResult();
-
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        return;
-    }
-
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
-    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
-    if (!lt_is_active_reservoir_lane(reservoirPosition)) {
-        return;
-    }
-
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!RAB_IsSurfaceValid(surface)) {
+    if (!RAB_IsSurfaceValid(surface))
+    {
         return;
     }
 
@@ -119,7 +104,8 @@ void main()
         uvec2(pixel)
     );
     ReservoirSplattingReconnectionData prevReconnectionData = scatter_load_prev_reconnection(pixel);
-    if (!RTXDI_IsValidDIReservoir(prevReservoir) || !any(greaterThan(prevReservoir.radiance, vec3(0.0f)))) {
+    if (!RTXDI_IsValidDIReservoir(prevReservoir) || !any(greaterThan(prevReservoir.radiance, vec3(0.0f))))
+    {
         return;
     }
 
@@ -151,7 +137,24 @@ void main()
         }
         storeRobustReuseOptimizationShiftedPath(offsetIndex, shiftedPathData);
     }
+}
 
-    // Structural parity with the reference orchestration: the robust pass runs
-    // before gather and precomputes shift data for neighbors.
+void main()
+{
+    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    storeEmptyRobustReuseOptimizationResult();
+
+    if (!lt_is_viewport_uv_in_bounds(pixel))
+    {
+        return;
+    }
+
+    const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
+    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
+    if (!lt_is_active_reservoir_lane(reservoirPosition))
+    {
+        return;
+    }
+
+    run(pixel);
 }

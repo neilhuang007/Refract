@@ -46,15 +46,17 @@ void storeEmptySpatialResamplingResult()
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        storeEmptySpatialResamplingResult();
+    storeEmptySpatialResamplingResult();
+
+    if (!lt_is_viewport_uv_in_bounds(pixel))
+    {
         return;
     }
 
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
     ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
-    if (!lt_is_active_reservoir_lane(reservoirPosition)) {
-        storeEmptySpatialResamplingResult();
+    if (!lt_is_active_reservoir_lane(reservoirPosition))
+    {
         return;
     }
 
@@ -90,4 +92,3 @@ void main()
 
     storeSpatialResamplingResult(currReservoir, currReconnectionData);
 }
-

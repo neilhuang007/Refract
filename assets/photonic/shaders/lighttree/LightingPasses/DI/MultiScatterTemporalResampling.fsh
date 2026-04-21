@@ -2,8 +2,6 @@
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY 1
 
-// Reference stage 2h -- MultiScatterTemporalResampling::run
-
 in vec4 direction_vert_out;
 
 layout(location = 0) out vec4 reservoir_frag_out;
@@ -20,17 +18,17 @@ void storeMultiScatterTemporalResamplingResult(
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
 {
-    float sidecarTransportAux0;
-    float sidecarTransportAux1;
+    float transportAux0;
+    float transportAux1;
     scatter_pack_reconnection(
         reconnectionData,
-        sidecarTransportAux0,
-        sidecarTransportAux1,
+        transportAux0,
+        transportAux1,
         reconnection0_frag_out,
         reconnection1_frag_out
     );
-    reservoir.transportAux0 = sidecarTransportAux0;
-    reservoir.transportAux1 = sidecarTransportAux1;
+    reservoir.transportAux0 = transportAux0;
+    reservoir.transportAux1 = transportAux1;
 
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
@@ -42,41 +40,29 @@ void storeEmptyMultiScatterTemporalResamplingResult()
     storeMultiScatterTemporalResamplingResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
 }
 
+void run(ivec2 pixel)
+{
+    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    RTXDI_DIReservoir currReservoir = lt_di_multi_scatter_temporal_resampling_stage(pixel, currReconnectionData);
+    storeMultiScatterTemporalResamplingResult(currReservoir, currReconnectionData);
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    if (!RTXDI_IsActiveCheckerboardPixel(pixel, int(ph_restir_active_checkerboard_field))) {
-        storeEmptyMultiScatterTemporalResamplingResult();
+    storeEmptyMultiScatterTemporalResamplingResult();
+
+    if (!lt_is_viewport_uv_in_bounds(pixel))
+    {
         return;
     }
 
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
     ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        storeEmptyMultiScatterTemporalResamplingResult();
+    if (!lt_is_active_reservoir_lane(reservoirPosition))
+    {
         return;
     }
 
-    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-
-    RTXDI_DIReservoir currReservoir = RTXDI_LoadDIReservoir(
-        restirDI.reservoirBufferParams,
-        uvec2(reservoirPosition),
-        restirDI.bufferIndices.initialSamplingOutputBufferIndex
-    );
-
-    RTXDI_RandomSamplerState randomSampler = RTXDI_InitRandomSampler(
-        uvec2(pixel),
-        runtimeParameters.frameIndex,
-        RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED + 59u
-    );
-
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir dstReservoir = lt_di_multi_scatter_temporal_resampling(
-        pixel,
-        currReconnectionData
-    );
-
-    storeMultiScatterTemporalResamplingResult(dstReservoir, currReconnectionData);
+    run(pixel);
 }

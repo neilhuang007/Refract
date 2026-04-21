@@ -8,8 +8,6 @@
 #define intermediate_reconnection1_frag_out temporal_gather_intermediate_reconnection1_frag_out
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE 1
 
-// Reference stage 2a -- CollectTemporalSamples::run
-
 in vec4 direction_vert_out;
 
 layout(location = 0) out vec2 temporal_gather_floating_coords_frag_out;
@@ -53,23 +51,27 @@ void storeEmptyCollectTemporalSamplesResult()
     temporal_gather_shifted_path_data9_frag_out = vec4(0.0f);
 }
 
+void execute(ivec2 currPixel)
+{
+    lt_di_collect_temporal_samples_stage(currPixel);
+}
+
 void main()
 {
-    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    ivec2 currPixel = ivec2(gl_FragCoord.xy);
     storeEmptyCollectTemporalSamplesResult();
 
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
+    if (!lt_is_viewport_uv_in_bounds(currPixel))
+    {
         return;
     }
 
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
-    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
-    if (!lt_is_active_reservoir_lane(reservoirPosition)) {
+    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(currPixel, int(runtimeParameters.activeCheckerboardField));
+    if (!lt_is_active_reservoir_lane(reservoirPosition))
+    {
         return;
     }
 
-    RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    RTXDI_RandomSamplerState randomSampler = lt_init_random_sampler(uvec2(pixel), runtimeParameters.frameIndex, 11u);
-    lt_di_collect_temporal_samples(pixel, surface, randomSampler);
+    execute(currPixel);
 }
-

@@ -2,8 +2,6 @@
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE 1
 
-// Reference stage 2b -- GatherTemporalResampling::run
-
 in vec4 direction_vert_out;
 
 layout(location = 0) out vec4 reservoir_frag_out;
@@ -42,22 +40,29 @@ void storeEmptyGatherTemporalResamplingResult()
     storeGatherTemporalResamplingResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
 }
 
+void run(ivec2 pixel)
+{
+    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    RTXDI_DIReservoir currReservoir = lt_di_gather_temporal_resampling_stage(pixel, currReconnectionData);
+    storeGatherTemporalResamplingResult(currReservoir, currReconnectionData);
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     storeEmptyGatherTemporalResamplingResult();
 
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
+    if (!lt_is_viewport_uv_in_bounds(pixel))
+    {
         return;
     }
 
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
     ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
-    if (!lt_is_active_reservoir_lane(reservoirPosition)) {
+    if (!lt_is_active_reservoir_lane(reservoirPosition))
+    {
         return;
     }
 
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir currReservoir = lt_di_gather_temporal_resampling(pixel, currReconnectionData);
-    storeGatherTemporalResamplingResult(currReservoir, currReconnectionData);
+    run(pixel);
 }

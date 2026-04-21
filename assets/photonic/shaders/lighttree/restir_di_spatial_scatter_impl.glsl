@@ -329,13 +329,13 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
     // reference while keeping the primary-hit identity fixed to the stored
     // reconnection data.
     RAB_Surface shiftedSurface = primaryHitSurface;
-    shiftedSurface.worldPos   = sourceReconnection.worldPos;
+    shiftedSurface.worldPos   = sourceReconnection.firstHit.worldPos;
     shiftedSurface.geoNormal  = primaryHitNormalW;
     shiftedSurface.normal     = primaryHitNormalW;
     shiftedSurface.viewDir    = -rayDir;
     shiftedSurface.viewDepth  = dist;
 
-    shifted.primaryHit            = sourceReconnection.worldPos;
+    shifted.primaryHit            = sourceReconnection.firstHit.worldPos;
     shifted.primaryHitNormal      = primaryHitNormalW;
     shifted.firstRayDir           = rayDir;
     shifted.fractionalPixel       = fractionalPixel;

@@ -274,6 +274,16 @@ int lt_resolve_initial_num_brdf_samples();
 #define PH_LIGHTTREE_INITIAL_SAMPLES 1
 #endif
 
+// RTXDI initial-sampling MIS data: needed by the ReSTIR_DI initial-candidate
+// stage regardless of whether the scatter buffers are wired in, so it lives at
+// top level instead of inside the SCATTER_BUFFERS gate further below.
+struct RTXDI_InitialSamplingMisData {
+    int numMisSamples;              // total candidates across all techniques
+    float localLightMisWeight;      // fraction of candidates from local-light sampling
+    float environmentMapMisWeight;  // fraction of candidates from environment sampling
+    float brdfMisWeight;            // fraction of candidates from BRDF sampling
+};
+
 uint lt_rng_hash(uint x)
 {
     x ^= x >> 16u;
@@ -4085,7 +4095,6 @@ void lt_MultiSortReprojectedReservoirs_sort_cell_data(uint scatterIndex)
 {
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
         uint counterIndex = lt_temporal_partitioned_counter_index(partitionIndex, LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT);
-        uint partitionCount = ph_temporal_scatter_global_counters_data[counterIndex];
         uint partitionCount = lt_temporal_scatter_global_counter_value(partitionIndex, counterIndex);
         if (scatterIndex >= partitionCount) {
             continue;
@@ -4678,6 +4687,7 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
     currReconnectionData = dstReconnectionData;
     return dstReservoir;
 }
+#endif // closes #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY) (opened line 4570)
 
 bool lt_multi_scatter_process_contributor(
     inout RTXDI_DIReservoir dstReservoir,
@@ -5065,13 +5075,6 @@ RTXDI_DIReservoir lt_di_multi_scatter_temporal_resampling_stage(
     currReconnectionData = dstReconnectionData;
     return dstReservoir;
 }
-
-struct RTXDI_InitialSamplingMisData {
-    int numMisSamples;              // total candidates across all techniques
-    float localLightMisWeight;      // fraction of candidates from local-light sampling
-    float environmentMapMisWeight;  // fraction of candidates from environment sampling
-    float brdfMisWeight;            // fraction of candidates from BRDF sampling
-};
 
 RTXDI_DIReservoir RTXDI_SampleLocalLights(
     inout RTXDI_RandomSamplerState rng,
@@ -5542,6 +5545,7 @@ bool IsComplexSurface(ivec2 pixelPosition, RAB_Surface surface) {
     return lt_is_complex_surface(surface);
 }
 
+#endif // closes #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS) (opened line 4349)
 #endif // closes #ifndef PH_LIGHTTREE_REUSE_INCLUDE (opened line 1)
 
 
