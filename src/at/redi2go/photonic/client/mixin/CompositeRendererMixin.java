@@ -9,6 +9,7 @@ import com.llamalad7.mixinextras.sugar.Local;
 import java.util.List;
 import net.irisshaders.iris.gl.program.ComputeProgram;
 import net.irisshaders.iris.gl.program.Program;
+import net.irisshaders.iris.pathways.FullScreenQuadRenderer;
 import net.irisshaders.iris.pipeline.CompositeRenderer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -18,6 +19,8 @@ import org.spongepowered.asm.mixin.injection.At;
 public class CompositeRendererMixin implements CompositeRendererExt {
    @Unique
    private List<PhotonicsShader> photonicsShaders = null;
+   @Unique
+   private int programId = -1;
 
    @WrapOperation(method = "renderAll", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/gl/program/ComputeProgram;use()V"))
    public void useCompute(ComputeProgram instance, Operation<Void> original) {
@@ -27,6 +30,7 @@ public class CompositeRendererMixin implements CompositeRendererExt {
 
    @WrapOperation(method = "renderAll", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/gl/program/Program;use()V"))
    public void use(Program instance, Operation<Void> original, @Local(ordinal = 0) int photonicsId) {
+      this.programId = instance.getProgramId();
       if (Raytracer.INSTANCE != null) {
          if (this.photonicsShaders != null && photonicsId >= 0 && photonicsId < this.photonicsShaders.size()) {
             Raytracer.INSTANCE.getMainRenderer().setCurrentPhotonicsFragment(this.photonicsShaders.get(photonicsId).getFragmentName());
@@ -34,9 +38,27 @@ public class CompositeRendererMixin implements CompositeRendererExt {
             Raytracer.INSTANCE.getMainRenderer().setCurrentPhotonicsFragment("");
          }
       }
-
-      Raytracer.bindBuffers(instance.getProgramId());
       original.call(instance);
+   }
+
+   @WrapOperation(method = "renderAll", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pathways/FullScreenQuadRenderer;renderQuad()V"))
+   public void afterDraw(FullScreenQuadRenderer instance, Operation<Void> original, @Local(ordinal = 0) int photonicsId) {
+      if (this.photonicsShaders != null && this.programId > 0 && photonicsId >= 0 && photonicsId < this.photonicsShaders.size()) {
+         this.photonicsShaders.get(photonicsId).bind(this.programId);
+      } else {
+         Raytracer.bindBuffers(this.programId);
+      }
+      if (Raytracer.CURRENT_FRAMEBUFFER != null) {
+         Raytracer.CURRENT_FRAMEBUFFER.bind();
+      }
+      original.call(instance);
+      if (Raytracer.CURRENT_FRAMEBUFFER != null) {
+         Raytracer.CURRENT_FRAMEBUFFER.unbind();
+      }
+      Raytracer.CURRENT_FRAMEBUFFER = null;
+      if (Raytracer.INSTANCE != null) {
+         Raytracer.INSTANCE.getMainRenderer().setCurrentPhotonicsFragment("");
+      }
    }
 
    @Override

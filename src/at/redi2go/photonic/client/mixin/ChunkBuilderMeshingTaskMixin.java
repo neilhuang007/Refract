@@ -3,6 +3,7 @@ package at.redi2go.photonic.client.mixin;
 import at.redi2go.photonic.client.BlockRendererExt;
 import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.config.PhotonicsConfig;
+import at.redi2go.photonic.client.rendering.world.PBlock;
 import at.redi2go.photonic.client.rendering.world.position.PChunkPos;
 import com.llamalad7.mixinextras.sugar.Local;
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkBuildContext;
@@ -63,8 +64,8 @@ public class ChunkBuilderMeshingTaskMixin {
       BlockState instance, @Local BlockRenderCache cache, @Local(ordinal = 0) Mutable blockPos, @Local(ordinal = 1) Mutable modelOffset
    ) {
       if (!Raytracer.isDisabled() && PhotonicsConfig.isVoxelized(instance.getBlock())) {
-         boolean canOcclude = Raytracer.INSTANCE.getBlockRegistry().canReferenceBlockOcclude(instance);
-         BlockState blockState = canOcclude ? Blocks.STONE.getDefaultState() : Blocks.OAK_LEAVES.getDefaultState();
+         PBlock block = Raytracer.INSTANCE.getBlockRegistry().getBlock(instance);
+         BlockState blockState = block != null && block.canOcclude ? Blocks.STONE.getDefaultState() : Blocks.OAK_LEAVES.getDefaultState();
          BakedModel model = cache.getBlockModels().getModelManager().getMissingModel();
          ((BlockRendererExt)cache.getBlockRenderer()).photonic$setRenderingVoxelBlock(true);
          cache.getBlockRenderer().renderModel(model, blockState, blockPos, modelOffset);

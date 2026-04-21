@@ -1,26 +1,17 @@
 package at.redi2go.photonic.client;
 
-import at.redi2go.photonic.client.config.lights.BlockLightInfo;
-import at.redi2go.photonic.client.config.lights.LightList;
 import at.redi2go.photonic.client.magicavoxel.VoxReader;
 import at.redi2go.photonic.client.mixin.ReloadableResourceManagerAccessor;
 import at.redi2go.photonic.client.rendering.opengl.objects.Destructable;
 import at.redi2go.photonic.client.rendering.schematics.AirEntry;
 import at.redi2go.photonic.client.rendering.schematics.Schematic;
-import at.redi2go.photonic.client.rendering.world.LightRegistry;
-import at.redi2go.photonic.client.rendering.world.MinecraftAtlasDownloader;
-import at.redi2go.photonic.client.rendering.world.NativeBlockPayload;
-import at.redi2go.photonic.client.rendering.world.NativeBlockPayloadBuilder;
+import at.redi2go.photonic.client.rendering.world.PBlock;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryManager;
 import at.redi2go.photonic.client.rendering.world.position.PBlockPos;
-import at.redi2go.photonics.core.rendering.world.allocator.BufferWorldAllocator;
-import at.redi2go.photonics.core.rendering.world.block.BlockEntry;
-import at.redi2go.photonics.core.rendering.world.block.palette.TextureData;
 import com.google.common.collect.UnmodifiableIterator;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,7 +39,7 @@ import org.apache.commons.io.IOUtils;
 import org.joml.Vector3f;
 
 public class BlockRegistry implements Destructable {
-   private static final Schematic EMPTY_BLOCK = new Schematic(BlockBuilder.BLOCK_VOXEL_SIZE, BlockBuilder.BLOCK_VOXEL_SIZE, BlockBuilder.BLOCK_VOXEL_SIZE);
+   private static final Schematic EMPTY_BLOCK = new Schematic(16, 16, 16);
    public static final Set<Block> DEFAULT_STATE_BLOCKS = Set.of(Blocks.NOTE_BLOCK);
    public static final Set<Block> VANILLA_RENDERED_BLOCK = Set.of(
       Blocks.WATER,
@@ -147,104 +138,50 @@ public class BlockRegistry implements Destructable {
    public static final Set<Property<?>> DEFAULT_PROPERTIES = Set.of(
       Properties.PERSISTENT, Properties.DISTANCE_1_7, Properties.WATERLOGGED, Properties.OCCUPIED
    );
-   private static final MinecraftAtlasDownloader ATLAS_DOWNLOADER = new MinecraftAtlasDownloader();
    private final MemoryManager memoryManager;
-   private final BufferWorldAllocator referenceAllocator;
-   private final Map<BlockState, BlockEntry> referenceBlockEntryCache = new ConcurrentHashMap<>();
-   private final Map<BlockState, Boolean> referenceOcclusionCache = new ConcurrentHashMap<>();
-   private final Map<BlockState, Integer> emissiveColorCache = new ConcurrentHashMap<>();
+   private final Map<BlockState, PBlock> blockSchematicCache = new ConcurrentHashMap<>();
    private final ResourceReloader resourceReloadListener = (preparationBarrier, resourceManager, profilerFiller, applyProfiler, applyExecutor, executor2) ->
       preparationBarrier.whenPrepared(Unit.INSTANCE).thenRunAsync(this::reloadBlockModels, applyExecutor);
 
    public BlockRegistry(MemoryManager memoryManager) {
       ((ReloadableResourceManagerImpl)MinecraftClient.getInstance().getResourceManager()).registerReloader(this.resourceReloadListener);
       this.memoryManager = memoryManager;
-      this.referenceAllocator = NativeBlockPayloadBuilder.createAllocator(ATLAS_DOWNLOADER);
-      memoryManager.allocate(NativeBlockPayload.BYTE_SIZE);
-      NativeBlockPayload.numAllocated = 0;
+      memoryManager.allocate(PBlock.BYTE_SIZE);
+      PBlock.numAllocated = 0;
    }
 
    public void freeUnused() {
-      this.referenceAllocator.freeUnusedObjects();
+      for (Map.Entry<BlockState, PBlock> e : this.blockSchematicCache.entrySet()) {
+         BlockState blockState = e.getKey();
+         PBlock block = e.getValue();
+         if (!block.isUsed() && block.isAllocated()) {
+            synchronized (block) {
+               block.free(this.memoryManager);
+               this.blockSchematicCache.remove(blockState);
+            }
+         }
+      }
    }
 
-   public void ensureAllocated(NativeBlockPayload block) {
+   public void ensureAllocated(PBlock block) {
       synchronized (block) {
          if (block.isAllocated()) {
             if (block.needsUpdate()) {
                block.update(this.memoryManager);
             }
          } else {
+            block.changeTimesUsed(1);
+            if (PBlock.numAllocated >= 4095) {
+               this.freeUnused();
+            }
+            block.changeTimesUsed(-1);
             block.allocate(this.memoryManager);
             block.update(this.memoryManager);
          }
       }
    }
 
-   public int getPackedBlock(PBlockPos blockPosition, int skyBrightness) {
-      World level = MinecraftClient.getInstance().world;
-      if (level == null) {
-         return 0;
-      } else {
-         BlockState blockState;
-         try {
-            blockState = level.getBlockState(new BlockPos(blockPosition.x, blockPosition.y, blockPosition.z));
-         } catch (Exception var6) {
-            blockState = Blocks.AIR.getDefaultState();
-         }
-
-         return this.getPackedBlock(blockState, skyBrightness);
-      }
-   }
-
-   public int getPackedBlock(BlockState blockState, int skyBrightness) {
-      BlockEntry entry = this.getReferenceBlock(blockState, skyBrightness);
-      return entry != null ? entry.begin() : 0;
-   }
-
-   public void updateLightInfo(BlockState blockState, BlockLightInfo lightInfo) {
-      blockState = cleanUpBlockState(blockState);
-      if (blockState == null) {
-         return;
-      }
-      int emissiveColor = lightInfo == null || lightInfo.isTraced() ? 0 : lightInfo.packedColor() & 16777215;
-      this.emissiveColorCache.put(blockState, emissiveColor);
-      BlockEntry cachedEntry = this.referenceBlockEntryCache.remove(blockState);
-      if (cachedEntry != null) {
-         cachedEntry.close();
-      }
-   }
-
-   public void refreshLightCache(LightList lights) {
-      this.emissiveColorCache.clear();
-      for (BlockState blockState : this.referenceBlockEntryCache.keySet()) {
-         this.updateLightInfo(blockState, lights.get(blockState));
-      }
-   }
-
-   public Schematic getSchematic(BlockState blockState) {
-      blockState = cleanUpBlockState(blockState);
-      if (blockState == null) {
-         return null;
-      }
-      int blockId = at.redi2go.photonic.client.rendering.util.IrisUtil.getBlockId(blockState);
-      int[] data = NativeBlockPayloadBuilder.build(blockState, blockId);
-      return new Schematic(data, BlockBuilder.BLOCK_VOXEL_SIZE, BlockBuilder.BLOCK_VOXEL_SIZE, BlockBuilder.BLOCK_VOXEL_SIZE);
-   }
-
-   public int getEmissiveColor(BlockState blockState) {
-      blockState = cleanUpBlockState(blockState);
-      if (blockState == null) {
-         return 0;
-      }
-      return this.emissiveColorCache.computeIfAbsent(blockState, state -> {
-         LightRegistry lightRegistry = Raytracer.INSTANCE != null ? Raytracer.INSTANCE.getWorldRegistry().getLightRegistry() : null;
-         BlockLightInfo lightInfo = lightRegistry != null ? lightRegistry.resolveBlockStateLightInfo(state) : null;
-         return lightInfo == null || lightInfo.isTraced() ? 0 : lightInfo.packedColor() & 16777215;
-      });
-   }
-
-   public NativeBlockPayload getBlock(PBlockPos blockPosition) {
+   public PBlock getBlock(PBlockPos blockPosition) {
       World level = MinecraftClient.getInstance().world;
       if (level == null) {
          return null;
@@ -252,7 +189,7 @@ public class BlockRegistry implements Destructable {
          BlockState blockState;
          try {
             blockState = level.getBlockState(new BlockPos(blockPosition.x, blockPosition.y, blockPosition.z));
-         } catch (Exception var6) {
+         } catch (Exception var5) {
             blockState = Blocks.AIR.getDefaultState();
          }
 
@@ -260,89 +197,70 @@ public class BlockRegistry implements Destructable {
       }
    }
 
-   public NativeBlockPayload getBlock(BlockState blockState) {
-      blockState = cleanUpBlockState(blockState);
-      return blockState == null ? null : this.createNativePayload(blockState);
-   }
-
-   private NativeBlockPayload createNativePayload(BlockState blockState) {
-      int blockId = at.redi2go.photonic.client.rendering.util.IrisUtil.getBlockId(blockState);
-      NativeBlockPayloadBuilder.VoxelBake bake = NativeBlockPayloadBuilder.buildBake(blockState, blockId);
-      NativeBlockPayload block = new NativeBlockPayload(blockId, bake.data());
-      block.canOcclude = this.referenceOcclusionCache.computeIfAbsent(blockState, state -> bake.solidVoxelCount() >= NativeBlockPayload.SCHEMATIC_SIZE);
-      block.setPackedEmissionColor(this.getEmissiveColor(blockState));
-      return block;
-   }
-
-   public BlockEntry getReferenceBlock(BlockState blockState, int skyBrightness) {
+   public PBlock getBlock(BlockState blockState) {
       blockState = cleanUpBlockState(blockState);
       if (blockState == null) {
          return null;
-      }
+      } else {
+         PBlock block = this.blockSchematicCache.get(blockState);
+         if (block != null) {
+            return block;
+         } else {
+            block = new PBlock(at.redi2go.photonic.client.rendering.util.IrisUtil.getBlockId(blockState), () -> EMPTY_BLOCK);
+            Raytracer.INSTANCE.getWorldRegistry().getLightRegistry().registerBlockState(blockState, block);
+            this.blockSchematicCache.put(blockState, block);
+            Schematic schematic = loadSchematicFromDisk(blockState, false);
+            if (schematic == null) {
+               BlockBuilder.streamBlockBuild(blockState, block);
+            } else {
+               schematic.initialize();
+               final PBlock finalBlock = block;
+               final Schematic finalSchematic = schematic;
+               schematic.optimizeThreaded().thenRun(() -> Raytracer.INSTANCE.queueUrgentBuildJob(() -> {
+                  finalBlock.setCompiledSchematicSupplier(() -> finalSchematic);
+               }));
+            }
 
-      BlockEntry cached = this.referenceBlockEntryCache.computeIfAbsent(blockState, this::createReferenceBlockEntry);
-      if (cached == null) {
-         return null;
+            return block;
+         }
       }
-
-      if (cached.skylight() == skyBrightness) {
-         return cached;
-      }
-
-      BlockEntry.Builder builder = cached.createBuilder();
-      builder.setSkylight(Math.max(0, skyBrightness));
-      BlockEntry result = builder.build();
-      builder.close();
-      return result;
-   }
-
-   private BlockEntry createReferenceBlockEntry(BlockState blockState) {
-      int blockId = at.redi2go.photonic.client.rendering.util.IrisUtil.getBlockId(blockState);
-      NativeBlockPayloadBuilder.ReferenceBake bake = NativeBlockPayloadBuilder.buildReferenceBake(blockState, blockId, this.referenceAllocator);
-      if (bake == null || bake.entry() == null) {
-         return null;
-      }
-      this.referenceOcclusionCache.put(blockState, bake.solidVoxelCount() >= NativeBlockPayload.SCHEMATIC_SIZE);
-      return bake.entry();
-   }
-
-   public boolean canReferenceBlockOcclude(BlockState blockState) {
-      blockState = cleanUpBlockState(blockState);
-      if (blockState == null) {
-         return false;
-      }
-      this.getReferenceBlock(blockState, 0);
-      return this.referenceOcclusionCache.getOrDefault(blockState, false);
    }
 
    public boolean upload() {
+      for (PBlock block : this.blockSchematicCache.values()) {
+         if (block.needsUpdate() && block.isAllocated()) {
+            block.update(this.memoryManager);
+         }
+      }
       return this.memoryManager.upload();
    }
 
    public void reloadBlockModels() {
       Raytracer.INSTANCE.queueUrgentBuildJob(() -> {
-         for (BlockEntry blockEntry : this.referenceBlockEntryCache.values()) {
-            blockEntry.close();
+         for (Entry<BlockState, PBlock> entry : this.blockSchematicCache.entrySet()) {
+            Schematic schematic = loadSchematicFromDisk(entry.getKey(), false);
+            if (schematic == null) {
+               BlockBuilder.streamBlockBuild(entry.getKey(), entry.getValue());
+            } else {
+               schematic.initialize();
+               schematic.optimizeThreaded().thenRun(() -> Raytracer.INSTANCE.queueUrgentBuildJob(() -> {
+                  entry.getValue().setCompiledSchematicSupplier(() -> schematic);
+               }));
+            }
          }
-         this.referenceBlockEntryCache.clear();
-         this.referenceOcclusionCache.clear();
-         this.emissiveColorCache.clear();
-         this.referenceAllocator.freeUnusedObjects();
       });
    }
 
    @Override
    public void free() {
-      for (BlockEntry entry : this.referenceBlockEntryCache.values()) {
-         entry.close();
-      }
-      this.referenceBlockEntryCache.clear();
-      this.referenceOcclusionCache.clear();
-      this.emissiveColorCache.clear();
-      this.referenceAllocator.close();
-      NativeBlockPayload.numAllocated = 0;
+      this.blockSchematicCache.clear();
+      PBlock.numAllocated = 0;
       ((ReloadableResourceManagerAccessor)MinecraftClient.getInstance().getResourceManager()).getListeners().remove(this.resourceReloadListener);
       this.memoryManager.free();
+   }
+
+   public Map<BlockState, PBlock> getBlockSchematicCache() {
+      return this.blockSchematicCache;
    }
 
    private static Schematic loadSchematicFromDisk(BlockState blockState, boolean aliased) {
@@ -372,9 +290,7 @@ public class BlockRegistry implements Destructable {
          Optional<Resource> resource = resourceFactory.getResource(Identifier.ofVanilla("schematics/" + encodeBlockState(blockState) + ".vox"));
          if (resource.isPresent()) {
             Schematic schematic = VoxReader.readToSchematic(resource.get().getInputStream());
-            if (schematic.getWidth() == BlockBuilder.BLOCK_VOXEL_SIZE
-               && schematic.getHeight() == BlockBuilder.BLOCK_VOXEL_SIZE
-               && schematic.getDepth() == BlockBuilder.BLOCK_VOXEL_SIZE) {
+            if (schematic.getWidth() == 16 && schematic.getHeight() == 16 && schematic.getDepth() == 16) {
                return schematic;
             }
          }
@@ -415,106 +331,63 @@ public class BlockRegistry implements Destructable {
       int[] signs = new int[3];
       int[] offsets = new int[3];
 
-      for (int i = 0; i < transformation.length; i++) {
+      for (int i = 0; i < 3; i++) {
          indices[i] = Math.abs(transformation[i]) - 1;
          signs[i] = transformation[i] < 0 ? -1 : 1;
-         offsets[i] = transformation[i] < 0 ? BlockBuilder.BLOCK_VOXEL_SIZE - 1 : 0;
+         offsets[i] = transformation[i] < 0 ? 15 : 0;
       }
 
-      return p -> {
-         float[] values = new float[]{p.x, p.y, p.z};
-         p.set(
-            signs[0] * values[indices[0]] + offsets[0],
-            signs[1] * values[indices[1]] + offsets[1],
-            signs[2] * values[indices[2]] + offsets[2]
-         );
-      };
+      return v -> v.set(offsets[0] + signs[0] * v.get(indices[0]), offsets[1] + signs[1] * v.get(indices[1]), offsets[2] + signs[2] * v.get(indices[2]));
    }
 
    public static String encodeBlockState(BlockState blockState) {
-      if (blockState == null) {
-         return "";
-      } else {
-         StringBuilder builder = new StringBuilder();
-         builder.append(Registries.BLOCK.getId(blockState.getBlock()).toString().replace(':', '_'));
-         if (!blockState.getEntries().isEmpty()) {
-            builder.append('[');
-            Iterator<Entry<Property<?>, Comparable<?>>> var2 = blockState.getEntries().entrySet().iterator();
-
-            while (var2.hasNext()) {
-               Entry<Property<?>, Comparable<?>> entry = (Entry)var2.next();
-               builder.append(entry.getKey().getName())
-                  .append('=')
-                  .append(getValueName(entry.getKey(), entry.getValue()));
-               if (var2.hasNext()) {
-                  builder.append(',');
-               }
-            }
-
-            builder.append(']');
+      StringBuilder builder = new StringBuilder();
+      builder.append(Registries.BLOCK.getId(blockState.getBlock()).getPath());
+      blockState.getEntries().forEach((p, v) -> {
+         if (!DEFAULT_PROPERTIES.contains(p)) {
+            builder.append('-').append(p.getName().toLowerCase(Locale.ENGLISH)).append('_').append(v.toString().toLowerCase(Locale.ENGLISH));
          }
-         return builder.toString();
-      }
+      });
+      return builder.toString();
    }
 
-   @SuppressWarnings("unchecked")
-   private static <T extends Comparable<T>> String getValueName(Property<T> property, Comparable<?> value) {
-      return property.name((T)value);
-   }
+   public static BlockState decodeBlockState(String encodedBlockState) {
+      String blockName = encodedBlockState.split("-")[0];
+      Optional<Block> block = Registries.BLOCK.getOrEmpty(Identifier.ofVanilla(blockName));
+      if (block.isEmpty()) {
+         return null;
+      }
 
-   public static BlockState decodeBlockState(String blockStateName) {
-      String[] split = blockStateName.split("\\[", 2);
-      if (split.length == 0 || split[0].isEmpty()) {
-         return null;
-      }
-      Identifier id = Identifier.tryParse(split[0].replace('_', ':'));
-      if (id == null) {
-         return null;
-      }
-      Block block = Registries.BLOCK.get(id);
-      if (block == Blocks.AIR && !Registries.BLOCK.containsId(id)) {
-         return null;
-      }
-      BlockState blockState = block.getDefaultState();
-      if (split.length == 2 && split[1].endsWith("]")) {
-         String properties = split[1].substring(0, split[1].length() - 1);
-         for (String prop : properties.split(",")) {
-            String[] propertySplit = prop.split("=", 2);
-            if (propertySplit.length == 2) {
-               Property<?> property = block.getStateManager().getProperty(propertySplit[0]);
-               if (property != null) {
-                  blockState = setProperty(blockState, property, propertySplit[1]);
-               }
-            }
+      UnmodifiableIterator var2 = block.get().getStateManager().getStates().iterator();
+
+      while (var2.hasNext()) {
+         BlockState blockState = (BlockState)var2.next();
+         if (encodeBlockState(blockState).equals(encodedBlockState)) {
+            return blockState;
          }
       }
-      return blockState;
-   }
 
-   private static <T extends Comparable<T>> BlockState setProperty(BlockState blockState, Property<T> property, String value) {
-      Optional<T> propertyValue = property.parse(value);
-      return propertyValue.map(t -> blockState.with(property, t)).orElse(blockState);
+      return null;
    }
 
    public static BlockState cleanUpBlockState(BlockState blockState) {
-      if (blockState == null || blockState.isAir() || !at.redi2go.photonic.client.config.PhotonicsConfig.isVoxelized(blockState.getBlock()) || VANILLA_RENDERED_BLOCK.contains(blockState.getBlock())) {
-         return null;
-      } else {
+      if (!blockState.isAir() && !isVanillaRendered(blockState.getBlock())) {
          if (DEFAULT_STATE_BLOCKS.contains(blockState.getBlock())) {
             blockState = blockState.getBlock().getDefaultState();
          }
 
-         for (Property<?> property : DEFAULT_PROPERTIES) {
-            if (blockState.contains(property)) {
-               blockState = resetProperty(blockState, property);
-            }
-         }
-
          return blockState;
+      } else {
+         return null;
       }
    }
 
-   private static <T extends Comparable<T>> BlockState resetProperty(BlockState blockState, Property<T> property) {
-      return blockState.with(property, property.getValues().stream().toList().get(0));
+   private static boolean isVanillaRendered(Block block) {
+      return Raytracer.getProperties().map(e -> e.voxelizeLava().orElse(false)).orElse(false) ? false : VANILLA_RENDERED_BLOCK.contains(block);
+   }
+
+   static {
+      Arrays.fill(EMPTY_BLOCK.getData(), AirEntry.toAirEntry(0, 0, 0, 16, 16, 16));
+      EMPTY_BLOCK.setState(2);
    }
 }

@@ -24,10 +24,6 @@ public interface WorldBackend extends Destructable {
       return false;
    }
 
-   default boolean usesNativeBlockPayloads() {
-      return true;
-   }
-
    default void markRootEntryDirty(PChunkPos chunkPos, PChunkPos rtToWorldChunkOffset, int worldChunkSize) {
    }
 

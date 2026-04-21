@@ -1231,6 +1231,82 @@ ScatterReconnectionData scatter_load_gather_intermediate_reconnection(ivec2 uv) 
     );
 }
 
+struct LtTemporalGatherShiftedPathData {
+    vec3 radiance;
+    float secondaryPathJacobian;
+    float lensVertexJacobian;
+    float valid;
+};
+
+LtTemporalGatherShiftedPathData LtTemporalGatherShiftedPathData_init()
+{
+    LtTemporalGatherShiftedPathData shiftedPathData;
+    shiftedPathData.radiance = vec3(0.0f);
+    shiftedPathData.secondaryPathJacobian = 1.0f;
+    shiftedPathData.lensVertexJacobian = 1.0f;
+    shiftedPathData.valid = 0.0f;
+    return shiftedPathData;
+}
+
+LtTemporalGatherShiftedPathData scatter_load_gather_shifted_path_data(ivec2 uv, int offsetIndex)
+{
+    vec4 shiftedPathData0;
+    vec4 shiftedPathData1;
+    switch (offsetIndex)
+    {
+        case 0:
+            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data0, uv, 0);
+            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data1, uv, 0);
+            break;
+        case 1:
+            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data2, uv, 0);
+            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data3, uv, 0);
+            break;
+        case 2:
+            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data4, uv, 0);
+            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data5, uv, 0);
+            break;
+        case 3:
+            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data6, uv, 0);
+            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data7, uv, 0);
+            break;
+        case 4:
+            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data8, uv, 0);
+            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data9, uv, 0);
+            break;
+        case 5:
+            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data10, uv, 0);
+            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data11, uv, 0);
+            break;
+        case 6:
+            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data12, uv, 0);
+            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data13, uv, 0);
+            break;
+        case 7:
+            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data14, uv, 0);
+            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data15, uv, 0);
+            break;
+        default:
+            return LtTemporalGatherShiftedPathData_init();
+    }
+
+    LtTemporalGatherShiftedPathData shiftedPathData = LtTemporalGatherShiftedPathData_init();
+    shiftedPathData.radiance = shiftedPathData0.xyz;
+    shiftedPathData.secondaryPathJacobian = max(shiftedPathData0.w, 1e-10f);
+    shiftedPathData.lensVertexJacobian = max(shiftedPathData1.x, 1e-10f);
+    shiftedPathData.valid = shiftedPathData1.y;
+    return shiftedPathData;
+}
+
+void scatter_store_gather_shifted_path_data(
+    LtTemporalGatherShiftedPathData shiftedPathData,
+    out vec4 shiftedPathData0,
+    out vec4 shiftedPathData1)
+{
+    shiftedPathData0 = vec4(max(shiftedPathData.radiance, vec3(0.0f)), max(shiftedPathData.secondaryPathJacobian, 1e-10f));
+    shiftedPathData1 = vec4(max(shiftedPathData.lensVertexJacobian, 1e-10f), shiftedPathData.valid, 0.0f, 0.0f);
+}
+
 vec2 scatter_load_gather_floating_coords(ivec2 uv) {
     return texelFetch(temporal_gather_floating_coords, uv, 0).xy;
 }
@@ -1274,7 +1350,6 @@ bool scatter_reconnection_matches_surface(ReservoirSplattingReconnectionData rec
     return scatter_reconnection_matches_surface(reconnection, pixelPosition, currentSurface, false);
 }
 
-// Forward-project a world-space position to the current frame's screen pixel.
 // Returns the fractional pixel coordinate, or vec2(-1.0) if behind camera / off screen.
 // This implements Section 4.1.1 of Liu et al. 2025 (Reservoir Splatting).
 vec2 scatter_forward_project_to_current_frame(vec3 worldPos) {
@@ -4650,9 +4725,8 @@ bool lt_multi_scatter_process_contributor(
             * currReservoirConfidence;
         float m2 = lt_scatter_radiance_phat(prevReservoir.integrand)
             * lt_scatter_reservoir_confidence(prevReservoir, prevReconnection);
-        if ((m1 + m2) > 0.0f) {
-            prevMIS = m2 / (m1 + m2);
-        }
+        float denominator = m1 + m2;
+        prevMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
     }
 
     bool prevSelected = lt_scatter_add_sample_from_reservoir(
@@ -4670,7 +4744,11 @@ bool lt_multi_scatter_process_contributor(
         float timePartitions = 1.0f / float(lt_multi_temporal_partition_count());
         float fractionalTime = clamp(prevReconnection.time, 0.0f, 1.0f);
         shiftedReconnection.time = (fractionalTime + float(partitionIndex)) * timePartitions;
-        shiftedReconnection.subPixel = clamp(shiftedPrev.fractionalPixel - floor(shiftedPrev.fractionalPixel), vec2(0.0f), vec2(1.0f));
+        shiftedReconnection.subPixel = clamp(
+            shiftedPrev.fractionalPixel - floor(shiftedPrev.fractionalPixel),
+            vec2(0.0f),
+            vec2(1.0f)
+        );
         dstReconnectionData = shiftedReconnection;
     }
     return prevSelected;

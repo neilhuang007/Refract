@@ -199,23 +199,82 @@ float lt_di_gather_temporal_previous_sample_mis(
     return ((m1 + m2) > 0.0f) ? (m2 / (m1 + m2)) : 0.0f;
 }
 
+float lt_di_gather_temporal_confidence_weight(float confidence)
+{
+    return confidence;
+}
+
+float lt_di_gather_temporal_shifted_jacobian(
+    LtTemporalGatherShiftedPathData shiftedPathData,
+    ReservoirSplattingReconnectionData reconnectionData,
+    bool primaryHitReconnection)
+{
+    if (primaryHitReconnection)
+    {
+        return (shiftedPathData.lensVertexJacobian * shiftedPathData.secondaryPathJacobian)
+            / max(reconnectionData.lensVertexJacobian * reconnectionData.secondaryPathJacobian, 1e-10f);
+    }
+    return shiftedPathData.secondaryPathJacobian / max(reconnectionData.secondaryPathJacobian, 1e-10f);
+}
+
+float lt_di_gather_temporal_reference_mis(
+    vec3 sourceRadiance,
+    float sourceWeight,
+    vec3 shiftedRadiance,
+    float shiftedJacobian,
+    float shiftedWeight,
+    float shiftProbability,
+    bool selectSource)
+{
+    float m1 = lt_scatter_radiance_phat(sourceRadiance) * sourceWeight;
+    float m2 = lt_scatter_radiance_phat(shiftedRadiance) * shiftedJacobian * shiftedWeight * shiftProbability;
+    m2 = isnan(m2) ? 0.0f : m2;
+    float sum = m1 + m2;
+    if (sum <= 0.0f)
+    {
+        return 0.0f;
+    }
+    return selectSource ? (m1 / sum) : (m2 / sum);
+}
+
 bool lt_di_gather_temporal_add_current_sample(
+    ivec2 pixel,
     inout RTXDI_DIReservoir dstReservoir,
     inout ReservoirSplattingReconnectionData dstReconnectionData,
     RTXDI_DIReservoir currReservoir,
     ReservoirSplattingReconnectionData currReconnectionData,
     float currConfidence,
     float prevConfidence,
+    bool primaryHitReconnection,
+    float shiftProbability,
+    int shiftedPathIndex,
     inout RTXDI_RandomSamplerState sg)
 {
-    float currSampleMIS = lt_di_gather_temporal_current_sample_mis(currReservoir, currConfidence, prevConfidence);
+    float currSampleMIS = 0.0f;
+    vec3 currPHat = vec3(0.0f);
+    if (any(greaterThan(currReservoir.radiance, vec3(0.0f))))
+    {
+        currPHat = currReservoir.radiance;
+        LtTemporalGatherShiftedPathData shiftedCurr = scatter_load_gather_shifted_path_data(pixel, shiftedPathIndex);
+        float shiftedJacobian = lt_di_gather_temporal_shifted_jacobian(shiftedCurr, currReconnectionData, primaryHitReconnection);
+        currSampleMIS = lt_di_gather_temporal_reference_mis(
+            currReservoir.radiance,
+            lt_di_gather_temporal_confidence_weight(currConfidence),
+            shiftedCurr.radiance,
+            shiftedJacobian,
+            lt_di_gather_temporal_confidence_weight(prevConfidence),
+            shiftProbability,
+            true
+        );
+    }
+
     bool currSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
         currConfidence,
         currSampleMIS,
-        currReservoir.radiance,
+        currPHat,
         1.0f,
-        lt_scatter_compute_ucw(currReservoir, currReservoir.radiance),
+        lt_scatter_compute_ucw(currReservoir, currPHat),
         currConfidence,
         currReservoir,
         sg
@@ -228,22 +287,48 @@ bool lt_di_gather_temporal_add_current_sample(
 }
 
 bool lt_di_gather_temporal_add_previous_sample(
+    ivec2 pixel,
     inout RTXDI_DIReservoir dstReservoir,
     inout ReservoirSplattingReconnectionData dstReconnectionData,
     RTXDI_DIReservoir prevReservoir,
     ReservoirSplattingReconnectionData prevReconnectionData,
     float currConfidence,
     float prevConfidence,
+    bool primaryHitReconnection,
+    float shiftProbability,
+    int shiftedPathIndex,
     inout RTXDI_RandomSamplerState sg)
 {
-    float prevSampleMIS = lt_di_gather_temporal_previous_sample_mis(prevReservoir, currConfidence, prevConfidence);
+    float prevSampleMIS = 0.0f;
+    vec3 prevPHat = vec3(0.0f);
+    float shiftedJacobian = 1.0f;
+    if (any(greaterThan(prevReservoir.radiance, vec3(0.0f))))
+    {
+        LtTemporalGatherShiftedPathData shiftedPrev = scatter_load_gather_shifted_path_data(pixel, shiftedPathIndex);
+        shiftedJacobian = lt_di_gather_temporal_shifted_jacobian(shiftedPrev, prevReconnectionData, primaryHitReconnection);
+        float shiftedWeight = lt_di_gather_temporal_confidence_weight(currConfidence);
+        float referenceMIS = lt_di_gather_temporal_reference_mis(
+            shiftedPrev.radiance,
+            shiftedWeight,
+            prevReservoir.radiance,
+            1.0f,
+            lt_di_gather_temporal_confidence_weight(prevConfidence),
+            shiftProbability,
+            false
+        );
+        float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance) * shiftedJacobian * shiftedWeight;
+        prevPHat = isnan(m1) ? vec3(0.0f) : max(shiftedPrev.radiance, vec3(0.0f));
+        shiftedJacobian = isnan(m1) ? 1.0f : shiftedJacobian;
+        prevSampleMIS = isnan(m1) ? 0.0f : referenceMIS;
+    }
+
     bool prevSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
         prevConfidence,
         prevSampleMIS,
-        prevReservoir.radiance,
-        1.0f,
-        lt_scatter_compute_ucw(prevReservoir, prevReservoir.radiance),
+        prevPHat,
+        shiftedJacobian,
+        lt_scatter_compute_ucw(prevReservoir, prevPHat),
         prevConfidence,
         prevReservoir,
         sg
@@ -284,15 +369,27 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
         prevConfidence
     );
 
-    if (hasCurrentSample)
+    RAB_Surface centerSurface = RAB_GetGBufferSurface(pixel, false);
+    const bool hasDepthOfField = lt_spatial_camera_aperture_radius() > 0.0f;
+    vec2 depthOfFieldProbs = hasDepthOfField
+        ? lt_spatial_resolve_dof_probabilities(centerSurface)
+        : vec2(1.0f, 0.0f);
+    const bool doLensVertexCopy = (depthOfFieldProbs.x > 0.0f);
+    const bool doPrimaryHitReconnection = (depthOfFieldProbs.y > 0.0f);
+
+    if (doLensVertexCopy)
     {
         lt_di_gather_temporal_add_current_sample(
+            pixel,
             dstReservoir,
             currReconnectionData,
             currReservoir,
             currentReconnectionData,
             currConfidence,
             prevConfidence,
+            false,
+            depthOfFieldProbs.x,
+            0,
             sg
         );
     }
@@ -300,14 +397,63 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
     if (hasPreviousSample)
     {
         lt_di_gather_temporal_add_previous_sample(
+            pixel,
             dstReservoir,
             currReconnectionData,
             prevReservoir,
             prevReconnectionData,
             currConfidence,
             prevConfidence,
+            false,
+            depthOfFieldProbs.x,
+            1,
             sg
         );
+    }
+
+    if (hasDepthOfField && doPrimaryHitReconnection)
+    {
+        RTXDI_DIReservoir lensVertexCopyReservoir = dstReservoir;
+        ReservoirSplattingReconnectionData lensVertexCopyReconnectionData = currReconnectionData;
+        dstReservoir = RTXDI_EmptyDIReservoir();
+        currReconnectionData = ReservoirSplattingReconnectionData_init();
+
+        RTXDI_DIReservoir currentDomainReservoir = hasCurrentSample ? lensVertexCopyReservoir : currReservoir;
+        ReservoirSplattingReconnectionData currentDomainReconnectionData = hasCurrentSample ? lensVertexCopyReconnectionData : currentReconnectionData;
+
+        if (hasCurrentSample)
+        {
+            lt_di_gather_temporal_add_current_sample(
+                pixel,
+                dstReservoir,
+                currReconnectionData,
+                currentDomainReservoir,
+                currentDomainReconnectionData,
+                currConfidence,
+                prevConfidence,
+                true,
+                depthOfFieldProbs.y,
+                2,
+                sg
+            );
+        }
+
+        if (doLensVertexCopy && hasPreviousSample)
+        {
+            lt_di_gather_temporal_add_previous_sample(
+                pixel,
+                dstReservoir,
+                currReconnectionData,
+                prevReservoir,
+                prevReconnectionData,
+                currConfidence,
+                prevConfidence,
+                true,
+                depthOfFieldProbs.y,
+                3,
+                sg
+            );
+        }
     }
 
     return dstReservoir;

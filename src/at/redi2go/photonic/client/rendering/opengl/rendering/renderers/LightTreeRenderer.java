@@ -59,6 +59,7 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String diShadeSamplesFragment = "lighttree/LightingPasses/DI/ShadeSamples.fsh";
    private static final String diGenerateInitialSamplesFragment = "lighttree/LightingPasses/DI/GenerateInitialSamples.fsh";
    private static final String diCollectTemporalSamplesFragment = "lighttree/LightingPasses/DI/CollectTemporalSamples.fsh";
+   private static final String diRobustReuseOptimizationFragment = "lighttree/LightingPasses/DI/RobustReuseOptimization.fsh";
    private static final String diGatherTemporalResamplingFragment = "lighttree/LightingPasses/DI/GatherTemporalResampling.fsh";
    private static final String diTemporalReprojectionFragment = "lighttree/LightingPasses/DI/TemporalReprojection.fsh";
    private static final String diTemporalBinningOffsetsFragment = "lighttree/LightingPasses/DI/TemporalBinningOffsets.fsh";
@@ -226,6 +227,8 @@ public class LightTreeRenderer extends MainRenderer {
   private CompositeRenderer shadeSamplesRenderer;
   @Nullable
   private CompositeRenderer temporalCollectRenderer;
+  @Nullable
+  private CompositeRenderer robustReuseOptimizationRenderer;
   @Nullable
   private CompositeRenderer temporalGatherRenderer;
   @Nullable
@@ -412,6 +415,9 @@ public class LightTreeRenderer extends MainRenderer {
       );
       this.temporalCollectRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diCollectTemporalSamplesFragment, "common/screen.vsh", this.memoryCollection, this.temporalGatherBuffer))
+      );
+      this.robustReuseOptimizationRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diRobustReuseOptimizationFragment, "common/screen.vsh", this.memoryCollection, this.temporalGatherBuffer))
       );
       this.temporalGatherRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diGatherTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
@@ -633,6 +639,22 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_meta", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"));
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection0", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"));
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection1", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data0", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data0"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data1", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data1"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data2", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data2"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data3", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data3"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data4", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data4"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data5", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data5"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data6", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data6"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data7", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data7"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data8", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data8"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data9", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data9"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data10", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data10"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data11", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data11"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data12", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data12"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data13", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data13"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data14", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data14"));
+      this.addTextureSampler(samplers, "temporal_gather_shifted_path_data15", () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data15"));
       this.addTextureSampler(samplers, "prev_radiosity_direct_soft", this::getPreviousCompatDirectSoftTexture);
       this.addTextureSampler(samplers, "prev_radiosity_handheld", () -> this.lightingBuffer.getReadAttachment("handheld"));
       this.addTextureSampler(samplers, "prev_radiosity_lighting_variance", () -> this.lightingBuffer.getReadAttachment("lighting_variance"));
@@ -1246,6 +1268,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.recalculateRenderer(this.proposalStageRenderer);
       this.recalculateRenderer(this.proposalReservoirRenderer);
       this.recalculateRenderer(this.temporalCollectRenderer);
+      this.recalculateRenderer(this.robustReuseOptimizationRenderer);
       this.recalculateRenderer(this.temporalGatherRenderer);
       this.recalculateRenderer(this.temporalScatterReprojectionRenderer);
       this.recalculateRenderer(this.temporalMultiScatterReprojectionRenderer);
@@ -1339,6 +1362,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.destroyRenderer(this.proposalStageRenderer);
       this.destroyRenderer(this.proposalReservoirRenderer);
       this.destroyRenderer(this.temporalCollectRenderer);
+      this.destroyRenderer(this.robustReuseOptimizationRenderer);
       this.destroyRenderer(this.temporalGatherRenderer);
       this.destroyRenderer(this.temporalScatterReprojectionRenderer);
       this.destroyRenderer(this.temporalMultiScatterReprojectionRenderer);
@@ -1442,6 +1466,22 @@ public class LightTreeRenderer extends MainRenderer {
       framebuffer.createAttachment("intermediate_meta", "RGBA32F", false);
       framebuffer.createAttachment("intermediate_reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("intermediate_reconnection1", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data0", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data1", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data2", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data3", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data4", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data5", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data6", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data7", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data8", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data9", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data10", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data11", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data12", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data13", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data14", "RGBA32F", false);
+      framebuffer.createAttachment("shifted_path_data15", "RGBA32F", false);
       return framebuffer;
    }
 
@@ -2080,10 +2120,14 @@ public class LightTreeRenderer extends MainRenderer {
          && !"multi_scatter".equals(temporalScatterIsolationMode);
       boolean scatterBackupTemporalBranch = "scatter_backup".equals(temporalScatterIsolationMode);
       boolean multiScatterTemporalBranch = "multi_scatter".equals(temporalScatterIsolationMode);
-      boolean gatherTemporalBranch = "off".equals(temporalScatterIsolationMode)
+      boolean robustGatherTemporalBranch = "off".equals(temporalScatterIsolationMode)
          || "ownership_only".equals(temporalScatterIsolationMode)
          || scatterBackupTemporalBranch;
-      if (gatherTemporalBranch && this.temporalGatherRenderer != null) {
+      if (robustGatherTemporalBranch && this.robustReuseOptimizationRenderer != null) {
+         this.robustReuseOptimizationRenderer.renderAll();
+         GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+      }
+      if (robustGatherTemporalBranch && this.temporalGatherRenderer != null) {
          this.temporalGatherRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
