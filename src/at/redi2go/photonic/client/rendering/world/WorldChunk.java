@@ -7,7 +7,7 @@ import java.util.concurrent.CompletableFuture;
 public interface WorldChunk extends MemoryOwner {
    void freeBlocks();
 
-   boolean set(int x, int y, int z, PBlock block, int skyBrightness);
+   boolean setPackedEntry(int x, int y, int z, int packedEntry);
 
    CompletableFuture<Void> optimizeAsync();
 

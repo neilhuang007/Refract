@@ -5,6 +5,68 @@
 // This keeps the indirect pipeline independent from late implementation regions in
 // reuse_bridge.glsl while preserving a single implementation owner for these symbols.
 
+// ---------------------------------------------------------------------------
+// Paper-aligned reconnection payload alias.
+// The reference implementation (Reservoir-Splatting, ReconnectionData.slang)
+// names this struct ``ReconnectionData``. Photonics exposes it under
+// ``ReservoirSplattingReconnectionData`` and the underlying storage layout is
+// defined as ``ScatterReconnectionData`` in reuse_bridge.glsl. Those aliases
+// are declared in reuse_bridge.glsl right after the struct definition so every
+// downstream include (this file included) picks them up transparently — no
+// re-declaration is needed or permitted here (GLSL forbids redefining macros
+// to the same target without ``#undef``).
+
+// ---------------------------------------------------------------------------
+// Local-light selection context sentinel (reference parity):
+// RTXDI_InitializeLocalLightSelectionContext may fail to produce a usable
+// POWER_RIS tile or REGIR_RIS cell. In that case the caller must short-circuit
+// RTXDI_SelectNextLocalLight with invSourcePdf=0 rather than silently falling
+// back to uniform sampling (which would bias the initial candidate stream).
+// These sentinels are consumed by ``lt_make_invalid_local_light_selection_context``
+// and the ``ctx.mode == RTXDI_LocalLightContextSamplingMode_INVALID`` branch in
+// ``RTXDI_SelectNextLocalLight`` (see reuse_bridge.glsl).
+const uint RTXDI_LocalLightContextSamplingMode_INVALID = 0xFFFFFFFFu;
+const uint LT_PROPOSAL_FAMILY_INVALID                  = 0xFFFFFFFFu;
+
+// ---------------------------------------------------------------------------
+// RTXDI_StreamSampleWithDomain
+//
+// Extends ``RTXDI_StreamSample`` with the Area-ReSTIR / reservoir-splatting
+// domain coordinates (subpixel, lens, pathSample id) that the reference
+// PathTracer records alongside the winning candidate (PathTracer.slang:208,
+// Reservoir.slang:CandidateReservoir::addVertex and the reconnection payload
+// plumbing in InitialCandidates.cs.slang). When the candidate is selected, the
+// reservoir stores the exact domain coordinate of the winning candidate so
+// downstream stages (scatter temporal reprojection, MIS weighting, shading)
+// can replay the selected path without a pixel-center fallback.
+bool RTXDI_StreamSampleWithDomain(
+    inout RTXDI_DIReservoir reservoir,
+    int lightIndex,
+    vec2 sampleUv,
+    float random,
+    float targetPdf,
+    float invSourcePdf,
+    vec2 pixelSampleUV,
+    vec2 lensSampleUV,
+    uint pathSample)
+{
+    float risWeight = targetPdf * invSourcePdf;
+    reservoir.M += 1.0f;
+    reservoir.weightSum += risWeight;
+    bool selectSample = (random * reservoir.weightSum < risWeight);
+    if (selectSample) {
+        rtxdi_set_light_index(reservoir, lightIndex);
+        rtxdi_set_sample_uv(reservoir, sampleUv);
+        reservoir.targetPdf = targetPdf;
+        reservoir.transportAux0 = 0.0f;
+        reservoir.transportAux1 = 0.0f;
+        reservoir.pixelSampleUV = pixelSampleUV;
+        reservoir.lensSampleUV  = lensSampleUV;
+        reservoir.pathSample    = pathSample;
+    }
+    return selectSample;
+}
+
 // RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)
 // RTXDI does NOT guard numMisSamples against zero here — the early-exit in RTXDI_SampleLocalLights
 // ensures numMisSamples > 0 before this is used in division.
@@ -134,41 +196,40 @@ float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir)
     return mix(pdfGgx, pdfCosine, diffuseProbability);
 }
 
+RTXDI_LocalLightSelectionContext lt_make_invalid_local_light_selection_context()
+{
+    // Reference parity: when ReGIR cell resolution or POWER_RIS tiles are
+    // unavailable the initial-candidate stage must NOT silently fall through
+    // to uniform sampling. We emit a selection context explicitly tagged
+    // INVALID so RTXDI_SelectNextLocalLight short-circuits with invSourcePdf=0.
+    RTXDI_LocalLightSelectionContext ctx;
+    ctx.mode = RTXDI_LocalLightContextSamplingMode_INVALID;
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_INVALID;
+    ctx.risTileInfo.risTileOffset = 0u;
+    ctx.risTileInfo.risTileSize = 0u;
+    ctx.lightBufferRegion.firstLightIndex = 0u;
+    ctx.lightBufferRegion.numLights = 0u;
+    ctx.lightBufferRegion.pad1 = 0u;
+    ctx.lightBufferRegion.pad2 = 0u;
+    return ctx;
+}
+
 RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIRRIS(
     inout RTXDI_RandomSamplerState coherentRng,
     RTXDI_LightBufferRegion localLightBufferRegion,
     RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams,
     RAB_Surface surface)
 {
-    // Old hard partitioning kept for reference:
-    // int cellIndex = -1;
-    // if (regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0)
-    // {
-    //     RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
-    //         RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
-    //     ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
-    //     return ctx;
-    // }
-
     int cellIndex = -1;
     bool useReGIR = regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0;
-    bool hasFallbackRIS = localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u;
-
-    if (useReGIR) {
-        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
-            RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
-        ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
-        return ctx;
+    if (!useReGIR) {
+        return lt_make_invalid_local_light_selection_context();
     }
 
-    if (hasFallbackRIS)
-    {
-        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
-        ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_FALLBACK;
-        return ctx;
-    }
-
-    return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
+    RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
+        RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
+    return ctx;
 }
 
 RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextFallback(
@@ -176,15 +237,13 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextFallb
     RTXDI_LightBufferRegion localLightBufferRegion,
     RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams)
 {
-    if (localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u)
+    if (localLightRISBufferSegmentParams.tileCount == 0u || localLightRISBufferSegmentParams.tileSize == 0u)
     {
-        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
-        ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_FALLBACK;
-        return ctx;
+        return lt_make_invalid_local_light_selection_context();
     }
 
-    RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
-    ctx.proposalFamily = LT_PROPOSAL_FAMILY_UNIFORM;
+    RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_POWER_RIS;
     return ctx;
 }
 
@@ -206,18 +265,16 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
 
     if (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_POWER_RIS)
     {
-        if (localLightRISBufferSegmentParams.tileCount > 0u && localLightRISBufferSegmentParams.tileSize > 0u)
-        {
-            return RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
-        }
-        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
-        ctx.proposalFamily = LT_PROPOSAL_FAMILY_UNIFORM;
-        return ctx;
+        return RTXDI_InitializeLocalLightSelectionContextFallback(
+            coherentRng,
+            localLightBufferRegion,
+            localLightRISBufferSegmentParams);
     }
 
-    RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
-    ctx.proposalFamily = LT_PROPOSAL_FAMILY_UNIFORM;
-    return ctx;
+    // Reference parity: the initial-candidate stage has no uniform-selection
+    // fallback. Any non-RIS/non-ReGIR mode is an explicit misconfiguration and
+    // results in an INVALID selection context that emits no candidates.
+    return lt_make_invalid_local_light_selection_context();
 }
 
 void RTXDI_UnpackLocalLightFromRISLightData(
@@ -269,6 +326,16 @@ void RTXDI_SelectNextLocalLight(
     out uint lightIndex,
     out float invSourcePdf)
 {
+    // Reference parity: an INVALID context (ReGIR cell missing or RIS tiles
+    // absent) short-circuits with no candidate instead of degrading to uniform.
+    if (ctx.mode == RTXDI_LocalLightContextSamplingMode_INVALID)
+    {
+        lightInfo = RAB_EmptyLightInfo();
+        lightIndex = 0u;
+        invSourcePdf = 0.0f;
+        return;
+    }
+
     if (ctx.mode == RTXDI_LocalLightContextSamplingMode_RIS)
     {
         RTXDI_RandomlySelectLocalLightFromRISTile(rnd, ctx.risTileInfo, lightInfo, lightIndex, invSourcePdf);
@@ -324,8 +391,10 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
         RAB_LightInfo lightInfo = RAB_EmptyLightInfo();
         float invSourcePdf = 0.0f;
 
+        // Reference parity: candidates must be IID (InitialCandidates.cs.slang:59
+        // "All samples are IID, so m_i = 1 / M."). No per-iteration stratified
+        // remapping of the random draw.
         float rnd = lt_next_random(rng);
-        rnd = (rnd + float(i)) / float(initialSamplingParams.numLocalLightSamples);
 
         RTXDI_SelectNextLocalLight(lightSelectionContext, rnd, lightInfo, lightIndex, invSourcePdf);
         if (lightInfo.index < 0 || invSourcePdf <= 0.0f)
@@ -350,21 +419,38 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
             continue;
         }
 
-        bool selected = RTXDI_StreamSample(state, int(lightIndex), uv, risRnd, targetPdf, 1.0f / blendedSourcePdf);
+        // Reference parity (PathTracer.slang:208): each candidate draws its own
+        // subpixel and lens sample from the path RNG so the selected reservoir
+        // carries the exact domain coordinate of the winning candidate, without
+        // a pixel-center fallback.
+        vec2 candidatePixelSample = lt_area_random_pixel_sample(rng, lt_fragment_pixel_pos());
+        vec2 candidateLensSample = lt_area_sample_lens_sample(rng);
+        uint candidatePathSample = lt_make_path_sample(2u, lightSelectionContext.proposalFamily);
+
+        bool selected = RTXDI_StreamSampleWithDomain(
+            state,
+            int(lightIndex),
+            uv,
+            risRnd,
+            targetPdf,
+            1.0f / blendedSourcePdf,
+            candidatePixelSample,
+            candidateLensSample,
+            candidatePathSample);
         if (selected)
         {
             state.transportAux0 = 1.0f / blendedSourcePdf;
-            state.pathSample = lt_make_path_sample(2u, lightSelectionContext.proposalFamily);
             o_selectedSample = candidateSample;
         }
     }
 
     RTXDI_FinalizeResampling(state, 1.0f, float(misData.numMisSamples));
     state.M = 1.0f;
-    if (RTXDI_IsValidDIReservoir(state)) {
-        state.pathSample = lt_make_path_sample(2u, lightSelectionContext.proposalFamily);
-    }
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), state.pathSample);
+    // Reference parity: when the stream selected a candidate, its per-path
+    // subpixel/lens sample is already recorded via StreamSampleWithDomain. No
+    // pixel-center fallback is needed. When no candidate was selected the
+    // reservoir remains empty and downstream readers must treat it as a dead
+    // pixel without inferring a domain (handled via RTXDI_IsValidDIReservoir).
     return state;
 }
 
@@ -499,21 +585,33 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surfa
             continue;
         }
 
-        bool selected = RTXDI_StreamSample(state, brdfSample.index, sampleUv, lt_next_random(rng), targetPdf, 1.0f / blendedSourcePdf);
+        // Reference parity: draw per-candidate subpixel + lens sample and
+        // record them alongside the light selection. No pixel-center fallback.
+        vec2 candidatePixelSample = lt_area_random_pixel_sample(rng, lt_fragment_pixel_pos());
+        vec2 candidateLensSample = lt_area_sample_lens_sample(rng);
+        uint candidatePathSample = lt_make_path_sample(1u, LT_PROPOSAL_FAMILY_BRDF);
+
+        bool selected = RTXDI_StreamSampleWithDomain(
+            state,
+            brdfSample.index,
+            sampleUv,
+            lt_next_random(rng),
+            targetPdf,
+            1.0f / blendedSourcePdf,
+            candidatePixelSample,
+            candidateLensSample,
+            candidatePathSample);
         if (selected)
         {
             state.transportAux0 = 1.0f / blendedSourcePdf;
-            state.pathSample = lt_make_path_sample(1u, LT_PROPOSAL_FAMILY_BRDF);
             o_selectedSample = brdfSample;
         }
     }
 
     RTXDI_FinalizeResampling(state, 1.0, float(misData.numMisSamples));
     state.M = 1.0;
-    if (RTXDI_IsValidDIReservoir(state)) {
-        state.pathSample = lt_make_path_sample(1u, LT_PROPOSAL_FAMILY_BRDF);
-    }
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), state.pathSample);
+    // Reference parity: pathSample/pixelSampleUV/lensSampleUV are recorded
+    // per-candidate during streaming. No pixel-center fallback is emitted.
     return state;
 }
 
@@ -551,7 +649,11 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
         brdfSample);
 
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    RTXDI_CombineDIReservoirs(state, localReservoir, 0.5, localReservoir.targetPdf);
+    // Reference parity: use an RNG draw to combine the local sub-reservoir
+    // rather than a constant bias term. The first combination into an empty
+    // reservoir is invariant over the RNG, but using a fresh draw matches
+    // InitialCandidates.cs.slang's randomized RIS combine (Reservoir.slang:93).
+    bool selectLocal = RTXDI_CombineDIReservoirs(state, localReservoir, lt_next_random(rng), localReservoir.targetPdf);
     bool selectInfinite = RTXDI_CombineDIReservoirs(state, infiniteReservoir, lt_next_random(rng), infiniteReservoir.targetPdf);
     bool selectEnvironment = RTXDI_CombineDIReservoirs(state, environmentReservoir, lt_next_random(rng), environmentReservoir.targetPdf);
     bool selectBrdf = RTXDI_CombineDIReservoirs(state, brdfReservoir, lt_next_random(rng), brdfReservoir.targetPdf);
@@ -565,9 +667,15 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
         } else {
             selectedProposalFamily = (state.pathSample >> LT_PATH_SAMPLE_PROPOSAL_SHIFT) & LT_PATH_SAMPLE_PROPOSAL_MASK;
         }
-        state.pathSample = lt_make_path_sample(selectBrdf ? 1u : 2u, selectedProposalFamily);
+        // Preserve the pixel/lens domain samples that the sub-reservoir
+        // recorded during streaming (RTXDI_InternalSimpleResample copies them
+        // on selection); only rewrite the path-sample tag so the proposal
+        // family reflects the winning technique.
+        uint basePathSample = selectBrdf ? 1u : 2u;
+        state.pathSample = lt_make_path_sample(basePathSample, selectedProposalFamily);
     }
-    lt_area_finalize_candidate(state, lt_fragment_pixel_pos(), state.pathSample);
+    // Reference parity: subpixel + lens domain samples are recorded during
+    // streaming, not synthesized post-hoc. Removed lt_area_finalize_candidate.
 
     o_lightSample = localSample;
     if (selectBrdf)
@@ -585,9 +693,51 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
 
     if (initialSamplingParams.enableInitialVisibility != 0u && RTXDI_IsValidDIReservoir(state) && o_lightSample.index >= 0)
     {
-        if (!RAB_GetConservativeVisibility(surface, o_lightSample))
+        // Trace the FINAL visibility (RGB transmittance through stained glass,
+        // tinted voxels, etc.) once per selected candidate and store it in the
+        // reservoir's packedVisibility channel. Bug T1.2 fix: bake V into the
+        // RIS arithmetic (targetPdf + weightSum) so the reference invariant
+        //     pHat_at_finalize == luminance(integrand)
+        // holds once the reconnection's integrand is built with V in
+        // `scatter_compute_reconnection_integrand`. Downstream stages then use
+        // pure `integrand * UCW` at resolve (ResolveReSTIR.cs.slang:57),
+        // eliminating the per-frame visibility re-trace that caused bug T1.1.
+        float visibilityHitDistance = 0.0f;
+        vec3 visibilityRgb = lt_trace_final_visibility_with_offset(
+            o_lightSample, surface, 0.0f, visibilityHitDistance
+        );
+        float lumV = ph_luminance(max(visibilityRgb, vec3(0.0f)));
+        if (!(lumV > 0.0f))
         {
             RTXDI_StoreVisibilityInDIReservoir(state, vec3(0.0f), true);
+        }
+        else
+        {
+            RTXDI_StoreVisibilityInDIReservoir(state, visibilityRgb, false);
+            // Bug T1.2 fix: bake V into the reservoir's stored pHat so the
+            // reference invariant pHat == luminance(integrand_with_V) holds
+            // after the reconnection's integrand absorbs V in
+            // `scatter_compute_reconnection_integrand`.
+            //
+            // Port storage convention: after this inner-RIS finalize,
+            //   state.weightSum = UCW (post-RTXDI_FinalizeResampling)
+            //   state.targetPdf = pHat (without V).
+            // The OUTER IID merge in `lt_accumulate_iid_candidate` accumulates
+            //   outer.weightSum += mis * candidate.weightSum * candidate.targetPdf
+            //                    = mis * UCW * pHat                  (reference totalWeight)
+            // and the resolve path recovers ref UCW via
+            //   UCW_resolve = outer.weightSum / luminance(integrand_with_V).
+            //
+            // To bake V into the reference `totalWeight` at the outer level we
+            // need exactly ONE factor of luminance(V) in `UCW * pHat`. Scaling
+            // BOTH would over-multiply by lumV^2 and amplify per-pixel pHat
+            // jitter across frames (catastrophic on shadow edges). Scaling
+            // ONLY `targetPdf` yields:
+            //   outer.weightSum += mis * UCW * (pHat * lumV) = mis * totalWeight_ref_with_V
+            //   UCW_resolve      = (totalWeight * lumV) / (pHat * lumV) = UCW_ref
+            //   color            = integrand_with_V * UCW_ref
+            // exactly matching ResolveReSTIR.cs.slang:57.
+            state.targetPdf *= lumV;
         }
     }
 

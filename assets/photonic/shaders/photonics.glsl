@@ -10,6 +10,8 @@ ph_int_size
 + ph_int_size
 + ph_schematic_size;
 
+const int ph_entry_data_flag = -2147483648;
+
 /*
     -- SSBO --
 */
@@ -20,6 +22,14 @@ layout(std430) restrict readonly buffer root_uniform {
 layout (std430) restrict readonly buffer cb_block {
     int cb_array[];
 };
+
+int ph_decode_data_entry(int entry) {
+    return entry & 0x7fffffff;
+}
+
+bool ph_is_data_entry(int entry) {
+    return (entry & ph_entry_data_flag) != 0;
+}
 
 
 const int light_size = 4; // 4 vec4s per light

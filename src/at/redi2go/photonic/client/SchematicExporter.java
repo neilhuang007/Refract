@@ -36,7 +36,7 @@ public class SchematicExporter {
          .filter(Objects::nonNull)
          .distinct()
          .toArray(BlockState[]::new);
-      this.writeContext = new ZipWriteContext(new ZipOutputStream(new FileOutputStream(zipFile)), 16384);
+      this.writeContext = new ZipWriteContext(new ZipOutputStream(new FileOutputStream(zipFile)), BlockBuilder.BLOCK_VOXEL_SIZE * BlockBuilder.BLOCK_VOXEL_SIZE * BlockBuilder.BLOCK_VOXEL_SIZE * Integer.BYTES);
    }
 
    public boolean exportOne() {
@@ -68,7 +68,7 @@ public class SchematicExporter {
 
    private static void exportBlockState(ZipWriteContext writeContext, BlockState blockState, Map<Long, Pair<BlockState, Schematic>> baseCases) {
       if (!blockState.isAir()) {
-         Schematic schematic = BlockBuilder.buildBlockSchematic(blockState);
+         Schematic schematic = BlockBuilder.buildBlockSchematic(blockState, BlockBuilder.BLOCK_VOXEL_SIZE);
          schematic.calcRotationHash();
          int[] targetHash = schematic.getHashVector();
          int ax = Math.abs(targetHash[0]);

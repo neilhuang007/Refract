@@ -35,6 +35,7 @@ import org.joml.Vector3f;
 import org.joml.Vector3i;
 import org.joml.Vector4f;
 import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL42;
@@ -57,8 +58,16 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String indirectDenoisingFragment = "lighttree/light_tree_indirect_denoising.fsh";
    private static final String diShadeSamplesFragment = "lighttree/LightingPasses/DI/ShadeSamples.fsh";
    private static final String diGenerateInitialSamplesFragment = "lighttree/LightingPasses/DI/GenerateInitialSamples.fsh";
+   private static final String diCollectTemporalSamplesFragment = "lighttree/LightingPasses/DI/CollectTemporalSamples.fsh";
+   private static final String diGatherTemporalResamplingFragment = "lighttree/LightingPasses/DI/GatherTemporalResampling.fsh";
    private static final String diTemporalReprojectionFragment = "lighttree/LightingPasses/DI/TemporalReprojection.fsh";
+   private static final String diTemporalBinningOffsetsFragment = "lighttree/LightingPasses/DI/TemporalBinningOffsets.fsh";
    private static final String diTemporalBinningFragment = "lighttree/LightingPasses/DI/TemporalBinning.fsh";
+   private static final String diMultiTemporalReprojectionFragment = "lighttree/LightingPasses/DI/MultiTemporalReprojection.fsh";
+   private static final String diMultiTemporalBinningOffsetsFragment = "lighttree/LightingPasses/DI/MultiTemporalBinningOffsets.fsh";
+   private static final String diMultiTemporalBinningFragment = "lighttree/LightingPasses/DI/MultiTemporalBinning.fsh";
+   private static final String diScatterBackupTemporalResamplingFragment = "lighttree/LightingPasses/DI/ScatterBackupTemporalResampling.fsh";
+   private static final String diMultiScatterTemporalResamplingFragment = "lighttree/LightingPasses/DI/MultiScatterTemporalResampling.fsh";
    private static final String diSpatialResamplingFragment = "lighttree/LightingPasses/DI/SpatialResampling.fsh";
    private static final String diShadeSamplesLightingFragment = "lighttree/LightingPasses/DI/ShadeSamplesLighting.fsh";
    private static final String diShadeSamplesReservoirFragment = "lighttree/LightingPasses/DI/ShadeSamplesReservoir.fsh";
@@ -68,44 +77,44 @@ public class LightTreeRenderer extends MainRenderer {
    private static final int[] shadeSamplesReservoirDrawBuffers = new int[]{-1, -1, 0, 1, 2};
    private static final int profilerLogIntervalFrames = 60;
    private static final String[] gpuProfilerRegionNames = new String[]{
-      "LightTreeSamplingStage", "DIGenerateInitialSamples", "DISpatialResampling", "DIShadeSamples", "NRDPrepareInputs", "RELAXDiffuseTemporalAccumulation", "RELAXDiffuseHistoryFix", "RELAXDiffuseHistoryClamping", "RELAXDiffuseAntiFirefly", "RELAXDiffuseAtrous", "RELAXSpecularTemporalAccumulation", "RELAXSpecularHistoryFix", "RELAXSpecularHistoryClamping", "RELAXSpecularAntiFirefly", "RELAXSpecularAtrous", "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
+      "LightTreeSamplingStage", "DIGenerateInitialSamples", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples", "NRDPrepareInputs", "RELAXDiffuseTemporalAccumulation", "RELAXDiffuseHistoryFix", "RELAXDiffuseHistoryClamping", "RELAXDiffuseAntiFirefly", "RELAXDiffuseAtrous", "RELAXSpecularTemporalAccumulation", "RELAXSpecularHistoryFix", "RELAXSpecularHistoryClamping", "RELAXSpecularAntiFirefly", "RELAXSpecularAtrous", "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
    };
    private static final String[] profilerPassNames = new String[]{
-      "LightTreeSamplingStage", "DIGenerateInitialSamples", "DISpatialResampling", "DIShadeSamples", "NRDPrepareInputs", "RELAXDiffuseTemporalAccumulation", "RELAXDiffuseHistoryFix", "RELAXDiffuseHistoryClamping", "RELAXDiffuseAntiFirefly", "RELAXDiffuseAtrous", "RELAXSpecularTemporalAccumulation", "RELAXSpecularHistoryFix", "RELAXSpecularHistoryClamping", "RELAXSpecularAntiFirefly", "RELAXSpecularAtrous", "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
+      "LightTreeSamplingStage", "DIGenerateInitialSamples", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples", "NRDPrepareInputs", "RELAXDiffuseTemporalAccumulation", "RELAXDiffuseHistoryFix", "RELAXDiffuseHistoryClamping", "RELAXDiffuseAntiFirefly", "RELAXDiffuseAtrous", "RELAXSpecularTemporalAccumulation", "RELAXSpecularHistoryFix", "RELAXSpecularHistoryClamping", "RELAXSpecularAntiFirefly", "RELAXSpecularAtrous", "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
    };
    private static final int lightTreeSamplingStageRegionIndex = 0;
    private static final int diGenerateInitialSamplesRegionIndex = 1;
-   private static final int diSpatialResamplingRegionIndex = 2;
    private static final int diTemporalResamplingRegionIndex = 2;
-   private static final int diShadeSamplesRegionIndex = 3;
-   private static final int nrdPrepareInputsRegionIndex = 4;
-   private static final int relaxDiffuseTemporalAccumulationRegionIndex = 5;
-   private static final int relaxDiffuseHistoryFixRegionIndex = 6;
-   private static final int relaxDiffuseHistoryClampingRegionIndex = 7;
-   private static final int relaxDiffuseAntiFireflyRegionIndex = 8;
-   private static final int relaxDiffuseAtrousRegionIndex = 9;
-   private static final int relaxSpecularTemporalAccumulationRegionIndex = 10;
-   private static final int relaxSpecularHistoryFixRegionIndex = 11;
-   private static final int relaxSpecularHistoryClampingRegionIndex = 12;
-   private static final int relaxSpecularAntiFireflyRegionIndex = 13;
-   private static final int relaxSpecularAtrousRegionIndex = 14;
-   private static final int restirGIRegionIndex = 15;
-   private static final int indirectDenoiseRegionIndex = 16;
-   private static final int lightingAccumulationRegionIndex = 17;
-   private static final int indirectCompositeRegionIndex = 18;
-   private boolean loggedRegirPresampleFrameSeedOverride = false;
-   private boolean loggedRegirBuildFrameSeedOverride = false;
+   private static final int diSpatialResamplingRegionIndex = 3;
+   private static final int diShadeSamplesRegionIndex = 4;
+   private static final int nrdPrepareInputsRegionIndex = 5;
+   private static final int relaxDiffuseTemporalAccumulationRegionIndex = 6;
+   private static final int relaxDiffuseHistoryFixRegionIndex = 7;
+   private static final int relaxDiffuseHistoryClampingRegionIndex = 8;
+   private static final int relaxDiffuseAntiFireflyRegionIndex = 9;
+   private static final int relaxDiffuseAtrousRegionIndex = 10;
+   private static final int relaxSpecularTemporalAccumulationRegionIndex = 11;
+   private static final int relaxSpecularHistoryFixRegionIndex = 12;
+   private static final int relaxSpecularHistoryClampingRegionIndex = 13;
+   private static final int relaxSpecularAntiFireflyRegionIndex = 14;
+  private static final int relaxSpecularAtrousRegionIndex = 15;
+  private static final int restirGIRegionIndex = 16;
+  private static final int indirectDenoiseRegionIndex = 17;
+  private static final int lightingAccumulationRegionIndex = 18;
+  private static final int indirectCompositeRegionIndex = 19;
+  private boolean loggedRegirPresampleFrameSeedOverride = false;
+  private boolean loggedRegirBuildFrameSeedOverride = false;
 
-   private final PhotonicsProperties properties;
-   private final ColorFramebuffer lightingBuffer;
-   private final ColorFramebuffer lightingStageBuffer;
-   private final ColorFramebuffer motionVectorBuffer;
-   private final ColorFramebuffer directReservoirBuffer;
-   private final ColorFramebuffer directSpatialReservoirBuffer;
-   private final ColorFramebuffer directConfidenceBuffer;
-   private final ColorFramebuffer directInitialDebugBuffer;
-   private final ColorFramebuffer compatDirectSoftBuffer;
-   private final ColorFramebuffer directHistoryLengthBuffer;
+  private final PhotonicsProperties properties;
+  private final ColorFramebuffer lightingBuffer;
+  private final ColorFramebuffer lightingStageBuffer;
+  private final ColorFramebuffer motionVectorBuffer;
+  private final ColorFramebuffer directReservoirBuffer;
+  private final ColorFramebuffer directSpatialReservoirBuffer;
+  private final ColorFramebuffer directConfidenceBuffer;
+  private final ColorFramebuffer directInitialDebugBuffer;
+  private final ColorFramebuffer compatDirectSoftBuffer;
+  private final ColorFramebuffer directHistoryLengthBuffer;
    private final ColorFramebuffer directNoisyBuffer;
    private final ColorFramebuffer directResponsiveBuffer;
    private final ColorFramebuffer directSlowBuffer;
@@ -128,20 +137,23 @@ public class LightTreeRenderer extends MainRenderer {
   private final ColorFramebuffer indirectInitialReservoirBuffer;
   private final ColorFramebuffer indirectReservoirBuffer;
   private final ColorFramebuffer indirectDenoisedBuffer;
-  // -- Scatter temporal resampling (Reservoir Splatting) --
-  // Persistent temporal history resources:
-  //   * scatterReconnectionBuffer: previous/current per-pixel reconnection payload history
+  // -- Shared DI reconnection payload / temporal scatter history --
+  // Persistent resources:
+  //   * scatterReconnectionBuffer: shared current-stage + previous-frame reconnection payload
   //   * temporalReservoirBuffer: same-frame temporal DI output consumed by spatial reuse
+  //   * temporalGatherBuffer: intermediate gather-side storage for CollectTemporalSamples / GatherTemporalResampling
   private final ColorFramebuffer scatterReconnectionBuffer;
   private final ColorFramebuffer temporalReservoirBuffer;
-  private final GlMemoryManager temporalScatterGlobalCountersMemoryManager;
-  private final GlMemoryManager temporalScatterCellCountersMemoryManager;
-  private final GlMemoryManager temporalScatterReservoirIndicesMemoryManager;
-  private final GlMemoryManager temporalScatterScatteredReservoirsMemoryManager;
-  private final GlMemoryManager temporalScatterScatteredWeightsMemoryManager;
-  private final GlMemoryManager temporalScatterCellOffsetsMemoryManager;
-  private final GlMemoryManager temporalScatterSortedReservoirsMemoryManager;
-  private final GlMemoryManager temporalScatterSortedWeightsMemoryManager;
+  private final ColorFramebuffer temporalGatherBuffer;
+  private GlMemoryManager[] temporalScatterGlobalCountersMemoryManagers;
+  private GlMemoryManager[] temporalScatterCellCountersMemoryManagers;
+
+  private GlMemoryManager[] temporalScatterReservoirIndicesMemoryManagers;
+  private GlMemoryManager[] temporalScatterScatteredReservoirsMemoryManagers;
+  private GlMemoryManager[] temporalScatterScatteredWeightsMemoryManagers;
+  private GlMemoryManager[] temporalScatterCellOffsetsMemoryManagers;
+  private GlMemoryManager[] temporalScatterSortedReservoirsMemoryManagers;
+  private GlMemoryManager[] temporalScatterSortedWeightsMemoryManagers;
   private final RoutingFramebuffer proposalFramebuffer;
   private final RoutingFramebuffer proposalReservoirFramebuffer;
   private final RoutingFramebuffer reuseResolveFramebuffer;
@@ -213,15 +225,36 @@ public class LightTreeRenderer extends MainRenderer {
   @Nullable
   private CompositeRenderer shadeSamplesRenderer;
   @Nullable
-  private CompositeRenderer temporalScatterOwnershipRenderer;
+  private CompositeRenderer temporalCollectRenderer;
+  @Nullable
+  private CompositeRenderer temporalGatherRenderer;
+  @Nullable
+  private CompositeRenderer temporalScatterReprojectionRenderer;
+  @Nullable
+  private CompositeRenderer temporalMultiScatterReprojectionRenderer;
+  @Nullable
+  private CompositeRenderer temporalScatterBinningOffsetsRenderer;
+  @Nullable
+  private CompositeRenderer temporalMultiScatterBinningOffsetsRenderer;
+  @Nullable
+  private CompositeRenderer temporalScatterBinningRenderer;
+  @Nullable
+  private CompositeRenderer temporalMultiScatterBinningRenderer;
   @Nullable
   private CompositeRenderer scatterTemporalRenderer;
+  @Nullable
+  private CompositeRenderer scatterBackupTemporalRenderer;
+  @Nullable
+  private CompositeRenderer multiScatterTemporalRenderer;
   private final GpuTimerQuery gpuTimerQuery;
   @Nullable
   private RegirComputeProgram regirComputeProgram;
   private final int[] directAtrousStepSizes;
   private final Consumer<String> localLightSamplingModeObserver;
   private final Consumer<String> temporalScatterIsolationModeObserver;
+   private static final int RESERVOIR_SPLATTING_TIME_PARTITION_COUNT = 4;
+   private int temporalScatterPixelCapacity;
+  private int temporalScatterContributorCapacity;
   private int directAtrousIteration = 0;
   private int specAtrousIteration = 0;
   private boolean compatDirectSoftDirty = true;
@@ -230,6 +263,7 @@ public class LightTreeRenderer extends MainRenderer {
   private int profilerFrameCounter = 0;
   private long lastCpuLightTreeSamplingStageNanos;
   private long lastCpuDIGenerateInitialSamplesNanos;
+  private long lastCpuDITemporalResamplingNanos;
   private long lastCpuDISpatialResamplingNanos;
   private long lastCpuDIShadeSamplesNanos;
   private long lastCpuNRDPrepareInputsNanos;
@@ -265,14 +299,10 @@ public class LightTreeRenderer extends MainRenderer {
       this.directSpatialReservoirBuffer = this.createDirectReservoirFramebuffer(renderScale);
       this.scatterReconnectionBuffer = this.createScatterReconnectionFramebuffer(renderScale);
       this.temporalReservoirBuffer = this.createTemporalReservoirFramebuffer(renderScale);
-      this.temporalScatterGlobalCountersMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_global_counters", 2 * Integer.BYTES);
-      this.temporalScatterCellCountersMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_cell_counters", this.getTemporalScatterPixelCapacity() * Integer.BYTES);
-      this.temporalScatterReservoirIndicesMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_reservoir_indices", this.getTemporalScatterContributorCapacity() * 2 * Integer.BYTES);
-      this.temporalScatterScatteredReservoirsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_scattered_reservoirs", this.getTemporalScatterContributorCapacity() * 2 * Integer.BYTES);
-      this.temporalScatterScatteredWeightsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_scattered_weights", this.getTemporalScatterContributorCapacity() * Integer.BYTES);
-      this.temporalScatterCellOffsetsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_cell_offsets", this.getTemporalScatterPixelCapacity() * Integer.BYTES);
-      this.temporalScatterSortedReservoirsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_sorted_reservoirs", this.getTemporalScatterContributorCapacity() * 2 * Integer.BYTES);
-      this.temporalScatterSortedWeightsMemoryManager = this.createTemporalScatterMemoryManager("ph_temporal_scatter_sorted_weights", this.getTemporalScatterContributorCapacity() * Integer.BYTES);
+      this.temporalGatherBuffer = this.createTemporalGatherFramebuffer(renderScale);
+      this.temporalScatterPixelCapacity = this.getTemporalScatterPixelCapacity();
+      this.temporalScatterContributorCapacity = this.getTemporalScatterContributorCapacity();
+      this.allocateTemporalScatterMemoryManagers();
       this.directConfidenceBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.directInitialDebugBuffer = this.createDirectPackedDebugFramebuffer(renderScale);
       this.compatDirectSoftBuffer = new ColorFramebuffer(renderScale);
@@ -344,15 +374,29 @@ public class LightTreeRenderer extends MainRenderer {
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getLightReverseMappingMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getPreviousLightsMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getNeighborOffsetMemoryManager());
-      memoryCollection.add(() -> this.temporalScatterGlobalCountersMemoryManager);
-      memoryCollection.add(() -> this.temporalScatterCellCountersMemoryManager);
-      memoryCollection.add(() -> this.temporalScatterReservoirIndicesMemoryManager);
-      memoryCollection.add(() -> this.temporalScatterScatteredReservoirsMemoryManager);
-      memoryCollection.add(() -> this.temporalScatterScatteredWeightsMemoryManager);
-      memoryCollection.add(() -> this.temporalScatterCellOffsetsMemoryManager);
-      memoryCollection.add(() -> this.temporalScatterSortedReservoirsMemoryManager);
-      memoryCollection.add(() -> this.temporalScatterSortedWeightsMemoryManager);
+      this.addTemporalScatterMemoryManagers(memoryCollection);
       return memoryCollection;
+   }
+
+   private void addTemporalScatterMemoryManagers(GLMemoryCollection memoryCollection) {
+      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterGlobalCountersMemoryManagers);
+      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterCellCountersMemoryManagers);
+      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterReservoirIndicesMemoryManagers);
+      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterScatteredReservoirsMemoryManagers);
+      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterScatteredWeightsMemoryManagers);
+      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterCellOffsetsMemoryManagers);
+      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterSortedReservoirsMemoryManagers);
+      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterSortedWeightsMemoryManagers);
+   }
+
+   private void addTemporalScatterMemoryManagers(GLMemoryCollection memoryCollection, GlMemoryManager[] managers) {
+      if (managers == null) {
+         return;
+      }
+
+      for (GlMemoryManager manager : managers) {
+         memoryCollection.add(() -> manager);
+      }
    }
 
    @Override
@@ -366,14 +410,38 @@ public class LightTreeRenderer extends MainRenderer {
       this.reuseResolveRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diSpatialResamplingFragment, "common/screen.vsh", this.memoryCollection, this.reuseResolveFramebuffer))
       );
-      this.temporalScatterOwnershipRenderer = rendererCreator.apply(
-         List.of(
-            new PhotonicsShader(diTemporalReprojectionFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer),
-            new PhotonicsShader(diTemporalBinningFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer)
-         )
+      this.temporalCollectRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diCollectTemporalSamplesFragment, "common/screen.vsh", this.memoryCollection, this.temporalGatherBuffer))
+      );
+      this.temporalGatherRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diGatherTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
+      );
+      this.temporalScatterReprojectionRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diTemporalReprojectionFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
+      );
+      this.temporalMultiScatterReprojectionRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diMultiTemporalReprojectionFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
+      );
+      this.temporalScatterBinningOffsetsRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diTemporalBinningOffsetsFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
+      );
+      this.temporalMultiScatterBinningOffsetsRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diMultiTemporalBinningOffsetsFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
+      );
+      this.temporalScatterBinningRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diTemporalBinningFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
+      );
+      this.temporalMultiScatterBinningRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diMultiTemporalBinningFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
       );
       this.scatterTemporalRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diScatterTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
+      );
+      this.scatterBackupTemporalRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diScatterBackupTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
+      );
+      this.multiScatterTemporalRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diMultiScatterTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
       );
       this.directFeatureRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader("lighttree/direct_feature_extract.fsh", "common/screen.vsh", this.memoryCollection, this.directFeatureFramebuffer))
@@ -546,15 +614,25 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "prev_radiosity_reservoirs", () -> this.directReservoirBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_radiosity_reservoir_samples", () -> this.directReservoirBuffer.getReadAttachment("sample"));
       this.addTextureSampler(samplers, "prev_radiosity_reservoir_meta", () -> this.directReservoirBuffer.getReadAttachment("meta"));
-      // Scatter temporal resampling: robust reconnection history (current + previous frame)
-      this.addTextureSampler(samplers, "scatter_reconnection0", () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"));
-      this.addTextureSampler(samplers, "scatter_reconnection1", () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"));
+      // Stage-input shadow copies expose the authoritative current-stage reconnection payload.
+      // The historical sampler names remain for compatibility, but the read side is explicitly
+      // split from the live write attachments so GenerateInitialSamples, ScatterTemporalResolve,
+      // SpatialResampling, and the local final resolve all consume the copied stage input rather than
+      // sampling an attachment that is simultaneously bound as a color target.
+      this.addTextureSampler(samplers, "scatter_reconnection0", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection0"));
+      this.addTextureSampler(samplers, "scatter_reconnection1", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection1"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection0", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection0"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection1", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection1"));
-      // Scatter temporal resampling output: consumed by spatial resampling
+      // Scatter temporal resampling output: consumed by the current local spatial resampling stage
       this.addTextureSampler(samplers, "temporal_reservoir_data", () -> this.temporalReservoirBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "temporal_reservoir_sample", () -> this.temporalReservoirBuffer.getWriteAttachment("sample"));
       this.addTextureSampler(samplers, "temporal_reservoir_meta", () -> this.temporalReservoirBuffer.getWriteAttachment("meta"));
+      this.addTextureSampler(samplers, "temporal_gather_floating_coords", () -> this.temporalGatherBuffer.getWriteAttachment("floating_coords"));
+      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_data", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_data"));
+      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_sample", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_sample"));
+      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_meta", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"));
+      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection0", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"));
+      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection1", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"));
       this.addTextureSampler(samplers, "prev_radiosity_direct_soft", this::getPreviousCompatDirectSoftTexture);
       this.addTextureSampler(samplers, "prev_radiosity_handheld", () -> this.lightingBuffer.getReadAttachment("handheld"));
       this.addTextureSampler(samplers, "prev_radiosity_lighting_variance", () -> this.lightingBuffer.getReadAttachment("lighting_variance"));
@@ -627,6 +705,7 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1i("direct_atrous_is_last_pass", this::getCurrentDirectAtrousIsLastPass, listener -> {});
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_active_checkerboard_field", this::getActiveCheckerboardField);
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_frame_index", this::getRestirFrameIndex);
+      uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_reservoir_splatting_time_partition_count", () -> RESERVOIR_SPLATTING_TIME_PARTITION_COUNT);
       uniforms.uniform1f("ph_direct_sample_budget_scale", this::getDirectSampleBudgetScale, listener -> {});
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_depth_threshold", () -> this.properties.getRestirDepthThreshold());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_normal_threshold", () -> this.properties.getRestirNormalThreshold());
@@ -732,6 +811,10 @@ public class LightTreeRenderer extends MainRenderer {
                PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.value
             );
             return switch (isolationMode) {
+               case "ownership_only" -> 1.0f;
+               case "scatter_backup" -> 2.0f;
+               case "scatter_only" -> 3.0f;
+               case "multi_scatter" -> 4.0f;
                case "temporal_off" -> 5.0f;
                default -> 0.0f;
             };
@@ -856,13 +939,48 @@ public class LightTreeRenderer extends MainRenderer {
    private void swapScatterTemporalHistory() {
       // Previous-frame reconnection data is double-buffered and becomes readable after the
       // frame-start swap. The temporal DI output is intentionally NOT swapped because it is a
-      // same-frame producer/consumer resource between scatter temporal and spatial reuse.
+      // same-frame producer/consumer resource between the current local scatter temporal stage
+      // and spatial reuse.
       this.scatterReconnectionBuffer.swap();
    }
 
    private void updateScatterTemporalResourcesPerFrame() {
+      this.ensureTemporalScatterMemoryCapacity();
       this.scatterReconnectionBuffer.updatePerFrame();
       this.temporalReservoirBuffer.updatePerFrame();
+   }
+
+   private void allocateTemporalScatterMemoryManagers() {
+      this.temporalScatterGlobalCountersMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_global_counters", () -> 2 * Integer.BYTES);
+      this.temporalScatterCellCountersMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_cell_counters", () -> this.temporalScatterPixelCapacity * Integer.BYTES);
+      this.temporalScatterReservoirIndicesMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_reservoir_indices", () -> this.temporalScatterPixelCapacity * 2 * Integer.BYTES);
+      this.temporalScatterScatteredReservoirsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_scattered_reservoirs", () -> this.temporalScatterPixelCapacity * 2 * Integer.BYTES);
+      this.temporalScatterScatteredWeightsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_scattered_weights", () -> this.temporalScatterPixelCapacity * Integer.BYTES);
+      this.temporalScatterCellOffsetsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_cell_offsets", () -> this.temporalScatterPixelCapacity * Integer.BYTES);
+      this.temporalScatterSortedReservoirsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_sorted_reservoirs", () -> this.temporalScatterPixelCapacity * 2 * Integer.BYTES);
+      this.temporalScatterSortedWeightsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_sorted_weights", () -> this.temporalScatterPixelCapacity * Integer.BYTES);
+   }
+
+   private GlMemoryManager[] createTemporalScatterPartitionedMemoryManagers(String baseName, IntSupplier byteSizeSupplier) {
+      GlMemoryManager[] managers = new GlMemoryManager[RESERVOIR_SPLATTING_TIME_PARTITION_COUNT];
+      for (int partitionIndex = 0; partitionIndex < RESERVOIR_SPLATTING_TIME_PARTITION_COUNT; partitionIndex++) {
+         managers[partitionIndex] = this.createTemporalScatterMemoryManager(baseName + "_partition" + partitionIndex, byteSizeSupplier.getAsInt());
+      }
+      return managers;
+   }
+
+   private void ensureTemporalScatterMemoryCapacity() {
+      int requiredPixelCapacity = this.getTemporalScatterPixelCapacity();
+      int requiredContributorCapacity = requiredPixelCapacity * 4;
+      if (requiredPixelCapacity == this.temporalScatterPixelCapacity && requiredContributorCapacity == this.temporalScatterContributorCapacity) {
+         return;
+      }
+
+      this.temporalScatterPixelCapacity = requiredPixelCapacity;
+      this.temporalScatterContributorCapacity = requiredContributorCapacity;
+      this.destroyTemporalScatterMemoryManagers();
+      this.allocateTemporalScatterMemoryManagers();
+      this.invalidateDirectReuseHistory();
    }
 
    private int getTemporalScatterPixelCapacity() {
@@ -871,11 +989,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int getTemporalScatterContributorCapacity() {
-      // Reservoir splatting can forward-project one previous-frame owner into up to four
-      // bilinear destination cells. The ownership/sorted contributor buffers therefore need
-      // enough space for 4x the active reservoir count, otherwise whole-light popping can
-      // occur when appendIndex/localCellIndex overflow and contributor ownership gets clobbered.
-      return this.getTemporalScatterPixelCapacity() * 4;
+      return this.temporalScatterPixelCapacity;
    }
 
    private boolean isTemporalScatterResolveOnlyBuffer(GlMemoryManager memoryManager) {
@@ -884,9 +998,9 @@ public class LightTreeRenderer extends MainRenderer {
       }
 
       String name = memoryManager.getName();
-      return "ph_temporal_scatter_cell_offsets".equals(name)
-         || "ph_temporal_scatter_sorted_reservoirs".equals(name)
-         || "ph_temporal_scatter_sorted_weights".equals(name);
+      return name.startsWith("ph_temporal_scatter_cell_offsets")
+         || name.startsWith("ph_temporal_scatter_sorted_reservoirs")
+         || name.startsWith("ph_temporal_scatter_sorted_weights");
    }
 
    private GlMemoryManager createTemporalScatterMemoryManager(String name, int byteSize) {
@@ -894,15 +1008,25 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void clearTemporalScatterOwnershipBuffers() {
-      this.clearUintBuffer(this.temporalScatterGlobalCountersMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterCellCountersMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterReservoirIndicesMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterScatteredReservoirsMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterScatteredWeightsMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterCellOffsetsMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterSortedReservoirsMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterSortedWeightsMemoryManager, 0);
+      this.clearUintBuffers(this.temporalScatterGlobalCountersMemoryManagers, 0);
+      this.clearUintBuffers(this.temporalScatterCellCountersMemoryManagers, 0);
+      this.clearUintBuffers(this.temporalScatterReservoirIndicesMemoryManagers, 0);
+      this.clearUintBuffers(this.temporalScatterScatteredReservoirsMemoryManagers, 0);
+      this.clearUintBuffers(this.temporalScatterScatteredWeightsMemoryManagers, 0);
+      this.clearUintBuffers(this.temporalScatterCellOffsetsMemoryManagers, 0);
+      this.clearUintBuffers(this.temporalScatterSortedReservoirsMemoryManagers, 0);
+      this.clearUintBuffers(this.temporalScatterSortedWeightsMemoryManagers, 0);
       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+   }
+
+   private void clearUintBuffers(GlMemoryManager[] memoryManagers, int value) {
+      if (memoryManagers == null) {
+         return;
+      }
+
+      for (GlMemoryManager memoryManager : memoryManagers) {
+         this.clearUintBuffer(memoryManager, value);
+      }
    }
 
    private void clearUintBuffer(GlMemoryManager memoryManager, int value) {
@@ -914,19 +1038,44 @@ public class LightTreeRenderer extends MainRenderer {
       GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
    }
 
+   private void destroyTemporalScatterMemoryManagers() {
+      this.destroyTemporalScatterMemoryManagers(this.temporalScatterGlobalCountersMemoryManagers);
+      this.destroyTemporalScatterMemoryManagers(this.temporalScatterCellCountersMemoryManagers);
+      this.destroyTemporalScatterMemoryManagers(this.temporalScatterReservoirIndicesMemoryManagers);
+      this.destroyTemporalScatterMemoryManagers(this.temporalScatterScatteredReservoirsMemoryManagers);
+      this.destroyTemporalScatterMemoryManagers(this.temporalScatterScatteredWeightsMemoryManagers);
+      this.destroyTemporalScatterMemoryManagers(this.temporalScatterCellOffsetsMemoryManagers);
+      this.destroyTemporalScatterMemoryManagers(this.temporalScatterSortedReservoirsMemoryManagers);
+      this.destroyTemporalScatterMemoryManagers(this.temporalScatterSortedWeightsMemoryManagers);
+      this.temporalScatterGlobalCountersMemoryManagers = null;
+      this.temporalScatterCellCountersMemoryManagers = null;
+      this.temporalScatterReservoirIndicesMemoryManagers = null;
+      this.temporalScatterScatteredReservoirsMemoryManagers = null;
+      this.temporalScatterScatteredWeightsMemoryManagers = null;
+      this.temporalScatterCellOffsetsMemoryManagers = null;
+      this.temporalScatterSortedReservoirsMemoryManagers = null;
+      this.temporalScatterSortedWeightsMemoryManagers = null;
+   }
+
+   private void destroyTemporalScatterMemoryManagers(GlMemoryManager[] memoryManagers) {
+      if (memoryManagers == null) {
+         return;
+      }
+
+      for (GlMemoryManager memoryManager : memoryManagers) {
+         if (memoryManager != null) {
+            memoryManager.free();
+         }
+      }
+   }
+
    private void destroyScatterTemporalResources() {
       this.temporalScatterStageFramebuffer.destroy();
       this.temporalReservoirFramebuffer.destroy();
       this.scatterReconnectionBuffer.destroy();
       this.temporalReservoirBuffer.destroy();
-      this.temporalScatterGlobalCountersMemoryManager.free();
-      this.temporalScatterCellCountersMemoryManager.free();
-      this.temporalScatterReservoirIndicesMemoryManager.free();
-      this.temporalScatterScatteredReservoirsMemoryManager.free();
-      this.temporalScatterScatteredWeightsMemoryManager.free();
-      this.temporalScatterCellOffsetsMemoryManager.free();
-      this.temporalScatterSortedReservoirsMemoryManager.free();
-      this.temporalScatterSortedWeightsMemoryManager.free();
+      this.temporalGatherBuffer.destroy();
+      this.destroyTemporalScatterMemoryManagers();
    }
 
    private void clearScatterTemporalHistory(Vector4f clearColor) {
@@ -934,6 +1083,7 @@ public class LightTreeRenderer extends MainRenderer {
       // output so later scatter modes can assume empty histories after a camera jump/reload.
       this.scatterReconnectionBuffer.clearBothSides(clearColor);
       this.temporalReservoirBuffer.clearBothSides(clearColor);
+      this.temporalGatherBuffer.clearBothSides(clearColor);
    }
 
    @Override
@@ -1095,8 +1245,17 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectDenoisedBuffer.updatePerFrame();
       this.recalculateRenderer(this.proposalStageRenderer);
       this.recalculateRenderer(this.proposalReservoirRenderer);
-      this.recalculateRenderer(this.temporalScatterOwnershipRenderer);
+      this.recalculateRenderer(this.temporalCollectRenderer);
+      this.recalculateRenderer(this.temporalGatherRenderer);
+      this.recalculateRenderer(this.temporalScatterReprojectionRenderer);
+      this.recalculateRenderer(this.temporalMultiScatterReprojectionRenderer);
+      this.recalculateRenderer(this.temporalScatterBinningOffsetsRenderer);
+      this.recalculateRenderer(this.temporalMultiScatterBinningOffsetsRenderer);
+      this.recalculateRenderer(this.temporalScatterBinningRenderer);
+      this.recalculateRenderer(this.temporalMultiScatterBinningRenderer);
       this.recalculateRenderer(this.scatterTemporalRenderer);
+      this.recalculateRenderer(this.scatterBackupTemporalRenderer);
+      this.recalculateRenderer(this.multiScatterTemporalRenderer);
       this.recalculateRenderer(this.reuseResolveRenderer);
       this.recalculateRenderer(this.directTemporalRenderer);
       this.recalculateRenderer(this.directAntiFireflyRenderer);
@@ -1179,8 +1338,17 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectDenoisedBuffer.destroy();
       this.destroyRenderer(this.proposalStageRenderer);
       this.destroyRenderer(this.proposalReservoirRenderer);
-      this.destroyRenderer(this.temporalScatterOwnershipRenderer);
+      this.destroyRenderer(this.temporalCollectRenderer);
+      this.destroyRenderer(this.temporalGatherRenderer);
+      this.destroyRenderer(this.temporalScatterReprojectionRenderer);
+      this.destroyRenderer(this.temporalMultiScatterReprojectionRenderer);
+      this.destroyRenderer(this.temporalScatterBinningOffsetsRenderer);
+      this.destroyRenderer(this.temporalMultiScatterBinningOffsetsRenderer);
+      this.destroyRenderer(this.temporalScatterBinningRenderer);
+      this.destroyRenderer(this.temporalMultiScatterBinningRenderer);
       this.destroyRenderer(this.scatterTemporalRenderer);
+      this.destroyRenderer(this.scatterBackupTemporalRenderer);
+      this.destroyRenderer(this.multiScatterTemporalRenderer);
       this.destroyRenderer(this.reuseResolveRenderer);
       this.destroyRenderer(this.directTemporalRenderer);
       this.destroyRenderer(this.directAntiFireflyRenderer);
@@ -1239,11 +1407,20 @@ public class LightTreeRenderer extends MainRenderer {
 
    private ColorFramebuffer createScatterReconnectionFramebuffer(float renderScale) {
       ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
-      // Robust temporal-history reconnection payload split across two finite-float targets:
+      // Shared DI reconnection payload split across two finite-float targets:
       // reconnection0: worldPos.xyz, viewDepth
       // reconnection1: packed confidence/lightPdf, packed meta flags, subPixel, packed Jacobians
       framebuffer.createAttachment("reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("reconnection1", "RGBA32F", false);
+      // Stage-input shadow copies of reconnection0/1. These are NEVER bound as
+      // color attachments during a draw call — they only receive
+      // glCopyImageSubData payloads between pipeline stages and are read as
+      // current_stage_reconnection0/1 samplers. Decoupling the
+      // read-side from the write-side avoids the undefined behaviour of
+      // sampling an attachment that is also bound as a draw-framebuffer color
+      // output in the same draw call (Stage 4 / Stage 5 feedback loop).
+      framebuffer.createAttachment("stage_in_reconnection0", "RGBA32F", false);
+      framebuffer.createAttachment("stage_in_reconnection1", "RGBA32F", false);
       return framebuffer;
    }
 
@@ -1257,11 +1434,25 @@ public class LightTreeRenderer extends MainRenderer {
       return framebuffer;
    }
 
+   private ColorFramebuffer createTemporalGatherFramebuffer(float renderScale) {
+      ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
+      framebuffer.createAttachment("floating_coords", "RG32F", false);
+      framebuffer.createAttachment("intermediate_data", "RGBA32F", false);
+      framebuffer.createAttachment("intermediate_sample", "RGBA32F", false);
+      framebuffer.createAttachment("intermediate_meta", "RGBA32F", false);
+      framebuffer.createAttachment("intermediate_reconnection0", "RGBA32F", false);
+      framebuffer.createAttachment("intermediate_reconnection1", "RGBA32F", false);
+      return framebuffer;
+   }
+
    private RoutingFramebuffer createTemporalReservoirRoutingFramebuffer() {
-      // Outputs 5 textures: 3 reservoir (data/sample/meta) + 2 reconnection history payloads.
-      // The reconnection data writes go to the current-frame scatterReconnectionBuffer
-      // (write side), which will be ping-ponged at the start of the next frame to become
-      // the previous-frame reconnection data for the next scatter temporal pass.
+      // Outputs 5 textures: 3 reservoir (data/sample/meta) + 2 reconnection payloads.
+      // The reconnection writes go to the current-frame scatterReconnectionBuffer
+      // (write side), which is ping-ponged next frame into previous-frame history.
+      // Strict reference parity would require additional gather-stage storage here
+      // (e.g. floating coordinates and intermediate reservoir/reconnection buffers),
+      // so the next concrete implementation step must extend the render graph rather
+      // than continue audit-only cleanup.
       return this.createDirectPackedRoutingFramebuffer(
          () -> this.temporalReservoirBuffer.getWriteAttachment("data"),
          () -> this.temporalReservoirBuffer.getWriteAttachment("sample"),
@@ -1441,23 +1632,29 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createProposalReservoirFramebuffer() {
+      // Reference parity (InitialCandidates.cs.slang:63-66): initial-candidate stage
+      // writes exactly two logical outputs — the packed DI reservoir (data/sample/meta)
+      // and the selected reconnection data (reconnection0/reconnection1). No side
+      // debug channel. Removing the orphan `direct_initial_debug` binding aligns the
+      // FBO attachment count with the 5 fragment outputs in GenerateInitialSamples.fsh.
       return this.createDirectPackedRoutingFramebuffer(
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta"),
          () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
-         () -> this.directInitialDebugBuffer.getWriteAttachment("data")
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1")
       );
    }
 
    private RoutingFramebuffer createReuseResolveFramebuffer() {
-      // Spatial reuse writes into a dedicated post-temporal staging reservoir.
-      // A later reservoir-finalization pass promotes that result into direct history.
-      return this.createRoutingFramebuffer(
+      // Spatial reuse writes the paired post-temporal reservoir and reconnection state
+      // that the local final resolve stages consume directly in the same frame.
+      return this.createDirectPackedRoutingFramebuffer(
          () -> this.directSpatialReservoirBuffer.getWriteAttachment("data"),
          () -> this.directSpatialReservoirBuffer.getWriteAttachment("sample"),
-         () -> this.directSpatialReservoirBuffer.getWriteAttachment("meta")
+         () -> this.directSpatialReservoirBuffer.getWriteAttachment("meta"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1")
       );
    }
 
@@ -1588,6 +1785,10 @@ public class LightTreeRenderer extends MainRenderer {
    private boolean shouldUseStageGeometry() {
       return this.isCurrentPhotonicsFragment(diShadeSamplesFragment)
          || this.isCurrentPhotonicsFragment(diGenerateInitialSamplesFragment)
+         || this.isCurrentPhotonicsFragment(diCollectTemporalSamplesFragment)
+         || this.isCurrentPhotonicsFragment(diTemporalReprojectionFragment)
+         || this.isCurrentPhotonicsFragment(diTemporalBinningOffsetsFragment)
+         || this.isCurrentPhotonicsFragment(diTemporalBinningFragment)
          || this.isCurrentPhotonicsFragment(diShadeSamplesLightingFragment)
          || this.isCurrentPhotonicsFragment(diShadeSamplesReservoirFragment)
          || this.isCurrentPhotonicsFragment(diSpatialResamplingFragment)
@@ -1859,19 +2060,157 @@ public class LightTreeRenderer extends MainRenderer {
 
    private void renderDIScatterTemporalProfiled() {
       this.beginGpuRegion(diTemporalResamplingRegionIndex);
+      // Publish Stage 1 (GenerateInitialSamples) reconnection output into the
+      // read-side shadow copies so the temporal/scatter stage below can sample
+      // `scatter_reconnection0/1` without aliasing the live draw attachments.
+      this.publishScatterReconnectionStageInputs();
       this.clearTemporalScatterOwnershipBuffers();
-      if (this.temporalScatterOwnershipRenderer != null) {
-         this.temporalScatterOwnershipRenderer.renderAll();
-         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+      // Step 2a: CollectTemporalSamples populates the gather-side floating
+      // coordinates and intermediate reservoir/reconnection storage before the
+      // scatter-side reprojection/sort/resolve chain runs.
+      if (this.temporalCollectRenderer != null) {
+         this.temporalCollectRenderer.renderAll();
+         GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
-      if (this.scatterTemporalRenderer != null) {
+      String temporalScatterIsolationMode = PhotonicsStorage.normalizeTemporalScatterIsolationMode(
+         PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.value
+      );
+      boolean scatterOnlyTemporalBranch = !"temporal_off".equals(temporalScatterIsolationMode)
+         && !"ownership_only".equals(temporalScatterIsolationMode)
+         && !"multi_scatter".equals(temporalScatterIsolationMode);
+      boolean scatterBackupTemporalBranch = "scatter_backup".equals(temporalScatterIsolationMode);
+      boolean multiScatterTemporalBranch = "multi_scatter".equals(temporalScatterIsolationMode);
+      boolean gatherTemporalBranch = "off".equals(temporalScatterIsolationMode)
+         || "ownership_only".equals(temporalScatterIsolationMode)
+         || scatterBackupTemporalBranch;
+      if (gatherTemporalBranch && this.temporalGatherRenderer != null) {
+         this.temporalGatherRenderer.renderAll();
+         GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+      }
+      if (multiScatterTemporalBranch) {
+         if (this.temporalMultiScatterReprojectionRenderer != null) {
+            this.temporalMultiScatterReprojectionRenderer.renderAll();
+            this.barrierTemporalScatterOwnershipWrites();
+         }
+         if (this.temporalMultiScatterBinningOffsetsRenderer != null) {
+            this.temporalMultiScatterBinningOffsetsRenderer.renderAll();
+            this.barrierTemporalScatterBinningHalves();
+         }
+         if (this.temporalMultiScatterBinningRenderer != null) {
+            this.temporalMultiScatterBinningRenderer.renderAll();
+            this.barrierTemporalScatterResolveInputs();
+         }
+         if (this.multiScatterTemporalRenderer != null) {
+            this.multiScatterTemporalRenderer.renderAll();
+         }
+      } else if (scatterOnlyTemporalBranch && this.temporalScatterReprojectionRenderer != null) {
+         this.temporalScatterReprojectionRenderer.renderAll();
+         this.barrierTemporalScatterOwnershipWrites();
+      }
+      // Reference: SortReprojectedReservoirs.cs.slang runs computeCellOffsets
+      // and sortCellData as TWO separate compute dispatches with a pipeline
+      // barrier between them (see ReservoirSplatting.cpp:474-479 for the
+      // two-phase dispatch). The prefix-sum half MUST complete and its
+      // cellOffsets[] writes MUST be globally visible before the sort half
+      // reads `cellOffsets[indices.x]`, otherwise the sort reads stale values
+      // and writes contributors to wrong cells -- producing flashing tiles.
+      if (scatterOnlyTemporalBranch && this.temporalScatterBinningOffsetsRenderer != null) {
+         this.temporalScatterBinningOffsetsRenderer.renderAll();
+         this.barrierTemporalScatterBinningHalves();
+      }
+      if (scatterOnlyTemporalBranch && this.temporalScatterBinningRenderer != null) {
+         this.temporalScatterBinningRenderer.renderAll();
+         this.barrierTemporalScatterResolveInputs();
+      }
+      if (scatterBackupTemporalBranch && this.scatterBackupTemporalRenderer != null) {
+         if (this.temporalScatterReprojectionRenderer != null) {
+            this.temporalScatterReprojectionRenderer.renderAll();
+            this.barrierTemporalScatterOwnershipWrites();
+         }
+         if (this.temporalScatterBinningOffsetsRenderer != null) {
+            this.temporalScatterBinningOffsetsRenderer.renderAll();
+            this.barrierTemporalScatterBinningHalves();
+         }
+         if (this.temporalScatterBinningRenderer != null) {
+            this.temporalScatterBinningRenderer.renderAll();
+            this.barrierTemporalScatterResolveInputs();
+         }
+         this.scatterBackupTemporalRenderer.renderAll();
+      } else if (scatterOnlyTemporalBranch && this.scatterTemporalRenderer != null) {
          this.scatterTemporalRenderer.renderAll();
       }
       this.endGpuRegion(diTemporalResamplingRegionIndex);
    }
 
+   private void barrierTemporalScatterOwnershipWrites() {
+      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
+   }
+
+   private void barrierTemporalScatterBinningHalves() {
+      // Cross-draw barrier between SortReprojectedReservoirs.cs.slang's
+      // computeCellOffsets (prefix sum) and sortCellData (sort) halves.
+      // SHADER_STORAGE: cellOffsets[] writes from the offsets pass must be
+      // visible to subsequent fragment reads in the sort pass.
+      // FRAMEBUFFER: both passes share the temporalScatterStageFramebuffer
+      // attachments, so ordering for dummy fragment writes matters too.
+      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
+   }
+
+   private void barrierTemporalScatterResolveInputs() {
+      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
+   }
+
+   // Stage-boundary barrier + copy helper for the shared DI reconnection payload.
+   //
+   // The scatterReconnectionBuffer owns the authoritative write-side attachments
+   // `reconnection0/1`, plus read-side shadow copies `stage_in_reconnection0/1`
+   // that the legacy `scatter_reconnection0/1` samplers resolve to. Stage 1
+   // (GenerateInitialSamples), Stage 2 (ScatterTemporalResolve), Stage 3
+   // (SpatialResampling), and Stage 6 (resolve/final shading) all multiplex the
+   // same payload attachments across consecutive passes. OpenGL does not allow a
+   // fragment stage to sample from an attachment that is simultaneously bound as a
+   // draw target, so every consumer stage reads from the copied stage-input side.
+   //
+   // To decouple reads from writes we:
+   //   1. Issue a FRAMEBUFFER + TEXTURE_FETCH barrier so the producing stage's
+   //      color writes are committed and available for texture operations.
+   //   2. Copy reconnection0 -> stage_in_reconnection0 and
+   //      reconnection1 -> stage_in_reconnection1 via glCopyImageSubData.
+   //   3. Issue a second TEXTURE_FETCH barrier so the sampler reads in the
+   //      consuming stage observe the copied data.
+   private void publishScatterReconnectionStageInputs() {
+      GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+      this.copyScatterReconnectionAttachment("reconnection0", "stage_in_reconnection0");
+      this.copyScatterReconnectionAttachment("reconnection1", "stage_in_reconnection1");
+      GL42.glMemoryBarrier(GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+   }
+
+   private void copyScatterReconnectionAttachment(String sourceName, String destName) {
+      TextureObject source = this.scatterReconnectionBuffer.getWriteAttachment(sourceName);
+      TextureObject dest = this.scatterReconnectionBuffer.getWriteAttachment(destName);
+      int[] dims = source.getTextureDimensions();
+      int width = dims.length > 0 ? dims[0] : 0;
+      int height = dims.length > 1 ? dims[1] : 0;
+      if (width <= 0 || height <= 0) {
+         return;
+      }
+      GL43.glCopyImageSubData(
+         source.getTextureId(), GL11.GL_TEXTURE_2D, 0, 0, 0, 0,
+         dest.getTextureId(), GL11.GL_TEXTURE_2D, 0, 0, 0, 0,
+         width, height, 1
+      );
+   }
+
    private void renderDISpatialResamplingProfiled() {
+      // Publish Stage 4 (ScatterTemporalResolve) reconnection output into the
+      // read-side shadow copies so Stage 5 can sample the post-temporal
+      // reconnection data without aliasing its own draw attachments.
+      this.publishScatterReconnectionStageInputs();
       this.renderProfiled(diSpatialResamplingRegionIndex, this.reuseResolveRenderer);
+      // Publish Stage 5 (SpatialResampling) reconnection output so subsequent
+      // shading passes (ShadeSamples / ShadeSamplesReservoir) that only read
+      // `scatter_reconnection0/1` observe the final post-spatial payload.
+      this.publishScatterReconnectionStageInputs();
    }
 
    private void renderIndirectAccumulationProfiled() {
@@ -2161,6 +2500,7 @@ public class LightTreeRenderer extends MainRenderer {
    private void recordCpuPassTimes(long t0, long t1, long t2, long t3, long t4, long t5, long t6, long t7, long t8, long t9, long t10, long t11, long t12, long t13, long t14, long t15, long t16, long t17, long t18, long t19, long t20) {
       this.lastCpuLightTreeSamplingStageNanos = t1 - t0;
       this.lastCpuDIGenerateInitialSamplesNanos = t2 - t1;
+      this.lastCpuDITemporalResamplingNanos = t3 - t2;
       this.lastCpuDISpatialResamplingNanos = t4 - t3;
       this.lastCpuDIShadeSamplesNanos = t5 - t4;
       this.lastCpuNRDPrepareInputsNanos = t6 - t5;
@@ -2221,9 +2561,10 @@ public class LightTreeRenderer extends MainRenderer {
          this.describeStageGeometryUsage()
       );
       Photonic.info(
-         "[Profiler] RTXDI/NRD CPU passes: LightTreeSamplingStage={}us DIGenerateInitialSamples={}us DISpatialResampling={}us DIShadeSamples={}us NRDPrepareInputs={}us RELAXDiffuseTemporalAccumulation={}us RELAXDiffuseHistoryFix={}us RELAXDiffuseHistoryClamping={}us RELAXDiffuseAntiFirefly={}us RELAXDiffuseAtrous={}us RELAXSpecularTemporalAccumulation={}us RELAXSpecularHistoryFix={}us RELAXSpecularHistoryClamping={}us RELAXSpecularAntiFirefly={}us RELAXSpecularAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
+         "[Profiler] RTXDI/NRD CPU passes: LightTreeSamplingStage={}us DIGenerateInitialSamples={}us DITemporalResampling={}us DISpatialResampling={}us DIShadeSamples={}us NRDPrepareInputs={}us RELAXDiffuseTemporalAccumulation={}us RELAXDiffuseHistoryFix={}us RELAXDiffuseHistoryClamping={}us RELAXDiffuseAntiFirefly={}us RELAXDiffuseAtrous={}us RELAXSpecularTemporalAccumulation={}us RELAXSpecularHistoryFix={}us RELAXSpecularHistoryClamping={}us RELAXSpecularAntiFirefly={}us RELAXSpecularAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
          this.toMicros(cpuPassNanos[lightTreeSamplingStageRegionIndex]),
          this.toMicros(cpuPassNanos[diGenerateInitialSamplesRegionIndex]),
+         this.toMicros(cpuPassNanos[diTemporalResamplingRegionIndex]),
          this.toMicros(cpuPassNanos[diSpatialResamplingRegionIndex]),
          this.toMicros(cpuPassNanos[diShadeSamplesRegionIndex]),
          this.toMicros(cpuPassNanos[nrdPrepareInputsRegionIndex]),
@@ -2248,6 +2589,7 @@ public class LightTreeRenderer extends MainRenderer {
    private void logGpuRenderProfile(long[] gpuPassNanos) {
       long diTotal = gpuPassNanos[lightTreeSamplingStageRegionIndex]
          + gpuPassNanos[diGenerateInitialSamplesRegionIndex]
+         + gpuPassNanos[diTemporalResamplingRegionIndex]
          + gpuPassNanos[diSpatialResamplingRegionIndex]
          + gpuPassNanos[diShadeSamplesRegionIndex];
       long relaxTotal = gpuPassNanos[nrdPrepareInputsRegionIndex]
@@ -2272,9 +2614,10 @@ public class LightTreeRenderer extends MainRenderer {
       int renderHeight = Math.round(fbHeight * this.renderScale);
       long renderPixels = (long) renderWidth * renderHeight;
       Photonic.info(
-         "[Profiler] RTXDI/NRD GPU passes: LightTreeSamplingStage={}us DIGenerateInitialSamples={}us DISpatialResampling={}us DIShadeSamples={}us NRDPrepareInputs={}us RELAXDiffuseTemporalAccumulation={}us RELAXDiffuseHistoryFix={}us RELAXDiffuseHistoryClamping={}us RELAXDiffuseAntiFirefly={}us RELAXDiffuseAtrous={}us RELAXSpecularTemporalAccumulation={}us RELAXSpecularHistoryFix={}us RELAXSpecularHistoryClamping={}us RELAXSpecularAntiFirefly={}us RELAXSpecularAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
+         "[Profiler] RTXDI/NRD GPU passes: LightTreeSamplingStage={}us DIGenerateInitialSamples={}us DITemporalResampling={}us DISpatialResampling={}us DIShadeSamples={}us NRDPrepareInputs={}us RELAXDiffuseTemporalAccumulation={}us RELAXDiffuseHistoryFix={}us RELAXDiffuseHistoryClamping={}us RELAXDiffuseAntiFirefly={}us RELAXDiffuseAtrous={}us RELAXSpecularTemporalAccumulation={}us RELAXSpecularHistoryFix={}us RELAXSpecularHistoryClamping={}us RELAXSpecularAntiFirefly={}us RELAXSpecularAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
          this.toMicros(gpuPassNanos[lightTreeSamplingStageRegionIndex]),
          this.toMicros(gpuPassNanos[diGenerateInitialSamplesRegionIndex]),
+         this.toMicros(gpuPassNanos[diTemporalResamplingRegionIndex]),
          this.toMicros(gpuPassNanos[diSpatialResamplingRegionIndex]),
          this.toMicros(gpuPassNanos[diShadeSamplesRegionIndex]),
          this.toMicros(gpuPassNanos[nrdPrepareInputsRegionIndex]),
@@ -2357,6 +2700,7 @@ public class LightTreeRenderer extends MainRenderer {
       return new long[]{
          this.lastCpuLightTreeSamplingStageNanos,
          this.lastCpuDIGenerateInitialSamplesNanos,
+         this.lastCpuDITemporalResamplingNanos,
          this.lastCpuDISpatialResamplingNanos,
          this.lastCpuDIShadeSamplesNanos,
          this.lastCpuNRDPrepareInputsNanos,
@@ -2381,6 +2725,7 @@ public class LightTreeRenderer extends MainRenderer {
       return new long[]{
          this.gpuTimerQuery.getTimeNanos(lightTreeSamplingStageRegionIndex),
          this.gpuTimerQuery.getTimeNanos(diGenerateInitialSamplesRegionIndex),
+         this.gpuTimerQuery.getTimeNanos(diTemporalResamplingRegionIndex),
          this.gpuTimerQuery.getTimeNanos(diSpatialResamplingRegionIndex),
          this.gpuTimerQuery.getTimeNanos(diShadeSamplesRegionIndex),
          this.gpuTimerQuery.getTimeNanos(nrdPrepareInputsRegionIndex),

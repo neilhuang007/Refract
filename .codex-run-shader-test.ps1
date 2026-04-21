@@ -12,7 +12,15 @@ $stdout = Join-Path (Get-Location) 'run/shaderGameTest.stdout.log'
 $stderr = Join-Path (Get-Location) 'run/shaderGameTest.stderr.log'
 $latestLog = Join-Path (Get-Location) 'run/logs/latest.log'
 $reportFile = Join-Path (Get-Location) 'run/automation/shader-report.properties'
-$fatalPatterns = @('Failed to create shader rendering pipeline', 'The shaderpack failed to load!')
+$fatalPatterns = @(
+  'Failed to create shader rendering pipeline',
+  'The shaderpack failed to load!',
+  'MixinApplyError',
+  'InvalidMixinException',
+  'ClassNotFoundException',
+  'Could not execute entrypoint stage ''preLaunch''',
+  'A mod crashed on startup!'
+)
 
 function Convert-ToCleanUtf8Text {
   param([string]$Text)

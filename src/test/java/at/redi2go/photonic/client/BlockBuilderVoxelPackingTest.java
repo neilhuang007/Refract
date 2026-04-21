@@ -7,6 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BlockBuilderVoxelPackingTest {
    @Test
+   void defaultBuildResolutionMatchesLegacyVoxelSize() {
+      assertEquals(16, BlockBuilder.BLOCK_VOXEL_SIZE);
+   }
+
+   @Test
    void repackShaderVoxelWordPreservesRgbAndMovesTransparencyIntoHighByte() {
       int alpha = 0x5A;
       int packed = (alpha << 24) | 0x123456;

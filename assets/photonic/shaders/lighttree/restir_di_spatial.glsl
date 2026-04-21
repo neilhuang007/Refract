@@ -1,10 +1,12 @@
 #ifndef PHOTONICS_RESTIR_DI_SPATIAL_GLSL
 #define PHOTONICS_RESTIR_DI_SPATIAL_GLSL
 
-RTXDI_DIReservoir lt_area_spatial_resampling(
+// Stage 3 — SpatialResampling.rt.slang
+RTXDI_DIReservoir lt_di_spatial_resampling_stage(
     ivec2 pixelPosition,
     RAB_Surface centerSurface,
     RTXDI_DIReservoir centerSample,
-    inout RTXDI_RandomSamplerState rng);
+    inout RTXDI_RandomSamplerState rng,
+    out ReservoirSplattingReconnectionData reconnection);
 
 #endif

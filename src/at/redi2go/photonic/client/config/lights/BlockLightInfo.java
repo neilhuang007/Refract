@@ -114,6 +114,13 @@ public final class BlockLightInfo implements Comparable<BlockLightInfo> {
       return new Vector3f(this.rawColor).mul(this.adjustedIntensity);
    }
 
+   public int packedColor() {
+      int r = Math.max(0, Math.min(255, Math.round(this.rawColor.x * this.adjustedIntensity * 255.0F)));
+      int g = Math.max(0, Math.min(255, Math.round(this.rawColor.y * this.adjustedIntensity * 255.0F)));
+      int b = Math.max(0, Math.min(255, Math.round(this.rawColor.z * this.adjustedIntensity * 255.0F)));
+      return r | g << 8 | b << 16;
+   }
+
    public Vector2f getAttenuationAsVector() {
       return new Vector2f(0.9F, this.radiusRcp);
    }

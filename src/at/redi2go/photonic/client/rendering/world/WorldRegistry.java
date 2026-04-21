@@ -163,7 +163,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       );
       this.cbMemoryManager = this.backend.getCbMemoryManager();
       this.cbMemoryManager.setUploadBatchSize(CHUNK_UPLOAD_BATCH_SIZE);
-      this.blockRegistry = new BlockRegistry(this.cbMemoryManager.allocateRegion(4096 * PBlock.BYTE_SIZE));
+      this.blockRegistry = new BlockRegistry(this.cbMemoryManager.allocateRegion(4096 * ReferenceChunk.byteSize));
       this.rootMemoryManager = this.backend.getRootMemoryManager();
       this.rootMemoryManager.setUploadBatchSize(ROOT_UPLOAD_BATCH_SIZE);
       this.worldCompilerThread = new WorldCompilerThread(this);
@@ -624,12 +624,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
    private void refreshResidentChunk(PChunkPos chunkPos, WorldChunk chunk) {
       this.populateChunkContents(chunkPos, chunk);
-      if (this.blockLightEnabled) {
-         ClientWorld level = MinecraftAccessor.getLevel();
-         if (level != null) {
-            this.lightRegistry.synchronizeChunkLights(level, chunkPos);
-         }
-      }
+      // Keep resident-chunk light residency driven by explicit block/chunk mutation events.
+      // Re-scanning all traced lights on every resident refresh replays chunk-load style
+      // light discovery against a partially synchronized neighborhood and causes coherent
+      // add/remove churn in the traced-light/ReGIR buffers while the same RT chunk stays resident.
       this.applyDeferredChunkLightUpdates(chunkPos, chunk);
    }
 
@@ -657,12 +655,18 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          .thenComparingInt(snapshot -> snapshot.blockPos().getZ()));
       for (BlockUpdateSnapshot snapshot : deferredSnapshots) {
          BlockPos blockPos = snapshot.blockPos();
-         if (this.refreshChunkBlock(level, chunkPos, chunk, blockPos, snapshot.blockState())) {
+         if (!level.isChunkLoaded(blockPos)) {
+            this.deferredLightBlockSnapshots.put(blockPos, snapshot);
+            continue;
+         }
+         BlockState currentBlockState = level.getBlockState(blockPos);
+         if (this.refreshChunkBlock(level, chunkPos, chunk, blockPos, currentBlockState)) {
             this.pendingSemanticChunkMutations++;
             this.markLightBlendBlock(blockPos);
          }
          if (this.blockLightEnabled) {
-            this.lightRegistry.onBlockUpdate(blockPos, snapshot.blockState(), snapshot.lightInfo());
+            BlockLightInfo currentLightInfo = this.resolveStableLightInfo(snapshot, currentBlockState, level);
+            this.lightRegistry.onBlockUpdate(blockPos, currentBlockState, currentLightInfo);
          }
       }
    }
@@ -673,7 +677,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       ChunkLightingView skyLightView = level != null ? level.getLightingProvider().get(LightType.SKY) : null;
       PBlockPos rtBlockPos = new PBlockPos(0, 0, 0);
       BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
+      this.fillChunk(chunk, chunkPos, skyLightView, mutableBlockPos, rtBlockPos);
+   }
 
+   private void fillChunk(WorldChunk chunk, PChunkPos chunkPos, ChunkLightingView skyLightView, BlockPos.Mutable mutableBlockPos, PBlockPos rtBlockPos) {
+      ClientWorld level = MinecraftAccessor.getLevel();
       for (int x = 0; x < 16; x++) {
          for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
@@ -681,26 +689,17 @@ public class WorldRegistry implements MemoryOwner, Destructable {
                rtBlockPos.y = 16 * chunkPos.y + y;
                rtBlockPos.z = 16 * chunkPos.z + z;
                mutableBlockPos.set(rtBlockPos.x, rtBlockPos.y, rtBlockPos.z);
-               PBlock block = this.blockRegistry.getBlock(rtBlockPos);
-               if (block != null) {
-                  if (!block.isUsed() || !block.isAllocated()) {
-                     synchronized (block) {
-                        this.blockRegistry.ensureAllocated(block);
-                        if (block.getMemory() == null) {
-                           block = null;
-                        }
-                     }
-                  }
-               }
-               if (block == null) {
-                  chunk.set(x, y, z, null, -1);
-               } else {
-                  int skyBrightness = this.computeSkyBrightness(skyLightView, mutableBlockPos);
-                  chunk.set(x, y, z, block, skyBrightness);
-               }
+               int skyBrightness = this.computeSkyBrightness(skyLightView, mutableBlockPos);
+               BlockState blockState = this.blockStateAt(level, mutableBlockPos);
+               chunk.setPackedEntry(x, y, z, this.blockRegistry.getPackedBlock(blockState, skyBrightness));
             }
          }
       }
+   }
+
+
+   private int resolveReferencePackedEntry(BlockState blockState, int skyBrightness) {
+      return this.blockRegistry.getPackedBlock(blockState, skyBrightness);
    }
 
    public void unloadChunk(PChunkPos chunkPos) {
@@ -719,11 +718,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    private WorldBackend createBackend() {
-      return new BrickWorldBackend(this.worldChunkSize, this.chunks);
+      return new ReferenceWorldBackend(this.worldChunkSize, this.chunks);
    }
 
    private WorldChunk createChunk() {
-      return new BrickChunk();
+      return new ReferenceChunk();
    }
 
    private void markRootEntryDirty(PChunkPos chunkPos) {
@@ -916,13 +915,13 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    private void logBrickUploadDiagnostics() {
-      if (!(this.backend instanceof BrickWorldBackend brickBackend)) {
+      if (!(this.backend instanceof ReferenceWorldBackend referenceBackend)) {
          this.lastLoggedBrickUploadSignature = "";
          return;
       }
-      BrickWorldBackend.BrickUploadSummary summary = brickBackend.consumeUploadSummary();
+      ReferenceWorldBackend.ReferenceUploadSummary summary = referenceBackend.consumeUploadSummary();
       if (!summary.hasWork()) {
-         summary = brickBackend.buildCurrentSummary();
+         summary = referenceBackend.buildCurrentSummary();
          if (!summary.hasWork()) {
             this.lastLoggedBrickUploadSignature = "";
             return;
@@ -935,23 +934,19 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          .add(Long.toString(summary.chunkUploadBytes))
          .add(Integer.toString(summary.populatedRootEntries))
          .add(Long.toString(summary.rootUploadBytes))
-         .add(Integer.toString(summary.trackedBlockTypes))
-         .add(Integer.toString(summary.trackedBlockReferences))
          .toString();
       if (signature.equals(this.lastLoggedBrickUploadSignature)) {
          return;
       }
       this.lastLoggedBrickUploadSignature = signature;
       Photonic.info(
-         "[Profiler] brickUpload: dirtyChunks={} dirtyVoxels={} chunkOps={} chunkBytes={} rootEntries={} rootBytes={} trackedBlockTypes={} trackedBlockRefs={}",
+         "[Profiler] brickUpload: dirtyChunks={} dirtyVoxels={} chunkOps={} chunkBytes={} rootEntries={} rootBytes={}",
          summary.dirtyChunks,
          summary.dirtyVoxels,
          summary.chunkUploadOps,
          summary.chunkUploadBytes,
          summary.populatedRootEntries,
-         summary.rootUploadBytes,
-         summary.trackedBlockTypes,
-         summary.trackedBlockReferences
+         summary.rootUploadBytes
       );
    }
 
@@ -1134,36 +1129,63 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return;
       }
 
+      if (!level.isChunkLoaded(blockPos)) {
+         if (refreshLight) {
+            this.queueDeferredLightBlockUpdate(snapshot);
+         }
+         return;
+      }
+
       this.deferredLightBlockSnapshots.remove(blockPos);
-      boolean chunkMutated = this.refreshChunkBlock(level, chunkPos, chunk, blockPos, snapshot.blockState());
+      BlockState currentBlockState = level.getBlockState(blockPos);
+      boolean chunkMutated = this.refreshChunkBlock(level, chunkPos, chunk, blockPos, currentBlockState);
       if (chunkMutated) {
          this.pendingSemanticChunkMutations++;
       }
       if (refreshLight && this.blockLightEnabled) {
          this.markLightBlendBlock(blockPos);
-         this.lightRegistry.onBlockUpdate(blockPos, snapshot.blockState(), snapshot.lightInfo());
+         BlockLightInfo currentLightInfo = this.resolveStableLightInfo(snapshot, currentBlockState, level);
+         this.lightRegistry.onBlockUpdate(blockPos, currentBlockState, currentLightInfo);
       } else if (chunkMutated) {
          this.markLightBlendBlock(blockPos);
       }
+   }
+
+   private BlockLightInfo resolveStableLightInfo(BlockUpdateSnapshot snapshot, BlockState currentBlockState, ClientWorld level) {
+      BlockLightInfo currentLightInfo = this.lightRegistry.resolveLightInfo(snapshot.blockPos(), currentBlockState, level);
+      if (currentLightInfo != null) {
+         return currentLightInfo;
+      }
+
+      // Preserve predicate-qualified emitter identities across chunk-streaming races.
+      // Area ReSTIR assumes emitter sets do not disappear simply because a local predicate
+      // evaluated before neighboring blocks finished loading; keep the captured descriptor
+      // until a later update proves the light is truly gone.
+      if (snapshot.lightInfo() != null && snapshot.blockState().getBlock() == currentBlockState.getBlock()) {
+         return snapshot.lightInfo();
+      }
+
+      return null;
    }
 
    private boolean refreshChunkBlock(ClientWorld level, PChunkPos chunkPos, WorldChunk chunk, BlockPos blockPos, BlockState blockState) {
       int localX = Math.floorMod(blockPos.getX(), 16);
       int localY = Math.floorMod(blockPos.getY(), 16);
       int localZ = Math.floorMod(blockPos.getZ(), 16);
-      PBlock block = this.blockRegistry.getBlock(blockState);
-      if (block != null && (!block.isUsed() || !block.isAllocated())) {
-         synchronized (block) {
-            this.blockRegistry.ensureAllocated(block);
-            if (block.getMemory() == null) {
-               block = null;
-            }
-         }
-      }
-
       ChunkLightingView skyLightView = level.getLightingProvider().get(LightType.SKY);
-      int skyBrightness = block == null ? -1 : this.computeSkyBrightness(skyLightView, blockPos);
-      return chunk.set(localX, localY, localZ, block, skyBrightness);
+      int skyBrightness = this.computeSkyBrightness(skyLightView, blockPos);
+      return chunk.setPackedEntry(localX, localY, localZ, this.blockRegistry.getPackedBlock(blockState, skyBrightness));
+   }
+
+   private BlockState blockStateAt(ClientWorld level, BlockPos blockPos) {
+      if (level == null) {
+         return Blocks.AIR.getDefaultState();
+      }
+      try {
+         return level.getBlockState(blockPos);
+      } catch (Exception ignored) {
+         return Blocks.AIR.getDefaultState();
+      }
    }
 
    private BlockUpdateSnapshot captureBlockUpdateSnapshot(ClientWorld level, BlockPos blockPos, BlockState blockState, boolean refreshLight) {

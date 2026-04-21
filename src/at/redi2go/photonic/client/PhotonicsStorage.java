@@ -216,7 +216,11 @@ public final class PhotonicsStorage {
       }
 
       return switch (isolationMode.trim().toLowerCase(Locale.ROOT)) {
-         case "", "0", "off", "disabled", "none", "1", "ownership", "ownership_append", "ownership-append", "disable_ownership_append", "2", "backup", "backup_gather", "backup-gather", "disable_backup_gather", "3", "scatter", "scatter_merge", "scatter-merge", "disable_scatter_merge", "4", "bypass", "resolve", "resolve_bypass", "resolve-bypass", "disable_resolve" -> "off";
+         case "", "0", "off", "disabled", "none" -> "off";
+         case "1", "ownership", "ownership_append", "ownership-append", "disable_ownership_append" -> "ownership_only";
+         case "2", "backup", "backup_gather", "backup-gather", "disable_backup_gather" -> "scatter_backup";
+         case "3", "scatter", "scatter_merge", "scatter-merge", "disable_scatter_merge" -> "scatter_only";
+         case "4", "multi", "multi_scatter", "multi-scatter", "multi_splat", "multiscatter" -> "multi_scatter";
          case "5", "temporal_off", "temporal-off", "disable_temporal", "full_bypass", "full-bypass", "canonical" -> "temporal_off";
          default -> "off";
       };

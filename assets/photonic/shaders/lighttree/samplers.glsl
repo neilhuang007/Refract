@@ -34,19 +34,24 @@ uniform sampler2D radiosity_indirect_initial_radiance;
 uniform sampler2D radiosity_indirect_initial_meta;
 uniform sampler2D radiosity_motion;
 
-// Scatter temporal resampling: robust reconnection history (finite-float encoded)
+// Shared current-stage reconnection payload read through stage-input copies.
+// Historical scatter-prefixed names are retained for ABI compatibility.
 uniform sampler2D scatter_reconnection0;
 uniform sampler2D scatter_reconnection1;
+#define current_stage_reconnection0 scatter_reconnection0
+#define current_stage_reconnection1 scatter_reconnection1
 // Single-buffered temporal resampling staging/output consumed within the same frame
-uniform sampler2D temporal_reprojection_data;
-uniform sampler2D temporal_reprojection_sample;
-uniform sampler2D temporal_reprojection_meta;
-uniform sampler2D temporal_binning_data;
-uniform sampler2D temporal_binning_sample;
-uniform sampler2D temporal_binning_meta;
 uniform sampler2D temporal_reservoir_data;
 uniform sampler2D temporal_reservoir_sample;
 uniform sampler2D temporal_reservoir_meta;
+
+// Gather-side temporal intermediates for the full Reservoir Splatting reference pipeline.
+uniform sampler2D temporal_gather_floating_coords;
+uniform sampler2D temporal_gather_intermediate_reservoir_data;
+uniform sampler2D temporal_gather_intermediate_reservoir_sample;
+uniform sampler2D temporal_gather_intermediate_reservoir_meta;
+uniform sampler2D temporal_gather_intermediate_reconnection0;
+uniform sampler2D temporal_gather_intermediate_reconnection1;
 uniform sampler2D prev_radiosity_position;
 uniform sampler2D prev_radiosity_normal;
 uniform sampler2D prev_radiosity_mapped_normal;
@@ -68,11 +73,13 @@ uniform sampler2D prev_radiosity_indirect_reservoir_meta;
 uniform sampler2D prev_radiosity_lighting;
 uniform sampler2D prev_radiosity_lighting_variance;
 uniform sampler2D prev_radiosity_motion;
-// Previous-frame scatter reconnection data
+// Shared previous-frame reconnection history.
+// Historical scatter-prefixed names are retained for ABI compatibility.
 uniform sampler2D prev_scatter_reconnection0;
 uniform sampler2D prev_scatter_reconnection1;
+#define previous_frame_reconnection0 prev_scatter_reconnection0
+#define previous_frame_reconnection1 prev_scatter_reconnection1
 
-uniform sampler2D prev_spec_slow_input;
 uniform sampler2D prev_spec_fast_input;
 uniform sampler2D prev_spec_history_length_input;
 

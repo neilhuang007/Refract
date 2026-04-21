@@ -55,6 +55,7 @@ import org.joml.Vector2f;
 import org.joml.Vector3f;
 
 public class LightRegistry implements Destructable {
+   private static final Vector3f ZERO_EMISSION = new Vector3f(0.0F, 0.0F, 0.0F);
    private static final int LIGHT_BYTE_SIZE = 64;
    private static final int GRID_CELL_SIZE = 32;
    private static final float REGIR_CELL_RADIUS = (float)(Math.sqrt(3.0) * GRID_CELL_SIZE);
@@ -366,25 +367,16 @@ public class LightRegistry implements Destructable {
       return new Vector3f(this.frozenLightSelectionCamera);
    }
 
-   private boolean shouldRefreshGlobalLightCdf(Vector3f selectionCamera, boolean lightsChanged) {
+   private boolean shouldRefreshGlobalLightCdf(boolean lightsChanged) {
       if (lightsChanged || this.tracedLights.length == 0) {
          return true;
       }
 
-      if (this.gpuRegirBuildEnabled) {
-         return true;
-      }
-
-      if (!this.lastGlobalLightCdfCameraInitialized) {
-         return true;
-      }
-
-      float refreshDistance = Math.max(GRID_CELL_SIZE * 0.25F, 4.0F);
-      return this.lastGlobalLightCdfCamera.distanceSquared(selectionCamera) >= refreshDistance * refreshDistance;
+      return !this.lastGlobalLightCdfCameraInitialized;
    }
 
-   private void markGlobalLightCdfCamera(Vector3f selectionCamera) {
-      this.lastGlobalLightCdfCamera.set(selectionCamera);
+   private void markGlobalLightCdfCamera() {
+      this.lastGlobalLightCdfCamera.set(0.0F, 0.0F, 0.0F);
       this.lastGlobalLightCdfCameraInitialized = true;
    }
 
@@ -492,8 +484,7 @@ public class LightRegistry implements Destructable {
             this.updateRegirGridOriginOnly();
          }
 
-         Vector3f selectionCamera = this.getTracedLightSelectionCameraPosition();
-         boolean refreshGlobalLightCdf = this.shouldRefreshGlobalLightCdf(selectionCamera, lightsChanged);
+         boolean refreshGlobalLightCdf = this.shouldRefreshGlobalLightCdf(lightsChanged);
 
          boolean identityQueued = false;
          if (lightsChanged) {
@@ -501,8 +492,8 @@ public class LightRegistry implements Destructable {
             this.storeLights();
             this.storeLightMappings();
             this.storeLightReverseMappings();
-            this.storeGlobalLightCdf(selectionCamera);
-            this.markGlobalLightCdfCamera(selectionCamera);
+            this.storeGlobalLightCdf();
+            this.markGlobalLightCdfCamera();
             this.lightsMemoryManager.queueUpload(this.lightsMemory);
             this.previousLightsMemoryManager.queueUpload(this.previousLightsMemory);
             this.lightMappingMemoryManager.queueUpload(this.lightMappingMemory);
@@ -511,8 +502,8 @@ public class LightRegistry implements Destructable {
             this.identityLightMappingPending = true;
          } else {
             if (refreshGlobalLightCdf) {
-               this.storeGlobalLightCdf(selectionCamera);
-               this.markGlobalLightCdfCamera(selectionCamera);
+               this.storeGlobalLightCdf();
+               this.markGlobalLightCdfCamera();
                this.globalLightCdfMemoryManager.queueUpload(this.globalLightCdfMemory);
             }
             identityQueued = this.queueIdentityLightMappingsIfNeeded();
@@ -683,7 +674,7 @@ public class LightRegistry implements Destructable {
       }
    }
 
-   private void storeGlobalLightCdf(Vector3f selectionCamera) {
+   private void storeGlobalLightCdf() {
       FloatBuffer buffer = this.globalLightCdfMemory.getMemory().getBuffer().asFloatBuffer();
       int tracedCount = this.tracedLights.length;
       int capacity = this.getLightCapacity();
@@ -696,8 +687,8 @@ public class LightRegistry implements Destructable {
       for (int i = 0; i < capacity; i++) {
          if (i < tracedCount) {
             LightInstance light = this.tracedLights[i];
-            float weight = Math.max(selectionSourceScore(light, selectionCamera, this.minTracedLightSelectionLuma), 0.0F);
-            float regirWeight = Math.max(selectionSourceScore(light), 0.0F);
+            float weight = Math.max(selectionSourceScore(light), 0.0F);
+            float regirWeight = weight;
             if (weight > 1.0e-6F) {
                cumulativeWeight += weight;
                hasPositiveWeight = true;
@@ -1121,30 +1112,12 @@ public class LightRegistry implements Destructable {
       return uploadDone;
    }
 
-   public void registerBlockState(BlockState blockState, PBlock pBlock) {
-      BlockLightInfo lightInfo = this.lightList.get(blockState);
-      if (lightInfo != null) {
-         if (lightInfo.isTraced()) {
-            pBlock.setEmissionColor(new Vector3f(0.0F));
-         } else {
-            pBlock.setEmissionColor(lightInfo.getColorAsVector());
-         }
-      }
+   public BlockLightInfo resolveBlockStateLightInfo(BlockState blockState) {
+      return this.lightList != null ? this.lightList.get(blockState) : null;
    }
 
    private void registerLightBlocks(LightList lights) {
-      Raytracer.INSTANCE.getBlockRegistry().getBlockSchematicCache().entrySet().stream()
-         .map(e -> Pair.of(e.getValue(), lights.get(e.getKey())))
-         .filter(e -> e.getValue() != null)
-         .forEach(entry -> {
-            PBlock pBlock = entry.getKey();
-            BlockLightInfo lightInfo = entry.getValue();
-            if (lightInfo.isTraced()) {
-               pBlock.setEmissionColor(new Vector3f(0.0F));
-            } else {
-               pBlock.setEmissionColor(lightInfo.getColorAsVector());
-            }
-         });
+      Raytracer.INSTANCE.getBlockRegistry().refreshLightCache(lights);
    }
 
    public boolean hasPossibleLight(Block block) {
@@ -1174,8 +1147,16 @@ public class LightRegistry implements Destructable {
 
    public BlockLightInfo resolveLightInfo(BlockPos blockPos, BlockState blockState, ClientWorld level) {
       if (level != null && level.isChunkLoaded(blockPos)) {
-         return this.lightList.get(blockPos, level);
+         BlockLightInfo resolved = this.lightList.get(blockPos, level);
+         if (resolved != null) {
+            return resolved;
+         }
       }
+
+      // During chunk streaming, predicate-driven emitters can momentarily evaluate to null
+      // while neighboring world state is still converging. Preserve a block-state-level
+      // descriptor instead of dropping the traced emitter outright; later block updates will
+      // refine it once the full predicate context is available.
       return this.lightList.get(blockState);
    }
 

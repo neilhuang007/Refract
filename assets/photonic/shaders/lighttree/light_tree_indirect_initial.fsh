@@ -10,20 +10,22 @@ layout(location = 3) out vec4 indirect_initial_meta_frag_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/restir_gi_bridge.glsl"
 
+void lt_emit_gi_initial_store(RTXDI_GIReservoirStore store) {
+    indirect_initial_position_frag_out = store.positionData;
+    indirect_initial_normal_frag_out = store.normalData;
+    indirect_initial_radiance_frag_out = store.radianceData;
+    indirect_initial_meta_frag_out = store.metaData;
+}
+
 void main() {
-    RTXDI_GIReservoirStore initialStore = gi_make_invalid_reservoir_store();
+    // Reference parity: InitialCandidates::run always produces a reservoir per pixel,
+    // including the primary-miss path (handlePrimaryMiss + addCandidateReservoir).
     RAB_Surface currentSurface = lt_load_surface(tex_coord);
     if (!lt_is_valid_surface(currentSurface)) {
-        indirect_initial_position_frag_out = initialStore.positionData;
-        indirect_initial_normal_frag_out = initialStore.normalData;
-        indirect_initial_radiance_frag_out = initialStore.radianceData;
-        indirect_initial_meta_frag_out = initialStore.metaData;
+        vec3 primaryRayDir = normalize(direction_vert_out.xyz);
+        lt_emit_gi_initial_store(gi_build_primary_miss_initial_reservoir_store(world_camera_position, primaryRayDir));
         return;
     }
 
-    initialStore = gi_build_initial_reservoir_store(currentSurface);
-    indirect_initial_position_frag_out = initialStore.positionData;
-    indirect_initial_normal_frag_out = initialStore.normalData;
-    indirect_initial_radiance_frag_out = initialStore.radianceData;
-    indirect_initial_meta_frag_out = initialStore.metaData;
+    lt_emit_gi_initial_store(gi_build_initial_reservoir_store(currentSurface));
 }

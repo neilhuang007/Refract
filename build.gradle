@@ -322,10 +322,26 @@ tasks.register("patchValidationTest", Test) {
     }
 }
 
+def glslangValidatorExecutable = (findProperty("glslangValidator") ?: System.getenv("GLSLANG_VALIDATOR") ?: "glslangValidator").toString()
+
+tasks.register("shaderValidationTest", Test) {
+    group = "verification"
+    description = "Runs offline GLSL validation against resolved Photonics shader entrypoints."
+    useJUnitPlatform()
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    systemProperty "photonics.projectDir", project.projectDir.absolutePath
+    systemProperty "photonics.buildDir", layout.buildDirectory.get().asFile.absolutePath
+    systemProperty "photonics.glslangValidator", glslangValidatorExecutable
+    filter {
+        includeTestsMatching "at.redi2go.photonic.client.rendering.validation.*"
+    }
+}
+
 tasks.register("automationValidation") {
     group = "verification"
-    description = "Runs patch validation tests and full build verification."
-    dependsOn "patchValidationTest", "build"
+    description = "Runs offline shader validation, patch validation tests, and full build verification."
+    dependsOn "patchValidationTest", "shaderValidationTest", "build"
 }
 
 tasks.register("shaderGameTest") {

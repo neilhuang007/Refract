@@ -31,6 +31,10 @@ public class InputBuffer {
       return this.array.read() | this.array.read() << 8 | this.array.read() << 16 | this.array.read() << 24;
    }
 
+   public int getIndex() {
+      return this.array.getIndex();
+   }
+
    public void get(byte[] dst) {
       for (int i = 0; i < dst.length; i++) {
          dst[i] = this.get();
@@ -57,10 +61,6 @@ public class InputBuffer {
 
    public int available() {
       return this.array.available();
-   }
-
-   public int getIndex() {
-      return this.array.getIndex();
    }
 
    private static class InputArray extends ByteArrayInputStream {

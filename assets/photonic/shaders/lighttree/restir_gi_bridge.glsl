@@ -546,10 +546,10 @@ RTXDI_GIReservoirStore gi_make_reservoir_store(RTXDI_GIReservoir reservoir) {
     return store;
 }
 
-RTXDI_GIReservoirStore gi_make_initial_reservoir_store(RTXDI_GIReservoir reservoir, vec3 misRadiance) {
-    RTXDI_GIReservoirStore store = gi_make_reservoir_store(reservoir);
-    store.radianceData = vec4(max(misRadiance, vec3(0.0f)), 0.0f);
-    return store;
+RTXDI_GIReservoirStore gi_make_initial_reservoir_store(RTXDI_GIReservoir reservoir) {
+    // The reference InitialCandidates pass writes reservoir state only — no side-channel radiance payload.
+    // Final-MIS consumers must reconstruct initial radiance from the selected sample, not from a dedicated texture.
+    return gi_make_reservoir_store(reservoir);
 }
 
 RTXDI_GIReservoirStore gi_make_reservoir_store_from_index(int bufferIndex, ivec2 uv) {
@@ -587,8 +587,6 @@ const float gi_default_spatial_depth_threshold = 0.1f;
 const float gi_default_spatial_normal_threshold = 0.6f;
 const float gi_default_spatial_sampling_radius = 32.0f;
 const float gi_default_boiling_filter_strength = 0.2f;
-const float gi_skylight_bootstrap_history = 8.0f;
-const float gi_skylight_bootstrap_age = 4.0f;
 
 int gi_runtime_bias_correction_mode(float configuredMode) {
     if (configuredMode < -0.5f) {
@@ -671,18 +669,9 @@ vec3 GetFinalVisibility(RAB_Surface surface, RTXDI_GISample giSample);
 bool gi_sample_requires_final_visibility(RAB_Surface surface, RTXDI_GISample giSample);
 
 RTXDI_GIReservoir RTXDI_LoadInitialGIReservoir(ivec2 uv) {
-    RTXDI_GIReservoir reservoir = gi_unpack_reservoir(RTXDI_PackedGIReservoir(
-        texelFetch(radiosity_indirect_initial_position, uv, 0).xyz,
-        floatBitsToUint(texelFetch(radiosity_indirect_initial_position, uv, 0).w),
-        floatBitsToUint(texelFetch(radiosity_indirect_initial_normal, uv, 0).x),
-        texelFetch(radiosity_indirect_initial_normal, uv, 0).y,
-        floatBitsToUint(texelFetch(radiosity_indirect_initial_normal, uv, 0).z),
-        floatBitsToUint(texelFetch(radiosity_indirect_initial_normal, uv, 0).w)
-    ));
-    reservoir.selected.radiance = max(texelFetch(radiosity_indirect_initial_radiance, uv, 0).rgb, vec3(0.0f));
-    reservoir.samples = 1.0f;
-    reservoir.age = 0.0f;
-    return reservoir;
+    // Parity with reference: the initial stage's selected sample (position/normal/radiance) and M come directly
+    // from the reservoir it wrote. No secondary radiance texture is consulted.
+    return RTXDI_LoadGIReservoir(gi_buffer_index_initial, uv);
 }
 
 bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 samplePosition) {
@@ -802,22 +791,84 @@ bool gi_shade_secondary_surface(
     return ph_luminance(shadedRadiance) > 1e-6f;
 }
 
-bool gi_build_initial_sample(RAB_Surface currentSurface, out RTXDI_GISample giSample, out float samplePdf, out vec3 misRadiance) {
-    giSample = gi_null_sample();
-    samplePdf = 0.0f;
-    misRadiance = vec3(0.0f);
+// -----------------------------------------------------------------------------
+// Initial-candidate generation — reference parity layer
+//
+// Reference: InitialCandidates.cs.slang
+//   tracePath -> addCandidateReservoir with MIS weight 1/SamplesPerPixel
+//   Handles primary miss by emitting a primary-miss candidate reservoir.
+//
+// Photonics GI parity port:
+//   gi_generate_primary_miss_candidate(...) synthesizes the primary-miss
+//     candidate used when the primary surface is invalid (parity with
+//     PathTracer::handlePrimaryMiss in the reference).
+//   gi_trace_initial_candidate(...) is a single candidate trace returning a
+//     GI-reservoir-shaped record plus its source pdf.
+//   gi_add_initial_candidate(...) merges one candidate into the running
+//     initial reservoir with MIS weight 1/SamplesPerPixel, mirroring
+//     PathReservoir::add in the reference.
+//
+// Note: the candidate is communicated by flat out-parameters instead of a
+// struct containing RTXDI_GISample, because Iris's GLSL transformer parser
+// refuses structs whose fields are other user-defined struct types in this
+// translation unit.
+// -----------------------------------------------------------------------------
 
-    uvec2 pixelPosition = uvec2(lt_current_pixel_pos());
-    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixelPosition, uint(frameCounter), RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+// valid/isSkylight are packed into a single uint: bit 0 = valid, bit 1 = skylight.
+const uint GI_CANDIDATE_FLAG_VALID     = 0x1u;
+const uint GI_CANDIDATE_FLAG_SKYLIGHT  = 0x2u;
+
+void gi_generate_primary_miss_candidate(
+    ivec2 pixelPosition,
+    vec3 cameraWorldPos,
+    vec3 primaryRayDir,
+    out RTXDI_GISample outSample,
+    out float outSourcePdf,
+    out uint outFlags
+) {
+    outSample = gi_null_sample();
+    outSourcePdf = 0.0f;
+    outFlags = 0u;
+
+    vec3 skyRadiance = max(get_sky_color(pixelPosition, cameraWorldPos, primaryRayDir), vec3(0.0f));
+    if (ph_luminance(skyRadiance) <= 1e-6f) {
+        skyRadiance = max(indirect_light_color, vec3(0.0f));
+    }
+    skyRadiance = gi_clamp_secondary_radiance(skyRadiance);
+    if (ph_luminance(skyRadiance) <= 1e-6f) {
+        return;
+    }
+
+    outSample.position = cameraWorldPos + primaryRayDir * gi_skylight_distance();
+    outSample.normal = -primaryRayDir;
+    outSample.radiance = skyRadiance;
+    // A primary-miss sample has unit pdf in the camera ray hemisphere for the purpose of
+    // matching the reference sampling weight; the reservoir absorbs the per-candidate
+    // MIS weight 1/SamplesPerPixel in gi_add_initial_candidate.
+    outSourcePdf = 1.0f;
+    outFlags = GI_CANDIDATE_FLAG_VALID | GI_CANDIDATE_FLAG_SKYLIGHT;
+}
+
+void gi_trace_initial_candidate(
+    RAB_Surface currentSurface,
+    inout RTXDI_RandomSamplerState rng,
+    ivec2 pixelPosition,
+    out RTXDI_GISample outSample,
+    out float outSourcePdf,
+    out uint outFlags
+) {
+    outSample = gi_null_sample();
+    outSourcePdf = 0.0f;
+    outFlags = 0u;
 
     vec3 sampleDir = vec3(0.0f);
     if (!RAB_SurfaceImportanceSampleBrdf(currentSurface, rng, sampleDir)) {
-        return false;
+        return;
     }
 
-    samplePdf = RAB_SurfaceEvaluateBrdfPdf(currentSurface, sampleDir);
+    float samplePdf = RAB_SurfaceEvaluateBrdfPdf(currentSurface, sampleDir);
     if (samplePdf <= 0.0f) {
-        return false;
+        return;
     }
 
     const float brdfRayMinT = 0.001f;
@@ -832,22 +883,22 @@ bool gi_build_initial_sample(RAB_Surface currentSurface, out RTXDI_GISample giSa
     bool hitSceneSurface = ray.result_hit && !ray_iteration_bound_reached;
 
     if (!hitSceneSurface) {
-        vec3 skyRadiance = max(get_sky_color(ivec2(pixelPosition), currentSurface.worldPos, sampleDir), vec3(0.0f));
+        vec3 skyRadiance = max(get_sky_color(pixelPosition, currentSurface.worldPos, sampleDir), vec3(0.0f));
         if (ph_luminance(skyRadiance) <= 1e-6f) {
             skyRadiance = max(indirect_light_color, vec3(0.0f));
         }
         skyRadiance *= secondaryThroughput;
         skyRadiance = gi_clamp_secondary_radiance(skyRadiance);
         if (ph_luminance(skyRadiance) <= 1e-6f) {
-            return false;
+            return;
         }
 
-        vec3 skyDistance = sampleDir * gi_skylight_distance();
-        giSample.position = currentSurface.worldPos + skyDistance;
-        giSample.normal = -sampleDir;
-        giSample.radiance = skyRadiance;
-        misRadiance = skyRadiance;
-        return gi_sample_is_valid(giSample);
+        outSample.position = currentSurface.worldPos + sampleDir * gi_skylight_distance();
+        outSample.normal = -sampleDir;
+        outSample.radiance = skyRadiance;
+        outSourcePdf = samplePdf;
+        outFlags = GI_CANDIDATE_FLAG_VALID | GI_CANDIDATE_FLAG_SKYLIGHT;
+        return;
     }
 
     vec3 secondaryPos = ray.result_position;
@@ -872,31 +923,100 @@ bool gi_build_initial_sample(RAB_Surface currentSurface, out RTXDI_GISample giSa
     );
 
     if (!gi_shade_secondary_surface(currentSurface, secondarySurface, rng, secondaryRadiance)) {
-        return false;
+        return;
     }
 
-    giSample.position = secondarySurface.worldPos;
-    giSample.normal = secondarySurface.normal;
-    giSample.radiance = secondaryRadiance;
-    misRadiance = secondaryRadiance * secondaryThroughput;
-    return gi_sample_is_valid(giSample);
+    outSample.position = secondarySurface.worldPos;
+    outSample.normal = secondarySurface.normal;
+    outSample.radiance = secondaryRadiance * secondaryThroughput;
+    outSourcePdf = samplePdf;
+    outFlags = GI_CANDIDATE_FLAG_VALID; // not skylight
+}
+
+// Reference parity: InitialCandidates::addCandidateReservoir
+// Accumulates one IID candidate into the running initial reservoir with m_i = 1/SamplesPerPixel.
+void gi_add_initial_candidate(
+    inout RTXDI_GIReservoir reservoir,
+    RTXDI_GISample candidateSample,
+    float sourcePdf,
+    uint flags,
+    inout RTXDI_RandomSamplerState rng,
+    int samplesPerPixel
+) {
+    if ((flags & GI_CANDIDATE_FLAG_VALID) == 0u || sourcePdf <= 0.0f) {
+        reservoir.samples += 1.0f;
+        return;
+    }
+
+    float candidateWeight = 1.0f / sourcePdf;
+    float misWeight = 1.0f / float(max(samplesPerPixel, 1));
+    float risWeight = misWeight * candidateWeight;
+
+    reservoir.samples += 1.0f;
+    reservoir.weight_sum += risWeight;
+
+    bool selectSample = (RTXDI_GetNextRandom(rng) * reservoir.weight_sum <= risWeight);
+    if (selectSample) {
+        reservoir.selected = candidateSample;
+        reservoir.age = 0.0f;
+        reservoir.miscData = ((flags & GI_CANDIDATE_FLAG_SKYLIGHT) != 0u) ? gi_misc_flag_skylight : 0u;
+    }
 }
 
 RTXDI_GIReservoirStore gi_build_initial_reservoir_store(RAB_Surface currentSurface) {
-    RTXDI_GISample giSample = gi_null_sample();
-    float samplePdf = 0.0f;
-    vec3 misRadiance = vec3(0.0f);
-    if (!gi_build_initial_sample(currentSurface, giSample, samplePdf, misRadiance)) {
-        return gi_make_invalid_reservoir_store();
+    const int samplesPerPixel = max(PH_LIGHTTREE_GI_INITIAL_SAMPLES, 1);
+
+    ivec2 pixelPosition = lt_current_pixel_pos();
+    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
+        uvec2(pixelPosition),
+        uint(frameCounter),
+        RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
+    );
+
+    RTXDI_GIReservoir reservoir = RTXDI_EmptyGIReservoir();
+    for (int i = 0; i < samplesPerPixel; i++) {
+        RTXDI_GISample candidateSample;
+        float candidateSourcePdf;
+        uint candidateFlags;
+        gi_trace_initial_candidate(currentSurface, rng, pixelPosition, candidateSample, candidateSourcePdf, candidateFlags);
+        gi_add_initial_candidate(reservoir, candidateSample, candidateSourcePdf, candidateFlags, rng, samplesPerPixel);
     }
 
-    RTXDI_GIReservoir reservoir = RTXDI_MakeGIReservoir(giSample, samplePdf);
-    if (gi_is_skylight_sample_position(giSample.position, currentSurface.worldPos)) {
-        gi_mark_reservoir_skylight(reservoir);
-        reservoir.samples = max(reservoir.samples, gi_skylight_bootstrap_history);
-        reservoir.age = max(reservoir.age, gi_skylight_bootstrap_age);
+    // Reference parity: InitialCandidates.cs.slang:58-62 always writes a
+    // reservoir entry with confidence = 1 after the SPP loop, even when no
+    // candidate was selected ("dead" pixel: totalWeight = 0, integrand = 0).
+    // We therefore never emit an M = 0 invalid store from this pass; instead
+    // we emit the empty reservoir with its samples normalized to 1 so the
+    // per-pixel entry has unit history weight for downstream reuse/splatting.
+    reservoir.samples = 1.0f;
+    return gi_make_initial_reservoir_store(reservoir);
+}
+
+// Reference parity: emits a primary-miss initial reservoir when the primary surface is invalid.
+// Matches PathTracer::handlePrimaryMiss + InitialCandidates::addCandidateReservoir in the reference.
+RTXDI_GIReservoirStore gi_build_primary_miss_initial_reservoir_store(vec3 cameraWorldPos, vec3 primaryRayDir) {
+    const int samplesPerPixel = max(PH_LIGHTTREE_GI_INITIAL_SAMPLES, 1);
+    ivec2 pixelPosition = lt_current_pixel_pos();
+    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
+        uvec2(pixelPosition),
+        uint(frameCounter),
+        RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
+    );
+
+    RTXDI_GIReservoir reservoir = RTXDI_EmptyGIReservoir();
+    for (int i = 0; i < samplesPerPixel; i++) {
+        RTXDI_GISample candidateSample;
+        float candidateSourcePdf;
+        uint candidateFlags;
+        gi_generate_primary_miss_candidate(pixelPosition, cameraWorldPos, primaryRayDir, candidateSample, candidateSourcePdf, candidateFlags);
+        gi_add_initial_candidate(reservoir, candidateSample, candidateSourcePdf, candidateFlags, rng, samplesPerPixel);
     }
-    return gi_make_initial_reservoir_store(reservoir, misRadiance);
+
+    // Reference parity: always write an entry with confidence = 1, even for a
+    // fully dead primary-miss pixel (matches unconditional addCandidateReservoir
+    // call in InitialCandidates.cs.slang:97).
+    reservoir.samples = 1.0f;
+    return gi_make_initial_reservoir_store(reservoir);
 }
 
 bool gi_stream_contributor(

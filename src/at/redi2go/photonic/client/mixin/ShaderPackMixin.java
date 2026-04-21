@@ -5,6 +5,7 @@ import at.redi2go.photonic.client.Raytracer;
 import at.redi2go.photonic.client.UniformPatcher;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
 import at.redi2go.photonic.client.rendering.patching.Patch;
+import at.redi2go.photonics.api.shaders.IShaderPack;
 import com.google.common.collect.ImmutableList;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
@@ -34,15 +35,15 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.At.Shift;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArgs;
-import org.spongepowered.asm.mixin.injection.At.Shift;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
 @Mixin(value = ShaderPack.class, remap = false)
-public abstract class ShaderPackMixin {
+public abstract class ShaderPackMixin implements IShaderPack {
    @Shadow
    @Final
    private ShaderProperties shaderProperties;
@@ -52,6 +53,9 @@ public abstract class ShaderPackMixin {
 
    @Unique
    private static boolean patchProperties = true;
+
+   @Unique
+   private boolean photonic$supportsPhotonics;
 
    @Shadow
    private static Optional<String> loadProperties(Path shaderPath, String name) {
@@ -78,6 +82,8 @@ public abstract class ShaderPackMixin {
          Raytracer.PATCHED_SHADERPACK_PROPERTIES = new Properties();
          var7.printStackTrace();
       }
+
+      this.photonic$supportsPhotonics = Raytracer.SHADERPACK_PROPERTIES.containsKey("photonics.enabled");
    }
 
    @Inject(method = "readProperties", at = @At("HEAD"), cancellable = true)
@@ -240,6 +246,21 @@ public abstract class ShaderPackMixin {
          definitions.add(new StringPair(dimensionDefine, ""));
          args.set(1, definitions);
       }
+   }
+
+   @Override
+   public String name() {
+      return Iris.getIrisConfig().getShaderPackName().orElse("<unknown>");
+   }
+
+   @Override
+   public boolean supportsPhotonics() {
+      return this.photonic$supportsPhotonics;
+   }
+
+   @Override
+   public at.redi2go.photonics.api.shaders.PhotonicsProperties properties() {
+      return (at.redi2go.photonics.api.shaders.PhotonicsProperties)this.shaderProperties;
    }
 
    @Unique

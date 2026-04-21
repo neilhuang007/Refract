@@ -128,7 +128,7 @@ public class Schematic {
    }
 
    public boolean isInBounds(int x, int y, int z) {
-      return x >= 0 && x < this.width && y >= 0 && y < this.height && z >= 0 && z < this.depth;
+      return contains(x, y, z, this.width, this.height, this.depth);
    }
 
    public void setEntry(int x, int y, int z, int data) {
@@ -143,8 +143,20 @@ public class Schematic {
       return (v | v << 2) & 153391689;
    }
 
+   public static int shrinkBits(int value) {
+      int v = value & 153391689;
+      v = (v & 51130563) | (v >> 2 & 51130563);
+      v = (v & 50393103) | (v >> 4 & 50393103);
+      v = (v & 50331903) | (v >> 8 & 50331903);
+      return (v & 15) | (v >> 16 & 15);
+   }
+
    public static int toSchematicIndex(int x, int y, int z) {
       return expandBits(x) | expandBits(y) << 1 | expandBits(z) << 2;
+   }
+
+   public static boolean contains(int x, int y, int z, int width, int height, int depth) {
+      return ((x | y | z | ~(x - width) | ~(y - height) | ~(z - depth)) & Integer.MIN_VALUE) == 0;
    }
 
    public int[] getHashVector() {
