@@ -16,20 +16,15 @@ bool InitialCandidates_addCandidateReservoir(
         1.0f / float(kSamplesPerPixel),
         path.reservoir
     );
-    if (selected) {
-        PathReservoir_setSubPixel(
-            existingReservoir,
-            PathState_getPixel(path),
-            path.selectedReconnection.subPixel
-        );
-    }
+    vec2 subPixel = selected ? path.reconnection.subPixel : PathReservoir_getSubPixel(existingReservoir, PathState_getPixel(path));
+    PathReservoir_setSubPixel(existingReservoir, PathState_getPixel(path), subPixel);
     PathReservoir_setConfidence(existingReservoir, 1.0f);
 
     currReservoir = existingReservoir;
     ReservoirSplattingReconnectionData existingReconnection = isFirstSample
         ? ReservoirSplattingReconnectionData_init()
         : currReconnectionData;
-    currReconnectionData = selected ? path.selectedReconnection : existingReconnection;
+    currReconnectionData = selected ? path.reconnection : existingReconnection;
     return selected;
 }
 

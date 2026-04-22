@@ -31,49 +31,6 @@ ShiftedPathData CollectTemporalSamples_make_no_shift_path(
     return shiftedPath;
 }
 
-ShiftedPathData CollectTemporalSamples_restore_shifted_path(
-    ivec2 targetPixel,
-    vec2 relativeSubPixel,
-    ReservoirSplattingReconnectionData sourceReconnectionData,
-    vec3 packedRadiance,
-    float packedSecondaryPathJacobian,
-    float packedLensVertexJacobian,
-    float packedValid)
-{
-    ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
-    shiftedPath.fractionalPixel = vec2(targetPixel) + relativeSubPixel;
-    shiftedPath.lensSample = sourceReconnectionData.lensSample;
-    shiftedPath.firstRayDir = -sourceReconnectionData.firstWi;
-    shiftedPath.subPixelJacobian = max(sourceReconnectionData.subPixelJacobian, 1e-10f);
-    shiftedPath.lensVertexJacobian = max(packedLensVertexJacobian, 1e-10f);
-    shiftedPath.secondaryPathJacobian = max(packedSecondaryPathJacobian, 1e-10f);
-    shiftedPath.radiance = packedRadiance;
-
-    if (packedValid <= 0.0f)
-    {
-        return shiftedPath;
-    }
-
-    RAB_Surface targetSurface = RAB_GetGBufferSurface(targetPixel, false);
-    if (!RAB_IsSurfaceValid(targetSurface))
-    {
-        return shiftedPath;
-    }
-
-    vec3 firstRayDir = normalize(targetSurface.worldPos - world_camera_position);
-    shiftedPath.primaryHit.worldPos = targetSurface.worldPos;
-    shiftedPath.primaryHit.viewDepth = targetSurface.viewDepth;
-    shiftedPath.primaryHit.faceId = uint(round(scatter_load_surface_identity(targetPixel, false).w));
-    shiftedPath.firstRayDir = firstRayDir;
-    shiftedPath.subPixelJacobian = scatter_compute_subpixel_jacobian(
-        targetSurface.worldPos,
-        targetSurface.geoNormal,
-        world_camera_position,
-        lt_current_camera_forward()
-    );
-    return shiftedPath;
-}
-
 ReservoirSplattingReconnectionData CollectTemporalSamples_update_reconnection(
     ReservoirSplattingReconnectionData sourceReconnectionData,
     ShiftedPathData shiftedPath,
@@ -106,6 +63,7 @@ void CollectTemporalSamples_storeResult(
         reconnectionData.irradiance,
         reconnectionData.subPixel,
         reconnectionData.subPixelJacobian,
+        reconnectionData.lensVertexJacobian,
         reconnectionData.secondaryPathJacobian,
         reconnectionData.firstHit.faceId,
         reconnectionData.pathLength,
@@ -211,7 +169,6 @@ void CollectTemporalSamples_run(ivec2 currPixel)
                 packedOffsetIndex -= 1;
             }
 
-            ivec2 targetPixel = neighborPixel + requiredOffset;
             ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
             float shiftedJacobian = 1.0f;
             if (noShiftNeeded)
@@ -224,17 +181,7 @@ void CollectTemporalSamples_run(ivec2 currPixel)
             }
             else
             {
-                LtTemporalGatherShiftedPathData packedShiftedPath =
-                    scatter_load_gather_shifted_path_data(neighborPixel, packedOffsetIndex);
-                shiftedPath = CollectTemporalSamples_restore_shifted_path(
-                    targetPixel,
-                    relativeSubPixel,
-                    neighborReconnectionData,
-                    packedShiftedPath.radiance,
-                    packedShiftedPath.secondaryPathJacobian,
-                    packedShiftedPath.lensVertexJacobian,
-                    packedShiftedPath.valid
-                );
+                shiftedPath = lt_temporal_load_shifted_path(neighborPixel, packedOffsetIndex);
                 shiftedJacobian = shiftedPath.secondaryPathJacobian
                     / max(neighborReconnectionData.secondaryPathJacobian, 1e-10f);
             }
@@ -273,8 +220,8 @@ void CollectTemporalSamples_run(ivec2 currPixel)
                         tempPackedIndex -= 1;
                     }
 
-                    LtTemporalGatherShiftedPathData tempShiftedPath =
-                        scatter_load_gather_shifted_path_data(neighborPixel, tempPackedIndex);
+                    ShiftedPathData tempShiftedPath =
+                        lt_temporal_load_shifted_path(neighborPixel, tempPackedIndex);
                     float tempPHat = lt_scatter_radiance_phat(tempShiftedPath.radiance);
                     float tempJacobian = tempShiftedPath.secondaryPathJacobian
                         / max(neighborReconnectionData.secondaryPathJacobian, 1e-10f);

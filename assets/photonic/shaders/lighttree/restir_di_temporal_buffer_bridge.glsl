@@ -105,7 +105,8 @@ layout(std430) restrict buffer ph_multi_scatter_temporal_resampling_sorted_reser
 };
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
+#if (defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)) && !defined(PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED)
+#define PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED
 layout(std430) restrict buffer ph_temporal_gather_shifted_paths {
     vec4 ph_temporal_gather_shifted_paths_data[];
 };

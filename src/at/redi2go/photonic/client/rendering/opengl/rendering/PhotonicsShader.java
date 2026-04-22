@@ -11,7 +11,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 public class PhotonicsShader {
-   private List<Entry<Integer, GlMemoryManager>> foundGlMemories;
+   private List<Entry<Integer, Supplier<GlMemoryManager>>> foundGlMemories;
    private final String fragmentName;
    private final String vertexName;
    private final GLMemoryCollection memoryCollection;
@@ -51,20 +51,27 @@ public class PhotonicsShader {
 
          for (Supplier<GlMemoryManager> glMemoryManagerSupplier : this.memoryCollection) {
             GlMemoryManager glMemoryManager = glMemoryManagerSupplier.get();
+            if (glMemoryManager == null) {
+               continue;
+            }
             if (!this.memoryFilter.test(glMemoryManager)) {
                continue;
             }
             int blockIndex = glMemoryManager.findInProgram(shaderId);
             if (blockIndex != -1) {
-               this.foundGlMemories.add(Map.entry(blockIndex, glMemoryManager));
+               this.foundGlMemories.add(Map.entry(blockIndex, glMemoryManagerSupplier));
             }
          }
       }
 
       int bindingPointIndex = 0;
 
-      for (Entry<Integer, GlMemoryManager> glMemoryManager : this.foundGlMemories) {
-         glMemoryManager.getValue().bind(shaderId, glMemoryManager.getKey(), bindingPointIndex++);
+      for (Entry<Integer, Supplier<GlMemoryManager>> glMemoryManager : this.foundGlMemories) {
+         GlMemoryManager resolvedMemoryManager = glMemoryManager.getValue().get();
+         if (resolvedMemoryManager == null) {
+            continue;
+         }
+         resolvedMemoryManager.bind(shaderId, glMemoryManager.getKey(), bindingPointIndex++);
       }
 
       if (this.framebuffer != null) {

@@ -19,6 +19,7 @@ layout(location = 5) out vec4 temporal_gather_intermediate_reconnection1_frag_ou
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
+#include "/photonics/lighttree/restir_di_temporal_buffer_bridge.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/ReservoirSplatting/CollectTemporalSamples.glsl"
 

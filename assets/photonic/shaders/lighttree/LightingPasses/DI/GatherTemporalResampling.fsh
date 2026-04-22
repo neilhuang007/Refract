@@ -12,6 +12,11 @@ layout(location = 4) out vec4 reconnection1_frag_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/restir_di_gather_temporal_stage.glsl"
+
+RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
+    ivec2 pixel,
+    out ReservoirSplattingReconnectionData currReconnectionData);
 
 void storeGatherTemporalResamplingResult(
     RTXDI_DIReservoir reservoir,
@@ -27,6 +32,7 @@ void storeGatherTemporalResamplingResult(
         reconnectionData.irradiance,
         reconnectionData.subPixel,
         reconnectionData.subPixelJacobian,
+        reconnectionData.lensVertexJacobian,
         reconnectionData.secondaryPathJacobian,
         reconnectionData.firstHit.faceId,
         reconnectionData.pathLength,

@@ -10,7 +10,7 @@
 void InitialCandidates_handlePrimaryMiss(inout PathState path)
 {
     path.reservoir = RTXDI_EmptyDIReservoir();
-    path.selectedReconnection = ReservoirSplattingReconnectionData_init();
+    path.reconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();
     lt_area_seed_domain_samples(path.reservoir, PathState_getPixel(path), 0u);
 }
@@ -28,11 +28,11 @@ void InitialCandidates_handleHit(inout PathState path)
 
     if (!RTXDI_IsValidDIReservoir(path.reservoir))
     {
-        path.selectedReconnection = ReservoirSplattingReconnectionData_init();
+        path.reconnection = ReservoirSplattingReconnectionData_init();
         return;
     }
 
-    path.selectedReconnection = InitialCandidates_buildSelectedReconnection(
+    path.reconnection = InitialCandidates_buildSelectedReconnection(
         path.surface,
         path.reservoir,
         path.selectedLightSample,

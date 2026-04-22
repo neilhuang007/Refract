@@ -28,6 +28,7 @@ void ScatterBackupTemporalResampling_storeResult(
         reconnectionData.irradiance,
         reconnectionData.subPixel,
         reconnectionData.subPixelJacobian,
+        reconnectionData.lensVertexJacobian,
         reconnectionData.secondaryPathJacobian,
         reconnectionData.firstHit.faceId,
         reconnectionData.pathLength,

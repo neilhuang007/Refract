@@ -939,7 +939,13 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
     RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
 
     RAB_LightSample localSample = lt_null_sample();
-    RTXDI_DIReservoir localReservoir = RTXDI_SampleLocalLights(rng, coherentRng, surface, initialSamplingParams, localSample);
+    RTXDI_DIReservoir localReservoir = InitialCandidates_SampleLocalLights(
+        rng,
+        coherentRng,
+        surface,
+        initialSamplingParams,
+        localSample
+    );
 
     RAB_LightSample infiniteSample = lt_null_sample();
     RTXDI_DIReservoir infiniteReservoir = RTXDI_SampleInfiniteLights(surface, int(initialSamplingParams.numInfiniteLightSamples));
@@ -948,7 +954,7 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
     RTXDI_DIReservoir environmentReservoir = RTXDI_SampleEnvironmentMap(surface, int(initialSamplingParams.numEnvironmentSamples));
 
     RAB_LightSample brdfSample = lt_null_sample();
-    RTXDI_DIReservoir brdfReservoir = RTXDI_SampleBrdf(
+    RTXDI_DIReservoir brdfReservoir = InitialCandidates_SampleBrdf(
         rng,
         surface,
         int(initialSamplingParams.numBrdfSamples),

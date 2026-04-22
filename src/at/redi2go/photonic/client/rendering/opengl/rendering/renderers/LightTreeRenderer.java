@@ -60,7 +60,6 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String diInitialCandidatesFragment = "lighttree/LightingPasses/DI/InitialCandidates.fsh";
    private static final String diCollectTemporalSamplesFragment = "lighttree/LightingPasses/DI/CollectTemporalSamples.fsh";
    private static final String diRobustReuseOptimizationFragment = "lighttree/LightingPasses/DI/RobustReuseOptimization.fsh";
-   private static final String diRobustReuseOptimizationHighFragment = "lighttree/LightingPasses/DI/RobustReuseOptimizationHigh.fsh";
    private static final String diGatherTemporalResamplingFragment = "lighttree/LightingPasses/DI/GatherTemporalResampling.fsh";
    private static final String diTemporalReprojectionFragment = "lighttree/LightingPasses/DI/TemporalReprojection.fsh";
    private static final String diTemporalBinningOffsetsFragment = "lighttree/LightingPasses/DI/TemporalBinningOffsets.fsh";
@@ -154,15 +153,18 @@ public class LightTreeRenderer extends MainRenderer {
   private final ColorFramebuffer temporalReservoirBuffer;
   private final ColorFramebuffer temporalGatherBuffer;
   private GlMemoryManager temporalGatherShiftedPathsMemoryManager;
-  private GlMemoryManager[] temporalScatterGlobalCountersMemoryManagers;
-  private GlMemoryManager[] temporalScatterCellCountersMemoryManagers;
-
-  private GlMemoryManager[] temporalScatterReservoirIndicesMemoryManagers;
-  private GlMemoryManager[] temporalScatterScatteredReservoirsMemoryManagers;
-  private GlMemoryManager[] temporalScatterScatteredWeightsMemoryManagers;
-  private GlMemoryManager[] temporalScatterCellOffsetsMemoryManagers;
-  private GlMemoryManager[] temporalScatterSortedReservoirsMemoryManagers;
-  private GlMemoryManager[] temporalScatterSortedWeightsMemoryManagers;
+  private GlMemoryManager temporalScatterCurrentGlobalCountersMemoryManager;
+  private GlMemoryManager temporalScatterCurrentCellCountersMemoryManager;
+  private GlMemoryManager temporalScatterCurrentReservoirIndicesMemoryManager;
+  private GlMemoryManager temporalScatterCurrentScatteredReservoirsMemoryManager;
+  private GlMemoryManager temporalScatterCurrentCellOffsetsMemoryManager;
+  private GlMemoryManager temporalScatterCurrentSortedReservoirsMemoryManager;
+  private GlMemoryManager temporalScatterMultiGlobalCountersMemoryManager;
+  private GlMemoryManager temporalScatterMultiCellCountersMemoryManager;
+  private GlMemoryManager temporalScatterMultiReservoirIndicesMemoryManager;
+  private GlMemoryManager temporalScatterMultiScatteredReservoirsMemoryManager;
+  private GlMemoryManager temporalScatterMultiCellOffsetsMemoryManager;
+  private GlMemoryManager temporalScatterMultiSortedReservoirsMemoryManager;
   private final RoutingFramebuffer proposalFramebuffer;
   private final RoutingFramebuffer proposalReservoirFramebuffer;
   private final RoutingFramebuffer reuseResolveFramebuffer;
@@ -187,7 +189,6 @@ public class LightTreeRenderer extends MainRenderer {
   private final RoutingFramebuffer shadeSamplesReservoirFramebuffer;
   private final RoutingFramebuffer temporalCollectFramebuffer;
   private final RoutingFramebuffer robustReuseOptimizationFramebuffer;
-  private final RoutingFramebuffer robustReuseOptimizationHighFramebuffer;
   private final RoutingFramebuffer temporalScatterStageFramebuffer;
   private final RoutingFramebuffer temporalReservoirFramebuffer;
   @Nullable
@@ -315,8 +316,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.temporalReservoirBuffer = this.createTemporalReservoirFramebuffer(renderScale);
       this.temporalGatherBuffer = this.createTemporalGatherFramebuffer(renderScale);
       this.temporalCollectFramebuffer = this.createTemporalCollectFramebuffer();
-      this.robustReuseOptimizationFramebuffer = this.createRobustReuseOptimizationFramebuffer(0);
-      this.robustReuseOptimizationHighFramebuffer = this.createRobustReuseOptimizationFramebuffer(8);
+      this.robustReuseOptimizationFramebuffer = this.createRobustReuseOptimizationFramebuffer();
       this.temporalScatterPixelCapacity = this.getTemporalScatterPixelCapacity();
       this.temporalScatterContributorCapacity = this.getTemporalScatterContributorCapacity();
       this.allocateTemporalScatterMemoryManagers();
@@ -396,31 +396,23 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void addTemporalScatterMemoryManagers(GLMemoryCollection memoryCollection) {
-      this.addTemporalScatterMemoryManager(memoryCollection, this.temporalGatherShiftedPathsMemoryManager);
-      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterGlobalCountersMemoryManagers);
-      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterCellCountersMemoryManagers);
-      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterReservoirIndicesMemoryManagers);
-      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterScatteredReservoirsMemoryManagers);
-      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterScatteredWeightsMemoryManagers);
-      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterCellOffsetsMemoryManagers);
-      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterSortedReservoirsMemoryManagers);
-      this.addTemporalScatterMemoryManagers(memoryCollection, this.temporalScatterSortedWeightsMemoryManagers);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalGatherShiftedPathsMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentGlobalCountersMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentCellCountersMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentReservoirIndicesMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentScatteredReservoirsMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentCellOffsetsMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentSortedReservoirsMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiGlobalCountersMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiCellCountersMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiReservoirIndicesMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiScatteredReservoirsMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiCellOffsetsMemoryManager);
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiSortedReservoirsMemoryManager);
    }
 
-   private void addTemporalScatterMemoryManager(GLMemoryCollection memoryCollection, GlMemoryManager manager) {
-      if (manager != null) {
-         memoryCollection.add(() -> manager);
-      }
-   }
-
-   private void addTemporalScatterMemoryManagers(GLMemoryCollection memoryCollection, GlMemoryManager[] managers) {
-      if (managers == null) {
-         return;
-      }
-
-      for (GlMemoryManager manager : managers) {
-         memoryCollection.add(() -> manager);
-      }
+   private void addTemporalScatterMemoryManager(GLMemoryCollection memoryCollection, Supplier<GlMemoryManager> managerSupplier) {
+      memoryCollection.add(managerSupplier);
    }
 
    @Override
@@ -435,43 +427,18 @@ public class LightTreeRenderer extends MainRenderer {
       this.reuseResolveRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diSpatialResamplingFragment, "common/screen.vsh", this.memoryCollection, this.reuseResolveFramebuffer))
       );
-      this.temporalCollectRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diCollectTemporalSamplesFragment, "common/screen.vsh", this.memoryCollection, this.temporalCollectFramebuffer))
-      );
-      this.robustReuseOptimizationRenderer = rendererCreator.apply(
-         List.of(
-            new PhotonicsShader(diRobustReuseOptimizationFragment, "common/screen.vsh", this.memoryCollection, this.robustReuseOptimizationFramebuffer),
-            new PhotonicsShader(diRobustReuseOptimizationHighFragment, "common/screen.vsh", this.memoryCollection, this.robustReuseOptimizationHighFramebuffer)
-         )
-      );
-      this.temporalGatherRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diGatherTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
-      );
-      this.temporalScatterReprojectionRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diTemporalReprojectionFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
-      );
-      this.temporalMultiScatterReprojectionRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diMultiTemporalReprojectionFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
-      );
-      this.temporalScatterBinningOffsetsRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diTemporalBinningOffsetsFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
-      );
-      this.temporalMultiScatterBinningOffsetsRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diMultiTemporalBinningOffsetsFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
-      );
-      this.temporalScatterBinningRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diTemporalBinningFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
-      );
-      this.temporalMultiScatterBinningRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diMultiTemporalBinningFragment, "common/screen.vsh", this.memoryCollection, this.temporalScatterStageFramebuffer))
-      );
-      this.scatterTemporalRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diScatterTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
-      );
+      this.temporalCollectRenderer = null;
+      this.robustReuseOptimizationRenderer = null;
+      this.temporalGatherRenderer = null;
+      this.temporalScatterReprojectionRenderer = null;
+      this.temporalMultiScatterReprojectionRenderer = null;
+      this.temporalScatterBinningOffsetsRenderer = null;
+      this.temporalMultiScatterBinningOffsetsRenderer = null;
+      this.temporalScatterBinningRenderer = null;
+      this.temporalMultiScatterBinningRenderer = null;
+      this.scatterTemporalRenderer = null;
       this.scatterBackupTemporalRenderer = null;
-      this.multiScatterTemporalRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diMultiScatterTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
-      );
+      this.multiScatterTemporalRenderer = null;
       this.directFeatureRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader("lighttree/direct_feature_extract.fsh", "common/screen.vsh", this.memoryCollection, this.directFeatureFramebuffer))
       );
@@ -533,6 +500,68 @@ public class LightTreeRenderer extends MainRenderer {
          List.of(new PhotonicsShader(diShadeSamplesLightingFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesFramebuffer))
       );
       this.compileRegirComputeShader();
+   }
+
+   @Nullable
+   private CompositeRenderer createLazyRenderer(String fragment, @Nullable RoutingFramebuffer framebuffer) {
+      if (this.compositeRendererCreator == null) {
+         return null;
+      }
+      return this.compositeRendererCreator.apply(
+         List.of(new PhotonicsShader(fragment, "common/screen.vsh", this.memoryCollection, framebuffer))
+      );
+   }
+
+   @Nullable
+   private CompositeRenderer createLazyRenderer(List<PhotonicsShader> shaders) {
+      if (this.compositeRendererCreator == null) {
+         return null;
+      }
+      return this.compositeRendererCreator.apply(shaders);
+   }
+
+   private void ensureTemporalGatherRenderers() {
+      if (this.temporalCollectRenderer == null) {
+         this.temporalCollectRenderer = this.createLazyRenderer(diCollectTemporalSamplesFragment, this.temporalCollectFramebuffer);
+      }
+      if (this.robustReuseOptimizationRenderer == null && this.compositeRendererCreator != null) {
+         this.robustReuseOptimizationRenderer = this.createLazyRenderer(
+            List.of(new PhotonicsShader(diRobustReuseOptimizationFragment, "common/screen.vsh", this.memoryCollection, this.robustReuseOptimizationFramebuffer))
+         );
+      }
+      if (this.temporalGatherRenderer == null) {
+         this.temporalGatherRenderer = this.createLazyRenderer(diGatherTemporalResamplingFragment, this.temporalReservoirFramebuffer);
+      }
+   }
+
+   private void ensureTemporalScatterRenderers() {
+      if (this.temporalScatterReprojectionRenderer == null) {
+         this.temporalScatterReprojectionRenderer = this.createLazyRenderer(diTemporalReprojectionFragment, this.temporalScatterStageFramebuffer);
+      }
+      if (this.temporalScatterBinningOffsetsRenderer == null) {
+         this.temporalScatterBinningOffsetsRenderer = this.createLazyRenderer(diTemporalBinningOffsetsFragment, this.temporalScatterStageFramebuffer);
+      }
+      if (this.temporalScatterBinningRenderer == null) {
+         this.temporalScatterBinningRenderer = this.createLazyRenderer(diTemporalBinningFragment, this.temporalScatterStageFramebuffer);
+      }
+      if (this.scatterTemporalRenderer == null) {
+         this.scatterTemporalRenderer = this.createLazyRenderer(diScatterTemporalResamplingFragment, this.temporalReservoirFramebuffer);
+      }
+   }
+
+   private void ensureMultiTemporalScatterRenderers() {
+      if (this.temporalMultiScatterReprojectionRenderer == null) {
+         this.temporalMultiScatterReprojectionRenderer = this.createLazyRenderer(diMultiTemporalReprojectionFragment, this.temporalScatterStageFramebuffer);
+      }
+      if (this.temporalMultiScatterBinningOffsetsRenderer == null) {
+         this.temporalMultiScatterBinningOffsetsRenderer = this.createLazyRenderer(diMultiTemporalBinningOffsetsFragment, this.temporalScatterStageFramebuffer);
+      }
+      if (this.temporalMultiScatterBinningRenderer == null) {
+         this.temporalMultiScatterBinningRenderer = this.createLazyRenderer(diMultiTemporalBinningFragment, this.temporalScatterStageFramebuffer);
+      }
+      if (this.multiScatterTemporalRenderer == null) {
+         this.multiScatterTemporalRenderer = this.createLazyRenderer(diMultiScatterTemporalResamplingFragment, this.temporalReservoirFramebuffer);
+      }
    }
 
    private void compileRegirComputeShader() {
@@ -991,27 +1020,66 @@ public class LightTreeRenderer extends MainRenderer {
             * TEMPORAL_GATHER_SHIFTED_PATH_COUNT
             * TEMPORAL_GATHER_SHIFTED_PATH_STRIDE_BYTES
       );
-      this.temporalScatterGlobalCountersMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_global_counters", () -> 2 * Integer.BYTES);
-      this.temporalScatterCellCountersMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_cell_counters", () -> this.temporalScatterPixelCapacity * Integer.BYTES);
-      this.temporalScatterReservoirIndicesMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_reservoir_indices", () -> this.temporalScatterPixelCapacity * 2 * Integer.BYTES);
-      this.temporalScatterScatteredReservoirsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_scattered_reservoirs", () -> this.temporalScatterPixelCapacity * 2 * Integer.BYTES);
-      this.temporalScatterScatteredWeightsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_scattered_weights", () -> this.temporalScatterPixelCapacity * Integer.BYTES);
-      this.temporalScatterCellOffsetsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_cell_offsets", () -> this.temporalScatterPixelCapacity * Integer.BYTES);
-      this.temporalScatterSortedReservoirsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_sorted_reservoirs", () -> this.temporalScatterPixelCapacity * 2 * Integer.BYTES);
-      this.temporalScatterSortedWeightsMemoryManagers = this.createTemporalScatterPartitionedMemoryManagers("ph_temporal_scatter_sorted_weights", () -> this.temporalScatterPixelCapacity * Integer.BYTES);
-   }
+      int currentCounterBytes = 2 * Integer.BYTES;
+      int currentCellBytes = this.temporalScatterPixelCapacity * Integer.BYTES;
+      int currentContributorBytes = this.temporalScatterPixelCapacity * 2 * Integer.BYTES;
+      int multiCounterBytes = RESERVOIR_SPLATTING_TIME_PARTITION_COUNT * 2 * Integer.BYTES;
+      int multiCellBytes = this.temporalScatterContributorCapacity * Integer.BYTES;
+      int multiContributorBytes = this.temporalScatterContributorCapacity * 2 * Integer.BYTES;
 
-   private GlMemoryManager[] createTemporalScatterPartitionedMemoryManagers(String baseName, IntSupplier byteSizeSupplier) {
-      GlMemoryManager[] managers = new GlMemoryManager[RESERVOIR_SPLATTING_TIME_PARTITION_COUNT];
-      for (int partitionIndex = 0; partitionIndex < RESERVOIR_SPLATTING_TIME_PARTITION_COUNT; partitionIndex++) {
-         managers[partitionIndex] = this.createTemporalScatterMemoryManager(baseName + "_partition" + partitionIndex, byteSizeSupplier.getAsInt());
-      }
-      return managers;
+      this.temporalScatterCurrentGlobalCountersMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_reproject_temporal_samples_global_counters",
+         currentCounterBytes
+      );
+      this.temporalScatterCurrentCellCountersMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_reproject_temporal_samples_cell_counters",
+         currentCellBytes
+      );
+      this.temporalScatterCurrentReservoirIndicesMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_reproject_temporal_samples_reservoir_indices",
+         currentContributorBytes
+      );
+      this.temporalScatterCurrentScatteredReservoirsMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_reproject_temporal_samples_scattered_reservoirs",
+         currentContributorBytes
+      );
+      this.temporalScatterCurrentCellOffsetsMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_scatter_temporal_resampling_cell_offsets",
+         currentCellBytes
+      );
+      this.temporalScatterCurrentSortedReservoirsMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_scatter_temporal_resampling_sorted_reservoirs",
+         currentContributorBytes
+      );
+      this.temporalScatterMultiGlobalCountersMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_multi_reproject_temporal_samples_global_counters",
+         multiCounterBytes
+      );
+      this.temporalScatterMultiCellCountersMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_multi_reproject_temporal_samples_cell_counters",
+         multiCellBytes
+      );
+      this.temporalScatterMultiReservoirIndicesMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_multi_reproject_temporal_samples_reservoir_indices",
+         multiContributorBytes
+      );
+      this.temporalScatterMultiScatteredReservoirsMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_multi_reproject_temporal_samples_scattered_reservoirs",
+         multiContributorBytes
+      );
+      this.temporalScatterMultiCellOffsetsMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_multi_scatter_temporal_resampling_cell_offsets",
+         multiCellBytes
+      );
+      this.temporalScatterMultiSortedReservoirsMemoryManager = this.createTemporalScatterMemoryManager(
+         "ph_multi_scatter_temporal_resampling_sorted_reservoirs",
+         multiContributorBytes
+      );
    }
 
    private void ensureTemporalScatterMemoryCapacity() {
       int requiredPixelCapacity = this.getTemporalScatterPixelCapacity();
-      int requiredContributorCapacity = requiredPixelCapacity * 4;
+      int requiredContributorCapacity = this.getTemporalScatterContributorCapacity();
       if (requiredPixelCapacity == this.temporalScatterPixelCapacity && requiredContributorCapacity == this.temporalScatterContributorCapacity) {
          return;
       }
@@ -1029,18 +1097,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int getTemporalScatterContributorCapacity() {
-      return this.temporalScatterPixelCapacity;
-   }
-
-   private boolean isTemporalScatterResolveOnlyBuffer(GlMemoryManager memoryManager) {
-      if (memoryManager == null) {
-         return false;
-      }
-
-      String name = memoryManager.getName();
-      return name.startsWith("ph_temporal_scatter_cell_offsets")
-         || name.startsWith("ph_temporal_scatter_sorted_reservoirs")
-         || name.startsWith("ph_temporal_scatter_sorted_weights");
+      return this.getTemporalScatterPixelCapacity() * RESERVOIR_SPLATTING_TIME_PARTITION_COUNT;
    }
 
    private GlMemoryManager createTemporalScatterMemoryManager(String name, int byteSize) {
@@ -1049,28 +1106,25 @@ public class LightTreeRenderer extends MainRenderer {
 
    private void clearTemporalScatterOwnershipBuffers() {
       this.clearFloat4Buffer(this.temporalGatherShiftedPathsMemoryManager);
-      this.clearUintBuffers(this.temporalScatterGlobalCountersMemoryManagers, 0);
-      this.clearUintBuffers(this.temporalScatterCellCountersMemoryManagers, 0);
-      this.clearUintBuffers(this.temporalScatterReservoirIndicesMemoryManagers, 0);
-      this.clearUintBuffers(this.temporalScatterScatteredReservoirsMemoryManagers, 0);
-      this.clearUintBuffers(this.temporalScatterScatteredWeightsMemoryManagers, 0);
-      this.clearUintBuffers(this.temporalScatterCellOffsetsMemoryManagers, 0);
-      this.clearUintBuffers(this.temporalScatterSortedReservoirsMemoryManagers, 0);
-      this.clearUintBuffers(this.temporalScatterSortedWeightsMemoryManagers, 0);
+      this.clearUintBuffer(this.temporalScatterCurrentGlobalCountersMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterCurrentCellCountersMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterCurrentReservoirIndicesMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterCurrentScatteredReservoirsMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterCurrentCellOffsetsMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterCurrentSortedReservoirsMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterMultiGlobalCountersMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterMultiCellCountersMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterMultiReservoirIndicesMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterMultiScatteredReservoirsMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterMultiCellOffsetsMemoryManager, 0);
+      this.clearUintBuffer(this.temporalScatterMultiSortedReservoirsMemoryManager, 0);
       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
    }
 
-   private void clearUintBuffers(GlMemoryManager[] memoryManagers, int value) {
-      if (memoryManagers == null) {
+   private void clearUintBuffer(GlMemoryManager memoryManager, int value) {
+      if (memoryManager == null) {
          return;
       }
-
-      for (GlMemoryManager memoryManager : memoryManagers) {
-         this.clearUintBuffer(memoryManager, value);
-      }
-   }
-
-   private void clearUintBuffer(GlMemoryManager memoryManager, int value) {
       java.nio.IntBuffer clearValue = BufferUtils.createIntBuffer(1);
       clearValue.put(value);
       clearValue.flip();
@@ -1093,38 +1147,27 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void destroyTemporalScatterMemoryManagers() {
-      if (this.temporalGatherShiftedPathsMemoryManager != null) {
-         this.temporalGatherShiftedPathsMemoryManager.free();
-         this.temporalGatherShiftedPathsMemoryManager = null;
-      }
-      this.destroyTemporalScatterMemoryManagers(this.temporalScatterGlobalCountersMemoryManagers);
-      this.destroyTemporalScatterMemoryManagers(this.temporalScatterCellCountersMemoryManagers);
-      this.destroyTemporalScatterMemoryManagers(this.temporalScatterReservoirIndicesMemoryManagers);
-      this.destroyTemporalScatterMemoryManagers(this.temporalScatterScatteredReservoirsMemoryManagers);
-      this.destroyTemporalScatterMemoryManagers(this.temporalScatterScatteredWeightsMemoryManagers);
-      this.destroyTemporalScatterMemoryManagers(this.temporalScatterCellOffsetsMemoryManagers);
-      this.destroyTemporalScatterMemoryManagers(this.temporalScatterSortedReservoirsMemoryManagers);
-      this.destroyTemporalScatterMemoryManagers(this.temporalScatterSortedWeightsMemoryManagers);
-      this.temporalScatterGlobalCountersMemoryManagers = null;
-      this.temporalScatterCellCountersMemoryManagers = null;
-      this.temporalScatterReservoirIndicesMemoryManagers = null;
-      this.temporalScatterScatteredReservoirsMemoryManagers = null;
-      this.temporalScatterScatteredWeightsMemoryManagers = null;
-      this.temporalScatterCellOffsetsMemoryManagers = null;
-      this.temporalScatterSortedReservoirsMemoryManagers = null;
-      this.temporalScatterSortedWeightsMemoryManagers = null;
+      this.temporalGatherShiftedPathsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalGatherShiftedPathsMemoryManager);
+      this.temporalScatterCurrentGlobalCountersMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentGlobalCountersMemoryManager);
+      this.temporalScatterCurrentCellCountersMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentCellCountersMemoryManager);
+      this.temporalScatterCurrentReservoirIndicesMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentReservoirIndicesMemoryManager);
+      this.temporalScatterCurrentScatteredReservoirsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentScatteredReservoirsMemoryManager);
+      this.temporalScatterCurrentCellOffsetsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentCellOffsetsMemoryManager);
+      this.temporalScatterCurrentSortedReservoirsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentSortedReservoirsMemoryManager);
+      this.temporalScatterMultiGlobalCountersMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiGlobalCountersMemoryManager);
+      this.temporalScatterMultiCellCountersMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiCellCountersMemoryManager);
+      this.temporalScatterMultiReservoirIndicesMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiReservoirIndicesMemoryManager);
+      this.temporalScatterMultiScatteredReservoirsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiScatteredReservoirsMemoryManager);
+      this.temporalScatterMultiCellOffsetsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiCellOffsetsMemoryManager);
+      this.temporalScatterMultiSortedReservoirsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiSortedReservoirsMemoryManager);
    }
 
-   private void destroyTemporalScatterMemoryManagers(GlMemoryManager[] memoryManagers) {
-      if (memoryManagers == null) {
-         return;
+   @Nullable
+   private GlMemoryManager freeTemporalScatterMemoryManager(@Nullable GlMemoryManager memoryManager) {
+      if (memoryManager != null) {
+         memoryManager.free();
       }
-
-      for (GlMemoryManager memoryManager : memoryManagers) {
-         if (memoryManager != null) {
-            memoryManager.free();
-         }
-      }
+      return null;
    }
 
    private void destroyScatterTemporalResources() {
@@ -1504,22 +1547,6 @@ public class LightTreeRenderer extends MainRenderer {
       framebuffer.createAttachment("intermediate_meta", "RGBA32F", false);
       framebuffer.createAttachment("intermediate_reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("intermediate_reconnection1", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data0", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data1", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data2", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data3", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data4", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data5", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data6", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data7", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data8", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data9", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data10", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data11", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data12", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data13", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data14", "RGBA32F", false);
-      framebuffer.createAttachment("shifted_path_data15", "RGBA32F", false);
       return framebuffer;
    }
 
@@ -1534,17 +1561,12 @@ public class LightTreeRenderer extends MainRenderer {
       );
    }
 
-   private RoutingFramebuffer createRobustReuseOptimizationFramebuffer(int shiftedPathAttachmentBase) {
-      return this.createDirectPackedRoutingFramebuffer(
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + shiftedPathAttachmentBase),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 1)),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 2)),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 3)),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 4)),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 5)),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 6)),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 7))
+   private RoutingFramebuffer createRobustReuseOptimizationFramebuffer() {
+      RoutingFramebuffer framebuffer = this.createDirectPackedRoutingFramebuffer(
+         () -> this.directInitialDebugBuffer.getWriteAttachment("data")
       );
+      framebuffer.setDrawBuffers(new int[] {-1});
+      return framebuffer;
    }
 
    private RoutingFramebuffer createTemporalReservoirRoutingFramebuffer() {
@@ -2182,6 +2204,18 @@ public class LightTreeRenderer extends MainRenderer {
       boolean gatherTemporalBranch = "off".equals(temporalScatterIsolationMode)
          || ownershipOnlyTemporalBranch
          || scatterBackupTemporalBranch;
+      if (gatherTemporalBranch) {
+         this.ensureTemporalGatherRenderers();
+      }
+      if (scatterOnlyTemporalBranch || scatterBackupTemporalBranch) {
+         this.ensureTemporalScatterRenderers();
+      }
+      if (multiScatterTemporalBranch) {
+         this.ensureMultiTemporalScatterRenderers();
+      }
+      if (scatterBackupTemporalBranch) {
+         this.ensureScatterBackupTemporalRenderer();
+      }
       if (gatherTemporalBranch && this.robustReuseOptimizationRenderer != null) {
          this.robustReuseOptimizationRenderer.renderAll();
          GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
@@ -2228,9 +2262,6 @@ public class LightTreeRenderer extends MainRenderer {
       if (scatterOnlyTemporalBranch && this.temporalScatterBinningRenderer != null) {
          this.temporalScatterBinningRenderer.renderAll();
          this.barrierTemporalScatterResolveInputs();
-      }
-      if (scatterBackupTemporalBranch) {
-         this.ensureScatterBackupTemporalRenderer();
       }
       if (scatterBackupTemporalBranch && this.scatterBackupTemporalRenderer != null) {
          if (this.temporalScatterReprojectionRenderer != null) {

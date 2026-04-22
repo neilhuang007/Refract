@@ -27,6 +27,7 @@
 #include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 #include "/photonics/lighttree/restir_di_scatter_impl.glsl"
 #include "/photonics/lighttree/restir_di_collect_temporal_stage.glsl"
+#include "/photonics/lighttree/restir_di_gather_temporal_stage.glsl"
 
 #if 0
 float CollectTemporalSamples_bilinear_weight(vec2 fractionalCoord, int x, int y)

@@ -1,7 +1,7 @@
 #ifndef PHOTONICS_RESERVOIR_SPLATTING_MULTI_REPROJECT_TEMPORAL_SAMPLES_GLSL
 #define PHOTONICS_RESERVOIR_SPLATTING_MULTI_REPROJECT_TEMPORAL_SAMPLES_GLSL
 
-#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/restir_di_temporal_scatter_bridge.glsl"
 
 void MultiReprojectTemporalSamples_run(ivec2 pixel)
 {

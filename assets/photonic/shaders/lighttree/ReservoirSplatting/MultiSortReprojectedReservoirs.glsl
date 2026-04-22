@@ -1,7 +1,7 @@
 #ifndef PHOTONICS_RESERVOIR_SPLATTING_MULTI_SORT_REPROJECTED_RESERVOIRS_GLSL
 #define PHOTONICS_RESERVOIR_SPLATTING_MULTI_SORT_REPROJECTED_RESERVOIRS_GLSL
 
-#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/restir_di_temporal_scatter_bridge.glsl"
 
 void MultiSortReprojectedReservoirs_computeCellOffsets(ivec2 pixel)
 {

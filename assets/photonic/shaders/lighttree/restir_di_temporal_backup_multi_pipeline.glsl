@@ -623,13 +623,13 @@ RTXDI_DIReservoir lt_di_multi_scatter_temporal_resampling_stage(
 
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex)
     {
-        uint partitionedCellIndex = lt_temporal_partitioned_cell_index(partitionIndex, reservoirIdx);
-        uint numReservoirs = lt_multi_reproject_temporal_samples_cell_counter_value(partitionIndex, partitionedCellIndex);
-        uint cellOffset = lt_multi_scatter_temporal_resampling_cell_offset_value(partitionIndex, partitionedCellIndex);
+        uint numReservoirs = lt_multi_reproject_temporal_samples_cell_counter_value(partitionIndex, reservoirIdx);
+        uint cellOffset = lt_multi_scatter_temporal_resampling_cell_offset_value(partitionIndex, reservoirIdx);
         for (uint i = 0u; i < numReservoirs; ++i)
         {
-            uint sortedBufferIndex = lt_temporal_partitioned_contributor_index(partitionIndex, cellOffset + i);
-            ivec2 scatteredPixel = ivec2(lt_multi_scatter_temporal_resampling_load_sorted_reservoir(partitionIndex, sortedBufferIndex));
+            ivec2 scatteredPixel = ivec2(
+                lt_multi_scatter_temporal_resampling_load_sorted_reservoir(partitionIndex, cellOffset + i)
+            );
             lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
                 pixel,
                 dstReservoir,

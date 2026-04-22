@@ -1,24 +1,6 @@
 #version 430
-#define shifted_path_data0_frag_out temporal_gather_shifted_path_data0_frag_out
-#define shifted_path_data1_frag_out temporal_gather_shifted_path_data1_frag_out
-#define shifted_path_data2_frag_out temporal_gather_shifted_path_data2_frag_out
-#define shifted_path_data3_frag_out temporal_gather_shifted_path_data3_frag_out
-#define shifted_path_data4_frag_out temporal_gather_shifted_path_data4_frag_out
-#define shifted_path_data5_frag_out temporal_gather_shifted_path_data5_frag_out
-#define shifted_path_data6_frag_out temporal_gather_shifted_path_data6_frag_out
-#define shifted_path_data7_frag_out temporal_gather_shifted_path_data7_frag_out
 #define PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE 1
-#define PH_LIGHTTREE_ROBUST_REUSE_OFFSET_BASE 0
 
 in vec4 direction_vert_out;
-
-layout(location = 0) out vec4 temporal_gather_shifted_path_data0_frag_out;
-layout(location = 1) out vec4 temporal_gather_shifted_path_data1_frag_out;
-layout(location = 2) out vec4 temporal_gather_shifted_path_data2_frag_out;
-layout(location = 3) out vec4 temporal_gather_shifted_path_data3_frag_out;
-layout(location = 4) out vec4 temporal_gather_shifted_path_data4_frag_out;
-layout(location = 5) out vec4 temporal_gather_shifted_path_data5_frag_out;
-layout(location = 6) out vec4 temporal_gather_shifted_path_data6_frag_out;
-layout(location = 7) out vec4 temporal_gather_shifted_path_data7_frag_out;
 
 #include "/photonics/lighttree/robust_reuse_optimization_stage.glsl"

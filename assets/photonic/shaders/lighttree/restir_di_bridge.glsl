@@ -211,10 +211,14 @@ void lt_SpatialResampling_run(
         ));
         if (!lt_is_viewport_uv_in_bounds(neighborPixel)) continue;
         validNeighbors += 1;
+        ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(
+            neighborPixel,
+            int(runtimeParameters.activeCheckerboardField)
+        );
 
         RTXDI_DIReservoir neighborReservoir = RTXDI_LoadDIReservoir(
             lt_build_restir_di_parameters().reservoirBufferParams,
-            uvec2(neighborPixel),
+            uvec2(neighborReservoirPos),
             lt_build_restir_di_parameters().bufferIndices.spatialResamplingInputBufferIndex
         );
         ReservoirSplattingReconnectionData neighborReconnection = SpatialResampling_load_input_reconnection(neighborPixel, neighborReservoir);

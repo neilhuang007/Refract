@@ -695,10 +695,13 @@ void lt_reproject_temporal_samples_append_record(ivec2 pixel, ivec2 newPixel) {
     }
 
     uint linearizedIndex = uint(newPixel.y * viewWidth + newPixel.x);
-    uint cellIndex = atomicAdd(ph_temporal_scatter_cell_counters_data[linearizedIndex], 1u);
-    uint index = atomicAdd(ph_temporal_scatter_global_counters_data[0], 1u);
-    ph_temporal_scatter_reservoir_indices_data[index] = uvec2(linearizedIndex, cellIndex);
-    ph_temporal_scatter_scattered_reservoirs_data[index] = uvec2(pixel);
+    uint cellIndex = lt_reproject_temporal_samples_cell_counter_atomic_add(linearizedIndex, 1u);
+    uint index = lt_reproject_temporal_samples_global_counter_atomic_add(
+        LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT,
+        1u
+    );
+    lt_reproject_temporal_samples_store_reservoir_index(index, uvec2(linearizedIndex, cellIndex));
+    lt_reproject_temporal_samples_store_scattered_reservoir(index, uvec2(pixel));
 }
 
 // ===========================================================================

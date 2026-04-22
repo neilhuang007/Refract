@@ -23,7 +23,7 @@ public abstract class MainRenderer implements Destructable {
    protected final WorldRegistry worldRegistry;
    protected final float renderScale;
    protected final GLMemoryCollection memoryCollection;
-   protected final Int2ObjectMap<List<Map.Entry<Integer, GlMemoryManager>>> foundMemories;
+   protected final Int2ObjectMap<List<Map.Entry<Integer, Supplier<GlMemoryManager>>>> foundMemories;
    private String currentPhotonicsFragment = "";
 
    public MainRenderer(WorldRegistry worldRegistry, float renderScale) {
@@ -71,26 +71,32 @@ public abstract class MainRenderer implements Destructable {
    }
 
    public void bindProgramBuffers(int shaderId, IntSet usedBuffers) {
-      List<Map.Entry<Integer, GlMemoryManager>> cached = this.foundMemories.get(shaderId);
+      List<Map.Entry<Integer, Supplier<GlMemoryManager>>> cached = this.foundMemories.get(shaderId);
       if (cached == null) {
          cached = new ArrayList<>();
          int bindingPointIndex = 16;
          for (Supplier<GlMemoryManager> glMemoryManagerSupplier : this.memoryCollection) {
             GlMemoryManager glMemoryManager = glMemoryManagerSupplier.get();
+            if (glMemoryManager == null) {
+               continue;
+            }
             int blockIndex = glMemoryManager.findInProgram(shaderId);
             if (blockIndex >= 0) {
                while (usedBuffers.contains(--bindingPointIndex)) {
                }
-               cached.add(Map.entry(blockIndex, glMemoryManager));
+               cached.add(Map.entry(blockIndex, glMemoryManagerSupplier));
                glMemoryManager.bind(shaderId, blockIndex, bindingPointIndex);
             }
          }
          this.foundMemories.put(shaderId, cached);
       } else {
          int bindingPointIndex = 16;
-         for (Map.Entry<Integer, GlMemoryManager> entry : cached) {
+         for (Map.Entry<Integer, Supplier<GlMemoryManager>> entry : cached) {
             int blockIndex = entry.getKey();
-            GlMemoryManager glMemoryManager = entry.getValue();
+            GlMemoryManager glMemoryManager = entry.getValue().get();
+            if (glMemoryManager == null) {
+               continue;
+            }
             while (usedBuffers.contains(--bindingPointIndex)) {
             }
             glMemoryManager.bind(shaderId, blockIndex, bindingPointIndex);

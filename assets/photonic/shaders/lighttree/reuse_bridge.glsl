@@ -801,6 +801,8 @@ const uint SCATTER_RECONNECTION_FIRST_BSDF_MASK = 0x3u;
 const uint SCATTER_RECONNECTION_FIRST_BSDF_SHIFT = 12u;
 const uint SCATTER_RECONNECTION_SECOND_BSDF_MASK = 0x3u;
 const uint SCATTER_RECONNECTION_SECOND_BSDF_SHIFT = 14u;
+const uint SCATTER_RECONNECTION_TIME_MASK = 0x7FFFu;
+const uint SCATTER_RECONNECTION_TIME_SHIFT = 17u;
 
 float scatter_pack_half2(vec2 value) {
     return uintBitsToFloat(packHalf2x16(value));
@@ -810,43 +812,23 @@ vec2 scatter_unpack_half2(float packedValue) {
     return unpackHalf2x16(floatBitsToUint(packedValue));
 }
 
+uint scatter_pack_reconnection_time_bits(float time)
+{
+    float clampedTime = clamp(time, 0.0f, 1.0f);
+    return min(uint(round(clampedTime * float(SCATTER_RECONNECTION_TIME_MASK))), SCATTER_RECONNECTION_TIME_MASK);
+}
+
+float scatter_unpack_reconnection_time_bits(uint packedMeta)
+{
+    return float((packedMeta >> SCATTER_RECONNECTION_TIME_SHIFT) & SCATTER_RECONNECTION_TIME_MASK)
+        / float(SCATTER_RECONNECTION_TIME_MASK);
+}
+
 uint lt_path_sample_proposal_family(uint pathSample);
 
 #include "/photonics/lighttree/restir_di_reconnection_packing.glsl"
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
-layout(std430) restrict buffer ph_temporal_gather_shifted_paths {
-    ShiftedPathData ph_temporal_gather_shifted_paths_data[];
-};
-
-uint lt_temporal_gather_shifted_path_linear_index(ivec2 pixel, int offsetIndex)
-{
-    return (uint(pixel.y) * uint(viewWidth) + uint(pixel.x)) * 8u + uint(offsetIndex);
-}
-
-ShiftedPathData lt_load_temporal_gather_shifted_path(ivec2 pixel, int offsetIndex)
-{
-    if (!lt_is_viewport_uv_in_bounds(pixel) || offsetIndex < 0 || offsetIndex >= 8)
-    {
-        return lt_temporal_empty_shifted_path();
-    }
-
-    return ph_temporal_gather_shifted_paths_data[
-        lt_temporal_gather_shifted_path_linear_index(pixel, offsetIndex)
-    ];
-}
-
-void lt_store_temporal_gather_shifted_path(ivec2 pixel, int offsetIndex, ShiftedPathData shiftedPath)
-{
-    if (!lt_is_viewport_uv_in_bounds(pixel) || offsetIndex < 0 || offsetIndex >= 8)
-    {
-        return;
-    }
-
-    ph_temporal_gather_shifted_paths_data[
-        lt_temporal_gather_shifted_path_linear_index(pixel, offsetIndex)
-    ] = shiftedPath;
-}
 #endif
 
 // ============================================================================

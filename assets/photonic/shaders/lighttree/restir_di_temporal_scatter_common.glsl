@@ -54,13 +54,22 @@ void lt_multi_temporal_scatter_append_contributor(
     }
 
     uint cellLinearIndex = lt_temporal_scatter_linear_index(targetReservoirPos);
-    uint partitionedCellIndex = lt_temporal_partitioned_cell_index(partitionIndex, cellLinearIndex);
-    uint counterBaseIndex = lt_temporal_partitioned_counter_index(partitionIndex, LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT);
-    uint localCellIndex = lt_multi_reproject_temporal_samples_cell_counter_atomic_add(partitionIndex, partitionedCellIndex, 1u);
-    uint appendIndex = lt_multi_reproject_temporal_samples_global_counter_atomic_add(partitionIndex, counterBaseIndex, 1u);
-    uint scatteredBufferIndex = lt_temporal_partitioned_contributor_index(partitionIndex, appendIndex);
-    lt_multi_reproject_temporal_samples_store_reservoir_index(partitionIndex, scatteredBufferIndex, uvec2(cellLinearIndex, localCellIndex));
-    lt_multi_reproject_temporal_samples_store_scattered_reservoir(partitionIndex, scatteredBufferIndex, uvec2(sourceReservoirPos));
+    uint localCellIndex = lt_multi_reproject_temporal_samples_cell_counter_atomic_add(partitionIndex, cellLinearIndex, 1u);
+    uint appendIndex = lt_multi_reproject_temporal_samples_global_counter_atomic_add(
+        partitionIndex,
+        LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT,
+        1u
+    );
+    lt_multi_reproject_temporal_samples_store_reservoir_index(
+        partitionIndex,
+        appendIndex,
+        uvec2(cellLinearIndex, localCellIndex)
+    );
+    lt_multi_reproject_temporal_samples_store_scattered_reservoir(
+        partitionIndex,
+        appendIndex,
+        uvec2(sourceReservoirPos)
+    );
 }
 #endif
 
@@ -104,34 +113,39 @@ void lt_MultiSortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel)
 
     uint cellIndex = uint(pixel.y * viewWidth + pixel.x);
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
-        uint partitionedCellIndex = lt_temporal_partitioned_cell_index(partitionIndex, cellIndex);
-        uint cellCounter = lt_multi_reproject_temporal_samples_cell_counter_value(partitionIndex, partitionedCellIndex);
+        uint cellCounter = lt_multi_reproject_temporal_samples_cell_counter_value(partitionIndex, cellIndex);
         if (cellCounter == 0u) {
             continue;
         }
-        uint counterIndex = lt_temporal_partitioned_counter_index(partitionIndex, LT_TEMPORAL_SCATTER_COUNTER_INDEX_PREFIX_SUM);
-        uint offset = lt_multi_reproject_temporal_samples_global_counter_atomic_add(partitionIndex, counterIndex, cellCounter);
-        lt_multi_scatter_temporal_resampling_store_cell_offset(partitionIndex, partitionedCellIndex, offset);
+        uint offset = lt_multi_reproject_temporal_samples_global_counter_atomic_add(
+            partitionIndex,
+            LT_TEMPORAL_SCATTER_COUNTER_INDEX_PREFIX_SUM,
+            cellCounter
+        );
+        lt_multi_scatter_temporal_resampling_store_cell_offset(partitionIndex, cellIndex, offset);
     }
 }
 
 void lt_MultiSortReprojectedReservoirs_sort_cell_data(uint scatterIndex)
 {
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
-        uint counterIndex = lt_temporal_partitioned_counter_index(partitionIndex, LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT);
-        uint partitionCount = lt_multi_reproject_temporal_samples_global_counter_value(partitionIndex, counterIndex);
+        uint partitionCount = lt_multi_reproject_temporal_samples_global_counter_value(
+            partitionIndex,
+            LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT
+        );
         if (scatterIndex >= partitionCount) {
             continue;
         }
 
-        uint scatteredBufferIndex = lt_temporal_partitioned_contributor_index(partitionIndex, scatterIndex);
-        uvec2 reservoirIndex = lt_multi_reproject_temporal_samples_load_reservoir_index(partitionIndex, scatteredBufferIndex);
+        uvec2 reservoirIndex = lt_multi_reproject_temporal_samples_load_reservoir_index(partitionIndex, scatterIndex);
         uint cellLinearIndex = reservoirIndex.x;
         uint localCellIndex = reservoirIndex.y;
-        uint partitionedCellIndex = lt_temporal_partitioned_cell_index(partitionIndex, cellLinearIndex);
-        uint sortedIndex = lt_multi_scatter_temporal_resampling_cell_offset_value(partitionIndex, partitionedCellIndex) + localCellIndex;
-        uint sortedBufferIndex = lt_temporal_partitioned_contributor_index(partitionIndex, sortedIndex);
-        lt_multi_scatter_temporal_resampling_store_sorted_reservoir(partitionIndex, sortedBufferIndex, lt_multi_reproject_temporal_samples_load_scattered_reservoir(partitionIndex, scatteredBufferIndex));
+        uint sortedIndex = lt_multi_scatter_temporal_resampling_cell_offset_value(partitionIndex, cellLinearIndex) + localCellIndex;
+        lt_multi_scatter_temporal_resampling_store_sorted_reservoir(
+            partitionIndex,
+            sortedIndex,
+            lt_multi_reproject_temporal_samples_load_scattered_reservoir(partitionIndex, scatterIndex)
+        );
     }
 }
 #endif

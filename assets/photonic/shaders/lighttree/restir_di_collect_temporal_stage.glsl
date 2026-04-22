@@ -106,6 +106,7 @@ void lt_di_store_collect_temporal_sample_result(
         reconnectionData.irradiance,
         reconnectionData.subPixel,
         reconnectionData.subPixelJacobian,
+        reconnectionData.lensVertexJacobian,
         reconnectionData.secondaryPathJacobian,
         reconnectionData.firstHit.faceId,
         reconnectionData.pathLength,
