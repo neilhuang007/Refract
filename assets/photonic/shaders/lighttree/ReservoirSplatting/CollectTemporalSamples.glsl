@@ -83,15 +83,27 @@ void CollectTemporalSamples_storeResult(
     intermediate_reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
+void CollectTemporalSamples_store_empty_result()
+{
+    floating_coords_frag_out = vec2(-1.0f);
+    intermediate_reservoir_frag_out = rtxdi_pack_reservoir(RTXDI_EmptyDIReservoir());
+    intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(RTXDI_EmptyDIReservoir());
+    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(RTXDI_EmptyDIReservoir());
+    intermediate_reconnection0_frag_out = vec4(0.0f);
+    intermediate_reconnection1_frag_out = vec4(0.0f);
+}
+
 void CollectTemporalSamples_run(ivec2 currPixel)
 {
     vec2 prevPixel = lt_temporal_previous_pixel_center(currPixel) - vec2(0.5f);
     if (any(lessThan(prevPixel, vec2(0.0f))))
     {
+        CollectTemporalSamples_store_empty_result();
         return;
     }
     if (any(greaterThanEqual(prevPixel, vec2(viewWidth, viewHeight))))
     {
+        CollectTemporalSamples_store_empty_result();
         return;
     }
 
@@ -260,6 +272,16 @@ void CollectTemporalSamples_run(ivec2 currPixel)
                 );
             }
         }
+    }
+
+    if (isnan(PathReservoir_getTotalWeight(dstReservoir)))
+    {
+        PathReservoir_setIntegrand(dstReservoir, vec3(0.0f));
+        PathReservoir_setTotalWeight(dstReservoir, 0.0f);
+        dstReconnectionData.subPixelJacobian = 1.0f;
+        dstReconnectionData.lensVertexJacobian = 1.0f;
+        dstReconnectionData.secondaryPathJacobian = 1.0f;
+        dstReconnectionData.pathLength = 0u;
     }
 
     PathReservoir_setConfidence(dstReservoir, totalConfidence);

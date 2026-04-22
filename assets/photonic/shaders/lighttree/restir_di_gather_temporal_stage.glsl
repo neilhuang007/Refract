@@ -3,6 +3,10 @@
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE)
 
+#include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
+#include "/photonics/lighttree/restir_di_scatter_impl.glsl"
+#include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
+#include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 #include "/photonics/lighttree/restir_di_temporal_dof.glsl"
 
 RTXDI_DIReservoir GatherTemporalResampling_load_current_reservoir(
