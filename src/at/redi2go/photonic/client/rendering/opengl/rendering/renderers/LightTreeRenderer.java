@@ -60,6 +60,7 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String diInitialCandidatesFragment = "lighttree/LightingPasses/DI/InitialCandidates.fsh";
    private static final String diCollectTemporalSamplesFragment = "lighttree/LightingPasses/DI/CollectTemporalSamples.fsh";
    private static final String diRobustReuseOptimizationFragment = "lighttree/LightingPasses/DI/RobustReuseOptimization.fsh";
+   private static final String diRobustReuseOptimizationHighFragment = "lighttree/LightingPasses/DI/RobustReuseOptimizationHigh.fsh";
    private static final String diGatherTemporalResamplingFragment = "lighttree/LightingPasses/DI/GatherTemporalResampling.fsh";
    private static final String diTemporalReprojectionFragment = "lighttree/LightingPasses/DI/TemporalReprojection.fsh";
    private static final String diTemporalBinningOffsetsFragment = "lighttree/LightingPasses/DI/TemporalBinningOffsets.fsh";
@@ -181,6 +182,7 @@ public class LightTreeRenderer extends MainRenderer {
   private final RoutingFramebuffer shadeSamplesReservoirFramebuffer;
   private final RoutingFramebuffer temporalCollectFramebuffer;
   private final RoutingFramebuffer robustReuseOptimizationFramebuffer;
+  private final RoutingFramebuffer robustReuseOptimizationHighFramebuffer;
   private final RoutingFramebuffer temporalScatterStageFramebuffer;
   private final RoutingFramebuffer temporalReservoirFramebuffer;
   @Nullable
@@ -308,7 +310,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.temporalReservoirBuffer = this.createTemporalReservoirFramebuffer(renderScale);
       this.temporalGatherBuffer = this.createTemporalGatherFramebuffer(renderScale);
       this.temporalCollectFramebuffer = this.createTemporalCollectFramebuffer();
-      this.robustReuseOptimizationFramebuffer = this.createRobustReuseOptimizationFramebuffer();
+      this.robustReuseOptimizationFramebuffer = this.createRobustReuseOptimizationFramebuffer(0);
+      this.robustReuseOptimizationHighFramebuffer = this.createRobustReuseOptimizationFramebuffer(8);
       this.temporalScatterPixelCapacity = this.getTemporalScatterPixelCapacity();
       this.temporalScatterContributorCapacity = this.getTemporalScatterContributorCapacity();
       this.allocateTemporalScatterMemoryManagers();
@@ -424,7 +427,10 @@ public class LightTreeRenderer extends MainRenderer {
          List.of(new PhotonicsShader(diCollectTemporalSamplesFragment, "common/screen.vsh", this.memoryCollection, this.temporalCollectFramebuffer))
       );
       this.robustReuseOptimizationRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diRobustReuseOptimizationFragment, "common/screen.vsh", this.memoryCollection, this.robustReuseOptimizationFramebuffer))
+         List.of(
+            new PhotonicsShader(diRobustReuseOptimizationFragment, "common/screen.vsh", this.memoryCollection, this.robustReuseOptimizationFramebuffer),
+            new PhotonicsShader(diRobustReuseOptimizationHighFragment, "common/screen.vsh", this.memoryCollection, this.robustReuseOptimizationHighFramebuffer)
+         )
       );
       this.temporalGatherRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diGatherTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
@@ -789,6 +795,11 @@ public class LightTreeRenderer extends MainRenderer {
             default -> 2.0f;
          };
       });
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_restir_scatter_backup_mis_mode",
+         () -> this.getOptionalFloatSystemProperty("photonics.restirScatterBackupMisMode", 0.0f)
+      );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_restir_debug_force_target_pdf_one",
@@ -1503,16 +1514,16 @@ public class LightTreeRenderer extends MainRenderer {
       );
    }
 
-   private RoutingFramebuffer createRobustReuseOptimizationFramebuffer() {
+   private RoutingFramebuffer createRobustReuseOptimizationFramebuffer(int shiftedPathAttachmentBase) {
       return this.createDirectPackedRoutingFramebuffer(
-         () -> this.temporalGatherBuffer.getWriteAttachment("floating_coords"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_data"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_sample"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data0"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data1")
+         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + shiftedPathAttachmentBase),
+         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 1)),
+         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 2)),
+         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 3)),
+         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 4)),
+         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 5)),
+         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 6)),
+         () -> this.temporalGatherBuffer.getWriteAttachment("shifted_path_data" + (shiftedPathAttachmentBase + 7))
       );
    }
 
@@ -2151,12 +2162,12 @@ public class LightTreeRenderer extends MainRenderer {
       boolean gatherTemporalBranch = "off".equals(temporalScatterIsolationMode)
          || ownershipOnlyTemporalBranch
          || scatterBackupTemporalBranch;
-      if (gatherTemporalBranch && this.temporalCollectRenderer != null) {
-         this.temporalCollectRenderer.renderAll();
-         GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
-      }
       if (gatherTemporalBranch && this.robustReuseOptimizationRenderer != null) {
          this.robustReuseOptimizationRenderer.renderAll();
+         GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+      }
+      if (gatherTemporalBranch && this.temporalCollectRenderer != null) {
+         this.temporalCollectRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
       if (gatherTemporalBranch && this.temporalGatherRenderer != null) {

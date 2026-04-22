@@ -117,6 +117,30 @@ const uint LT_PROPOSAL_FAMILY_INVALID = 0xFFFFFFFFu;
 // reservoir stores the exact domain coordinate of the winning candidate so
 // downstream stages (scatter temporal reprojection, MIS weighting, shading)
 // can replay the selected path without a pixel-center fallback.
+float CandidateReservoir_getTotalWeight(RTXDI_DIReservoir candidateReservoir)
+{
+    return PathReservoir_getTotalWeight(candidateReservoir);
+}
+
+void CandidateReservoir_setTotalWeight(
+    inout RTXDI_DIReservoir candidateReservoir,
+    float totalWeight)
+{
+    PathReservoir_setTotalWeight(candidateReservoir, totalWeight);
+}
+
+vec3 CandidateReservoir_getIntegrand(RTXDI_DIReservoir candidateReservoir)
+{
+    return PathReservoir_getIntegrand(candidateReservoir);
+}
+
+void CandidateReservoir_setIntegrand(
+    inout RTXDI_DIReservoir candidateReservoir,
+    vec3 integrand)
+{
+    PathReservoir_setIntegrand(candidateReservoir, integrand);
+}
+
 bool CandidateReservoir_addVertex(
     inout RTXDI_DIReservoir candidateReservoir,
     float random,
@@ -134,14 +158,16 @@ bool CandidateReservoir_addVertex(
     float sampleWeight = sampleMIS * samplePHat;
     sampleWeight = isnan(sampleWeight) ? 0.0f : sampleWeight;
 
-    PathReservoir_setConfidence(candidateReservoir, PathReservoir_getConfidence(candidateReservoir) + 1.0f);
-    PathReservoir_setTotalWeight(candidateReservoir, PathReservoir_getTotalWeight(candidateReservoir) + sampleWeight);
-    bool selected = (random * PathReservoir_getTotalWeight(candidateReservoir) < sampleWeight);
+    CandidateReservoir_setTotalWeight(
+        candidateReservoir,
+        CandidateReservoir_getTotalWeight(candidateReservoir) + sampleWeight
+    );
+    bool selected = (random * CandidateReservoir_getTotalWeight(candidateReservoir) < sampleWeight);
     if (selected) {
         rtxdi_set_light_index(candidateReservoir, lightIndex);
         rtxdi_set_sample_uv(candidateReservoir, sampleUv);
         candidateReservoir.targetPdf = sampleTargetPdf;
-        PathReservoir_setIntegrand(candidateReservoir, sampleIntegrand);
+        CandidateReservoir_setIntegrand(candidateReservoir, sampleIntegrand);
         candidateReservoir.pixelSampleUV = pixelSampleUV;
         candidateReservoir.lensSampleUV  = lensSampleUV;
         candidateReservoir.pathSample    = pathSample;
@@ -151,7 +177,8 @@ bool CandidateReservoir_addVertex(
 
 float CandidateReservoir_computeUCW(RTXDI_DIReservoir candidateReservoir)
 {
-    return PathReservoir_computeStoredUCW(candidateReservoir);
+    float pHat = ph_luminance(CandidateReservoir_getIntegrand(candidateReservoir));
+    return (pHat <= 0.0f) ? 0.0f : CandidateReservoir_getTotalWeight(candidateReservoir) / pHat;
 }
 
 bool PathReservoir_add(
@@ -160,7 +187,7 @@ bool PathReservoir_add(
     float sampleMIS,
     RTXDI_DIReservoir candidateReservoir)
 {
-    float weight = sampleMIS * PathReservoir_getTotalWeight(candidateReservoir);
+    float weight = sampleMIS * CandidateReservoir_getTotalWeight(candidateReservoir);
     PathReservoir_setTotalWeight(pathReservoir, PathReservoir_getTotalWeight(pathReservoir) + weight);
     PathReservoir_setConfidence(pathReservoir, PathReservoir_getConfidence(pathReservoir) + 1.0f);
 
@@ -714,7 +741,6 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
             candidatePathSample);
         if (selected)
         {
-            state.transportAux0 = 1.0f / blendedSourcePdf;
             o_selectedSample = candidateSample;
         }
     }
@@ -881,7 +907,6 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surfa
             candidatePathSample);
         if (selected)
         {
-            state.transportAux0 = 1.0f / blendedSourcePdf;
             o_selectedSample = brdfSample;
         }
     }
@@ -1012,6 +1037,131 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
             //   color            = integrand_with_V * UCW_ref
             // exactly matching ResolveReSTIR.cs.slang:57.
             state.targetPdf *= lumV;
+        }
+    }
+
+    return state;
+}
+
+void InitialCandidates_restoreCandidateTotalWeight(
+    inout RTXDI_DIReservoir candidateReservoir,
+    float normalizationDenominator)
+{
+    if (!RTXDI_IsValidDIReservoir(candidateReservoir)) {
+        return;
+    }
+
+    CandidateReservoir_setTotalWeight(
+        candidateReservoir,
+        CandidateReservoir_getTotalWeight(candidateReservoir)
+            * max(candidateReservoir.targetPdf, 0.0f)
+            * max(normalizationDenominator, 0.0f)
+    );
+}
+
+RTXDI_DIReservoir InitialCandidates_SampleLightsForSurface(
+    inout RTXDI_RandomSamplerState rng,
+    inout RTXDI_RandomSamplerState coherentRng,
+    RAB_Surface surface,
+    RTXDI_DIInitialSamplingParameters initialSamplingParams,
+    out RAB_LightSample o_lightSample)
+{
+    if (!RAB_IsSurfaceValid(surface))
+    {
+        o_lightSample = RAB_EmptyLightSample();
+        return RTXDI_EmptyDIReservoir();
+    }
+
+    RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
+    float candidateNormalization = float(misData.numMisSamples);
+
+    RAB_LightSample localSample = lt_null_sample();
+    RTXDI_DIReservoir localReservoir = RTXDI_SampleLocalLights(
+        rng,
+        coherentRng,
+        surface,
+        initialSamplingParams,
+        localSample
+    );
+    InitialCandidates_restoreCandidateTotalWeight(localReservoir, candidateNormalization);
+
+    RAB_LightSample infiniteSample = lt_null_sample();
+    RTXDI_DIReservoir infiniteReservoir = RTXDI_SampleInfiniteLights(
+        surface,
+        int(initialSamplingParams.numInfiniteLightSamples)
+    );
+    InitialCandidates_restoreCandidateTotalWeight(infiniteReservoir, 1.0f);
+
+    RAB_LightSample environmentSample = lt_null_sample();
+    RTXDI_DIReservoir environmentReservoir = RTXDI_SampleEnvironmentMap(
+        surface,
+        int(initialSamplingParams.numEnvironmentSamples)
+    );
+    InitialCandidates_restoreCandidateTotalWeight(environmentReservoir, 1.0f);
+
+    RAB_LightSample brdfSample = lt_null_sample();
+    RTXDI_DIReservoir brdfReservoir = RTXDI_SampleBrdf(
+        rng,
+        surface,
+        int(initialSamplingParams.numBrdfSamples),
+        misData,
+        initialSamplingParams.brdfCutoff,
+        brdfSample
+    );
+    InitialCandidates_restoreCandidateTotalWeight(brdfReservoir, candidateNormalization);
+
+    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
+    bool selectLocal = PathReservoir_add(state, lt_next_random(rng), 1.0f, localReservoir);
+    bool selectInfinite = PathReservoir_add(state, lt_next_random(rng), 1.0f, infiniteReservoir);
+    bool selectEnvironment = PathReservoir_add(state, lt_next_random(rng), 1.0f, environmentReservoir);
+    bool selectBrdf = PathReservoir_add(state, lt_next_random(rng), 1.0f, brdfReservoir);
+
+    if (RTXDI_IsValidDIReservoir(state)) {
+        uint selectedProposalFamily = LT_PROPOSAL_FAMILY_UNKNOWN;
+        if (selectBrdf) {
+            selectedProposalFamily = LT_PROPOSAL_FAMILY_BRDF;
+        } else {
+            selectedProposalFamily = lt_path_sample_proposal_family(state.pathSample);
+        }
+
+        uint basePathSample = selectBrdf ? 1u : 2u;
+        state.pathSample = lt_make_path_sample(basePathSample, selectedProposalFamily);
+    }
+
+    o_lightSample = localSample;
+    if (selectBrdf)
+    {
+        o_lightSample = brdfSample;
+    }
+    else if (selectEnvironment)
+    {
+        o_lightSample = environmentSample;
+    }
+    else if (selectInfinite)
+    {
+        o_lightSample = infiniteSample;
+    }
+
+    if (initialSamplingParams.enableInitialVisibility != 0u
+        && RTXDI_IsValidDIReservoir(state)
+        && o_lightSample.index >= 0)
+    {
+        float visibilityHitDistance = 0.0f;
+        vec3 visibilityRgb = lt_trace_final_visibility_with_offset(
+            o_lightSample, surface, 0.0f, visibilityHitDistance
+        );
+        float lumV = ph_luminance(max(visibilityRgb, vec3(0.0f)));
+        if (!(lumV > 0.0f))
+        {
+            RTXDI_StoreVisibilityInDIReservoir(state, vec3(0.0f), true);
+            PathReservoir_setIntegrand(state, vec3(0.0f));
+            CandidateReservoir_setTotalWeight(state, 0.0f);
+        }
+        else
+        {
+            RTXDI_StoreVisibilityInDIReservoir(state, visibilityRgb, false);
+            PathReservoir_setIntegrand(state, PathReservoir_getIntegrand(state) * visibilityRgb);
+            CandidateReservoir_setTotalWeight(state, CandidateReservoir_getTotalWeight(state) * lumV);
         }
     }
 

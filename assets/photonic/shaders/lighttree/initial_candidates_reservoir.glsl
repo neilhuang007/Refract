@@ -7,7 +7,9 @@ bool InitialCandidates_addCandidateReservoir(
     PathState path)
 {
     bool isFirstSample = (PathState_getSampleIdx(path) == (uint(kSamplesPerPixel) - 1u));
-    RTXDI_DIReservoir existingReservoir = isFirstSample ? RTXDI_EmptyDIReservoir() : currReservoir;
+    RTXDI_DIReservoir existingReservoir = isFirstSample
+        ? RTXDI_EmptyDIReservoir()
+        : currReservoir;
     bool selected = PathReservoir_add(
         existingReservoir,
         lt_next_random(path.sg),
@@ -15,7 +17,11 @@ bool InitialCandidates_addCandidateReservoir(
         path.reservoir
     );
     if (selected) {
-        PathReservoir_setSubPixel(existingReservoir, PathState_getPixel(path), path.subPixel);
+        PathReservoir_setSubPixel(
+            existingReservoir,
+            PathState_getPixel(path),
+            path.selectedReconnection.subPixel
+        );
     }
     PathReservoir_setConfidence(existingReservoir, 1.0f);
 
@@ -23,7 +29,7 @@ bool InitialCandidates_addCandidateReservoir(
     ReservoirSplattingReconnectionData existingReconnection = isFirstSample
         ? ReservoirSplattingReconnectionData_init()
         : currReconnectionData;
-    currReconnectionData = selected ? path.reconnection : existingReconnection;
+    currReconnectionData = selected ? path.selectedReconnection : existingReconnection;
     return selected;
 }
 

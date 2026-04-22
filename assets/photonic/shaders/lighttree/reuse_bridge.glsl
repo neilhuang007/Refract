@@ -219,6 +219,7 @@ uniform float ph_restir_debug_force_solid_angle_pdf_one;  // Hidden debug overri
 //    2 = ReSTIRDI_LocalLightSamplingMode_REGIR_RIS -- ReGIR cell-based RIS (with Power_RIS fallback)
 // SDK default (ReSTIRDI.cpp line 45): Uniform (0).
 uniform float ph_restir_local_light_sampling_mode;
+uniform float ph_restir_scatter_backup_mis_mode;
 
 float lt_debug_resolve_target_pdf(float targetPdf) {
     return (ph_restir_debug_force_target_pdf_one >= 0.5f) ? 1.0f : targetPdf;

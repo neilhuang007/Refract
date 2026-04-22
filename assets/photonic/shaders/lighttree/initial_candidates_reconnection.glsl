@@ -41,14 +41,14 @@ float InitialCandidates_computeCurrentSubPixelJacobian(RAB_Surface surface)
 
 ReservoirSplattingReconnectionData InitialCandidates_createReconnectionData(
     RAB_Surface surface,
-    RTXDI_DIReservoir pathReservoir,
+    RTXDI_DIReservoir candidateReservoir,
     RAB_LightSample selectedLightSample,
     ivec2 pixel)
 {
     float subPixelJacobian = InitialCandidates_computeCurrentSubPixelJacobian(surface);
     return ReconnectionData_build(
         surface,
-        pathReservoir,
+        candidateReservoir,
         selectedLightSample,
         pixel,
         1.0f,
@@ -56,29 +56,18 @@ ReservoirSplattingReconnectionData InitialCandidates_createReconnectionData(
     );
 }
 
-void InitialCandidates_updateReconnectionData(
-    inout ReservoirSplattingReconnectionData reconnectionData,
-    vec3 visibilityRgb)
-{
-    reconnectionData.irradiance = visibilityRgb;
-    reconnectionData.earlyThroughput = visibilityRgb;
-}
-
 ReservoirSplattingReconnectionData InitialCandidates_buildSelectedReconnection(
     RAB_Surface surface,
-    RTXDI_DIReservoir pathReservoir,
+    RTXDI_DIReservoir candidateReservoir,
     RAB_LightSample selectedLightSample,
-    ivec2 pixel,
-    vec3 visibilityRgb)
+    ivec2 pixel)
 {
-    ReservoirSplattingReconnectionData reconnectionData = InitialCandidates_createReconnectionData(
+    return InitialCandidates_createReconnectionData(
         surface,
-        pathReservoir,
+        candidateReservoir,
         selectedLightSample,
         pixel
     );
-    InitialCandidates_updateReconnectionData(reconnectionData, visibilityRgb);
-    return reconnectionData;
 }
 
 #endif

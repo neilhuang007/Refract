@@ -88,9 +88,7 @@ bool lt_spatial_reservoir_add_sample_from_reservoir(
     dstReservoir.packedVisibility = sampleReservoir.packedVisibility;
     dstReservoir.spatialDistance = sampleReservoir.spatialDistance;
     dstReservoir.age = sampleReservoir.age;
-    dstReservoir.canonicalWeight = sampleReservoir.canonicalWeight;
-    dstReservoir.transportAux0 = sampleReservoir.transportAux0;
-    dstReservoir.transportAux1 = sampleReservoir.transportAux1;
+    PathReservoir_setIntegrand(dstReservoir, samplePHat);
     dstReservoir.pixelSampleUV = sampleReservoir.pixelSampleUV;
     dstReservoir.lensSampleUV  = sampleReservoir.lensSampleUV;
     dstReservoir.pathSample    = sampleReservoir.pathSample;

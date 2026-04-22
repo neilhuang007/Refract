@@ -383,7 +383,6 @@ RTXDI_DIReservoir lt_di_multi_scatter_temporal_resampling_stage(
                 currSample.confidence,
                 sg
             );
-            newConfidence = prevSelected ? dstReservoir.M : newConfidence;
         }
     }
 

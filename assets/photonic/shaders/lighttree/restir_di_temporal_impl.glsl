@@ -22,6 +22,86 @@
 #include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE)
+float CollectTemporalSamples_bilinear_weight(vec2 fractionalCoord, int x, int y)
+{
+    return mix(float(1 - x), float(x), fractionalCoord.x)
+        * mix(float(1 - y), float(y), fractionalCoord.y);
+}
+
+ShiftedPathData CollectTemporalSamples_make_no_shift_path(
+    ivec2 neighborPixel,
+    RTXDI_DIReservoir neighborReservoir,
+    ReservoirSplattingReconnectionData neighborReconnectionData)
+{
+    ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
+    shiftedPath.primaryHit = neighborReconnectionData.firstHit;
+    shiftedPath.fractionalPixel = vec2(neighborPixel)
+        + PathReservoir_getSubPixel(neighborReservoir, neighborPixel);
+    shiftedPath.lensSample = neighborReconnectionData.lensSample;
+    shiftedPath.firstRayDir = -neighborReconnectionData.firstWi;
+    shiftedPath.subPixelJacobian = max(neighborReconnectionData.subPixelJacobian, 1e-10f);
+    shiftedPath.lensVertexJacobian = max(neighborReconnectionData.lensVertexJacobian, 1e-10f);
+    shiftedPath.secondaryPathJacobian = max(neighborReconnectionData.secondaryPathJacobian, 1e-10f);
+    shiftedPath.radiance = PathReservoir_getIntegrand(neighborReservoir);
+    return shiftedPath;
+}
+
+ShiftedPathData CollectTemporalSamples_restore_shifted_path(
+    ivec2 targetPixel,
+    vec2 relativeSubPixel,
+    ReservoirSplattingReconnectionData sourceReconnectionData,
+    LtTemporalGatherShiftedPathData packedShiftedPath)
+{
+    ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
+    shiftedPath.fractionalPixel = vec2(targetPixel) + relativeSubPixel;
+    shiftedPath.lensSample = sourceReconnectionData.lensSample;
+    shiftedPath.firstRayDir = -sourceReconnectionData.firstWi;
+    shiftedPath.subPixelJacobian = max(sourceReconnectionData.subPixelJacobian, 1e-10f);
+    shiftedPath.lensVertexJacobian = max(packedShiftedPath.lensVertexJacobian, 1e-10f);
+    shiftedPath.secondaryPathJacobian = max(packedShiftedPath.secondaryPathJacobian, 1e-10f);
+    shiftedPath.radiance = packedShiftedPath.radiance;
+
+    if (packedShiftedPath.valid <= 0.0f)
+    {
+        return shiftedPath;
+    }
+
+    RAB_Surface targetSurface = RAB_GetGBufferSurface(targetPixel, false);
+    if (!RAB_IsSurfaceValid(targetSurface))
+    {
+        return shiftedPath;
+    }
+
+    vec3 firstRayDir = normalize(targetSurface.worldPos - world_camera_position);
+    shiftedPath.primaryHit.worldPos = targetSurface.worldPos;
+    shiftedPath.primaryHit.viewDepth = targetSurface.viewDepth;
+    shiftedPath.primaryHit.faceId = uint(round(scatter_load_surface_identity(targetPixel, false).w));
+    shiftedPath.firstRayDir = firstRayDir;
+    shiftedPath.subPixelJacobian = scatter_compute_subpixel_jacobian(
+        targetSurface.worldPos,
+        targetSurface.geoNormal,
+        world_camera_position,
+        lt_current_camera_forward()
+    );
+
+    return shiftedPath;
+}
+
+ReservoirSplattingReconnectionData CollectTemporalSamples_update_reconnection(
+    ReservoirSplattingReconnectionData sourceReconnectionData,
+    ShiftedPathData shiftedPath,
+    vec2 relativeSubPixel)
+{
+    ReservoirSplattingReconnectionData updatedReconnectionData =
+        ReconnectionData_update(sourceReconnectionData, shiftedPath);
+    updatedReconnectionData.subPixel = relativeSubPixel;
+    updatedReconnectionData.lensSample = shiftedPath.lensSample;
+    updatedReconnectionData.subPixelJacobian = max(shiftedPath.subPixelJacobian, 1e-10f);
+    updatedReconnectionData.lensVertexJacobian = max(shiftedPath.lensVertexJacobian, 1e-10f);
+    updatedReconnectionData.secondaryPathJacobian = max(shiftedPath.secondaryPathJacobian, 1e-10f);
+    return updatedReconnectionData;
+}
+
 void lt_di_store_collect_temporal_sample_result(
     vec2 floatingCoord,
     RTXDI_DIReservoir reservoir,
@@ -62,27 +142,170 @@ void lt_di_collect_temporal_samples_stage(
     ivec2 currPixel)
 {
     vec2 prevPixel = lt_temporal_previous_pixel_center(currPixel) - vec2(0.5f);
-    if (!lt_is_viewport_uv_in_bounds(ivec2(floor(prevPixel)))
-        || any(lessThan(prevPixel, vec2(0.0f)))
-        || any(greaterThanEqual(prevPixel, vec2(viewWidth, viewHeight)))) {
+    if (any(lessThan(prevPixel, vec2(0.0f)))
+        || any(greaterThanEqual(prevPixel, vec2(viewWidth, viewHeight))))
+    {
         return;
     }
 
-    ivec2 roundedPrevPixel = ivec2(round(prevPixel));
-    if (!lt_is_viewport_uv_in_bounds(roundedPrevPixel)) {
-        return;
+    RTXDI_RandomSamplerState sg = lt_init_random_sampler(uvec2(currPixel), uint(frameCounter), 2u);
+    RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
+    ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
+    float dstConfidence = 0.0f;
+
+    ivec2 prevPixelTopLeft = ivec2(floor(prevPixel));
+    vec2 fractionalCoord = clamp(prevPixel - vec2(prevPixelTopLeft), vec2(0.0f), vec2(1.0f));
+    float totalConfidence = 0.0f;
+
+    for (int x = 0; x < 2; ++x)
+    {
+        for (int y = 0; y < 2; ++y)
+        {
+            ivec2 offset = ivec2(x, y);
+            ivec2 neighborPixel = prevPixelTopLeft + offset;
+            if (!lt_is_viewport_uv_in_bounds(neighborPixel))
+            {
+                continue;
+            }
+
+            float bilinearWeight = CollectTemporalSamples_bilinear_weight(fractionalCoord, x, y);
+            RTXDI_DIReservoir neighborReservoir = RTXDI_LoadPreviousDIReservoir(
+                lt_build_restir_di_parameters().reservoirBufferParams,
+                uvec2(neighborPixel)
+            );
+            ReservoirSplattingReconnectionData neighborReconnectionData =
+                RestirDI_loadPreviousFrameReconnection(neighborPixel);
+            float neighborConfidence = lt_scatter_reservoir_confidence(
+                neighborReservoir,
+                neighborReconnectionData
+            );
+            totalConfidence += bilinearWeight * neighborConfidence;
+
+            vec3 sourceIntegrand = PathReservoir_getIntegrand(neighborReservoir);
+            if (!RTXDI_IsValidDIReservoir(neighborReservoir)
+                || ph_luminance(sourceIntegrand) <= 0.0f)
+            {
+                continue;
+            }
+
+            vec2 relativeSubPixel = vec2(offset)
+                + PathReservoir_getSubPixel(neighborReservoir, neighborPixel)
+                - fractionalCoord;
+
+            ivec2 requiredOffset = ivec2(0);
+            if (relativeSubPixel.x < 0.0f) requiredOffset.x += 1;
+            if (relativeSubPixel.x >= 1.0f) requiredOffset.x -= 1;
+            if (relativeSubPixel.y < 0.0f) requiredOffset.y += 1;
+            if (relativeSubPixel.y >= 1.0f) requiredOffset.y -= 1;
+            relativeSubPixel += vec2(requiredOffset);
+
+            ivec2 packedOffset = requiredOffset + ivec2(1);
+            int packedOffsetIndex = packedOffset.x + 3 * packedOffset.y;
+            bool noShiftNeeded = (packedOffsetIndex == 4);
+            if (packedOffsetIndex > 4)
+            {
+                packedOffsetIndex -= 1;
+            }
+
+            ivec2 targetPixel = neighborPixel + requiredOffset;
+            ShiftedPathData shiftedPath = noShiftNeeded
+                ? CollectTemporalSamples_make_no_shift_path(
+                    neighborPixel,
+                    neighborReservoir,
+                    neighborReconnectionData
+                )
+                : CollectTemporalSamples_restore_shifted_path(
+                    targetPixel,
+                    relativeSubPixel,
+                    neighborReconnectionData,
+                    scatter_load_gather_shifted_path_data(neighborPixel, packedOffsetIndex)
+                );
+            float shiftedJacobian = noShiftNeeded
+                ? 1.0f
+                : shiftedPath.secondaryPathJacobian
+                    / max(neighborReconnectionData.secondaryPathJacobian, 1e-10f);
+
+            float sourceWeight = bilinearWeight
+                * lt_scatter_radiance_phat(sourceIntegrand)
+                * neighborConfidence;
+            float totalPHat = sourceWeight;
+
+            for (int tempX = 0; tempX < 2; ++tempX)
+            {
+                for (int tempY = 0; tempY < 2; ++tempY)
+                {
+                    ivec2 tempOffset = ivec2(tempX, tempY);
+                    ivec2 tempOffsetPixel = prevPixelTopLeft + tempOffset;
+                    if (!lt_is_viewport_uv_in_bounds(tempOffsetPixel))
+                    {
+                        continue;
+                    }
+
+                    ivec2 diff = tempOffset - offset;
+                    if (all(equal(diff, ivec2(0))))
+                    {
+                        continue;
+                    }
+
+                    float tempBilinearWeight = CollectTemporalSamples_bilinear_weight(
+                        fractionalCoord,
+                        tempX,
+                        tempY
+                    );
+                    ivec2 tempPackedOffset = diff + ivec2(1);
+                    int tempPackedIndex = tempPackedOffset.x + 3 * tempPackedOffset.y;
+                    if (tempPackedIndex > 4)
+                    {
+                        tempPackedIndex -= 1;
+                    }
+
+                    LtTemporalGatherShiftedPathData tempShiftedPath =
+                        scatter_load_gather_shifted_path_data(neighborPixel, tempPackedIndex);
+                    float tempPHat = lt_scatter_radiance_phat(tempShiftedPath.radiance);
+                    float tempJacobian = tempShiftedPath.secondaryPathJacobian
+                        / max(neighborReconnectionData.secondaryPathJacobian, 1e-10f);
+                    float tempConfidence = lt_scatter_reservoir_confidence(
+                        RTXDI_LoadPreviousDIReservoir(
+                            lt_build_restir_di_parameters().reservoirBufferParams,
+                            uvec2(tempOffsetPixel)
+                        ),
+                        RestirDI_loadPreviousFrameReconnection(tempOffsetPixel)
+                    );
+                    totalPHat += tempBilinearWeight * tempPHat * tempJacobian * tempConfidence;
+                }
+            }
+
+            float misWeight = (totalPHat > 0.0f) ? (sourceWeight / totalPHat) : 0.0f;
+            RTXDI_DIReservoir shiftedReservoir = neighborReservoir;
+            PathReservoir_setSubPixel(shiftedReservoir, currPixel, relativeSubPixel);
+
+            bool selected = lt_scatter_add_sample_from_reservoir(
+                dstReservoir,
+                dstConfidence,
+                misWeight,
+                shiftedPath.radiance,
+                shiftedJacobian,
+                lt_scatter_compute_ucw(neighborReservoir, sourceIntegrand),
+                neighborConfidence,
+                shiftedReservoir,
+                sg
+            );
+            if (selected)
+            {
+                dstReconnectionData = CollectTemporalSamples_update_reconnection(
+                    neighborReconnectionData,
+                    shiftedPath,
+                    relativeSubPixel
+                );
+            }
+        }
     }
 
-    RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(roundedPrevPixel)
-    );
-    ReservoirSplattingReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(roundedPrevPixel);
-
+    PathReservoir_setConfidence(dstReservoir, totalConfidence);
     lt_di_store_collect_temporal_sample_result(
         prevPixel,
-        prevReservoir,
-        prevReconnectionData
+        dstReservoir,
+        dstReconnectionData
     );
 }
 
@@ -204,16 +427,28 @@ float lt_di_gather_temporal_confidence_weight(float confidence)
 }
 
 float lt_di_gather_temporal_shifted_jacobian(
-    LtTemporalGatherShiftedPathData shiftedPathData,
+    ShiftedPathData shiftedPathData,
     ReservoirSplattingReconnectionData reconnectionData,
     bool primaryHitReconnection)
 {
     if (primaryHitReconnection)
     {
-        return (shiftedPathData.lensVertexJacobian * shiftedPathData.secondaryPathJacobian)
-            / max(reconnectionData.lensVertexJacobian * reconnectionData.secondaryPathJacobian, 1e-10f);
+        float baseJacobian = reconnectionData.lensVertexJacobian
+            * reconnectionData.secondaryPathJacobian;
+        if (baseJacobian <= 1e-10f)
+        {
+            return 0.0f;
+        }
+        float ratio = (shiftedPathData.lensVertexJacobian * shiftedPathData.secondaryPathJacobian)
+            / baseJacobian;
+        return (isnan(ratio) || isinf(ratio) || ratio < 0.0f) ? 0.0f : ratio;
     }
-    return shiftedPathData.secondaryPathJacobian / max(reconnectionData.secondaryPathJacobian, 1e-10f);
+    if (reconnectionData.secondaryPathJacobian <= 1e-10f)
+    {
+        return 0.0f;
+    }
+    float ratio = shiftedPathData.secondaryPathJacobian / reconnectionData.secondaryPathJacobian;
+    return (isnan(ratio) || isinf(ratio) || ratio < 0.0f) ? 0.0f : ratio;
 }
 
 float lt_di_gather_temporal_reference_mis(
@@ -239,6 +474,7 @@ float lt_di_gather_temporal_reference_mis(
 bool lt_di_gather_temporal_add_current_sample(
     ivec2 pixel,
     inout RTXDI_DIReservoir dstReservoir,
+    inout float dstConfidence,
     inout ReservoirSplattingReconnectionData dstReconnectionData,
     RTXDI_DIReservoir currReservoir,
     ReservoirSplattingReconnectionData currReconnectionData,
@@ -255,22 +491,41 @@ bool lt_di_gather_temporal_add_current_sample(
     if (any(greaterThan(currIntegrand, vec3(0.0f))))
     {
         currPHat = currIntegrand;
-        LtTemporalGatherShiftedPathData shiftedCurr = scatter_load_gather_shifted_path_data(pixel, shiftedPathIndex);
+        vec2 floatingCoord = scatter_load_gather_floating_coords(pixel);
+        vec2 shiftedPixel = primaryHitReconnection
+            ? (vec2(pixel) + currReconnectionData.subPixel)
+            : (floatingCoord + currReconnectionData.subPixel);
+        ShiftedPathData shiftedCurr = primaryHitReconnection
+            ? gatherPrimaryHitReconnectionShift(
+                sg,
+                currReconnectionData,
+                currReconnectionData.time,
+                shiftedPixel,
+                currReconnectionData.firstHit,
+                currReservoir
+            )
+            : gatherLensVertexCopyShift(
+                sg,
+                currReconnectionData,
+                currReconnectionData.time,
+                shiftedPixel,
+                currReconnectionData.lensSample,
+                currReservoir
+            );
         float shiftedJacobian = lt_di_gather_temporal_shifted_jacobian(shiftedCurr, currReconnectionData, primaryHitReconnection);
-        currSampleMIS = lt_di_gather_temporal_reference_mis(
-            currIntegrand,
-            lt_di_gather_temporal_confidence_weight(currConfidence),
-            shiftedCurr.radiance,
-            shiftedJacobian,
-            lt_di_gather_temporal_confidence_weight(prevConfidence),
-            shiftProbability,
-            true
-        );
+        float m1 = lt_scatter_radiance_phat(currIntegrand)
+            * lt_di_gather_temporal_confidence_weight(currConfidence);
+        float m2 = lt_scatter_radiance_phat(shiftedCurr.radiance)
+            * shiftedJacobian
+            * lt_di_gather_temporal_confidence_weight(prevConfidence)
+            * shiftProbability;
+        m2 = isnan(m2) ? 0.0f : m2;
+        currSampleMIS = ((m1 + m2) > 0.0f) ? (m1 / (m1 + m2)) : 0.0f;
     }
 
     bool currSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
-        currConfidence,
+        dstConfidence,
         currSampleMIS,
         currPHat,
         1.0f,
@@ -289,6 +544,7 @@ bool lt_di_gather_temporal_add_current_sample(
 bool lt_di_gather_temporal_add_previous_sample(
     ivec2 pixel,
     inout RTXDI_DIReservoir dstReservoir,
+    inout float dstConfidence,
     inout ReservoirSplattingReconnectionData dstReconnectionData,
     RTXDI_DIReservoir prevReservoir,
     ReservoirSplattingReconnectionData prevReconnectionData,
@@ -305,27 +561,45 @@ bool lt_di_gather_temporal_add_previous_sample(
     vec3 prevIntegrand = PathReservoir_getIntegrand(prevReservoir);
     if (any(greaterThan(prevIntegrand, vec3(0.0f))))
     {
-        LtTemporalGatherShiftedPathData shiftedPrev = scatter_load_gather_shifted_path_data(pixel, shiftedPathIndex);
+        vec2 shiftedPixel = vec2(pixel) + PathReservoir_getSubPixel(prevReservoir, pixel);
+        ShiftedPathData shiftedPrev = primaryHitReconnection
+            ? gatherPrimaryHitReconnectionShift(
+                sg,
+                prevReconnectionData,
+                prevReconnectionData.time,
+                shiftedPixel,
+                prevReconnectionData.firstHit,
+                prevReservoir
+            )
+            : gatherLensVertexCopyShift(
+                sg,
+                prevReconnectionData,
+                prevReconnectionData.time,
+                shiftedPixel,
+                prevReconnectionData.lensSample,
+                prevReservoir
+            );
         shiftedJacobian = lt_di_gather_temporal_shifted_jacobian(shiftedPrev, prevReconnectionData, primaryHitReconnection);
-        float shiftedWeight = lt_di_gather_temporal_confidence_weight(currConfidence);
-        float referenceMIS = lt_di_gather_temporal_reference_mis(
-            shiftedPrev.radiance,
-            shiftedWeight,
-            prevIntegrand,
-            1.0f,
-            lt_di_gather_temporal_confidence_weight(prevConfidence),
-            shiftProbability,
-            false
-        );
-        float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance) * shiftedJacobian * shiftedWeight;
+        float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
+            * shiftedJacobian
+            * lt_di_gather_temporal_confidence_weight(currConfidence);
         prevPHat = isnan(m1) ? vec3(0.0f) : max(shiftedPrev.radiance, vec3(0.0f));
         shiftedJacobian = isnan(m1) ? 1.0f : shiftedJacobian;
-        prevSampleMIS = isnan(m1) ? 0.0f : referenceMIS;
+        float m2 = lt_scatter_radiance_phat(prevIntegrand)
+            * lt_di_gather_temporal_confidence_weight(prevConfidence)
+            * shiftProbability;
+        prevSampleMIS = isnan(m1) ? 0.0f : (((m1 + m2) > 0.0f) ? (m2 / (m1 + m2)) : 0.0f);
+        bool shiftedPrevValid = shiftedPrev.primaryHit.viewDepth > 0.0f
+            || any(greaterThan(max(shiftedPrev.radiance, vec3(0.0f)), vec3(0.0f)));
+        if (shiftedPrevValid)
+        {
+            prevReconnectionData = ReconnectionData_update(prevReconnectionData, shiftedPrev);
+        }
     }
 
     bool prevSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
-        prevConfidence,
+        dstConfidence,
         prevSampleMIS,
         prevPHat,
         shiftedJacobian,
@@ -347,6 +621,7 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
 {
     RTXDI_RandomSamplerState sg = lt_init_random_sampler(uvec2(pixel), uint(frameCounter), 3u);
     RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
+    float dstConfidence = 0.0f;
     currReconnectionData = ReservoirSplattingReconnectionData_init();
 
     RTXDI_DIReservoir currReservoir;
@@ -379,57 +654,68 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
 
     if (doLensVertexCopy)
     {
-        lt_di_gather_temporal_add_current_sample(
-            pixel,
-            dstReservoir,
-            currReconnectionData,
-            currReservoir,
-            currentReconnectionData,
-            currConfidence,
-            prevConfidence,
-            false,
-            depthOfFieldProbs.x,
-            0,
-            sg
-        );
-    }
+        if (hasCurrentSample)
+        {
+            lt_di_gather_temporal_add_current_sample(
+                pixel,
+                dstReservoir,
+                dstConfidence,
+                currReconnectionData,
+                currReservoir,
+                currentReconnectionData,
+                currConfidence,
+                prevConfidence,
+                false,
+                depthOfFieldProbs.x,
+                0,
+                sg
+            );
+        }
 
-    if (hasPreviousSample)
-    {
-        lt_di_gather_temporal_add_previous_sample(
-            pixel,
-            dstReservoir,
-            currReconnectionData,
-            prevReservoir,
-            prevReconnectionData,
-            currConfidence,
-            prevConfidence,
-            false,
-            depthOfFieldProbs.x,
-            1,
-            sg
-        );
+        if (hasPreviousSample)
+        {
+            lt_di_gather_temporal_add_previous_sample(
+                pixel,
+                dstReservoir,
+                dstConfidence,
+                currReconnectionData,
+                prevReservoir,
+                prevReconnectionData,
+                currConfidence,
+                prevConfidence,
+                false,
+                depthOfFieldProbs.x,
+                1,
+                sg
+            );
+        }
+
+        PathReservoir_setConfidence(dstReservoir, dstConfidence);
     }
 
     if (hasDepthOfField && doPrimaryHitReconnection)
     {
         RTXDI_DIReservoir lensVertexCopyReservoir = dstReservoir;
+        float lensVertexCopyConfidence = dstConfidence;
         ReservoirSplattingReconnectionData lensVertexCopyReconnectionData = currReconnectionData;
         dstReservoir = RTXDI_EmptyDIReservoir();
+        dstConfidence = 0.0f;
         currReconnectionData = ReservoirSplattingReconnectionData_init();
 
         RTXDI_DIReservoir currentDomainReservoir = hasCurrentSample ? lensVertexCopyReservoir : currReservoir;
         ReservoirSplattingReconnectionData currentDomainReconnectionData = hasCurrentSample ? lensVertexCopyReconnectionData : currentReconnectionData;
+        float currentDomainConfidence = hasCurrentSample ? lensVertexCopyConfidence : currConfidence;
 
         if (hasCurrentSample)
         {
             lt_di_gather_temporal_add_current_sample(
                 pixel,
                 dstReservoir,
+                dstConfidence,
                 currReconnectionData,
                 currentDomainReservoir,
                 currentDomainReconnectionData,
-                currConfidence,
+                currentDomainConfidence,
                 prevConfidence,
                 true,
                 depthOfFieldProbs.y,
@@ -443,10 +729,11 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
             lt_di_gather_temporal_add_previous_sample(
                 pixel,
                 dstReservoir,
+                dstConfidence,
                 currReconnectionData,
                 prevReservoir,
                 prevReconnectionData,
-                currConfidence,
+                currentDomainConfidence,
                 prevConfidence,
                 true,
                 depthOfFieldProbs.y,
@@ -454,6 +741,8 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
                 sg
             );
         }
+
+        PathReservoir_setConfidence(dstReservoir, dstConfidence);
     }
 
     return dstReservoir;

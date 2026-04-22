@@ -27,7 +27,7 @@ void addCandidateReservoir(
     currReconnectionData = ReservoirSplattingReconnectionData_init();
 
     RAB_LightSample selectedLightSample = RAB_EmptyLightSample();
-    RTXDI_DIReservoir candidateReservoir = RTXDI_SampleLightsForSurface(
+    RTXDI_DIReservoir candidateReservoir = InitialCandidates_SampleLightsForSurface(
         sg,
         coherentSg,
         surface,
@@ -40,17 +40,19 @@ void addCandidateReservoir(
         return;
     }
 
-    vec3 visibility = max(rtxdi_unpack_visibility(candidateReservoir.packedVisibility), vec3(0.0f));
-    currReservoir = candidateReservoir;
-    currReservoir.weightSum *= sampleMIS;
-    currReservoir.M = 1.0f;
-    currReconnectionData = InitialCandidates_buildSelectedReconnection(
+    ReservoirSplattingReconnectionData selectedReconnection = InitialCandidates_buildSelectedReconnection(
         surface,
-        currReservoir,
+        candidateReservoir,
         selectedLightSample,
-        pixel,
-        visibility
+        pixel
     );
+    bool selected = PathReservoir_add(currReservoir, lt_next_random(sg), sampleMIS, candidateReservoir);
+    if (selected)
+    {
+        PathReservoir_setSubPixel(currReservoir, pixel, selectedReconnection.subPixel);
+        currReconnectionData = selectedReconnection;
+    }
+    PathReservoir_setConfidence(currReservoir, 1.0f);
 }
 
 #endif

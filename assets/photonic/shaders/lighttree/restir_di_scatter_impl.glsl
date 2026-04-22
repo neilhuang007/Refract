@@ -586,8 +586,7 @@ bool lt_scatter_add_sample_from_reservoir(
         state.packedVisibility  = otherReservoir.packedVisibility;
         state.age               = otherReservoir.age;
         state.spatialDistance   = otherReservoir.spatialDistance;
-        state.transportAux0     = otherReservoir.transportAux0;
-        state.transportAux1     = otherReservoir.transportAux1;
+        PathReservoir_setIntegrand(state, pHat);
         state.pixelSampleUV     = otherReservoir.pixelSampleUV;
         state.lensSampleUV      = otherReservoir.lensSampleUV;
         state.pathSample        = otherReservoir.pathSample;
@@ -905,9 +904,10 @@ bool ScatterTemporalResampling_process_contributor(
         prevSampleMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
     }
 
+    float contributorConfidence = newConfidence;
     bool prevSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
-        newConfidence,
+        contributorConfidence,
         prevSampleMIS,
         shiftedPrev.radiance,
         shiftedJacobian,

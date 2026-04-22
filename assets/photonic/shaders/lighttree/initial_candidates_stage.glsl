@@ -10,16 +10,15 @@
 void InitialCandidates_handlePrimaryMiss(inout PathState path)
 {
     path.reservoir = RTXDI_EmptyDIReservoir();
-    path.reconnection = ReservoirSplattingReconnectionData_init();
+    path.selectedReconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();
-    path.subPixel = vec2(0.5f);
     lt_area_seed_domain_samples(path.reservoir, PathState_getPixel(path), 0u);
 }
 
 void InitialCandidates_handleHit(inout PathState path)
 {
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    path.reservoir = RTXDI_SampleLightsForSurface(
+    path.reservoir = InitialCandidates_SampleLightsForSurface(
         path.sg,
         path.coherentRng,
         path.surface,
@@ -29,19 +28,15 @@ void InitialCandidates_handleHit(inout PathState path)
 
     if (!RTXDI_IsValidDIReservoir(path.reservoir))
     {
-        path.reconnection = ReservoirSplattingReconnectionData_init();
-        path.subPixel = vec2(0.5f);
+        path.selectedReconnection = ReservoirSplattingReconnectionData_init();
         return;
     }
 
-    path.subPixel = PathReservoir_getSubPixel(path.reservoir, PathState_getPixel(path));
-    vec3 visibility = max(rtxdi_unpack_visibility(path.reservoir.packedVisibility), vec3(0.0f));
-    path.reconnection = InitialCandidates_buildSelectedReconnection(
+    path.selectedReconnection = InitialCandidates_buildSelectedReconnection(
         path.surface,
         path.reservoir,
         path.selectedLightSample,
-        PathState_getPixel(path),
-        visibility
+        PathState_getPixel(path)
     );
 }
 

@@ -66,6 +66,26 @@ ShiftedPathData gatherLensVertexCopyShift(
     return lt_temporal_shifted_path_from_spatial(shiftedPathSpatial);
 }
 
+ShiftedPathData gatherPrimaryHitReconnectionShift(
+    inout RTXDI_RandomSamplerState rng,
+    ReservoirSplattingReconnectionData reconnectionData,
+    float time,
+    vec2 fractionalPixel,
+    ReservoirSplattingHitInfo primaryHit,
+    RTXDI_DIReservoir sourceReservoir)
+{
+    SpatialShiftedPathData shiftedPathSpatial;
+    shiftedPathSpatial = spatial_gather_primary_hit_reconnection_shift(
+        rng,
+        reconnectionData,
+        time,
+        fractionalPixel,
+        primaryHit.worldPos,
+        sourceReservoir
+    );
+    return lt_temporal_shifted_path_from_spatial(shiftedPathSpatial);
+}
+
 ReservoirSplattingReconnectionData ReconnectionData_update(
     ReservoirSplattingReconnectionData source,
     ShiftedPathData shiftedPath)
