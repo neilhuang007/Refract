@@ -14,12 +14,7 @@ layout(location = 3) out vec4 reconnection0_frag_out;
 layout(location = 4) out vec4 reconnection1_frag_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/reuse_bridge.glsl"
-#include "/photonics/lighttree/restir_di_scatter_impl.glsl"
-#include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
-#include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
-#include "/photonics/lighttree/restir_di_temporal_scatter_pipeline.glsl"
+#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
 
 void storeScatterBackupTemporalResamplingResult(
     RTXDI_DIReservoir reservoir,
@@ -55,27 +50,10 @@ void main()
         return;
     }
 
-    const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
-    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
         storeEmptyScatterBackupTemporalResamplingResult();
         return;
     }
-
-    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-
-    RTXDI_DIReservoir currReservoir = RTXDI_LoadDIReservoir(
-        restirDI.reservoirBufferParams,
-        uvec2(reservoirPosition),
-        restirDI.bufferIndices.initialSamplingOutputBufferIndex
-    );
-
-    RTXDI_RandomSamplerState randomSampler = RTXDI_InitRandomSampler(
-        uvec2(pixel),
-        runtimeParameters.frameIndex,
-        RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED + 61u
-    );
 
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
     RTXDI_DIReservoir dstReservoir = lt_di_scatter_backup_temporal_resampling_stage(

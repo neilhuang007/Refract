@@ -11,8 +11,8 @@ struct PathState
     RAB_Surface surface;
     RTXDI_RandomSamplerState rng;
     RTXDI_RandomSamplerState coherentRng;
-    RTXDI_DIReservoir reservoir;
-    ReservoirSplattingReconnectionData reconnection;
+    RTXDI_DIReservoir candidateReservoir;
+    ReservoirSplattingReconnectionData selectedReconnection;
     RAB_LightSample selectedLightSample;
 };
 
@@ -48,8 +48,8 @@ void InitialCandidates_generatePath(out PathState path, ivec2 pixel, uint sample
         sampleIdx,
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
     );
-    path.reservoir = RTXDI_EmptyDIReservoir();
-    path.reconnection = ReservoirSplattingReconnectionData_init();
+    path.candidateReservoir = RTXDI_EmptyDIReservoir();
+    path.selectedReconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();
 }
 

@@ -42,7 +42,7 @@ void ScatterTemporalResampling_storeEmptyResult()
 void ScatterTemporalResampling_execute(ivec2 pixel)
 {
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir currReservoir = lt_di_scatter_temporal_resampling(pixel, currReconnectionData);
+    RTXDI_DIReservoir currReservoir = lt_di_scatter_temporal_resampling_stage(pixel, currReconnectionData);
     ScatterTemporalResampling_storeResult(currReservoir, currReconnectionData);
 }
 

@@ -9,15 +9,15 @@
 
 void InitialCandidates_handlePrimaryMiss(inout PathState path)
 {
-    path.reservoir = RTXDI_EmptyDIReservoir();
-    path.reconnection = ReservoirSplattingReconnectionData_init();
+    path.candidateReservoir = RTXDI_EmptyDIReservoir();
+    path.selectedReconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();
 }
 
 void InitialCandidates_handleHit(inout PathState path)
 {
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    path.reservoir = RTXDI_SampleLightsForSurface(
+    path.candidateReservoir = RTXDI_SampleLightsForSurface(
         path.rng,
         path.coherentRng,
         path.surface,
@@ -25,19 +25,17 @@ void InitialCandidates_handleHit(inout PathState path)
         path.selectedLightSample
     );
 
-    if (!RTXDI_IsValidDIReservoir(path.reservoir))
+    if (!RTXDI_IsValidDIReservoir(path.candidateReservoir))
     {
-        path.reconnection = ReservoirSplattingReconnectionData_init();
+        path.selectedReconnection = ReservoirSplattingReconnectionData_init();
         return;
     }
 
-    vec3 visibility = max(rtxdi_unpack_visibility(path.reservoir.packedVisibility), vec3(0.0f));
-    path.reconnection = InitialCandidates_buildSelectedReconnection(
+    path.selectedReconnection = InitialCandidates_buildSelectedReconnection(
         path.surface,
-        path.reservoir,
+        path.candidateReservoir,
         path.selectedLightSample,
-        PathState_getPixel(path),
-        visibility
+        PathState_getPixel(path)
     );
 }
 
@@ -70,10 +68,10 @@ void InitialCandidates_run(ivec2 pixel)
 
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    for (int sampleIdx = kSamplesPerPixel - 1; sampleIdx >= 0; --sampleIdx)
+    for (uint sampleIdx = 0u; sampleIdx < uint(kSamplesPerPixel); ++sampleIdx)
     {
         PathState path;
-        InitialCandidates_generatePath(path, pixel, uint(sampleIdx));
+        InitialCandidates_generatePath(path, pixel, sampleIdx);
         InitialCandidates_tracePath(path);
         InitialCandidates_addCandidateReservoir(currReservoir, currReconnectionData, path);
     }

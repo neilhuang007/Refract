@@ -11,10 +11,7 @@ in vec4 direction_vert_out;
 
 void run(ivec2 pixel)
 {
-    RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
-    RTXDI_RandomSamplerState randomSampler = lt_init_random_sampler(uvec2(pixel), runtimeParameters.frameIndex, 17u);
-    lt_di_multi_reproject_temporal_samples(pixel, surface, randomSampler);
+    lt_di_multi_reproject_temporal_samples_stage(pixel);
 }
 
 void main()
