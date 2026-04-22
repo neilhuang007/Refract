@@ -674,6 +674,20 @@ ReservoirSplattingHitInfo ReservoirSplattingHitInfo_empty() {
     return h;
 }
 
+#ifndef PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
+#define PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
+struct ShiftedPathData {
+    ReservoirSplattingHitInfo primaryHit;
+    vec2 fractionalPixel;
+    vec2 lensSample;
+    vec3 firstRayDir;
+    float subPixelJacobian;
+    float lensVertexJacobian;
+    float secondaryPathJacobian;
+    vec3 radiance;
+};
+#endif
+
 // Reference-parity ``ReconnectionData`` (ReconnectionData.slang:89-166).
 struct ReservoirSplattingReconnectionData {
     // Some camera / film parameters used generally.
@@ -800,81 +814,38 @@ uint lt_path_sample_proposal_family(uint pathSample);
 
 #include "/photonics/lighttree/restir_di_reconnection_packing.glsl"
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
-struct LtTemporalGatherShiftedPathData {
-    vec3 radiance;
-    float secondaryPathJacobian;
-    float lensVertexJacobian;
-    float valid;
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
+layout(std430) restrict buffer ph_temporal_gather_shifted_paths {
+    ShiftedPathData ph_temporal_gather_shifted_paths_data[];
 };
 
-LtTemporalGatherShiftedPathData LtTemporalGatherShiftedPathData_init()
+uint lt_temporal_gather_shifted_path_linear_index(ivec2 pixel, int offsetIndex)
 {
-    LtTemporalGatherShiftedPathData shiftedPathData;
-    shiftedPathData.radiance = vec3(0.0f);
-    shiftedPathData.secondaryPathJacobian = 1.0f;
-    shiftedPathData.lensVertexJacobian = 1.0f;
-    shiftedPathData.valid = 0.0f;
-    return shiftedPathData;
+    return (uint(pixel.y) * uint(viewWidth) + uint(pixel.x)) * 8u + uint(offsetIndex);
 }
 
-LtTemporalGatherShiftedPathData scatter_load_gather_shifted_path_data(ivec2 uv, int offsetIndex)
+ShiftedPathData lt_load_temporal_gather_shifted_path(ivec2 pixel, int offsetIndex)
 {
-    vec4 shiftedPathData0;
-    vec4 shiftedPathData1;
-    switch (offsetIndex)
+    if (!lt_is_viewport_uv_in_bounds(pixel) || offsetIndex < 0 || offsetIndex >= 8)
     {
-        case 0:
-            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data0, uv, 0);
-            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data1, uv, 0);
-            break;
-        case 1:
-            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data2, uv, 0);
-            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data3, uv, 0);
-            break;
-        case 2:
-            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data4, uv, 0);
-            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data5, uv, 0);
-            break;
-        case 3:
-            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data6, uv, 0);
-            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data7, uv, 0);
-            break;
-        case 4:
-            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data8, uv, 0);
-            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data9, uv, 0);
-            break;
-        case 5:
-            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data10, uv, 0);
-            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data11, uv, 0);
-            break;
-        case 6:
-            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data12, uv, 0);
-            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data13, uv, 0);
-            break;
-        case 7:
-            shiftedPathData0 = texelFetch(temporal_gather_shifted_path_data14, uv, 0);
-            shiftedPathData1 = texelFetch(temporal_gather_shifted_path_data15, uv, 0);
-            break;
-        default:
-            return LtTemporalGatherShiftedPathData_init();
+        return lt_temporal_empty_shifted_path();
     }
 
-    LtTemporalGatherShiftedPathData shiftedPathData = LtTemporalGatherShiftedPathData_init();
-    shiftedPathData.radiance = shiftedPathData0.xyz;
-    shiftedPathData.secondaryPathJacobian = max(shiftedPathData0.w, 1e-10f);
-    shiftedPathData.lensVertexJacobian = max(shiftedPathData1.x, 1e-10f);
-    shiftedPathData.valid = shiftedPathData1.y;
-    return shiftedPathData;
+    return ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_linear_index(pixel, offsetIndex)
+    ];
 }
 
-void scatter_store_gather_shifted_path_data(
-    LtTemporalGatherShiftedPathData shiftedPathData,
-    out vec4 shiftedPathData0,
-    out vec4 shiftedPathData1)
+void lt_store_temporal_gather_shifted_path(ivec2 pixel, int offsetIndex, ShiftedPathData shiftedPath)
 {
-    shiftedPathData0 = vec4(max(shiftedPathData.radiance, vec3(0.0f)), max(shiftedPathData.secondaryPathJacobian, 1e-10f));
-    shiftedPathData1 = vec4(max(shiftedPathData.lensVertexJacobian, 1e-10f), shiftedPathData.valid, 0.0f, 0.0f);
+    if (!lt_is_viewport_uv_in_bounds(pixel) || offsetIndex < 0 || offsetIndex >= 8)
+    {
+        return;
+    }
+
+    ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_linear_index(pixel, offsetIndex)
+    ] = shiftedPath;
 }
 #endif
 

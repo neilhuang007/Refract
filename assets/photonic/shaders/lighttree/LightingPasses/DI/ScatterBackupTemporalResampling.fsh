@@ -3,8 +3,6 @@
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE 1
 
-// Reference stage 2e backup variant -- ScatterBackupTemporalResampling::run
-
 in vec4 direction_vert_out;
 
 layout(location = 0) out vec4 reservoir_frag_out;
@@ -14,14 +12,14 @@ layout(location = 3) out vec4 reconnection0_frag_out;
 layout(location = 4) out vec4 reconnection1_frag_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/ReservoirSplatting/ScatterBackupTemporalResampling.glsl"
 
-void storeScatterBackupTemporalResamplingResult(
+void ScatterBackupTemporalResampling_storeResult(
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
 {
-    float sidecarTransportAux0;
-    float sidecarTransportAux1;
+    float transportAux0;
+    float transportAux1;
     scatter_pack_reconnection_fields(
         reconnectionData.firstHit.worldPos,
         reconnectionData.firstHit.viewDepth,
@@ -38,8 +36,8 @@ void storeScatterBackupTemporalResamplingResult(
         reconnectionData.transmissionEvent,
         reconnectionData.lightIsNEE,
         reconnectionData.lightIsDistant,
-        sidecarTransportAux0,
-        sidecarTransportAux1,
+        transportAux0,
+        transportAux1,
         reconnection0_frag_out,
         reconnection1_frag_out
     );
@@ -48,29 +46,29 @@ void storeScatterBackupTemporalResamplingResult(
     reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
-void storeEmptyScatterBackupTemporalResamplingResult()
+void ScatterBackupTemporalResampling_storeEmptyResult()
 {
-    storeScatterBackupTemporalResamplingResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
+    ScatterBackupTemporalResampling_storeResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
 }
 
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     if (!RTXDI_IsActiveCheckerboardPixel(pixel, false, int(ph_restir_active_checkerboard_field))) {
-        storeEmptyScatterBackupTemporalResamplingResult();
+        ScatterBackupTemporalResampling_storeEmptyResult();
         return;
     }
 
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        storeEmptyScatterBackupTemporalResamplingResult();
+        ScatterBackupTemporalResampling_storeEmptyResult();
         return;
     }
 
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir dstReservoir = lt_di_scatter_backup_temporal_resampling_stage(
+    RTXDI_DIReservoir dstReservoir = ScatterBackupTemporalResampling_run(
         pixel,
         currReconnectionData
     );
 
-    storeScatterBackupTemporalResamplingResult(dstReservoir, currReconnectionData);
+    ScatterBackupTemporalResampling_storeResult(dstReservoir, currReconnectionData);
 }

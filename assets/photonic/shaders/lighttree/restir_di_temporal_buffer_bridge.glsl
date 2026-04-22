@@ -105,6 +105,32 @@ layout(std430) restrict buffer ph_multi_scatter_temporal_resampling_sorted_reser
 };
 #endif
 
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
+layout(std430) restrict buffer ph_temporal_gather_shifted_paths {
+    vec4 ph_temporal_gather_shifted_paths_data[];
+};
+
+const uint LT_TEMPORAL_GATHER_SHIFT_COUNT = 8u;
+const uint LT_TEMPORAL_GATHER_SHIFTED_PATH_PACKED_VEC4_COUNT = 5u;
+
+uint lt_temporal_gather_shifted_path_pixel_index(ivec2 pixel)
+{
+    return uint(pixel.y * viewWidth + pixel.x);
+}
+
+uint lt_temporal_gather_shifted_path_record_index(ivec2 pixel, int offsetIndex)
+{
+    return lt_temporal_gather_shifted_path_pixel_index(pixel) * LT_TEMPORAL_GATHER_SHIFT_COUNT + uint(offsetIndex);
+}
+
+uint lt_temporal_gather_shifted_path_vec4_index(ivec2 pixel, int offsetIndex, uint vec4Index)
+{
+    return lt_temporal_gather_shifted_path_record_index(pixel, offsetIndex)
+        * LT_TEMPORAL_GATHER_SHIFTED_PATH_PACKED_VEC4_COUNT
+        + vec4Index;
+}
+#endif
+
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS) && defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
 void lt_temporal_scatter_append_contributor(ivec2 targetPixel, ivec2 sourceReservoirPos, float supportWeight)
 {

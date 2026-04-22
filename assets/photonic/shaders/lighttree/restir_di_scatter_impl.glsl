@@ -330,6 +330,80 @@ RAB_Surface lt_scatter_build_shifted_primary_surface(
     return shiftedSurface;
 }
 
+bool lt_scatter_update_shifted_reservoir(
+    ScatterReconnectionData sourceReconnection,
+    RTXDI_DIReservoir sourceReservoir,
+    bool sourcePreviousFrame,
+    bool targetPreviousFrame,
+    RAB_Surface targetSurface,
+    ivec2 targetPixel,
+    out LtScatterShiftedPath shifted,
+    out RTXDI_DIReservoir shiftedReservoir,
+    out ScatterReconnectionData shiftedReconnection,
+    out float shiftedJacobian);
+
+RAB_Surface lt_scatter_load_target_surface(
+    ivec2 pixel,
+    bool previousFrame)
+{
+    return previousFrame
+        ? lt_load_previous_surface(pixel)
+        : RAB_GetGBufferSurface(pixel, false);
+}
+
+bool lt_scatter_update_shifted_reservoir_to_previous_frame(
+    ScatterReconnectionData sourceReconnection,
+    RTXDI_DIReservoir sourceReservoir,
+    bool sourcePreviousFrame,
+    out LtScatterShiftedPath shifted,
+    out RTXDI_DIReservoir shiftedReservoir,
+    out ScatterReconnectionData shiftedReconnection,
+    out float shiftedJacobian)
+{
+    shifted = lt_scatter_empty_shifted_path();
+    shiftedReservoir = RTXDI_EmptyDIReservoir();
+    shiftedReconnection = scatter_empty_reconnection();
+    shiftedJacobian = 0.0f;
+
+    vec2 projectedPixel;
+    vec3 rayOrigin;
+    vec3 rayDirection;
+    float traceMaxDistance;
+    bool hitDistantLight;
+    if (!scatter_project_reconnection_to_previous_frame(
+            sourceReconnection,
+            projectedPixel,
+            rayOrigin,
+            rayDirection,
+            traceMaxDistance,
+            hitDistantLight)) {
+        return false;
+    }
+
+    ivec2 targetPixel = ivec2(floor(projectedPixel));
+    if (!lt_is_viewport_uv_in_bounds(targetPixel)) {
+        return false;
+    }
+
+    RAB_Surface targetSurface = lt_scatter_load_target_surface(targetPixel, true);
+    if (!RAB_IsSurfaceValid(targetSurface)) {
+        return false;
+    }
+
+    return lt_scatter_update_shifted_reservoir(
+        sourceReconnection,
+        sourceReservoir,
+        sourcePreviousFrame,
+        true,
+        targetSurface,
+        targetPixel,
+        shifted,
+        shiftedReservoir,
+        shiftedReconnection,
+        shiftedJacobian
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Shifted-reservoir update + evaluation.
 //
@@ -435,7 +509,11 @@ bool lt_scatter_update_shifted_reservoir(
     shiftedReservoir.targetPdf = targetPdf;
 
     vec3 shiftedIntegrand = max(lt_shade_surface_light_sample(shiftedPrimarySurface, shiftedLight), vec3(0.0f));
-    float secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(shiftedPrimarySurface, shiftedLight);
+    float secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
+        shiftedPrimarySurface,
+        shiftedReservoir,
+        shiftedLight
+    );
     shifted.radiance = shiftedIntegrand;
     shifted.secondaryPathJacobian = secondaryPathJacobian;
 
@@ -809,13 +887,10 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
     RTXDI_DIReservoir shiftedReservoir;
     ScatterReconnectionData shiftedReconnection;
     float shiftedJacobian;
-    if (!lt_scatter_update_shifted_reservoir(
+    if (!lt_scatter_update_shifted_reservoir_to_previous_frame(
             currSample.reconnectionData,
             currSample.reservoir,
             false,
-            true,
-            surface,
-            pixel,
             shiftedCurr,
             shiftedReservoir,
             shiftedReconnection,

@@ -20,8 +20,15 @@
 // implementation is consolidated elsewhere.
 
 #include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
+#include "/photonics/lighttree/restir_di_reconnection_surface.glsl"
+#include "/photonics/lighttree/restir_di_reconnection_packing.glsl"
+#include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
+#include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
+#include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
+#include "/photonics/lighttree/restir_di_scatter_impl.glsl"
+#include "/photonics/lighttree/restir_di_collect_temporal_stage.glsl"
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE)
+#if 0
 float CollectTemporalSamples_bilinear_weight(vec2 fractionalCoord, int x, int y)
 {
     return mix(float(1 - x), float(x), fractionalCoord.x)
@@ -50,18 +57,21 @@ ShiftedPathData CollectTemporalSamples_restore_shifted_path(
     ivec2 targetPixel,
     vec2 relativeSubPixel,
     ReservoirSplattingReconnectionData sourceReconnectionData,
-    LtTemporalGatherShiftedPathData packedShiftedPath)
+    vec3 packedRadiance,
+    float packedSecondaryPathJacobian,
+    float packedLensVertexJacobian,
+    float packedValid)
 {
     ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
     shiftedPath.fractionalPixel = vec2(targetPixel) + relativeSubPixel;
     shiftedPath.lensSample = sourceReconnectionData.lensSample;
     shiftedPath.firstRayDir = -sourceReconnectionData.firstWi;
     shiftedPath.subPixelJacobian = max(sourceReconnectionData.subPixelJacobian, 1e-10f);
-    shiftedPath.lensVertexJacobian = max(packedShiftedPath.lensVertexJacobian, 1e-10f);
-    shiftedPath.secondaryPathJacobian = max(packedShiftedPath.secondaryPathJacobian, 1e-10f);
-    shiftedPath.radiance = packedShiftedPath.radiance;
+    shiftedPath.lensVertexJacobian = max(packedLensVertexJacobian, 1e-10f);
+    shiftedPath.secondaryPathJacobian = max(packedSecondaryPathJacobian, 1e-10f);
+    shiftedPath.radiance = packedRadiance;
 
-    if (packedShiftedPath.valid <= 0.0f)
+    if (packedValid <= 0.0f)
     {
         return shiftedPath;
     }
@@ -142,8 +152,11 @@ void lt_di_collect_temporal_samples_stage(
     ivec2 currPixel)
 {
     vec2 prevPixel = lt_temporal_previous_pixel_center(currPixel) - vec2(0.5f);
-    if (any(lessThan(prevPixel, vec2(0.0f)))
-        || any(greaterThanEqual(prevPixel, vec2(viewWidth, viewHeight))))
+    if (any(lessThan(prevPixel, vec2(0.0f))))
+    {
+        return;
+    }
+    if (any(greaterThanEqual(prevPixel, vec2(viewWidth, viewHeight))))
     {
         return;
     }
@@ -193,10 +206,22 @@ void lt_di_collect_temporal_samples_stage(
                 - fractionalCoord;
 
             ivec2 requiredOffset = ivec2(0);
-            if (relativeSubPixel.x < 0.0f) requiredOffset.x += 1;
-            if (relativeSubPixel.x >= 1.0f) requiredOffset.x -= 1;
-            if (relativeSubPixel.y < 0.0f) requiredOffset.y += 1;
-            if (relativeSubPixel.y >= 1.0f) requiredOffset.y -= 1;
+            if (relativeSubPixel.x < 0.0f)
+            {
+                requiredOffset.x += 1;
+            }
+            if (relativeSubPixel.x >= 1.0f)
+            {
+                requiredOffset.x -= 1;
+            }
+            if (relativeSubPixel.y < 0.0f)
+            {
+                requiredOffset.y += 1;
+            }
+            if (relativeSubPixel.y >= 1.0f)
+            {
+                requiredOffset.y -= 1;
+            }
             relativeSubPixel += vec2(requiredOffset);
 
             ivec2 packedOffset = requiredOffset + ivec2(1);
@@ -208,22 +233,32 @@ void lt_di_collect_temporal_samples_stage(
             }
 
             ivec2 targetPixel = neighborPixel + requiredOffset;
-            ShiftedPathData shiftedPath = noShiftNeeded
-                ? CollectTemporalSamples_make_no_shift_path(
+            ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
+            float shiftedJacobian = 1.0f;
+            if (noShiftNeeded)
+            {
+                shiftedPath = CollectTemporalSamples_make_no_shift_path(
                     neighborPixel,
                     neighborReservoir,
                     neighborReconnectionData
-                )
-                : CollectTemporalSamples_restore_shifted_path(
+                );
+            }
+            else
+            {
+                LtTemporalGatherShiftedPathData packedShiftedPath =
+                    scatter_load_gather_shifted_path_data(neighborPixel, packedOffsetIndex);
+                shiftedPath = CollectTemporalSamples_restore_shifted_path(
                     targetPixel,
                     relativeSubPixel,
                     neighborReconnectionData,
-                    scatter_load_gather_shifted_path_data(neighborPixel, packedOffsetIndex)
+                    packedShiftedPath.radiance,
+                    packedShiftedPath.secondaryPathJacobian,
+                    packedShiftedPath.lensVertexJacobian,
+                    packedShiftedPath.valid
                 );
-            float shiftedJacobian = noShiftNeeded
-                ? 1.0f
-                : shiftedPath.secondaryPathJacobian
+                shiftedJacobian = shiftedPath.secondaryPathJacobian
                     / max(neighborReconnectionData.secondaryPathJacobian, 1e-10f);
+            }
 
             float sourceWeight = bilinearWeight
                 * lt_scatter_radiance_phat(sourceIntegrand)

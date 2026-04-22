@@ -43,8 +43,8 @@ bool RestirDI_restoreReconnectionRadiometry(
     }
 
     reconnection.lightPdf = scatter_resolve_light_pdf(reservoir, lightSample);
-    reconnection.irradiance = scatter_resolve_irradiance(surface, lightSample);
-    reconnection.earlyThroughput = scatter_resolve_early_throughput(surface, lightSample);
+    reconnection.irradiance = scatter_resolve_irradiance(surface, reservoir, lightSample);
+    reconnection.earlyThroughput = scatter_resolve_early_throughput(surface, reservoir, lightSample);
     return true;
 }
 

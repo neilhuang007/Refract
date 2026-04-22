@@ -20,7 +20,7 @@ layout(location = 5) out vec4 temporal_gather_intermediate_reconnection1_frag_ou
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
-#include "/photonics/lighttree/restir_di_temporal_impl.glsl"
+#include "/photonics/lighttree/ReservoirSplatting/CollectTemporalSamples.glsl"
 
 void CollectTemporalSamples_storeEmptyResult()
 {
@@ -34,7 +34,7 @@ void CollectTemporalSamples_storeEmptyResult()
 
 void CollectTemporalSamples_execute(ivec2 currPixel)
 {
-    lt_di_collect_temporal_samples_stage(currPixel);
+    CollectTemporalSamples_run(currPixel);
 }
 
 void main()
@@ -56,4 +56,3 @@ void main()
 
     CollectTemporalSamples_execute(currPixel);
 }
-

@@ -11,7 +11,7 @@ layout(location = 3) out vec4 reconnection0_frag_out;
 layout(location = 4) out vec4 reconnection1_frag_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/ReservoirSplatting/ScatterTemporalResampling.glsl"
 
 void ScatterTemporalResampling_storeResult(
     RTXDI_DIReservoir reservoir,
@@ -54,7 +54,7 @@ void ScatterTemporalResampling_storeEmptyResult()
 void ScatterTemporalResampling_execute(ivec2 pixel)
 {
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir currReservoir = lt_di_scatter_temporal_resampling_stage(pixel, currReconnectionData);
+    RTXDI_DIReservoir currReservoir = ScatterTemporalResampling_run(pixel, currReconnectionData);
     ScatterTemporalResampling_storeResult(currReservoir, currReconnectionData);
 }
 

@@ -18,7 +18,7 @@ void ResolveReSTIR_load_curr_reservoir(
         lt_get_final_shading_input_buffer_index()
     );
 
-    currReconnectionData = SpatialResampling_load_input_reconnection(reservoirPosition, currReservoir);
+    currReconnectionData = ReservoirSplattingReconnectionData_init();
 }
 
 float ResolveReSTIR_computeUCW(
@@ -26,16 +26,6 @@ float ResolveReSTIR_computeUCW(
     ReservoirSplattingReconnectionData currReconnectionData)
 {
     return PathReservoir_computeStoredUCW(currReservoir);
-}
-
-vec3 ResolveReSTIR_load_integrand(ReservoirSplattingReconnectionData currReconnectionData)
-{
-    return vec3(0.0f);
-}
-
-vec3 ResolveReSTIR_load_integrand(RTXDI_DIReservoir currReservoir)
-{
-    return PathReservoir_getIntegrand(currReservoir);
 }
 
 vec3 ResolveReSTIR(
@@ -46,8 +36,8 @@ vec3 ResolveReSTIR(
         return vec3(0.0f);
     }
 
-    vec3 integrand = ResolveReSTIR_load_integrand(currReservoir);
-    return integrand * ResolveReSTIR_computeUCW(currReservoir, currReconnectionData);
+    return PathReservoir_getIntegrand(currReservoir)
+        * ResolveReSTIR_computeUCW(currReservoir, currReconnectionData);
 }
 
 #endif

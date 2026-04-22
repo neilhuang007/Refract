@@ -1,15 +1,15 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE 1
+
 in vec4 direction_vert_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/ReservoirSplatting/ReprojectTemporalSamples.glsl"
 
-void run(ivec2 pixel)
+void ReprojectTemporalSamples_execute(ivec2 pixel)
 {
-    lt_di_reproject_temporal_samples_stage(pixel);
+    ReprojectTemporalSamples_run(pixel);
 }
 
 void main()
@@ -27,5 +27,5 @@ void main()
         return;
     }
 
-    run(pixel);
+    ReprojectTemporalSamples_execute(pixel);
 }

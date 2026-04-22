@@ -10,22 +10,45 @@ float scatter_resolve_light_pdf(RTXDI_DIReservoir reservoir, RAB_LightSample lig
     return max(lightSample.solidAnglePdf, 0.0f);
 }
 
-vec3 scatter_resolve_irradiance(RAB_Surface surface, RAB_LightSample lightSample)
+vec3 scatter_resolve_visibility(RTXDI_DIReservoir reservoir)
 {
-    if (lightSample.index < 0) {
-        return vec3(0.0f);
-    }
-
-    return lt_light_sample_incident_radiance(surface, lightSample);
+    return max(rtxdi_unpack_visibility(reservoir.packedVisibility), vec3(0.0f));
 }
 
-vec3 scatter_resolve_early_throughput(RAB_Surface surface, RAB_LightSample lightSample)
+vec3 scatter_resolve_irradiance(
+    RAB_Surface surface,
+    RTXDI_DIReservoir reservoir,
+    RAB_LightSample lightSample)
 {
-    if (lightSample.index < 0) {
+    if (!RTXDI_IsValidDIReservoir(reservoir) || lightSample.index < 0) {
         return vec3(0.0f);
     }
 
-    return vec3(1.0f);
+    return max(
+        lt_light_sample_incident_radiance(surface, lightSample)
+            * scatter_resolve_visibility(reservoir),
+        vec3(0.0f)
+    );
+}
+
+vec3 scatter_resolve_early_throughput(
+    RAB_Surface surface,
+    RTXDI_DIReservoir reservoir,
+    RAB_LightSample lightSample)
+{
+    if (!RTXDI_IsValidDIReservoir(reservoir) || lightSample.index < 0) {
+        return vec3(0.0f);
+    }
+
+    LightBrdf brdf = lt_evaluate_surface_brdf_with_view(
+        surface,
+        lightSample.dir,
+        surface.viewDir
+    );
+    return max(
+        brdf.demodulatedDiffuse * surface.material.diffuseAlbedo + brdf.specular,
+        vec3(0.0f)
+    );
 }
 
 float scatter_resolve_secondary_path_jacobian_from_reconnection(
@@ -52,15 +75,18 @@ float scatter_resolve_secondary_path_jacobian_from_reconnection(
     return clamp((cosSurface * irradianceScale) / (distanceSq * throughputScale), 1e-4f, 1e4f);
 }
 
-float scatter_resolve_secondary_path_jacobian(RAB_Surface surface, RAB_LightSample lightSample)
+float scatter_resolve_secondary_path_jacobian(
+    RAB_Surface surface,
+    RTXDI_DIReservoir reservoir,
+    RAB_LightSample lightSample)
 {
     if (lightSample.index < 0) {
         return 1.0f;
     }
 
     vec3 secondPos = lightSample.position;
-    vec3 earlyThroughput = scatter_resolve_early_throughput(surface, lightSample);
-    vec3 irradiance = scatter_resolve_irradiance(surface, lightSample);
+    vec3 earlyThroughput = scatter_resolve_early_throughput(surface, reservoir, lightSample);
+    vec3 irradiance = scatter_resolve_irradiance(surface, reservoir, lightSample);
     return scatter_resolve_secondary_path_jacobian_from_reconnection(
         surface,
         lightSample,
@@ -111,8 +137,8 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
 {
     ReservoirSplattingReconnectionData d = ReservoirSplattingReconnectionData_init();
     vec4 identityData = scatter_load_surface_identity(pixelPosition, false);
-    vec3 irradiance = scatter_resolve_irradiance(surface, lightSample);
-    vec3 earlyThroughput = scatter_resolve_early_throughput(surface, lightSample);
+    vec3 irradiance = scatter_resolve_irradiance(surface, reservoir, lightSample);
+    vec3 earlyThroughput = scatter_resolve_early_throughput(surface, reservoir, lightSample);
     vec3 secondPos = (lightSample.index >= 0) ? lightSample.position : surface.worldPos;
     bool lightIsAnalytic = (lightSample.index >= 0) && RAB_IsAnalyticLightSample(lightSample);
 

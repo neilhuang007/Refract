@@ -68,6 +68,68 @@ struct ShiftedPathData {
     vec3 radiance;
 };
 
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
+ShiftedPathData lt_temporal_load_shifted_path(ivec2 pixel, int offsetIndex)
+{
+    ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
+    vec4 packed0 = ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 0u)
+    ];
+    vec4 packed1 = ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 1u)
+    ];
+    vec4 packed2 = ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 2u)
+    ];
+    vec4 packed3 = ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 3u)
+    ];
+    vec4 packed4 = ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 4u)
+    ];
+
+    shiftedPath.primaryHit.worldPos = packed0.xyz;
+    shiftedPath.primaryHit.viewDepth = packed0.w;
+    shiftedPath.primaryHit.faceId = floatBitsToUint(packed1.x);
+    shiftedPath.fractionalPixel = packed1.yz;
+    shiftedPath.lensSample = vec2(packed1.w, packed2.x);
+    shiftedPath.firstRayDir = packed2.yzw;
+    shiftedPath.subPixelJacobian = packed3.x;
+    shiftedPath.lensVertexJacobian = packed3.y;
+    shiftedPath.secondaryPathJacobian = packed3.z;
+    shiftedPath.radiance = packed4.xyz;
+    return shiftedPath;
+}
+
+void lt_temporal_store_shifted_path(ivec2 pixel, int offsetIndex, ShiftedPathData shiftedPath)
+{
+    ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 0u)
+    ] = vec4(shiftedPath.primaryHit.worldPos, shiftedPath.primaryHit.viewDepth);
+    ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 1u)
+    ] = vec4(
+        uintBitsToFloat(shiftedPath.primaryHit.faceId),
+        shiftedPath.fractionalPixel,
+        shiftedPath.lensSample.x
+    );
+    ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 2u)
+    ] = vec4(shiftedPath.lensSample.y, shiftedPath.firstRayDir);
+    ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 3u)
+    ] = vec4(
+        shiftedPath.subPixelJacobian,
+        shiftedPath.lensVertexJacobian,
+        shiftedPath.secondaryPathJacobian,
+        0.0f
+    );
+    ph_temporal_gather_shifted_paths_data[
+        lt_temporal_gather_shifted_path_vec4_index(pixel, offsetIndex, 4u)
+    ] = vec4(shiftedPath.radiance, 0.0f);
+}
+#endif
+
 ShiftedPathData gatherLensVertexCopyShift(
     inout RTXDI_RandomSamplerState rng,
     ReservoirSplattingReconnectionData reconnectionData,

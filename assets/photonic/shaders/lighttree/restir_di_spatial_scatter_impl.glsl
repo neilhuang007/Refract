@@ -242,6 +242,7 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
         hitPosW, hitNormalW, cameraPosW, rayDir, camForward);
     shifted.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
         landingSurface,
+        sourceReservoir,
         lt_decode_reservoir_sample_for_frame(sourceReservoir, landingSurface, false, false)
     );
 
@@ -347,6 +348,7 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
         primaryHitPosW, primaryHitNormalW, cameraPosW, rayDir, camForward);
     shifted.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
         shiftedSurface,
+        sourceReservoir,
         lt_decode_reservoir_sample_for_frame(sourceReservoir, shiftedSurface, false, false)
     );
 
