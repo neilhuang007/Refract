@@ -3,7 +3,10 @@
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
+#include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
+#include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
+#include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 
 const ivec2 kRobustReuseOptimizationOffsets[8] = ivec2[8](
     ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1),

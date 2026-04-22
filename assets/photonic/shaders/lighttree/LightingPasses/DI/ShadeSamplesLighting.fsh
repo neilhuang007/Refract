@@ -43,15 +43,10 @@ void main()
         pixel, int(runtimeParameters.activeCheckerboardField));
 
     RTXDI_DIReservoir currReservoir;
-    ReservoirSplattingReconnectionData currReconnectionData;
-    ResolveReSTIR_load_curr_reservoir(
-        reservoirPosition,
-        currReservoir,
-        currReconnectionData
-    );
+    ResolveReSTIR_load_curr_reservoir(reservoirPosition, currReservoir);
 
     float shadingHitDistance = max(surface.viewDepth, 0.0f);
-    vec3 color = ResolveReSTIR(currReservoir, currReconnectionData);
+    vec3 color = ResolveReSTIR(currReservoir);
 
     if (lt_build_restir_di_parameters().shadingParams.enableDenoiserInputPacking != 0u) {
         direct_diffuse_frag_out = nrd_pack_direct_signal(color, shadingHitDistance);

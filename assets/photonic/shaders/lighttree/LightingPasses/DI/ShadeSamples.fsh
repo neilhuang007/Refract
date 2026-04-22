@@ -295,15 +295,13 @@ void main() {
     //   outputColor[pixel] = float4(color, 1);
     // ------------------------------------------------------------------
     RTXDI_DIReservoir currReservoir;
-    ReservoirSplattingReconnectionData currReconnectionData;
     ResolveReSTIR_load_curr_reservoir(
         reservoirPosition,
-        currReservoir,
-        currReconnectionData
+        currReservoir
     );
 
     float shadingHitDistance = lt_resolve_shading_hit_distance(surface);
-    vec3 color = ResolveReSTIR(currReservoir, currReconnectionData);
+    vec3 color = ResolveReSTIR(currReservoir);
 
     if (restirDI.shadingParams.enableDenoiserInputPacking != 0u) {
         direct_diffuse_frag_out = nrd_pack_direct_signal(color, shadingHitDistance);
