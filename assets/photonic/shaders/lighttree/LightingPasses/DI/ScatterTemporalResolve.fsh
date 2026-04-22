@@ -43,7 +43,7 @@ void ScatterTemporalResampling_storeResult(
 
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(reservoir, transportAux0, transportAux1);
+    reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
 void ScatterTemporalResampling_storeEmptyResult()

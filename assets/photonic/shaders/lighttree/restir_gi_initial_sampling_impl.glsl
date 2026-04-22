@@ -123,25 +123,25 @@ bool CandidateReservoir_addVertex(
     int lightIndex,
     vec2 sampleUv,
     float sampleMIS,
+    vec3 sampleIntegrand,
     float sampleTargetPdf,
     float sampleInvSourcePdf,
     vec2 pixelSampleUV,
     vec2 lensSampleUV,
     uint pathSample)
 {
-    float samplePHat = sampleTargetPdf;
+    float samplePHat = ph_luminance(max(sampleIntegrand, vec3(0.0f)));
     float sampleWeight = sampleMIS * samplePHat;
     sampleWeight = isnan(sampleWeight) ? 0.0f : sampleWeight;
 
-    candidateReservoir.M += 1.0f;
-    candidateReservoir.weightSum += sampleWeight;
-    bool selected = (random * candidateReservoir.weightSum < sampleWeight);
+    PathReservoir_setConfidence(candidateReservoir, PathReservoir_getConfidence(candidateReservoir) + 1.0f);
+    PathReservoir_setTotalWeight(candidateReservoir, PathReservoir_getTotalWeight(candidateReservoir) + sampleWeight);
+    bool selected = (random * PathReservoir_getTotalWeight(candidateReservoir) < sampleWeight);
     if (selected) {
         rtxdi_set_light_index(candidateReservoir, lightIndex);
         rtxdi_set_sample_uv(candidateReservoir, sampleUv);
         candidateReservoir.targetPdf = sampleTargetPdf;
-        candidateReservoir.transportAux0 = 0.0f;
-        candidateReservoir.transportAux1 = 0.0f;
+        PathReservoir_setIntegrand(candidateReservoir, sampleIntegrand);
         candidateReservoir.pixelSampleUV = pixelSampleUV;
         candidateReservoir.lensSampleUV  = lensSampleUV;
         candidateReservoir.pathSample    = pathSample;
@@ -151,8 +151,7 @@ bool CandidateReservoir_addVertex(
 
 float CandidateReservoir_computeUCW(RTXDI_DIReservoir candidateReservoir)
 {
-    float pHat = candidateReservoir.targetPdf;
-    return (pHat == 0.0f) ? 0.0f : candidateReservoir.weightSum / pHat;
+    return PathReservoir_computeStoredUCW(candidateReservoir);
 }
 
 bool PathReservoir_add(
@@ -161,11 +160,11 @@ bool PathReservoir_add(
     float sampleMIS,
     RTXDI_DIReservoir candidateReservoir)
 {
-    float weight = sampleMIS * candidateReservoir.weightSum;
-    pathReservoir.weightSum += weight;
-    pathReservoir.M = min(pathReservoir.M + 1.0f, SCATTER_RECONNECTION_CONFIDENCE_MAX);
+    float weight = sampleMIS * PathReservoir_getTotalWeight(candidateReservoir);
+    PathReservoir_setTotalWeight(pathReservoir, PathReservoir_getTotalWeight(pathReservoir) + weight);
+    PathReservoir_setConfidence(pathReservoir, PathReservoir_getConfidence(pathReservoir) + 1.0f);
 
-    bool selected = (random * pathReservoir.weightSum < weight);
+    bool selected = (random * PathReservoir_getTotalWeight(pathReservoir) < weight);
     if (selected) {
         pathReservoir.lightData = candidateReservoir.lightData;
         pathReservoir.uvData = candidateReservoir.uvData;
@@ -173,6 +172,7 @@ bool PathReservoir_add(
         pathReservoir.packedVisibility = candidateReservoir.packedVisibility;
         pathReservoir.age = candidateReservoir.age;
         pathReservoir.spatialDistance = candidateReservoir.spatialDistance;
+        pathReservoir.canonicalWeight = candidateReservoir.canonicalWeight;
         pathReservoir.transportAux0 = candidateReservoir.transportAux0;
         pathReservoir.transportAux1 = candidateReservoir.transportAux1;
         pathReservoir.pixelSampleUV = candidateReservoir.pixelSampleUV;
@@ -184,8 +184,7 @@ bool PathReservoir_add(
 
 float PathReservoir_computeUCW(RTXDI_DIReservoir pathReservoir)
 {
-    float pHat = pathReservoir.targetPdf;
-    return (pHat == 0.0f) ? 0.0f : pathReservoir.weightSum / pHat;
+    return PathReservoir_computeStoredUCW(pathReservoir);
 }
 
 // RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)
@@ -685,6 +684,7 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
             misData.brdfMisWeight,
             initialSamplingParams.brdfCutoff);
         float targetPdf = RAB_GetLightSampleTargetPdfForSurface(candidateSample, surface);
+        vec3 sampleIntegrand = max(lt_shade_surface_light_sample(surface, candidateSample), vec3(0.0f));
         float risRnd = lt_next_random(rng);
 
         if (blendedSourcePdf == 0.0f)
@@ -706,6 +706,7 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
             int(lightIndex),
             uv,
             1.0f / blendedSourcePdf,
+            sampleIntegrand,
             targetPdf,
             1.0f / blendedSourcePdf,
             candidatePixelSample,
@@ -822,6 +823,7 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surfa
         vec2 sampleUv = vec2(0.0f);
         RAB_LightSample brdfSample = light_sample_new_at_position(hitLight, sampledPosition, surface);
         float targetPdf = brdfSample.weight;
+        vec3 sampleIntegrand = max(lt_shade_surface_light_sample(surface, brdfSample), vec3(0.0f));
         if (targetPdf <= 0.0)
         {
             continue;
@@ -871,6 +873,7 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surfa
             brdfSample.index,
             sampleUv,
             1.0f / blendedSourcePdf,
+            sampleIntegrand,
             targetPdf,
             1.0f / blendedSourcePdf,
             candidatePixelSample,

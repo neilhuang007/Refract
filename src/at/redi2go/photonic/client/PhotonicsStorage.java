@@ -54,7 +54,7 @@ public final class PhotonicsStorage {
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
    public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "regir_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
-   public static final Parameter<String> RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE = stringParam("restir_temporal_scatter_isolation_mode", "off");
+   public static final Parameter<String> RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE = stringParam("restir_temporal_scatter_isolation_mode", "scatter_only");
    // Performance tuning — individual per-parameter overrides.
    // A value of -1 means "use shaderpack default" (auto).  Any positive
    // value overrides the shaderpack setting at runtime.
@@ -212,13 +212,17 @@ public final class PhotonicsStorage {
 
    public static String normalizeTemporalScatterIsolationMode(String isolationMode) {
       if (isolationMode == null) {
-         return "off";
+         return "scatter_only";
       }
 
       return switch (isolationMode.trim().toLowerCase(Locale.ROOT)) {
-         case "", "0", "off", "disabled", "none", "1", "ownership", "ownership_append", "ownership-append", "disable_ownership_append", "2", "backup", "backup_gather", "backup-gather", "disable_backup_gather", "3", "scatter", "scatter_merge", "scatter-merge", "disable_scatter_merge", "4", "bypass", "resolve", "resolve_bypass", "resolve-bypass", "disable_resolve" -> "off";
+         case "", "0", "scatter_only", "scatter-only", "scatter", "scatter_merge", "scatter-merge", "default", "splat", "splat_only", "splat-only" -> "scatter_only";
+         case "1", "off", "gather", "gather_only", "gather-only", "legacy", "robust_gather", "robust-gather" -> "off";
+         case "2", "ownership_only", "ownership-only", "ownership", "ownership_append", "ownership-append" -> "ownership_only";
+         case "3", "scatter_backup", "scatter-backup", "backup", "backup_gather", "backup-gather" -> "scatter_backup";
+         case "4", "multi_scatter", "multi-scatter", "multi", "multi_splat", "multi-splat" -> "multi_scatter";
          case "5", "temporal_off", "temporal-off", "disable_temporal", "full_bypass", "full-bypass", "canonical" -> "temporal_off";
-         default -> "off";
+         default -> "scatter_only";
       };
    }
 

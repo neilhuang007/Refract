@@ -15,6 +15,46 @@ struct RTXDI_DIReservoir {
     uint pathSample;
 };
 
+vec3 PathReservoir_getIntegrand(RTXDI_DIReservoir reservoir) {
+    return max(
+        vec3(
+            reservoir.canonicalWeight,
+            reservoir.transportAux0,
+            reservoir.transportAux1
+        ),
+        vec3(0.0f)
+    );
+}
+
+void PathReservoir_setIntegrand(inout RTXDI_DIReservoir reservoir, vec3 integrand) {
+    vec3 clampedIntegrand = max(integrand, vec3(0.0f));
+    reservoir.canonicalWeight = clampedIntegrand.x;
+    reservoir.transportAux0 = clampedIntegrand.y;
+    reservoir.transportAux1 = clampedIntegrand.z;
+}
+
+float PathReservoir_getConfidence(RTXDI_DIReservoir reservoir) {
+    return clamp(max(reservoir.M, 0.0f), 0.0f, 20.0f);
+}
+
+void PathReservoir_setConfidence(inout RTXDI_DIReservoir reservoir, float confidence) {
+    reservoir.M = clamp(confidence, 0.0f, 20.0f);
+}
+
+float PathReservoir_getTotalWeight(RTXDI_DIReservoir reservoir) {
+    return max(reservoir.weightSum, 0.0f);
+}
+
+void PathReservoir_setTotalWeight(inout RTXDI_DIReservoir reservoir, float totalWeight) {
+    reservoir.weightSum = max(totalWeight, 0.0f);
+}
+
+float PathReservoir_computeStoredUCW(RTXDI_DIReservoir reservoir) {
+    vec3 integrand = PathReservoir_getIntegrand(reservoir);
+    float pHat = ph_luminance(integrand);
+    return (pHat <= 0.0f) ? 0.0f : PathReservoir_getTotalWeight(reservoir) / pHat;
+}
+
 RTXDI_DIReservoir RTXDI_EmptyDIReservoir();
 bool RTXDI_IsValidDIReservoir(RTXDI_DIReservoir reservoir);
 

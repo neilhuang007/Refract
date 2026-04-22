@@ -9,9 +9,9 @@ layout(location = 4) out vec4 reconnection1_frag_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
-#include "/photonics/lighttree/di_initial_candidates_stage_impl.glsl"
+#include "/photonics/lighttree/initial_candidates_stage.glsl"
 
 void main()
 {
-    run(tex_coord);
+    InitialCandidates_run(ivec2(gl_FragCoord.xy));
 }

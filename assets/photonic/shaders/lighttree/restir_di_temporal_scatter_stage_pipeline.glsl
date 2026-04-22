@@ -44,7 +44,7 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
     RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
     ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
     ReservoirSplattingReconnectionData currReconnectionDataLocal = currSample.reconnectionData;
-    vec3 currIntegrand = currSample.isValid ? scatter_reconnection_integrand(currReconnectionDataLocal) : vec3(0.0f);
+    vec3 currIntegrand = currSample.isValid ? PathReservoir_getIntegrand(currReservoir) : vec3(0.0f);
     float currReservoirConfidence = currSample.confidence;
     float currUCW = currSample.isValid ? lt_scatter_compute_ucw(currReservoir, currIntegrand) : 0.0f;
 
@@ -55,7 +55,7 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
     );
     bool currSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
-        dstReservoir.M,
+        currReservoirConfidence,
         currSampleMIS,
         currIntegrand,
         1.0f,
@@ -66,7 +66,7 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
     );
     dstReconnectionData = currSelected ? currReconnectionDataLocal : dstReconnectionData;
 
-    float newConfidence = dstReservoir.M;
+    float newConfidence = currReservoirConfidence;
 
     uint numReservoirs = lt_reproject_temporal_samples_cell_counter_value(reservoirIdx);
     uint cellOffset = lt_scatter_temporal_resampling_cell_offset_value(reservoirIdx);
@@ -85,7 +85,7 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
         );
     }
 
-    dstReservoir.M = ScatterTemporalResampling_motion_vector_confidence(pixel, newConfidence);
+    PathReservoir_setConfidence(dstReservoir, ScatterTemporalResampling_motion_vector_confidence(pixel, newConfidence));
     currReconnectionData = dstReconnectionData;
     return dstReservoir;
 }

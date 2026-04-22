@@ -55,7 +55,7 @@ void lt_di_store_collect_temporal_sample_result(
 
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(reservoir, transportAux0, transportAux1);
+    intermediate_reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
 void lt_di_collect_temporal_samples_stage(
@@ -160,7 +160,7 @@ bool lt_di_gather_temporal_load_current_sample(
     currReconnectionData = lt_di_load_current_proposal_reconnection(pixel);
     currConfidence = lt_scatter_reservoir_confidence(currReservoir, currReconnectionData);
     return RTXDI_IsValidDIReservoir(currReservoir)
-        && any(greaterThan(scatter_reconnection_integrand(currReconnectionData), vec3(0.0f)));
+        && ph_luminance(PathReservoir_getIntegrand(currReservoir)) > 0.0f;
 }
 
 bool lt_di_gather_temporal_load_previous_sample(
@@ -173,7 +173,7 @@ bool lt_di_gather_temporal_load_previous_sample(
     prevReconnectionData = RestirDI_loadGatherIntermediateReconnection(pixel);
     prevConfidence = lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
     return RTXDI_IsValidDIReservoir(prevReservoir)
-        && any(greaterThan(scatter_reconnection_integrand(prevReconnectionData), vec3(0.0f)));
+        && ph_luminance(PathReservoir_getIntegrand(prevReservoir)) > 0.0f;
 }
 
 float lt_di_gather_temporal_current_sample_mis(
@@ -251,7 +251,7 @@ bool lt_di_gather_temporal_add_current_sample(
 {
     float currSampleMIS = 0.0f;
     vec3 currPHat = vec3(0.0f);
-    vec3 currIntegrand = scatter_reconnection_integrand(currReconnectionData);
+    vec3 currIntegrand = PathReservoir_getIntegrand(currReservoir);
     if (any(greaterThan(currIntegrand, vec3(0.0f))))
     {
         currPHat = currIntegrand;
@@ -302,7 +302,7 @@ bool lt_di_gather_temporal_add_previous_sample(
     float prevSampleMIS = 0.0f;
     vec3 prevPHat = vec3(0.0f);
     float shiftedJacobian = 1.0f;
-    vec3 prevIntegrand = scatter_reconnection_integrand(prevReconnectionData);
+    vec3 prevIntegrand = PathReservoir_getIntegrand(prevReservoir);
     if (any(greaterThan(prevIntegrand, vec3(0.0f))))
     {
         LtTemporalGatherShiftedPathData shiftedPrev = scatter_load_gather_shifted_path_data(pixel, shiftedPathIndex);

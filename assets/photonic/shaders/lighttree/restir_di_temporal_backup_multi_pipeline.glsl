@@ -58,7 +58,7 @@ bool lt_multi_scatter_process_contributor(
         prevMIS,
         shiftedPrev.radiance,
         shiftedJacobian * (1.0f / float(lt_multi_temporal_partition_count())),
-        lt_scatter_compute_ucw(shiftedReservoir, shiftedPrev.radiance),
+        lt_scatter_compute_ucw(prevReservoir, scatter_reconnection_integrand(prevReconnection)),
         lt_scatter_reservoir_confidence(prevReservoir, prevReconnection),
         shiftedReservoir,
         sg

@@ -97,17 +97,14 @@ void scatter_pack_reconnection_fields(
     packedMeta |= (secondBSDFComponentType & SCATTER_RECONNECTION_SECOND_BSDF_MASK) << SCATTER_RECONNECTION_SECOND_BSDF_SHIFT;
     packedMeta |= transmissionBit << 16u;
 
-    transportAux0 = scatter_pack_reconnection_proposal_pdf(lightPdf);
-    transportAux1 = scatter_pack_half2(vec2(
-        clamp(time, 0.0f, 1.0f),
-        clamp(ph_luminance(max(irradiance, vec3(0.0f))), 0.0f, 65504.0f)
-    ));
+    transportAux0 = 0.0f;
+    transportAux1 = 0.0f;
 
     data0 = vec4(firstHitWorldPos, firstHitViewDepth);
     data1 = vec4(
         scatter_pack_half2(vec2(
             clamp(lightPdf, 0.0f, 65504.0f),
-            clamp(subPixelJacobian, 0.0f, 65504.0f)
+            clamp(time, 0.0f, 1.0f)
         )),
         uintBitsToFloat(packedMeta),
         scatter_pack_half2(clamp(subPixel, vec2(0.0f), vec2(1.0f))),
@@ -128,19 +125,19 @@ void scatter_unpack_reconnection(
 {
     uint packedMeta;
     uint packedFlags;
-    vec2 packedTimeIrradiance;
+    vec2 packedLightPdfTime;
     vec2 packedJacobians;
 
     packedMeta = floatBitsToUint(data1.y);
     packedFlags = (packedMeta >> SCATTER_RECONNECTION_FLAGS_SHIFT) & SCATTER_RECONNECTION_FLAGS_MASK;
-    packedTimeIrradiance = scatter_unpack_half2(transportAux1);
+    packedLightPdfTime = scatter_unpack_half2(data1.x);
     packedJacobians = scatter_unpack_half2(data1.w);
     d = ReservoirSplattingReconnectionData_init();
 
     d.firstHit.worldPos = data0.xyz;
     d.firstHit.viewDepth = data0.w;
     d.firstHit.faceId = (packedMeta >> SCATTER_RECONNECTION_FACE_SHIFT) & SCATTER_RECONNECTION_FACE_MASK;
-    d.lightPdf = scatter_unpack_reconnection_proposal_pdf(transportAux0);
+    d.lightPdf = scatter_unpack_reconnection_proposal_pdf(max(packedLightPdfTime.x, 0.0f));
     d.lightIsNEE = (packedFlags & SCATTER_RECONNECTION_FLAG_LIGHT_IS_NEE) != 0u;
     d.lightIsDistant = (packedFlags & SCATTER_RECONNECTION_FLAG_LIGHT_IS_DISTANT) != 0u;
     d.pathLength = (packedMeta >> SCATTER_RECONNECTION_PATH_LENGTH_SHIFT) & SCATTER_RECONNECTION_PATH_LENGTH_MASK;
@@ -149,7 +146,7 @@ void scatter_unpack_reconnection(
     d.transmissionEvent = ((packedMeta >> 16u) & 0x1u) != 0u;
     d.subPixel = clamp(scatter_unpack_half2(data1.z), vec2(0.0f), vec2(1.0f));
     d.lensSample = clamp(rtxdi_unpack_sample_uv(floatBitsToUint(sampleData.z)), vec2(0.0f), vec2(1.0f));
-    d.time = clamp(packedTimeIrradiance.x, 0.0f, 1.0f);
+    d.time = clamp(packedLightPdfTime.y, 0.0f, 1.0f);
     d.subPixelJacobian = max(packedJacobians.x, 1e-10f);
     d.secondaryPathJacobian = max(packedJacobians.y, 1e-10f);
     d.firstWi = normalize(world_camera_position - d.firstHit.worldPos);
@@ -159,7 +156,7 @@ void scatter_unpack_reconnection(
     d.secondHit = ReservoirSplattingHitInfo_empty();
     d.secondHit.faceId = d.firstHit.faceId;
     d.secondWo = vec3(0.0f);
-    d.irradiance = vec3(max(packedTimeIrradiance.y, 0.0f));
+    d.irradiance = vec3(0.0f);
     d.earlyThroughput = vec3(1.0f);
 }
 

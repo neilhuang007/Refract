@@ -25,13 +25,17 @@ float ResolveReSTIR_computeUCW(
     RTXDI_DIReservoir currReservoir,
     ReservoirSplattingReconnectionData currReconnectionData)
 {
-    float pHat = ph_luminance(scatter_reconnection_integrand(currReconnectionData));
-    return (pHat == 0.0f) ? 0.0f : max(currReservoir.weightSum, 0.0f) / pHat;
+    return PathReservoir_computeStoredUCW(currReservoir);
 }
 
 vec3 ResolveReSTIR_load_integrand(ReservoirSplattingReconnectionData currReconnectionData)
 {
-    return scatter_reconnection_integrand(currReconnectionData);
+    return vec3(0.0f);
+}
+
+vec3 ResolveReSTIR_load_integrand(RTXDI_DIReservoir currReservoir)
+{
+    return PathReservoir_getIntegrand(currReservoir);
 }
 
 vec3 ResolveReSTIR(
@@ -42,7 +46,7 @@ vec3 ResolveReSTIR(
         return vec3(0.0f);
     }
 
-    vec3 integrand = ResolveReSTIR_load_integrand(currReconnectionData);
+    vec3 integrand = ResolveReSTIR_load_integrand(currReservoir);
     return integrand * ResolveReSTIR_computeUCW(currReservoir, currReconnectionData);
 }
 

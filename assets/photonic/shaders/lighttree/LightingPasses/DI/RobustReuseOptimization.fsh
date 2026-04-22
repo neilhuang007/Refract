@@ -99,7 +99,7 @@ void run(ivec2 pixel)
     );
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(prevReservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(prevReservoir);
-    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(prevReservoir, transportAux0, transportAux1);
+    intermediate_reservoir_meta_frag_out = PathReservoir_packMeta(prevReservoir);
 
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(surface) || !RTXDI_IsValidDIReservoir(prevReservoir) || prevReservoir.M <= 0.0f)

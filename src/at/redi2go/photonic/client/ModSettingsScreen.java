@@ -330,15 +330,24 @@ public class ModSettingsScreen extends Screen {
 
    private static String getNextTemporalScatterIsolationMode(String isolationMode) {
       return switch (PhotonicsStorage.normalizeTemporalScatterIsolationMode(isolationMode)) {
-         case "temporal_off" -> "off";
-         default -> "temporal_off";
+         case "scatter_only" -> "off";
+         case "off" -> "ownership_only";
+         case "ownership_only" -> "scatter_backup";
+         case "scatter_backup" -> "multi_scatter";
+         case "multi_scatter" -> "temporal_off";
+         default -> "scatter_only";
       };
    }
 
    private static String formatTemporalScatterIsolationMode(String isolationMode) {
       return switch (PhotonicsStorage.normalizeTemporalScatterIsolationMode(isolationMode)) {
+         case "scatter_only" -> "Scatter Only";
+         case "off" -> "Gather Only";
+         case "ownership_only" -> "Ownership Only";
+         case "scatter_backup" -> "Scatter + Backup";
+         case "multi_scatter" -> "Multi Scatter";
          case "temporal_off" -> "Temporal Off";
-         default -> "Off";
+         default -> "Scatter Only";
       };
    }
 

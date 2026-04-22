@@ -31,7 +31,7 @@ vec3 lt_previous_camera_forward() {
 }
 
 float lt_scatter_reservoir_confidence(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
-    return scatter_clamp_reconnection_confidence(reservoir.M);
+    return PathReservoir_getConfidence(reservoir);
 }
 
 float lt_scatter_radiance_phat(vec3 radiance) {
@@ -88,6 +88,22 @@ LtScatterShiftedPath lt_scatter_empty_shifted_path() {
     s.secondaryPathJacobian = 1.0f;
     s.lensVertexJacobian = 1.0f;
     return s;
+}
+
+bool lt_scatter_trace_reconnection_visibility(
+    vec3 rayOriginW,
+    vec3 rayDirW,
+    float traceMaxDistance)
+{
+    ray.origin = rayOriginW;
+    ray.direction = rayDirW;
+    ray_min_trace_distance = 0.001f;
+    ray_max_trace_distance = max(traceMaxDistance, ray_min_trace_distance);
+    trace_ray(ray, true);
+    bool unoccluded = !ray.result_hit && ray_distance_limit_reached;
+    ray_min_trace_distance = 0.0f;
+    ray_max_trace_distance = -1.0f;
+    return unoccluded;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +235,7 @@ bool scatter_project_reconnection_to_frame(
 
 bool lt_scatter_reprojection_shift(
     ScatterReconnectionData reconnectionData,
+    RTXDI_DIReservoir sourceReservoir,
     bool targetPreviousFrame,
     RAB_Surface targetSurface,
     out LtScatterShiftedPath shifted)
@@ -259,6 +276,16 @@ bool lt_scatter_reprojection_shift(
         return false;
     }
 
+    float visibilityTraceDistance = projectedHitDistantLight
+        ? projectedTraceMaxDistance
+        : (0.999f * projectedTraceMaxDistance);
+    if (!lt_scatter_trace_reconnection_visibility(
+            projectedRayOrigin,
+            projectedRayDirection,
+            visibilityTraceDistance)) {
+        return false;
+    }
+
     if (!scatter_reconnection_matches_surface(reconnectionData, landingPixel, targetSurface, targetPreviousFrame)) {
         return false;
     }
@@ -279,7 +306,7 @@ bool lt_scatter_reprojection_shift(
     shifted.firstRayDir = projectedRayDirection;
     shifted.subPixelJacobian = max(subPixelJacobian, 1e-10f);
     shifted.lensVertexJacobian = max(reconnectionData.lensVertexJacobian, 1e-10f);
-    shifted.radiance = max(scatter_reconnection_integrand(reconnectionData), vec3(0.0f));
+    shifted.radiance = PathReservoir_getIntegrand(sourceReservoir);
     shifted.secondaryPathJacobian = max(reconnectionData.secondaryPathJacobian, 1e-10f);
     return true;
 }
@@ -344,7 +371,7 @@ bool lt_scatter_update_shifted_reservoir(
     shiftedReconnection = scatter_empty_reconnection();
     shiftedJacobian = 0.0f;
 
-    if (lt_scatter_radiance_phat(scatter_reconnection_integrand(sourceReconnection)) <= 0.0f) {
+    if (lt_scatter_radiance_phat(PathReservoir_getIntegrand(sourceReservoir)) <= 0.0f) {
         return false;
     }
     if (sourceReconnection.subPixelJacobian <= 1e-10f
@@ -355,6 +382,7 @@ bool lt_scatter_update_shifted_reservoir(
 
     if (!lt_scatter_reprojection_shift(
         sourceReconnection,
+        sourceReservoir,
         targetPreviousFrame,
         targetSurface,
         shifted)) {
@@ -546,11 +574,11 @@ bool lt_scatter_add_sample_from_reservoir(
     if (isnan(candidateWeight) || isinf(candidateWeight) || candidateWeight < 0.0f) {
         candidateWeight = 0.0f;
     }
-    state.weightSum += candidateWeight;
+    PathReservoir_setTotalWeight(state, PathReservoir_getTotalWeight(state) + candidateWeight);
 
     bool selected = (candidateWeight > 0.0f)
         && RTXDI_IsValidDIReservoir(otherReservoir)
-        && (lt_next_random(rng) * state.weightSum < candidateWeight);
+        && (lt_next_random(rng) * PathReservoir_getTotalWeight(state) < candidateWeight);
     if (selected) {
         state.lightData         = otherReservoir.lightData;
         state.uvData            = otherReservoir.uvData;
@@ -745,11 +773,11 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
         reservoirMeta.z,
         storedReconnection
     );
-    RestirDI_restoreReconnectionRadiometry(reservoirPosition, false, currReservoir, storedReconnection);
-    currentSample.confidence = lt_scatter_reservoir_confidence(currReservoir, storedReconnection);
+    RestirDI_restoreReconnectionRadiometry(reservoirPosition, false, currentSample.reservoir, storedReconnection);
+    currentSample.confidence = lt_scatter_reservoir_confidence(currentSample.reservoir, storedReconnection);
     currentSample.isValid = true;
     currentSample.reconnectionData = storedReconnection;
-    currentSample.hasPositivePHat = ph_luminance(max(scatter_reconnection_integrand(storedReconnection), vec3(0.0f))) > 0.0f;
+    currentSample.hasPositivePHat = ph_luminance(PathReservoir_getIntegrand(currentSample.reservoir)) > 0.0f;
     return currentSample;
 }
 
@@ -808,7 +836,7 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
 
     return lt_scatter_canonical_mis(
-        lt_scatter_radiance_phat(scatter_reconnection_integrand(currSample.reconnectionData)),
+        lt_scatter_radiance_phat(PathReservoir_getIntegrand(currSample.reservoir)),
         currSample.confidence,
         lt_scatter_radiance_phat(shiftedCurr.radiance),
         shiftedJacobian,
@@ -867,11 +895,11 @@ bool ScatterTemporalResampling_process_contributor(
     }
 
     float prevSampleMIS = 0.0f;
-    if (any(greaterThan(scatter_reconnection_integrand(prevReconnectionData), vec3(0.0f)))) {
+    if (ph_luminance(PathReservoir_getIntegrand(prevReservoir)) > 0.0f) {
         float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
             * shiftedJacobian
             * currReservoirConfidence;
-        float m2 = lt_scatter_radiance_phat(scatter_reconnection_integrand(prevReconnectionData))
+        float m2 = lt_scatter_radiance_phat(PathReservoir_getIntegrand(prevReservoir))
             * prevReservoirConfidence;
         float denominator = m1 + m2;
         prevSampleMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
@@ -883,7 +911,7 @@ bool ScatterTemporalResampling_process_contributor(
         prevSampleMIS,
         shiftedPrev.radiance,
         shiftedJacobian,
-        lt_scatter_compute_ucw(shiftedReservoir, shiftedPrev.radiance),
+        lt_scatter_compute_ucw(prevReservoir, PathReservoir_getIntegrand(prevReservoir)),
         prevReservoirConfidence,
         shiftedReservoir,
         sg

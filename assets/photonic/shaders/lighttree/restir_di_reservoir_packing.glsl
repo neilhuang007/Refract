@@ -85,6 +85,14 @@ vec4 rtxdi_pack_reservoir_meta(RTXDI_DIReservoir reservoir) {
     return rtxdi_pack_reservoir_meta_with_transport(reservoir, 0.0f, 0.0f);
 }
 
+vec4 PathReservoir_packMeta(RTXDI_DIReservoir reservoir) {
+    return rtxdi_pack_reservoir_meta_with_transport(
+        reservoir,
+        reservoir.transportAux0,
+        reservoir.transportAux1
+    );
+}
+
 void rtxdi_unpack_reservoir_at_surface(
     inout RTXDI_DIReservoir reservoir,
     vec4 color,

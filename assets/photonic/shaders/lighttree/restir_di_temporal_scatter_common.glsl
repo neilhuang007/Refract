@@ -151,12 +151,12 @@ void splat_resample_temporal_pairwise_mis(
     float supportWeight,
     inout RTXDI_RandomSamplerState rng)
 {
-    float pHatCurrent = candidateReservoir.targetPdf;
-    float pHatCanonical = canonicalReservoir.targetPdf;
-    float c_i = max(candidateReservoir.M, 0.0f);
-    float c_star = max(canonicalReservoir.M, 1.0f);
+    float pHatCurrent = ph_luminance(PathReservoir_getIntegrand(candidateReservoir));
+    float pHatCanonical = ph_luminance(PathReservoir_getIntegrand(canonicalReservoir));
+    float c_i = PathReservoir_getConfidence(candidateReservoir);
+    float c_star = max(PathReservoir_getConfidence(canonicalReservoir), 1.0f);
 
-    if (pHatCurrent <= 0.0f || pHatCanonical <= 0.0f || c_i <= 0.0f || candidateReservoir.weightSum <= 0.0f || supportWeight <= 0.0f) {
+    if (pHatCurrent <= 0.0f || pHatCanonical <= 0.0f || c_i <= 0.0f || PathReservoir_getTotalWeight(candidateReservoir) <= 0.0f || supportWeight <= 0.0f) {
         return;
     }
 
@@ -176,18 +176,19 @@ void splat_resample_temporal_pairwise_mis(
     float m1Denominator = c_star * pHatCanonical + canonicalReverseContribution;
     float m1 = (m1Denominator > 0.0f) ? ((c_star * pHatCanonical) / m1Denominator) : 0.0f;
 
-    float sampleWeight = m0 * pHatCurrent * candidateReservoir.weightSum * splatJacobian;
+    float sampleWeight = m0 * pHatCurrent * PathReservoir_getTotalWeight(candidateReservoir) * splatJacobian;
 
-    state.M += weightedCandidateConfidence;
-    state.weightSum += sampleWeight;
+    PathReservoir_setConfidence(state, PathReservoir_getConfidence(state) + weightedCandidateConfidence);
+    PathReservoir_setTotalWeight(state, PathReservoir_getTotalWeight(state) + sampleWeight);
     state.canonicalWeight += m1;
 
-    bool selectSample = (sampleWeight > 0.0 && state.weightSum > 0.0)
-        ? (lt_next_random(rng) * state.weightSum < sampleWeight)
+    bool selectSample = (sampleWeight > 0.0 && PathReservoir_getTotalWeight(state) > 0.0)
+        ? (lt_next_random(rng) * PathReservoir_getTotalWeight(state) < sampleWeight)
         : false;
 
     if (selectSample) {
-        state.targetPdf = pHatCurrent;
+        PathReservoir_setIntegrand(state, PathReservoir_getIntegrand(candidateReservoir));
+        state.targetPdf = candidateReservoir.targetPdf;
         state.lightData = candidateReservoir.lightData;
         state.uvData = candidateReservoir.uvData;
         state.pixelSampleUV = candidateReservoir.pixelSampleUV;
@@ -219,7 +220,7 @@ float lt_temporal_candidate_confidence_weight(
 {
     float proposalWeight = lt_temporal_proposal_weight(reservoir, reconnection);
     float clampedProposalWeight = clamp(proposalWeight, 0.25f, 4.0f);
-    return max(reservoir.M, 0.0f)
+    return PathReservoir_getConfidence(reservoir)
         * max(supportWeight, 0.0f)
         * clampedProposalWeight;
 }
@@ -306,7 +307,7 @@ float lt_temporal_scatter_support_denominator(
             );
             float invSupportJ = (supportJacobian > 1e-8f) ? (1.0f / supportJacobian) : 0.0f;
 
-            denominator += bilinearWeight * sourcePrevReservoir.M * sourceProposalWeight * invSupportJ;
+            denominator += bilinearWeight * PathReservoir_getConfidence(sourcePrevReservoir) * sourceProposalWeight * invSupportJ;
         }
     }
 

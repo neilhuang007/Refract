@@ -7,10 +7,15 @@ bool RestirDI_restoreReconnectionRadiometry(
     RTXDI_DIReservoir reservoir,
     inout ReservoirSplattingReconnectionData reconnection)
 {
-    reconnection.firstWi = normalize(
-        (previousFrame ? previous_world_camera_position : world_camera_position)
-        - reconnection.firstHit.worldPos
-    );
+    bool hasPrimaryHit = reconnection.firstHit.viewDepth > 0.0f
+        && any(greaterThan(abs(reconnection.firstHit.worldPos), vec3(0.0f)));
+    if (hasPrimaryHit)
+    {
+        reconnection.firstWi = normalize(
+            (previousFrame ? previous_world_camera_position : world_camera_position)
+            - reconnection.firstHit.worldPos
+        );
+    }
 
     if (!lt_is_viewport_uv_in_bounds(pixelPosition) || !RTXDI_IsValidDIReservoir(reservoir)) {
         reconnection.irradiance = vec3(0.0f);
