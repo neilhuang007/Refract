@@ -54,7 +54,7 @@ void lt_di_multi_reproject_temporal_samples_stage(
         return;
     }
 
-    ScatterReconnectionData prevReconnection = scatter_load_prev_reconnection(pixel);
+    ScatterReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
     RAB_Surface prevSurface = lt_load_previous_surface(pixel);
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
         vec2 newFractionalPixel;
@@ -123,7 +123,7 @@ void lt_di_reproject_temporal_samples_stage(
         return;
     }
 
-    ScatterReconnectionData prevReconnection = scatter_load_prev_reconnection(pixel);
+    ScatterReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
 
     bool hasPrimaryHit = prevReconnection.firstHit.viewDepth > 0.0f;
     vec2 newFractionalPixel = vec2(-1.0f);

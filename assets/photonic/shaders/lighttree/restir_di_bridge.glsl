@@ -2,6 +2,7 @@
 #define PHOTONICS_RESTIR_DI_BRIDGE_GLSL
 
 #include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
 #include "/photonics/lighttree/restir_di_spatial.glsl"
 #include "/photonics/lighttree/restir_di_spatial_impl.glsl"
 #include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
@@ -22,9 +23,11 @@ float lt_spatial_reconnection_phat(ReservoirSplattingReconnectionData reconnecti
     return ph_luminance(lt_spatial_reconnection_integrand(reconnection));
 }
 
-float PathReservoir_computeUCW(RTXDI_DIReservoir pathReservoir)
+float PathReservoir_computeUCW(
+    RTXDI_DIReservoir pathReservoir,
+    ReservoirSplattingReconnectionData reconnection)
 {
-    float pHat = pathReservoir.targetPdf;
+    float pHat = lt_spatial_reconnection_phat(reconnection);
     if (pHat <= 0.0f) return 0.0f;
     float ucw = max(pathReservoir.weightSum, 0.0f) / pHat;
     return (isnan(ucw) || isinf(ucw) || ucw < 0.0f) ? 0.0f : ucw;
@@ -34,7 +37,7 @@ float PathReservoir_computeUCW(RTXDI_DIReservoir pathReservoir)
 // Reference: Reservoir.slang:112-116 PathReservoir::computeUCW = totalWeight / pHat.
 float lt_spatial_reconnection_compute_ucw(RTXDI_DIReservoir reservoir, ReservoirSplattingReconnectionData reconnection)
 {
-    return PathReservoir_computeUCW(reservoir);
+    return PathReservoir_computeUCW(reservoir, reconnection);
 }
 
 float lt_spatial_reservoir_confidence(RTXDI_DIReservoir reservoir)
@@ -108,45 +111,33 @@ ReservoirSplattingReconnectionData ReconnectionData_update(
     updated.firstWi                 = -shifted.firstRayDir;
     updated.firstHit.faceId         = uint(round(scatter_load_surface_identity(landingPixel, false).w));
     updated.secondHit.faceId        = updated.firstHit.faceId;
-    updated.subPixel                = shifted.subPixel;
+    updated.subPixel                = clamp(
+        shifted.fractionalPixel - floor(shifted.fractionalPixel),
+        vec2(0.0f),
+        vec2(1.0f)
+    );
     updated.lensSample              = shifted.lensSample;
     updated.subPixelJacobian        = max(shifted.subPixelJacobian, 1e-10f);
     updated.lensVertexJacobian      = max(shifted.lensVertexJacobian, 1e-10f);
     updated.secondaryPathJacobian   = max(shifted.secondaryPathJacobian, 1e-10f);
-    updated.irradiance              = max(shifted.radiance, vec3(0.0f));
-    updated.earlyThroughput         = vec3(1.0f);
     return updated;
 }
 
-ReservoirSplattingReconnectionData ScatterTemporalReconnectionData_update(
-    ReservoirSplattingReconnectionData source,
-    SpatialShiftedPathData shifted)
-{
-    ReservoirSplattingReconnectionData updated = source;
-    updated.firstHit.worldPos = shifted.primaryHit;
-    updated.firstHit.viewDepth = length(shifted.primaryHit - world_camera_position);
-    updated.firstWi = -shifted.firstRayDir;
-    updated.subPixel = clamp(shifted.subPixel, vec2(0.0f), vec2(1.0f));
-    updated.lensSample = shifted.lensSample;
-    updated.subPixelJacobian = max(shifted.subPixelJacobian, 1e-10f);
-    updated.lensVertexJacobian = max(shifted.lensVertexJacobian, 1e-10f);
-    updated.secondaryPathJacobian = max(shifted.secondaryPathJacobian, 1e-10f);
-    updated.irradiance = max(shifted.radiance, vec3(0.0f));
-    updated.earlyThroughput = vec3(1.0f);
-    return updated;
-}
-
-ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ivec2 pixel)
+ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ivec2 pixel, RTXDI_DIReservoir reservoir)
 {
     vec4 reservoirMeta = texelFetch(radiosity_reservoir_meta, pixel, 0);
     vec4 sampleData    = texelFetch(radiosity_reservoir_samples, pixel, 0);
-    return scatter_unpack_reconnection(
+    ReservoirSplattingReconnectionData reconnection;
+    scatter_unpack_reconnection(
         texelFetch(current_stage_reconnection0, pixel, 0),
         texelFetch(current_stage_reconnection1, pixel, 0),
         sampleData,
         reservoirMeta.y,
-        reservoirMeta.z
+        reservoirMeta.z,
+        reconnection
     );
+    RestirDI_restoreReconnectionRadiometry(pixel, false, reservoir, reconnection);
+    return reconnection;
 }
 
 vec2 lt_spatial_resolve_dof_probabilities(RAB_Surface centerSurface)
@@ -222,7 +213,7 @@ void lt_SpatialResampling_run(
             uvec2(neighborPixel),
             lt_build_restir_di_parameters().bufferIndices.spatialResamplingInputBufferIndex
         );
-        ReservoirSplattingReconnectionData neighborReconnection = SpatialResampling_load_input_reconnection(neighborPixel);
+        ReservoirSplattingReconnectionData neighborReconnection = SpatialResampling_load_input_reconnection(neighborPixel, neighborReservoir);
 
         float m1 = 0.0f;
         if (lt_spatial_reconnection_phat(centralReconnection) > 0.0f)
@@ -349,7 +340,7 @@ RTXDI_DIReservoir lt_di_spatial_resampling_stage(
     spatialResampling.pixel = pixel;
     spatialResampling.centerSurface = centerSurface;
     spatialResampling.centralReservoir = centralReservoir;
-    spatialResampling.centralReconnectionData = SpatialResampling_load_input_reconnection(pixel);
+    spatialResampling.centralReconnectionData = SpatialResampling_load_input_reconnection(pixel, centralReservoir);
 
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
     lt_SpatialResampling_run(spatialResampling, sg, currReservoir, currReconnectionData);

@@ -20,19 +20,30 @@ void storeSpatialResamplingResult(
 {
     float sidecarTransportAux0;
     float sidecarTransportAux1;
-    scatter_pack_reconnection(
-        reconnectionData,
+    scatter_pack_reconnection_fields(
+        reconnectionData.firstHit.worldPos,
+        reconnectionData.firstHit.viewDepth,
+        reconnectionData.lightPdf,
+        reconnectionData.time,
+        reconnectionData.irradiance,
+        reconnectionData.subPixel,
+        reconnectionData.subPixelJacobian,
+        reconnectionData.secondaryPathJacobian,
+        reconnectionData.firstHit.faceId,
+        reconnectionData.pathLength,
+        reconnectionData.firstBSDFComponentType,
+        reconnectionData.secondBSDFComponentType,
+        reconnectionData.transmissionEvent,
+        reconnectionData.lightIsNEE,
+        reconnectionData.lightIsDistant,
         sidecarTransportAux0,
         sidecarTransportAux1,
         reconnection0_frag_out,
         reconnection1_frag_out
     );
-    reservoir.transportAux0 = sidecarTransportAux0;
-    reservoir.transportAux1 = sidecarTransportAux1;
-
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(reservoir, sidecarTransportAux0, sidecarTransportAux1);
 }
 
 void storeEmptySpatialResamplingResult()

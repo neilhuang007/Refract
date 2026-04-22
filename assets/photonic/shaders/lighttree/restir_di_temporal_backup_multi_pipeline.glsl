@@ -21,7 +21,7 @@ bool lt_multi_scatter_process_contributor(
         return false;
     }
 
-    ScatterReconnectionData prevReconnection = scatter_load_prev_reconnection(scatteredPixel);
+    ScatterReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(scatteredPixel);
     RAB_Surface targetSurface = RAB_GetGBufferSurface(resolvePixel, false);
     LtScatterShiftedPath shiftedPrev;
     RTXDI_DIReservoir shiftedReservoir;
@@ -139,7 +139,7 @@ RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(
         uvec2(pixel),
         lt_build_restir_di_parameters().bufferIndices.spatialResamplingInputBufferIndex
     );
-    ReservoirSplattingReconnectionData backupReconnectionData = scatter_load_gather_intermediate_reconnection(pixel);
+    ReservoirSplattingReconnectionData backupReconnectionData = RestirDI_loadGatherIntermediateReconnection(pixel);
 
     {
         float currSampleMIS = 1.0f;
@@ -183,7 +183,7 @@ RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(
                     sg,
                     currSample.reconnectionData,
                     currSample.reconnectionData.time,
-                    floatingCoord + currReservoir.pixelSampleUV,
+                    floatingCoord + currSample.reconnectionData.subPixel,
                     currSample.reconnectionData.lensSample,
                     currReservoir
                 );
@@ -224,7 +224,7 @@ RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(
                 sg,
                 backupReconnectionData,
                 backupReconnectionData.time,
-                vec2(pixel) + backupReservoir.pixelSampleUV,
+                vec2(pixel) + backupReconnectionData.subPixel,
                 backupReconnectionData.lensSample,
                 backupReservoir
             );
@@ -237,7 +237,7 @@ RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(
             shiftedJacobian = (isnan(m1) || isinf(m1)) ? 1.0f : shiftedJacobian;
             m1 = (isnan(m1) || isinf(m1)) ? 0.0f : m1;
 
-            backupReconnectionData = ScatterTemporalReconnectionData_update(backupReconnectionData, shiftedBackup);
+            backupReconnectionData = ReconnectionData_update(backupReconnectionData, shiftedBackup);
 
             float m2 = 0.0f;
             LtScatterShiftedPath scatteredBackup;

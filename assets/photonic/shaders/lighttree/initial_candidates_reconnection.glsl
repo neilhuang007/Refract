@@ -1,11 +1,37 @@
 #ifndef PHOTONICS_INITIAL_CANDIDATES_RECONNECTION_GLSL
 #define PHOTONICS_INITIAL_CANDIDATES_RECONNECTION_GLSL
 
+float InitialCandidates_computeSubPixelJacobianRaw(
+    vec3 primaryHitPos,
+    vec3 primaryHitNormal,
+    vec3 cameraPos,
+    vec3 cameraForward)
+{
+    vec3 toHit;
+    float dist;
+    vec3 rayDir;
+    float cosNormal;
+    float cosSensor;
+    float jacobian;
+
+    toHit = primaryHitPos - cameraPos;
+    dist = length(toHit);
+    if (dist < 1e-6f) {
+        return 1.0f;
+    }
+
+    rayDir = toHit / dist;
+    cosNormal = abs(dot(-rayDir, primaryHitNormal));
+    cosSensor = max(abs(dot(cameraForward, rayDir)), 1e-6f);
+    jacobian = cosNormal / (dist * dist * cosSensor * cosSensor * cosSensor);
+    return max(jacobian, 1e-10f);
+}
+
 float InitialCandidates_computeCurrentSubPixelJacobian(RAB_Surface surface)
 {
     vec3 currCameraPos = world_camera_position;
     vec3 currCameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
-    return scatter_compute_subpixel_jacobian(
+    return InitialCandidates_computeSubPixelJacobianRaw(
         surface.worldPos,
         surface.geoNormal,
         currCameraPos,
@@ -15,14 +41,14 @@ float InitialCandidates_computeCurrentSubPixelJacobian(RAB_Surface surface)
 
 ReservoirSplattingReconnectionData InitialCandidates_createReconnectionData(
     RAB_Surface surface,
-    RTXDI_DIReservoir reservoir,
+    RTXDI_DIReservoir pathReservoir,
     RAB_LightSample selectedLightSample,
     ivec2 pixel)
 {
     float subPixelJacobian = InitialCandidates_computeCurrentSubPixelJacobian(surface);
     return ReconnectionData_build(
         surface,
-        reservoir,
+        pathReservoir,
         selectedLightSample,
         pixel,
         1.0f,
@@ -32,13 +58,13 @@ ReservoirSplattingReconnectionData InitialCandidates_createReconnectionData(
 
 ReservoirSplattingReconnectionData InitialCandidates_buildSelectedReconnection(
     RAB_Surface surface,
-    RTXDI_DIReservoir reservoir,
+    RTXDI_DIReservoir pathReservoir,
     RAB_LightSample selectedLightSample,
     ivec2 pixel)
 {
     return InitialCandidates_createReconnectionData(
         surface,
-        reservoir,
+        pathReservoir,
         selectedLightSample,
         pixel
     );

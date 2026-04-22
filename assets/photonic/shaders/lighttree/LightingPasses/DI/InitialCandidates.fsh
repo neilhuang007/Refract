@@ -8,6 +8,7 @@ layout(location = 4) out vec4 reconnection1_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
+#define PH_LIGHTTREE_RECONNECTION_PACK_ONLY 1
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/initial_candidates_stage.glsl"
 

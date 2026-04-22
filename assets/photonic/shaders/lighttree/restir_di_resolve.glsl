@@ -18,7 +18,7 @@ void ResolveReSTIR_load_curr_reservoir(
         lt_get_final_shading_input_buffer_index()
     );
 
-    currReconnectionData = SpatialResampling_load_input_reconnection(reservoirPosition);
+    currReconnectionData = SpatialResampling_load_input_reconnection(reservoirPosition, currReservoir);
 }
 
 float ResolveReSTIR_computeUCW(

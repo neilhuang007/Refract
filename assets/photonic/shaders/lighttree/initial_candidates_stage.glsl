@@ -9,31 +9,31 @@
 
 void InitialCandidates_handlePrimaryMiss(inout PathState path)
 {
-    path.candidateReservoir = RTXDI_EmptyDIReservoir();
-    path.selectedReconnection = ReservoirSplattingReconnectionData_init();
+    path.reservoir = RTXDI_EmptyDIReservoir();
+    path.reconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();
 }
 
 void InitialCandidates_handleHit(inout PathState path)
 {
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    path.candidateReservoir = RTXDI_SampleLightsForSurface(
-        path.rng,
+    path.reservoir = RTXDI_SampleLightsForSurface(
+        path.sg,
         path.coherentRng,
         path.surface,
         restirDI.initialSamplingParams,
         path.selectedLightSample
     );
 
-    if (!RTXDI_IsValidDIReservoir(path.candidateReservoir))
+    if (!RTXDI_IsValidDIReservoir(path.reservoir))
     {
-        path.selectedReconnection = ReservoirSplattingReconnectionData_init();
+        path.reconnection = ReservoirSplattingReconnectionData_init();
         return;
     }
 
-    path.selectedReconnection = InitialCandidates_buildSelectedReconnection(
+    path.reconnection = InitialCandidates_buildSelectedReconnection(
         path.surface,
-        path.candidateReservoir,
+        path.reservoir,
         path.selectedLightSample,
         PathState_getPixel(path)
     );

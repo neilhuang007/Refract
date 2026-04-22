@@ -241,66 +241,96 @@ uvec2 lt_scatter_temporal_resampling_load_sorted_reservoir(uint contributorIndex
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS)
 uint lt_multi_reproject_temporal_samples_global_counter_value(uint partitionIndex, uint counterIndex)
 {
-    return ph_multi_reproject_temporal_samples_global_counters_data[counterIndex];
+    return ph_multi_reproject_temporal_samples_global_counters_data[
+        lt_temporal_partitioned_counter_index(partitionIndex, counterIndex)
+    ];
 }
 
 uint lt_multi_reproject_temporal_samples_global_counter_atomic_add(uint partitionIndex, uint counterIndex, uint value)
 {
-    return atomicAdd(ph_multi_reproject_temporal_samples_global_counters_data[counterIndex], value);
+    return atomicAdd(
+        ph_multi_reproject_temporal_samples_global_counters_data[
+            lt_temporal_partitioned_counter_index(partitionIndex, counterIndex)
+        ],
+        value
+    );
 }
 
 uint lt_multi_reproject_temporal_samples_cell_counter_value(uint partitionIndex, uint cellIndex)
 {
-    return ph_multi_reproject_temporal_samples_cell_counters_data[cellIndex];
+    return ph_multi_reproject_temporal_samples_cell_counters_data[
+        lt_temporal_partitioned_cell_index(partitionIndex, cellIndex)
+    ];
 }
 
 uint lt_multi_reproject_temporal_samples_cell_counter_atomic_add(uint partitionIndex, uint cellIndex, uint value)
 {
-    return atomicAdd(ph_multi_reproject_temporal_samples_cell_counters_data[cellIndex], value);
+    return atomicAdd(
+        ph_multi_reproject_temporal_samples_cell_counters_data[
+            lt_temporal_partitioned_cell_index(partitionIndex, cellIndex)
+        ],
+        value
+    );
 }
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS)
 void lt_multi_reproject_temporal_samples_store_reservoir_index(uint partitionIndex, uint contributorIndex, uvec2 reservoirIndex)
 {
-    ph_multi_reproject_temporal_samples_reservoir_indices_data[contributorIndex] = reservoirIndex;
+    ph_multi_reproject_temporal_samples_reservoir_indices_data[
+        lt_temporal_partitioned_contributor_index(partitionIndex, contributorIndex)
+    ] = reservoirIndex;
 }
 
 uvec2 lt_multi_reproject_temporal_samples_load_reservoir_index(uint partitionIndex, uint contributorIndex)
 {
-    return ph_multi_reproject_temporal_samples_reservoir_indices_data[contributorIndex];
+    return ph_multi_reproject_temporal_samples_reservoir_indices_data[
+        lt_temporal_partitioned_contributor_index(partitionIndex, contributorIndex)
+    ];
 }
 
 void lt_multi_reproject_temporal_samples_store_scattered_reservoir(uint partitionIndex, uint contributorIndex, uvec2 scatteredReservoir)
 {
-    ph_multi_reproject_temporal_samples_scattered_reservoirs_data[contributorIndex] = scatteredReservoir;
+    ph_multi_reproject_temporal_samples_scattered_reservoirs_data[
+        lt_temporal_partitioned_contributor_index(partitionIndex, contributorIndex)
+    ] = scatteredReservoir;
 }
 
 uvec2 lt_multi_reproject_temporal_samples_load_scattered_reservoir(uint partitionIndex, uint contributorIndex)
 {
-    return ph_multi_reproject_temporal_samples_scattered_reservoirs_data[contributorIndex];
+    return ph_multi_reproject_temporal_samples_scattered_reservoirs_data[
+        lt_temporal_partitioned_contributor_index(partitionIndex, contributorIndex)
+    ];
 }
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)
 uint lt_multi_scatter_temporal_resampling_cell_offset_value(uint partitionIndex, uint cellIndex)
 {
-    return ph_multi_scatter_temporal_resampling_cell_offsets_data[cellIndex];
+    return ph_multi_scatter_temporal_resampling_cell_offsets_data[
+        lt_temporal_partitioned_cell_index(partitionIndex, cellIndex)
+    ];
 }
 
 void lt_multi_scatter_temporal_resampling_store_cell_offset(uint partitionIndex, uint cellIndex, uint value)
 {
-    ph_multi_scatter_temporal_resampling_cell_offsets_data[cellIndex] = value;
+    ph_multi_scatter_temporal_resampling_cell_offsets_data[
+        lt_temporal_partitioned_cell_index(partitionIndex, cellIndex)
+    ] = value;
 }
 
 void lt_multi_scatter_temporal_resampling_store_sorted_reservoir(uint partitionIndex, uint contributorIndex, uvec2 sortedReservoir)
 {
-    ph_multi_scatter_temporal_resampling_sorted_reservoirs_data[contributorIndex] = sortedReservoir;
+    ph_multi_scatter_temporal_resampling_sorted_reservoirs_data[
+        lt_temporal_partitioned_contributor_index(partitionIndex, contributorIndex)
+    ] = sortedReservoir;
 }
 
 uvec2 lt_multi_scatter_temporal_resampling_load_sorted_reservoir(uint partitionIndex, uint contributorIndex)
 {
-    return ph_multi_scatter_temporal_resampling_sorted_reservoirs_data[contributorIndex];
+    return ph_multi_scatter_temporal_resampling_sorted_reservoirs_data[
+        lt_temporal_partitioned_contributor_index(partitionIndex, contributorIndex)
+    ];
 }
 #endif
 

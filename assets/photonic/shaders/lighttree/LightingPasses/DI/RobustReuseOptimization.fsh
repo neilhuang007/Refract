@@ -71,23 +71,35 @@ void run(ivec2 pixel)
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(roundedPrevPixel)
     );
-    ReservoirSplattingReconnectionData prevReconnectionData = scatter_load_prev_reconnection(roundedPrevPixel);
+    ReservoirSplattingReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(roundedPrevPixel);
 
     floating_coords_frag_out = prevPixel;
     float transportAux0;
     float transportAux1;
-    scatter_pack_reconnection(
-        prevReconnectionData,
+    scatter_pack_reconnection_fields(
+        prevReconnectionData.firstHit.worldPos,
+        prevReconnectionData.firstHit.viewDepth,
+        prevReconnectionData.lightPdf,
+        prevReconnectionData.time,
+        prevReconnectionData.irradiance,
+        prevReconnectionData.subPixel,
+        prevReconnectionData.subPixelJacobian,
+        prevReconnectionData.secondaryPathJacobian,
+        prevReconnectionData.firstHit.faceId,
+        prevReconnectionData.pathLength,
+        prevReconnectionData.firstBSDFComponentType,
+        prevReconnectionData.secondBSDFComponentType,
+        prevReconnectionData.transmissionEvent,
+        prevReconnectionData.lightIsNEE,
+        prevReconnectionData.lightIsDistant,
         transportAux0,
         transportAux1,
         intermediate_reconnection0_frag_out,
         intermediate_reconnection1_frag_out
     );
-    prevReservoir.transportAux0 = transportAux0;
-    prevReservoir.transportAux1 = transportAux1;
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(prevReservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(prevReservoir);
-    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(prevReservoir);
+    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(prevReservoir, transportAux0, transportAux1);
 
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(surface) || !RTXDI_IsValidDIReservoir(prevReservoir) || prevReservoir.M <= 0.0f)

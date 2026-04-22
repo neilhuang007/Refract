@@ -19,6 +19,8 @@
 // surface so include ordering remains stable while the reference-structured
 // implementation is consolidated elsewhere.
 
+#include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
+
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE)
 void lt_di_store_collect_temporal_sample_result(
     vec2 floatingCoord,
@@ -29,19 +31,31 @@ void lt_di_store_collect_temporal_sample_result(
 
     float transportAux0;
     float transportAux1;
-    scatter_pack_reconnection(
-        reconnectionData,
+    scatter_pack_reconnection_fields(
+        reconnectionData.firstHit.worldPos,
+        reconnectionData.firstHit.viewDepth,
+        reconnectionData.lightPdf,
+        reconnectionData.time,
+        reconnectionData.irradiance,
+        reconnectionData.subPixel,
+        reconnectionData.subPixelJacobian,
+        reconnectionData.secondaryPathJacobian,
+        reconnectionData.firstHit.faceId,
+        reconnectionData.pathLength,
+        reconnectionData.firstBSDFComponentType,
+        reconnectionData.secondBSDFComponentType,
+        reconnectionData.transmissionEvent,
+        reconnectionData.lightIsNEE,
+        reconnectionData.lightIsDistant,
         transportAux0,
         transportAux1,
         intermediate_reconnection0_frag_out,
         intermediate_reconnection1_frag_out
     );
 
-    reservoir.transportAux0 = transportAux0;
-    reservoir.transportAux1 = transportAux1;
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(reservoir, transportAux0, transportAux1);
 }
 
 void lt_di_collect_temporal_samples_stage(
@@ -63,7 +77,7 @@ void lt_di_collect_temporal_samples_stage(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(roundedPrevPixel)
     );
-    ReservoirSplattingReconnectionData prevReconnectionData = scatter_load_prev_reconnection(roundedPrevPixel);
+    ReservoirSplattingReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(roundedPrevPixel);
 
     lt_di_store_collect_temporal_sample_result(
         prevPixel,
@@ -90,13 +104,18 @@ RTXDI_DIReservoir lt_di_load_current_proposal_reservoir(
 ReservoirSplattingReconnectionData lt_di_load_current_proposal_reconnection(ivec2 pixel)
 {
     vec4 proposalReservoirMeta = texelFetch(radiosity_proposal_reservoir_meta, pixel, 0);
-    return scatter_unpack_reconnection(
+    RTXDI_DIReservoir reservoir = lt_di_load_current_proposal_reservoir(pixel);
+    ReservoirSplattingReconnectionData reconnection;
+    scatter_unpack_reconnection(
         texelFetch(current_stage_reconnection0, pixel, 0),
         texelFetch(current_stage_reconnection1, pixel, 0),
         texelFetch(radiosity_proposal_reservoir_samples, pixel, 0),
         proposalReservoirMeta.y,
-        proposalReservoirMeta.z
+        proposalReservoirMeta.z,
+        reconnection
     );
+    RestirDI_restoreReconnectionRadiometry(pixel, false, reservoir, reconnection);
+    return reconnection;
 }
 
 RTXDI_DIReservoir lt_di_load_gather_intermediate_reservoir(ivec2 pixel)
@@ -151,7 +170,7 @@ bool lt_di_gather_temporal_load_previous_sample(
     out float prevConfidence)
 {
     prevReservoir = lt_di_load_gather_intermediate_reservoir(pixel);
-    prevReconnectionData = scatter_load_gather_intermediate_reconnection(pixel);
+    prevReconnectionData = RestirDI_loadGatherIntermediateReconnection(pixel);
     prevConfidence = lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
     return RTXDI_IsValidDIReservoir(prevReservoir)
         && any(greaterThan(scatter_reconnection_integrand(prevReconnectionData), vec3(0.0f)));

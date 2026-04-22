@@ -377,9 +377,9 @@ bool lt_scatter_update_shifted_reservoir(
     // subPixel == fract(shiftedCurr.fractionalPixel) (reference parity --
     // ScatterTemporalResampling.rt.slang:139 sets it from prevReconnection
     // after update(shiftedPrev); ShiftMapping.slang writes shifted.fractionalPixel
-    // into the reservoir's pixelSampleUV after the shift is finalized).
+    // into the selected reservoir's subPixel after the shift is finalized).
     vec2 shiftedSubPixel = clamp(fract(shifted.fractionalPixel), vec2(0.0f), vec2(1.0f - 1e-5f));
-    shiftedReservoir.pixelSampleUV = lt_area_pixel_sample_from_subpixel(targetPixel, shiftedSubPixel);
+    PathReservoir_setSubPixel(shiftedReservoir, targetPixel, shiftedSubPixel);
     shiftedReservoir.lensSampleUV = clamp(sourceReconnection.lensSample, vec2(0.0f), vec2(1.0f));
     lt_area_finalize_candidate(shiftedReservoir, targetPixel, shiftedReservoir.pathSample);
 
@@ -436,8 +436,6 @@ bool lt_scatter_update_shifted_reservoir(
     shiftedReconnection.subPixelJacobian = max(shifted.subPixelJacobian, 1e-10f);
     shiftedReconnection.lensVertexJacobian = max(shifted.lensVertexJacobian, 1e-10f);
     shiftedReconnection.secondaryPathJacobian = max(secondaryPathJacobian, 1e-10f);
-    shiftedReconnection.irradiance = shiftedIntegrand;
-    shiftedReconnection.earlyThroughput = vec3(1.0f);
     shiftedReconnection.firstHit.faceId = uint(round(scatter_load_surface_identity(targetPixel, targetPreviousFrame).w));
     shiftedReconnection.secondHit.faceId = shiftedReconnection.firstHit.faceId;
     shiftedReconnection.time = sourceReconnection.time;
@@ -736,14 +734,18 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
     );
     vec4 reconnection0 = texelFetch(current_stage_reconnection0, reservoirPosition, 0);
     vec4 reconnection1 = texelFetch(current_stage_reconnection1, reservoirPosition, 0);
+    vec4 reservoirMeta = texelFetch(radiosity_proposal_reservoir_meta, reservoirPosition, 0);
     vec4 sampleData    = texelFetch(radiosity_proposal_reservoir_samples, reservoirPosition, 0);
-    ReservoirSplattingReconnectionData storedReconnection = scatter_unpack_reconnection(
+    ReservoirSplattingReconnectionData storedReconnection;
+    scatter_unpack_reconnection(
         reconnection0,
         reconnection1,
         sampleData,
-        currReservoir.transportAux0,
-        currReservoir.transportAux1
+        reservoirMeta.y,
+        reservoirMeta.z,
+        storedReconnection
     );
+    RestirDI_restoreReconnectionRadiometry(reservoirPosition, false, currReservoir, storedReconnection);
     currentSample.confidence = lt_scatter_reservoir_confidence(currReservoir, storedReconnection);
     currentSample.isValid = true;
     currentSample.reconnectionData = storedReconnection;
@@ -839,7 +841,7 @@ bool ScatterTemporalResampling_process_contributor(
         return false;
     }
 
-    ScatterReconnectionData prevReconnectionData = scatter_load_prev_reconnection(scatteredPixel);
+    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(scatteredPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
     RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(targetSurface)) {
@@ -919,7 +921,7 @@ float ScatterTemporalResampling_load_previous_reservoir_confidence(
         uvec2(neighborPixel)
     );
 
-    ReservoirSplattingReconnectionData prevReconnectionData = scatter_load_prev_reconnection(neighborPixel);
+    ReservoirSplattingReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(neighborPixel);
     return lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
 }
 

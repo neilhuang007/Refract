@@ -58,25 +58,25 @@ struct LtScatterShiftedPath {
 };
 
 struct ShiftedPathData {
-    vec3 primaryHit;
-    vec3 firstRayDir;
-    vec3 radiance;
+    ReservoirSplattingHitInfo primaryHit;
     vec2 fractionalPixel;
-    vec2 subPixel;
     vec2 lensSample;
+    vec3 firstRayDir;
     float subPixelJacobian;
-    float secondaryPathJacobian;
     float lensVertexJacobian;
+    float secondaryPathJacobian;
+    vec3 radiance;
 };
 
 ShiftedPathData gatherLensVertexCopyShift(
-    RTXDI_RandomSamplerState rng,
+    inout RTXDI_RandomSamplerState rng,
     ReservoirSplattingReconnectionData reconnectionData,
     float time,
     vec2 pixel,
-    vec2 lensSample);
+    vec2 lensSample,
+    RTXDI_DIReservoir sourceReservoir);
 
-ReservoirSplattingReconnectionData ScatterTemporalReconnectionData_update(
+ReservoirSplattingReconnectionData ReconnectionData_update(
     ReservoirSplattingReconnectionData reconnectionData,
     ShiftedPathData shiftedPathData);
 
