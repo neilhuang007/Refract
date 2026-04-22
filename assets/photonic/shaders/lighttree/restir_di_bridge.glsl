@@ -167,7 +167,7 @@ struct SpatialResampling
     ReservoirSplattingReconnectionData centralReconnectionData;
 };
 
-void lt_SpatialResampling_run(
+void SpatialResampling_execute(
     SpatialResampling spatialResampling,
     inout RTXDI_RandomSamplerState sg,
     out RTXDI_DIReservoir currReservoir,
@@ -326,7 +326,7 @@ void lt_SpatialResampling_run(
         : ReservoirSplattingReconnectionData_init();
 }
 
-RTXDI_DIReservoir lt_di_spatial_resampling_stage(
+RTXDI_DIReservoir SpatialResampling_run(
     ivec2 pixel,
     RAB_Surface centerSurface,
     RTXDI_DIReservoir centralReservoir,
@@ -351,7 +351,7 @@ RTXDI_DIReservoir lt_di_spatial_resampling_stage(
     spatialResampling.centralReconnectionData = SpatialResampling_load_input_reconnection(pixel, centralReservoir);
 
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
-    lt_SpatialResampling_run(spatialResampling, sg, currReservoir, currReconnectionData);
+    SpatialResampling_execute(spatialResampling, sg, currReservoir, currReconnectionData);
     return currReservoir;
 }
 

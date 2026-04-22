@@ -78,9 +78,10 @@ public class LightTreeRenderer extends MainRenderer {
    private static final int[] shadeSamplesReservoirDrawBuffers = new int[]{-1, -1, 0, 1, 2};
    private static final int profilerLogIntervalFrames = 60;
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_COUNT = 8;
-   private static final int TEMPORAL_GATHER_SHIFTED_PATH_PACKED_VEC4_COUNT = 5;
+   // Matches one std430 LtTemporalGatherShiftedPathRecord in restir_di_temporal_buffer_bridge.glsl.
+   private static final int TEMPORAL_GATHER_SHIFTED_PATH_RECORD_VEC4_COUNT = 5;
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_STRIDE_BYTES =
-      TEMPORAL_GATHER_SHIFTED_PATH_PACKED_VEC4_COUNT * 4 * Float.BYTES;
+      TEMPORAL_GATHER_SHIFTED_PATH_RECORD_VEC4_COUNT * 4 * Float.BYTES;
    private static final String[] gpuProfilerRegionNames = new String[]{
       "LightTreeSamplingStage", "InitialCandidates", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples", "NRDPrepareInputs", "RELAXDiffuseTemporalAccumulation", "RELAXDiffuseHistoryFix", "RELAXDiffuseHistoryClamping", "RELAXDiffuseAntiFirefly", "RELAXDiffuseAtrous", "RELAXSpecularTemporalAccumulation", "RELAXSpecularHistoryFix", "RELAXSpecularHistoryClamping", "RELAXSpecularAntiFirefly", "RELAXSpecularAtrous", "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
    };
@@ -1562,9 +1563,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createRobustReuseOptimizationFramebuffer() {
-      RoutingFramebuffer framebuffer = this.createDirectPackedRoutingFramebuffer(
-         () -> this.directInitialDebugBuffer.getWriteAttachment("data")
-      );
+      RoutingFramebuffer framebuffer = this.createDirectPackedRoutingFramebuffer();
       framebuffer.setDrawBuffers(new int[] {-1});
       return framebuffer;
    }

@@ -52,13 +52,6 @@ void MultiScatterTemporalResampling_storeEmptyResult()
     MultiScatterTemporalResampling_storeResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
 }
 
-void MultiScatterTemporalResampling_execute(ivec2 pixel)
-{
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir currReservoir = MultiScatterTemporalResampling_run(pixel, currReconnectionData);
-    MultiScatterTemporalResampling_storeResult(currReservoir, currReconnectionData);
-}
-
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
@@ -76,5 +69,7 @@ void main()
         return;
     }
 
-    MultiScatterTemporalResampling_execute(pixel);
+    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    RTXDI_DIReservoir currReservoir = MultiScatterTemporalResampling_run(pixel, currReconnectionData);
+    MultiScatterTemporalResampling_storeResult(currReservoir, currReconnectionData);
 }

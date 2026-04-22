@@ -3,7 +3,9 @@
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE)
 
+#include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
+#include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
 #include "/photonics/lighttree/restir_di_scatter_impl.glsl"
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
 #include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
@@ -276,7 +278,7 @@ bool GatherTemporalResampling_add_previous_sample(
     return prevSelected;
 }
 
-RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
+RTXDI_DIReservoir GatherTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {

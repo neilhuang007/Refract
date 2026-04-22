@@ -35,7 +35,7 @@ float lt_multi_temporal_reproject_partition(
     return newTime;
 }
 
-void lt_di_multi_reproject_temporal_samples_stage(
+void MultiReprojectTemporalSamples_run(
     ivec2 pixel)
 {
     if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
@@ -104,7 +104,7 @@ void lt_di_multi_reproject_temporal_samples_stage(
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE)
-void lt_di_reproject_temporal_samples_stage(
+void ReprojectTemporalSamples_run(
     ivec2 pixel)
 {
     if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
@@ -193,7 +193,7 @@ void computeCellOffsetsStage(
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
     return;
 #else
-    lt_SortReprojectedReservoirs_compute_cell_offsets(pixel);
+    SortReprojectedReservoirs_computeCellOffsets(pixel);
 #endif
 }
 #else
@@ -211,7 +211,7 @@ void sortCellDataStage(
         return;
     }
 
-    lt_SortReprojectedReservoirs_sort_cell_data(index);
+    SortReprojectedReservoirs_sortCellData(index);
 }
 #endif
 

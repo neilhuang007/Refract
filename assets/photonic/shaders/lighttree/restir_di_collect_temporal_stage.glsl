@@ -5,7 +5,7 @@
 
 void lt_di_collect_temporal_samples_stage(ivec2 currPixel)
 {
-    CollectTemporalSamples_run(currPixel);
+    CollectTemporalSamples_execute(currPixel);
 }
 
 #endif

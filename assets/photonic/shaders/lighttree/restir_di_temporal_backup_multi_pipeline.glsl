@@ -468,7 +468,7 @@ void multiComputeCellOffsetsStage(
 {
 #if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
     if (ph_scatter_temporal_enabled > 0.5f) {
-        lt_MultiSortReprojectedReservoirs_compute_cell_offsets(pixel);
+        MultiSortReprojectedReservoirs_computeCellOffsets(pixel);
     }
 #endif
 }
@@ -478,14 +478,14 @@ void multiSortCellDataStage(
 {
 #if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
     if (ph_scatter_temporal_enabled > 0.5f) {
-        lt_MultiSortReprojectedReservoirs_sort_cell_data(index);
+        MultiSortReprojectedReservoirs_sortCellData(index);
     }
 #endif
 }
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE)
-RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(
+RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {
@@ -574,7 +574,7 @@ RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE)
-RTXDI_DIReservoir lt_di_multi_scatter_temporal_resampling_stage(
+RTXDI_DIReservoir MultiScatterTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {

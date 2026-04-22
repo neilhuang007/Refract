@@ -1,6 +1,0 @@
-#ifndef PHOTONICS_DI_INITIAL_CANDIDATES_RECONNECTION_GLSL
-#define PHOTONICS_DI_INITIAL_CANDIDATES_RECONNECTION_GLSL
-
-#include "/photonics/lighttree/initial_candidates_reconnection.glsl"
-
-#endif

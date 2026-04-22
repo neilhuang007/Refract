@@ -7,10 +7,10 @@
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY
 #endif
 
-void lt_SortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel);
-void lt_SortReprojectedReservoirs_sort_cell_data(uint scatterIndex);
-void lt_MultiSortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel);
-void lt_MultiSortReprojectedReservoirs_sort_cell_data(uint scatterIndex);
+void SortReprojectedReservoirs_computeCellOffsets(ivec2 pixel);
+void SortReprojectedReservoirs_sortCellData(uint scatterIndex);
+void MultiSortReprojectedReservoirs_computeCellOffsets(ivec2 pixel);
+void MultiSortReprojectedReservoirs_sortCellData(uint scatterIndex);
 
 #ifndef PH_LIGHTTREE_INITIAL_SAMPLE_COUNT_HELPERS
 #define PH_LIGHTTREE_INITIAL_SAMPLE_COUNT_HELPERS

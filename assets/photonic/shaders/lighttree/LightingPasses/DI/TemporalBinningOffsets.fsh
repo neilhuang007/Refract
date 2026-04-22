@@ -18,11 +18,6 @@ void SortReprojectedReservoirs_storeEmptyComputeCellOffsetsResult()
     reservoir_meta_frag_out = vec4(0.0f);
 }
 
-void SortReprojectedReservoirs_executeComputeCellOffsets(ivec2 pixel)
-{
-    SortReprojectedReservoirs_computeCellOffsets(pixel);
-}
-
 void main()
 {
     SortReprojectedReservoirs_storeEmptyComputeCellOffsetsResult();
@@ -32,6 +27,6 @@ void main()
         return;
     }
 
-    SortReprojectedReservoirs_executeComputeCellOffsets(pixel);
+    SortReprojectedReservoirs_computeCellOffsets(pixel);
 }
 

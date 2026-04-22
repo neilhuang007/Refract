@@ -4,41 +4,41 @@
 void lt_di_collect_temporal_samples_stage(
     ivec2 pixel);
 
-RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
+RTXDI_DIReservoir GatherTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData);
 
-void lt_di_reproject_temporal_samples_stage(
+void ReprojectTemporalSamples_run(
     ivec2 pixel);
 
-void lt_SortReprojectedReservoirs_compute_cell_offsets(
+void SortReprojectedReservoirs_computeCellOffsets(
     ivec2 pixel);
 
-void lt_SortReprojectedReservoirs_sort_cell_data(
+void SortReprojectedReservoirs_sortCellData(
     uint index);
 
-RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
+RTXDI_DIReservoir ScatterTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData);
 
-void lt_di_multi_reproject_temporal_samples_stage(
+void MultiReprojectTemporalSamples_run(
     ivec2 pixel);
 
-void lt_MultiSortReprojectedReservoirs_compute_cell_offsets(
+void MultiSortReprojectedReservoirs_computeCellOffsets(
     ivec2 pixel);
 
-void lt_MultiSortReprojectedReservoirs_sort_cell_data(
+void MultiSortReprojectedReservoirs_sortCellData(
     uint index);
 
-RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(
+RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData);
 
-RTXDI_DIReservoir lt_di_multi_scatter_temporal_resampling_stage(
+RTXDI_DIReservoir MultiScatterTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData);
 
-RTXDI_DIReservoir lt_di_spatial_resampling_stage(
+RTXDI_DIReservoir SpatialResampling_run(
     ivec2 pixel,
     RAB_Surface centerSurface,
     RTXDI_DIReservoir centralReservoir,

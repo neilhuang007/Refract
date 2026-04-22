@@ -74,7 +74,7 @@ void lt_multi_temporal_scatter_append_contributor(
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-void lt_SortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel)
+void SortReprojectedReservoirs_computeCellOffsets(ivec2 pixel)
 {
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return;
@@ -89,7 +89,7 @@ void lt_SortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel)
     lt_scatter_temporal_resampling_store_cell_offset(cellIndex, offset);
 }
 
-void lt_SortReprojectedReservoirs_sort_cell_data(uint scatterIndex)
+void SortReprojectedReservoirs_sortCellData(uint scatterIndex)
 {
     if (scatterIndex >= lt_reproject_temporal_samples_global_counter_value(LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT)) {
         return;
@@ -105,7 +105,7 @@ void lt_SortReprojectedReservoirs_sort_cell_data(uint scatterIndex)
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-void lt_MultiSortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel)
+void MultiSortReprojectedReservoirs_computeCellOffsets(ivec2 pixel)
 {
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return;
@@ -126,7 +126,7 @@ void lt_MultiSortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel)
     }
 }
 
-void lt_MultiSortReprojectedReservoirs_sort_cell_data(uint scatterIndex)
+void MultiSortReprojectedReservoirs_sortCellData(uint scatterIndex)
 {
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
         uint partitionCount = lt_multi_reproject_temporal_samples_global_counter_value(

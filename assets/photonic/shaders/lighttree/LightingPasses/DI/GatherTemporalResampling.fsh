@@ -13,10 +13,6 @@ layout(location = 4) out vec4 reconnection1_frag_out;
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/restir_di_gather_temporal_stage.glsl"
 
-RTXDI_DIReservoir lt_di_gather_temporal_resampling_stage(
-    ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData);
-
 void storeGatherTemporalResamplingResult(
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
@@ -56,13 +52,6 @@ void storeEmptyGatherTemporalResamplingResult()
     storeGatherTemporalResamplingResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
 }
 
-void run(ivec2 pixel)
-{
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir currReservoir = lt_di_gather_temporal_resampling_stage(pixel, currReconnectionData);
-    storeGatherTemporalResamplingResult(currReservoir, currReconnectionData);
-}
-
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
@@ -80,5 +69,7 @@ void main()
         return;
     }
 
-    run(pixel);
+    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    RTXDI_DIReservoir currReservoir = GatherTemporalResampling_run(pixel, currReconnectionData);
+    storeGatherTemporalResamplingResult(currReservoir, currReconnectionData);
 }

@@ -7,6 +7,17 @@
 #include "/photonics/lighttree/initial_candidates_path_state.glsl"
 #include "/photonics/lighttree/initial_candidates_reservoir.glsl"
 
+void InitialCandidates_tracePrimaryMiss(
+    inout RTXDI_DIReservoir currReservoir,
+    inout ReservoirSplattingReconnectionData currReconnectionData,
+    inout PathState path)
+{
+    path.reservoir = RTXDI_EmptyDIReservoir();
+    path.reconnection = ReservoirSplattingReconnectionData_init();
+    path.selectedLightSample = RAB_EmptyLightSample();
+    InitialCandidates_addCandidateReservoir(currReservoir, currReconnectionData, path);
+}
+
 void InitialCandidates_tracePath(
     const RTXDI_Parameters params,
     inout RTXDI_DIReservoir currReservoir,
@@ -15,10 +26,7 @@ void InitialCandidates_tracePath(
 {
     if (!RAB_IsSurfaceValid(path.surface))
     {
-        path.reservoir = RTXDI_EmptyDIReservoir();
-        path.reconnection = ReservoirSplattingReconnectionData_init();
-        path.selectedLightSample = RAB_EmptyLightSample();
-        InitialCandidates_addCandidateReservoir(currReservoir, currReconnectionData, path);
+        InitialCandidates_tracePrimaryMiss(currReservoir, currReconnectionData, path);
         return;
     }
 
@@ -61,6 +69,7 @@ void InitialCandidates_run(ivec2 pixel)
     const RTXDI_Parameters params = lt_build_restir_di_parameters();
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+
     for (uint sampleIdx = 0u; sampleIdx < uint(kSamplesPerPixel); ++sampleIdx)
     {
         PathState path;

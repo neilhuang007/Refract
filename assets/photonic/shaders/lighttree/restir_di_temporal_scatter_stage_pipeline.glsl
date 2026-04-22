@@ -3,7 +3,7 @@
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE)
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
+RTXDI_DIReservoir ScatterTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {
@@ -11,7 +11,7 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
     return RTXDI_EmptyDIReservoir();
 }
 #else
-RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
+RTXDI_DIReservoir ScatterTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {

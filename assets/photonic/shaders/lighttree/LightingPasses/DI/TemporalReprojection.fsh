@@ -7,11 +7,6 @@ in vec4 direction_vert_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/ReservoirSplatting/ReprojectTemporalSamples.glsl"
 
-void ReprojectTemporalSamples_execute(ivec2 pixel)
-{
-    ReprojectTemporalSamples_run(pixel);
-}
-
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
@@ -27,5 +22,5 @@ void main()
         return;
     }
 
-    ReprojectTemporalSamples_execute(pixel);
+    ReprojectTemporalSamples_run(pixel);
 }

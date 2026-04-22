@@ -33,11 +33,6 @@ void CollectTemporalSamples_storeEmptyResult()
     temporal_gather_intermediate_reconnection1_frag_out = vec4(0.0f);
 }
 
-void CollectTemporalSamples_execute(ivec2 currPixel)
-{
-    CollectTemporalSamples_run(currPixel);
-}
-
 void main()
 {
     ivec2 currPixel = ivec2(gl_FragCoord.xy);

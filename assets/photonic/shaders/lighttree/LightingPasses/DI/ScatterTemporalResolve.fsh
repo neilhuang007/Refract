@@ -52,13 +52,6 @@ void ScatterTemporalResampling_storeEmptyResult()
     ScatterTemporalResampling_storeResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
 }
 
-void ScatterTemporalResampling_execute(ivec2 pixel)
-{
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir currReservoir = ScatterTemporalResampling_run(pixel, currReconnectionData);
-    ScatterTemporalResampling_storeResult(currReservoir, currReconnectionData);
-}
-
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
@@ -76,6 +69,8 @@ void main()
         return;
     }
 
-    ScatterTemporalResampling_execute(pixel);
+    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    RTXDI_DIReservoir currReservoir = ScatterTemporalResampling_run(pixel, currReconnectionData);
+    ScatterTemporalResampling_storeResult(currReservoir, currReconnectionData);
 }
 

@@ -1,6 +1,6 @@
 #version 430
 
-// Reference stage 4 -- ResolveReSTIR::execute
+// Reference stage 7 -- ResolveReSTIR::execute
 
 in vec4 direction_vert_out;
 

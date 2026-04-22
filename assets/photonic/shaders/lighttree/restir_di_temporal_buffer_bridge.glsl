@@ -27,12 +27,19 @@
 
 #if (defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)) && !defined(PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED)
 #define PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED
+struct LtTemporalGatherShiftedPathRecord {
+    vec4 primaryHitData;
+    vec4 primaryHitFaceFractionalPixelLensX;
+    vec4 lensYFirstRayDir;
+    vec4 jacobianData;
+    vec4 radianceData;
+};
+
 layout(std430) restrict buffer ph_temporal_gather_shifted_paths {
-    vec4 ph_temporal_gather_shifted_paths_data[];
+    LtTemporalGatherShiftedPathRecord ph_temporal_gather_shifted_paths_data[];
 };
 
 const uint LT_TEMPORAL_GATHER_SHIFT_COUNT = 8u;
-const uint LT_TEMPORAL_GATHER_SHIFTED_PATH_PACKED_VEC4_COUNT = 5u;
 
 uint lt_temporal_gather_shifted_path_pixel_index(ivec2 pixel)
 {
@@ -42,13 +49,6 @@ uint lt_temporal_gather_shifted_path_pixel_index(ivec2 pixel)
 uint lt_temporal_gather_shifted_path_record_index(ivec2 pixel, int offsetIndex)
 {
     return lt_temporal_gather_shifted_path_pixel_index(pixel) * LT_TEMPORAL_GATHER_SHIFT_COUNT + uint(offsetIndex);
-}
-
-uint lt_temporal_gather_shifted_path_vec4_index(ivec2 pixel, int offsetIndex, uint vec4Index)
-{
-    return lt_temporal_gather_shifted_path_record_index(pixel, offsetIndex)
-        * LT_TEMPORAL_GATHER_SHIFTED_PATH_PACKED_VEC4_COUNT
-        + vec4Index;
 }
 #endif
 

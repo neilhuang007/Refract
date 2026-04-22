@@ -3,9 +3,4 @@
 
 #include "/photonics/lighttree/restir_di_temporal_scatter_bridge.glsl"
 
-void ReprojectTemporalSamples_run(ivec2 pixel)
-{
-    lt_di_reproject_temporal_samples_stage(pixel);
-}
-
 #endif

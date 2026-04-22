@@ -64,6 +64,8 @@ float lt_scatter_shift_jacobian_ratio(
 // only the fields the MIS / addSampleFromReservoir logic needs.
 // ---------------------------------------------------------------------------
 
+#ifndef PH_LIGHTTREE_LT_SCATTER_SHIFTED_PATH_DECLARED
+#define PH_LIGHTTREE_LT_SCATTER_SHIFTED_PATH_DECLARED
 struct LtScatterShiftedPath {
     bool  valid;
     ReservoirSplattingHitInfo firstHit;
@@ -75,6 +77,7 @@ struct LtScatterShiftedPath {
     float secondaryPathJacobian;
     float lensVertexJacobian;
 };
+#endif
 
 LtScatterShiftedPath lt_scatter_empty_shifted_path() {
     LtScatterShiftedPath s;

@@ -1,6 +1,6 @@
 #version 430
 
-// Reference stage 3 -- SpatialResampling::run
+// Reference stage 6 -- SpatialResampling::run
 
 in vec4 direction_vert_out;
 
@@ -92,7 +92,7 @@ void main()
 
         if (RTXDI_IsValidDIReservoir(centralReservoir))
         {
-            currReservoir = lt_di_spatial_resampling_stage(
+            currReservoir = SpatialResampling_run(
                 pixel,
                 centerSurface,
                 centralReservoir,

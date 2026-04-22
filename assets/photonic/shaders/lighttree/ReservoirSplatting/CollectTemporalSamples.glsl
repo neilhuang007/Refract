@@ -93,7 +93,7 @@ void CollectTemporalSamples_store_empty_result()
     intermediate_reconnection1_frag_out = vec4(0.0f);
 }
 
-void CollectTemporalSamples_run(ivec2 currPixel)
+void CollectTemporalSamples_execute(ivec2 currPixel)
 {
     vec2 prevPixel = lt_temporal_previous_pixel_center(currPixel) - vec2(0.5f);
     if (any(lessThan(prevPixel, vec2(0.0f))))

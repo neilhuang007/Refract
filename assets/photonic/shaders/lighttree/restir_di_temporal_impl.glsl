@@ -25,7 +25,7 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {
-    return lt_di_gather_temporal_resampling_stage(
+    return GatherTemporalResampling_run(
         pixel,
         currReconnectionData
     );
@@ -46,7 +46,7 @@ void lt_di_reproject_temporal_samples(
     RAB_Surface surface,
     inout RTXDI_RandomSamplerState sg)
 {
-    lt_di_reproject_temporal_samples_stage(pixel);
+    ReprojectTemporalSamples_run(pixel);
 }
 #endif
 
@@ -69,7 +69,7 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {
-    return lt_di_scatter_temporal_resampling_stage(
+    return ScatterTemporalResampling_run(
         pixel,
         currReconnectionData
     );
@@ -81,7 +81,7 @@ RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {
-    return lt_di_scatter_backup_temporal_resampling_stage(
+    return ScatterBackupTemporalResampling_run(
         pixel,
         currReconnectionData
     );
@@ -94,7 +94,7 @@ void lt_di_multi_reproject_temporal_samples(
     RAB_Surface surface,
     inout RTXDI_RandomSamplerState sg)
 {
-    lt_di_multi_reproject_temporal_samples_stage(pixel);
+    MultiReprojectTemporalSamples_run(pixel);
 }
 #endif
 
@@ -117,7 +117,7 @@ RTXDI_DIReservoir lt_di_multi_scatter_temporal_resampling(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {
-    return lt_di_multi_scatter_temporal_resampling_stage(
+    return MultiScatterTemporalResampling_run(
         pixel,
         currReconnectionData
     );

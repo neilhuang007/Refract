@@ -19,15 +19,10 @@ void MultiSortReprojectedReservoirs_storeEmptySortCellDataResult()
     reservoir_meta_frag_out = vec4(0.0f);
 }
 
-void MultiSortReprojectedReservoirs_executeSortCellData(uint index)
-{
-    MultiSortReprojectedReservoirs_sortCellData(index);
-}
-
 void main()
 {
     MultiSortReprojectedReservoirs_storeEmptySortCellDataResult();
 
     uint index = uint(gl_FragCoord.x);
-    MultiSortReprojectedReservoirs_executeSortCellData(index);
+    MultiSortReprojectedReservoirs_sortCellData(index);
 }
