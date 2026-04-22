@@ -1,25 +1,13 @@
 #ifndef PHOTONICS_RESTIR_GI_INITIAL_SAMPLING_IMPL_GLSL
 #define PHOTONICS_RESTIR_GI_INITIAL_SAMPLING_IMPL_GLSL
 
-RTXDI_DIReservoir RTXDI_SampleLocalLights(
-    inout RTXDI_RandomSamplerState rng,
-    inout RTXDI_RandomSamplerState coherentRng,
-    RAB_Surface surface,
-    RTXDI_DIInitialSamplingParameters initialSamplingParams,
-    out RAB_LightSample o_selectedSample);
-RTXDI_DIReservoir RTXDI_SampleInfiniteLights(RAB_Surface surface, int numSamples);
-RTXDI_DIReservoir RTXDI_SampleEnvironmentMap(RAB_Surface surface, int numSamples);
-RTXDI_DIReservoir RTXDI_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surface surface, int numSamples, RTXDI_InitialSamplingMisData misData, float brdfCutoff, out RAB_LightSample o_selectedSample);
-RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
-    inout RTXDI_RandomSamplerState rng,
-    inout RTXDI_RandomSamplerState coherentRng,
-    RAB_Surface surface,
-    RTXDI_DIInitialSamplingParameters initialSamplingParams,
-    out RAB_LightSample o_lightSample);
-
-bool RAB_SurfaceImportanceSampleBrdf(RAB_Surface surface, inout RTXDI_RandomSamplerState rng, out vec3 dir);
-float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir);
-float RTXDI_BrdfMaxDistanceFromPdf(float brdfCutoff, float pdf);
+// Forward declarations for the sampling helpers defined below. The
+// function prototypes for RTXDI_Sample* / RAB_SurfaceImportanceSampleBrdf
+// / RAB_SurfaceEvaluateBrdfPdf / RTXDI_BrdfMaxDistanceFromPdf already live
+// in reuse_bridge.glsl (pulled in via the stage header) -- redeclaring
+// them here triggers "declaration conflicts with previous declaration"
+// under strict drivers, so this block intentionally only holds the
+// additional GI-specific prototypes we need before their point of use.
 
 // GI-facing implementation surface for the shared initial-sampling helper chain.
 // This keeps the indirect pipeline independent from late implementation regions in
@@ -32,9 +20,80 @@ float RTXDI_BrdfMaxDistanceFromPdf(float brdfCutoff, float pdf);
 // ``ReservoirSplattingReconnectionData`` and the underlying storage layout is
 // defined as ``ScatterReconnectionData`` in reuse_bridge.glsl. Those aliases
 // are declared in reuse_bridge.glsl right after the struct definition so every
-// downstream include (this file included) picks them up transparently — no
+// downstream include (this file included) picks them up transparently -- no
 // re-declaration is needed or permitted here (GLSL forbids redefining macros
 // to the same target without ``#undef``).
+
+// ---------------------------------------------------------------------------
+// Reference-aligned local-light selection payloads.
+// These declarations are consumed by the initial-candidate stage before the
+// late reuse bridge implementation region becomes visible in Iris' dumped
+// shader output, so they live with the stage that first requires them.
+#ifndef PH_LIGHTTREE_REUSE_INCLUDE
+struct RTXDI_LightBufferRegion
+{
+    uint firstLightIndex;
+    uint numLights;
+    uint pad1;
+    uint pad2;
+};
+
+struct RTXDI_RISBufferSegmentParameters
+{
+    uint bufferOffset;
+    uint tileSize;
+    uint tileCount;
+    uint pad1;
+};
+
+struct RTXDI_RISTileInfo
+{
+    uint risTileOffset;
+    uint risTileSize;
+};
+
+const uint RTXDI_LocalLightContextSamplingMode_UNIFORM = 0u;
+const uint RTXDI_LocalLightContextSamplingMode_RIS = 1u;
+const uint RTXDI_LocalLightContextSamplingMode_INVALID = 0xFFFFFFFFu;
+
+struct RTXDI_LocalLightSelectionContext
+{
+    uint mode;
+    uint proposalFamily;
+    RTXDI_RISTileInfo risTileInfo;
+    RTXDI_LightBufferRegion lightBufferRegion;
+};
+
+RTXDI_LightBufferRegion RTXDI_GetLocalLightBufferRegion();
+RTXDI_RISBufferSegmentParameters RTXDI_GetLocalLightRISBufferSegmentParameters();
+void RTXDI_RandomlySelectLightUniformly(
+    float rnd,
+    RTXDI_LightBufferRegion region,
+    out RAB_LightInfo lightInfo,
+    out uint lightIndex,
+    out float invSourcePdf);
+void RTXDI_RandomlySelectLightDataFromRISTile(
+    float rnd,
+    RTXDI_RISTileInfo bufferInfo,
+    out uvec2 tileData,
+    out uint risBufferPtr);
+RTXDI_RISTileInfo RTXDI_SelectLocalLightReGIRRISTile(int cellIndex);
+RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextUniform(RTXDI_LightBufferRegion lightBufferRegion);
+RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextRIS(RTXDI_RISTileInfo risTileInfo);
+RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextRIS(
+    inout RTXDI_RandomSamplerState coherentRng,
+    RTXDI_RISBufferSegmentParameters risBufferSegmentParams);
+bool lt_bridge_supports_brdf_local_light_replay();
+float RTXDI_BrdfMaxDistanceFromPdf(float brdfCutoff, float pdf);
+float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir);
+float RTXDI_LightBrdfMisWeight(
+    RAB_Surface surface,
+    RAB_LightSample lightSample,
+    float lightSelectionPdf,
+    float lightMisWeight,
+    float brdfMisWeight,
+    float brdfCutoff);
+#endif
 
 // ---------------------------------------------------------------------------
 // Local-light selection context sentinel (reference parity):
@@ -130,7 +189,7 @@ float PathReservoir_computeUCW(RTXDI_DIReservoir pathReservoir)
 }
 
 // RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)
-// RTXDI does NOT guard numMisSamples against zero here — the early-exit in RTXDI_SampleLocalLights
+// RTXDI does NOT guard numMisSamples against zero here -- the early-exit in RTXDI_SampleLocalLights
 // ensures numMisSamples > 0 before this is used in division.
 // numMisSamples includes local + environment + BRDF sample counts (InitialSampling.hlsli line 45).
 // Environment samples are included even when the environment stub returns M=0 so MIS weights
@@ -148,6 +207,162 @@ RTXDI_LocalLightSelectionContext lt_make_invalid_local_light_selection_context()
     ctx.lightBufferRegion.pad2 = 0u;
     return ctx;
 }
+
+#ifndef PH_LIGHTTREE_REUSE_INCLUDE
+RTXDI_LightBufferRegion RTXDI_GetLocalLightBufferRegion()
+{
+    RTXDI_LightBufferRegion region;
+    region.firstLightIndex = 0u;
+    region.numLights = uint(max(ph_light_count, 0));
+    region.pad1 = 0u;
+    region.pad2 = 0u;
+    return region;
+}
+
+RTXDI_RISBufferSegmentParameters RTXDI_GetLocalLightRISBufferSegmentParameters()
+{
+    RTXDI_RISBufferSegmentParameters params;
+    params.bufferOffset = uint(max(ph_ris_tile_buffer_offset, 0));
+    params.tileSize = uint(max(ph_ris_tile_size, 0));
+    params.tileCount = uint(max(ph_ris_tile_count, 0));
+    params.pad1 = 0u;
+    return params;
+}
+
+void RTXDI_RandomlySelectLightUniformly(
+    float rnd,
+    RTXDI_LightBufferRegion region,
+    out RAB_LightInfo lightInfo,
+    out uint lightIndex,
+    out float invSourcePdf)
+{
+    lightInfo = RAB_EmptyLightInfo();
+    lightIndex = 0u;
+    invSourcePdf = 0.0f;
+
+    if (region.numLights == 0u)
+    {
+        return;
+    }
+
+    invSourcePdf = float(region.numLights);
+    lightIndex = region.firstLightIndex + min(uint(floor(rnd * float(region.numLights))), region.numLights - 1u);
+    lightInfo = RAB_LoadLightInfo(int(lightIndex), false);
+}
+
+void RTXDI_RandomlySelectLightDataFromRISTile(
+    float rnd,
+    RTXDI_RISTileInfo bufferInfo,
+    out uvec2 tileData,
+    out uint risBufferPtr)
+{
+    tileData = uvec2(0u);
+    risBufferPtr = 0u;
+
+    if (bufferInfo.risTileSize == 0u)
+    {
+        return;
+    }
+
+    uint risSample = min(uint(floor(rnd * float(bufferInfo.risTileSize))), bufferInfo.risTileSize - 1u);
+    risBufferPtr = risSample + bufferInfo.risTileOffset;
+    tileData = ph_ris_data[risBufferPtr];
+}
+
+RTXDI_RISTileInfo RTXDI_RandomlySelectRISTile(
+    inout RTXDI_RandomSamplerState coherentRng,
+    RTXDI_RISBufferSegmentParameters params)
+{
+    RTXDI_RISTileInfo risTileInfo;
+    risTileInfo.risTileOffset = params.bufferOffset;
+    risTileInfo.risTileSize = params.tileSize;
+
+    if (params.tileCount == 0u || params.tileSize == 0u)
+    {
+        risTileInfo.risTileSize = 0u;
+        return risTileInfo;
+    }
+
+    float tileRnd = RTXDI_GetNextRandom(coherentRng);
+    uint tileIndex = min(uint(tileRnd * float(params.tileCount)), params.tileCount - 1u);
+    risTileInfo.risTileOffset = tileIndex * params.tileSize + params.bufferOffset;
+    return risTileInfo;
+}
+
+RTXDI_RISTileInfo RTXDI_SelectLocalLightReGIRRISTile(int cellIndex)
+{
+    RTXDI_RISTileInfo tileInfo;
+    tileInfo.risTileOffset = uint(cellIndex) * uint(ph_regir_lights_per_cell) + uint(ph_regir_ris_buffer_offset);
+    tileInfo.risTileSize = uint(max(ph_regir_lights_per_cell, 0));
+    return tileInfo;
+}
+
+RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextUniform(RTXDI_LightBufferRegion lightBufferRegion)
+{
+    RTXDI_LocalLightSelectionContext ctx;
+    ctx.mode = RTXDI_LocalLightContextSamplingMode_UNIFORM;
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_UNIFORM;
+    ctx.lightBufferRegion = lightBufferRegion;
+    ctx.risTileInfo.risTileOffset = 0u;
+    ctx.risTileInfo.risTileSize = 0u;
+    return ctx;
+}
+
+RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextRIS(RTXDI_RISTileInfo risTileInfo)
+{
+    RTXDI_LocalLightSelectionContext ctx;
+    ctx.mode = RTXDI_LocalLightContextSamplingMode_RIS;
+    ctx.proposalFamily = LT_PROPOSAL_FAMILY_POWER_RIS;
+    ctx.risTileInfo = risTileInfo;
+    ctx.lightBufferRegion.firstLightIndex = 0u;
+    ctx.lightBufferRegion.numLights = 0u;
+    ctx.lightBufferRegion.pad1 = 0u;
+    ctx.lightBufferRegion.pad2 = 0u;
+    return ctx;
+}
+
+RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextRIS(
+    inout RTXDI_RandomSamplerState coherentRng,
+    RTXDI_RISBufferSegmentParameters risBufferSegmentParams)
+{
+    return RTXDI_InitializeLocalLightSelectionContextRIS(
+        RTXDI_RandomlySelectRISTile(coherentRng, risBufferSegmentParams));
+}
+
+bool lt_bridge_supports_brdf_local_light_replay() {
+    return false;
+}
+
+float RTXDI_LightBrdfMisWeight(
+    RAB_Surface surface,
+    RAB_LightSample lightSample,
+    float lightSelectionPdf,
+    float lightMisWeight,
+    float brdfMisWeight,
+    float brdfCutoff
+) {
+    float lightSolidAnglePdf = lightSample.solidAnglePdf;
+
+    if (brdfMisWeight == 0.0
+        || rtxdi_is_analytic_light_sample(lightSample)
+        || lightSolidAnglePdf <= 0.0
+        || isinf(lightSolidAnglePdf)
+        || isnan(lightSolidAnglePdf)) {
+        return lightMisWeight * lightSelectionPdf;
+    }
+
+    float brdfPdf = RAB_SurfaceEvaluateBrdfPdf(surface, lightSample.dir);
+    float maxDistance = RTXDI_BrdfMaxDistanceFromPdf(brdfCutoff, brdfPdf);
+    float lightDistance = length(lightSample.position - lt_surface_rt_pos(surface));
+    if (lightDistance > maxDistance) {
+        brdfPdf = 0.0;
+    }
+
+    float sourcePdfWrtSolidAngle = lightSelectionPdf * lightSolidAnglePdf;
+    float blendedPdfWrtSolidAngle = lightMisWeight * sourcePdfWrtSolidAngle + brdfMisWeight * brdfPdf;
+    return blendedPdfWrtSolidAngle / lightSolidAnglePdf;
+}
+#endif
 
 RTXDI_InitialSamplingMisData RTXDI_ComputeInitialSamplingMisData(RTXDI_DIInitialSamplingParameters initialSamplingParams)
 {

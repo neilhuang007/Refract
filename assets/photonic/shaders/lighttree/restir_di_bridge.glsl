@@ -7,7 +7,7 @@
 #include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
 
 // ============================================================================
-// Stage 3 (SpatialResampling.rt.slang) — direct port of the currently
+// Stage 3 (SpatialResampling.rt.slang) -- direct port of the currently
 // implemented local spatial stage, shaped after the reference file
 // reference/repos/Reservoir-Splatting/Source/RenderPasses/ReservoirSplatting/SpatialResampling.rt.slang
 // ============================================================================

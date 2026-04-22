@@ -1,266 +1,16 @@
 #ifndef PH_LIGHTTREE_REUSE_INCLUDE
 #define PH_LIGHTTREE_REUSE_INCLUDE
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
-// Reference-stage per-partition scatter tables.
-// Partition 0 is the single-splat temporal path; partitions [0, kNumTimePartitions)
-// are also addressed explicitly by the multi-splat motion-blur stages.
-layout(std430) restrict buffer ph_temporal_scatter_global_counters_partition0 {
-    uint ph_temporal_scatter_global_counters_partition0_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_global_counters_partition1 {
-    uint ph_temporal_scatter_global_counters_partition1_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_global_counters_partition2 {
-    uint ph_temporal_scatter_global_counters_partition2_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_global_counters_partition3 {
-    uint ph_temporal_scatter_global_counters_partition3_data[];
-};
+#include "/photonics/lighttree/restir_di_temporal_buffer_bridge.glsl"
 
-layout(std430) restrict buffer ph_temporal_scatter_cell_counters_partition0 {
-    uint ph_temporal_scatter_cell_counters_partition0_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_cell_counters_partition1 {
-    uint ph_temporal_scatter_cell_counters_partition1_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_cell_counters_partition2 {
-    uint ph_temporal_scatter_cell_counters_partition2_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_cell_counters_partition3 {
-    uint ph_temporal_scatter_cell_counters_partition3_data[];
-};
-
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
-layout(std430) restrict buffer ph_temporal_scatter_reservoir_indices_partition0 {
-    uvec2 ph_temporal_scatter_reservoir_indices_partition0_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_reservoir_indices_partition1 {
-    uvec2 ph_temporal_scatter_reservoir_indices_partition1_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_reservoir_indices_partition2 {
-    uvec2 ph_temporal_scatter_reservoir_indices_partition2_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_reservoir_indices_partition3 {
-    uvec2 ph_temporal_scatter_reservoir_indices_partition3_data[];
-};
-
-layout(std430) restrict buffer ph_temporal_scatter_scattered_reservoirs_partition0 {
-    uvec2 ph_temporal_scatter_scattered_reservoirs_partition0_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_scattered_reservoirs_partition1 {
-    uvec2 ph_temporal_scatter_scattered_reservoirs_partition1_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_scattered_reservoirs_partition2 {
-    uvec2 ph_temporal_scatter_scattered_reservoirs_partition2_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_scattered_reservoirs_partition3 {
-    uvec2 ph_temporal_scatter_scattered_reservoirs_partition3_data[];
-};
-
-layout(std430) restrict buffer ph_temporal_scatter_scattered_weights_partition0 {
-    uint ph_temporal_scatter_scattered_weights_partition0_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_scattered_weights_partition1 {
-    uint ph_temporal_scatter_scattered_weights_partition1_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_scattered_weights_partition2 {
-    uint ph_temporal_scatter_scattered_weights_partition2_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_scattered_weights_partition3 {
-    uint ph_temporal_scatter_scattered_weights_partition3_data[];
-};
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
+#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY
 #endif
 
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORTING) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
-layout(std430) restrict buffer ph_temporal_scatter_cell_offsets_partition0 {
-    uint ph_temporal_scatter_cell_offsets_partition0_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_cell_offsets_partition1 {
-    uint ph_temporal_scatter_cell_offsets_partition1_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_cell_offsets_partition2 {
-    uint ph_temporal_scatter_cell_offsets_partition2_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_cell_offsets_partition3 {
-    uint ph_temporal_scatter_cell_offsets_partition3_data[];
-};
-
-layout(std430) restrict buffer ph_temporal_scatter_sorted_reservoirs_partition0 {
-    uvec2 ph_temporal_scatter_sorted_reservoirs_partition0_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_sorted_reservoirs_partition1 {
-    uvec2 ph_temporal_scatter_sorted_reservoirs_partition1_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_sorted_reservoirs_partition2 {
-    uvec2 ph_temporal_scatter_sorted_reservoirs_partition2_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_sorted_reservoirs_partition3 {
-    uvec2 ph_temporal_scatter_sorted_reservoirs_partition3_data[];
-};
-
-layout(std430) restrict buffer ph_temporal_scatter_sorted_weights_partition0 {
-    uint ph_temporal_scatter_sorted_weights_partition0_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_sorted_weights_partition1 {
-    uint ph_temporal_scatter_sorted_weights_partition1_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_sorted_weights_partition2 {
-    uint ph_temporal_scatter_sorted_weights_partition2_data[];
-};
-layout(std430) restrict buffer ph_temporal_scatter_sorted_weights_partition3 {
-    uint ph_temporal_scatter_sorted_weights_partition3_data[];
-};
-#endif
-#endif
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
-uniform uint ph_reservoir_splatting_time_partition_count;
-
-uint lt_multi_temporal_partition_count()
-{
-    return max(ph_reservoir_splatting_time_partition_count, 1u);
-}
-
-const uint LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT = 0u;
-const uint LT_MULTI_TEMPORAL_COUNTER_INDEX_PREFIX_SUM = 1u;
-
-uint lt_multi_temporal_partition_linear_index(uint partitionIndex, uint cellIndex)
-{
-    return cellIndex;
-}
-
-uint lt_multi_temporal_scatter_counter_index(uint partitionIndex, uint counterIndex)
-{
-    return counterIndex;
-}
-
-uint lt_temporal_partitioned_cell_index(uint partitionIndex, uint cellIndex)
-{
-    return lt_multi_temporal_partition_linear_index(partitionIndex, cellIndex);
-}
-
-uint lt_temporal_partitioned_contributor_index(uint partitionIndex, uint contributorIndex)
-{
-    return contributorIndex;
-}
-
-uint lt_temporal_partitioned_counter_index(uint partitionIndex, uint counterIndex)
-{
-    return lt_multi_temporal_scatter_counter_index(partitionIndex, counterIndex);
-}
-
-float lt_multi_temporal_partition_duration()
-{
-    return 1.0f / float(lt_multi_temporal_partition_count());
-}
-
-float lt_multi_temporal_partition_fraction(float time)
-{
-    return clamp(time, 0.0f, 1.0f);
-}
-
-float lt_multi_temporal_partition_time(float fractionalTime, uint partitionIndex)
-{
-    return (fractionalTime + float(partitionIndex)) * lt_multi_temporal_partition_duration();
-}
-
-uint lt_temporal_scatter_global_counter_value(uint partitionIndex, uint counterIndex)
-{
-    if (partitionIndex == 0u) return ph_temporal_scatter_global_counters_partition0_data[counterIndex];
-    if (partitionIndex == 1u) return ph_temporal_scatter_global_counters_partition1_data[counterIndex];
-    if (partitionIndex == 2u) return ph_temporal_scatter_global_counters_partition2_data[counterIndex];
-    return ph_temporal_scatter_global_counters_partition3_data[counterIndex];
-}
-
-uint lt_temporal_scatter_global_counter_atomic_add(uint partitionIndex, uint counterIndex, uint value)
-{
-    if (partitionIndex == 0u) return atomicAdd(ph_temporal_scatter_global_counters_partition0_data[counterIndex], value);
-    if (partitionIndex == 1u) return atomicAdd(ph_temporal_scatter_global_counters_partition1_data[counterIndex], value);
-    if (partitionIndex == 2u) return atomicAdd(ph_temporal_scatter_global_counters_partition2_data[counterIndex], value);
-    return atomicAdd(ph_temporal_scatter_global_counters_partition3_data[counterIndex], value);
-}
-
-uint lt_temporal_scatter_cell_counter_value(uint partitionIndex, uint cellIndex)
-{
-    if (partitionIndex == 0u) return ph_temporal_scatter_cell_counters_partition0_data[cellIndex];
-    if (partitionIndex == 1u) return ph_temporal_scatter_cell_counters_partition1_data[cellIndex];
-    if (partitionIndex == 2u) return ph_temporal_scatter_cell_counters_partition2_data[cellIndex];
-    return ph_temporal_scatter_cell_counters_partition3_data[cellIndex];
-}
-
-uint lt_temporal_scatter_cell_counter_atomic_add(uint partitionIndex, uint cellIndex, uint value)
-{
-    if (partitionIndex == 0u) return atomicAdd(ph_temporal_scatter_cell_counters_partition0_data[cellIndex], value);
-    if (partitionIndex == 1u) return atomicAdd(ph_temporal_scatter_cell_counters_partition1_data[cellIndex], value);
-    if (partitionIndex == 2u) return atomicAdd(ph_temporal_scatter_cell_counters_partition2_data[cellIndex], value);
-    return atomicAdd(ph_temporal_scatter_cell_counters_partition3_data[cellIndex], value);
-}
-
-void lt_temporal_scatter_store_reservoir_index(uint partitionIndex, uint contributorIndex, uvec2 reservoirIndex)
-{
-    if (partitionIndex == 0u) { ph_temporal_scatter_reservoir_indices_partition0_data[contributorIndex] = reservoirIndex; return; }
-    if (partitionIndex == 1u) { ph_temporal_scatter_reservoir_indices_partition1_data[contributorIndex] = reservoirIndex; return; }
-    if (partitionIndex == 2u) { ph_temporal_scatter_reservoir_indices_partition2_data[contributorIndex] = reservoirIndex; return; }
-    ph_temporal_scatter_reservoir_indices_partition3_data[contributorIndex] = reservoirIndex;
-}
-
-uvec2 lt_temporal_scatter_load_reservoir_index(uint partitionIndex, uint contributorIndex)
-{
-    if (partitionIndex == 0u) return ph_temporal_scatter_reservoir_indices_partition0_data[contributorIndex];
-    if (partitionIndex == 1u) return ph_temporal_scatter_reservoir_indices_partition1_data[contributorIndex];
-    if (partitionIndex == 2u) return ph_temporal_scatter_reservoir_indices_partition2_data[contributorIndex];
-    return ph_temporal_scatter_reservoir_indices_partition3_data[contributorIndex];
-}
-
-void lt_temporal_scatter_store_scattered_reservoir(uint partitionIndex, uint contributorIndex, uvec2 scatteredReservoir)
-{
-    if (partitionIndex == 0u) { ph_temporal_scatter_scattered_reservoirs_partition0_data[contributorIndex] = scatteredReservoir; return; }
-    if (partitionIndex == 1u) { ph_temporal_scatter_scattered_reservoirs_partition1_data[contributorIndex] = scatteredReservoir; return; }
-    if (partitionIndex == 2u) { ph_temporal_scatter_scattered_reservoirs_partition2_data[contributorIndex] = scatteredReservoir; return; }
-    ph_temporal_scatter_scattered_reservoirs_partition3_data[contributorIndex] = scatteredReservoir;
-}
-
-uvec2 lt_temporal_scatter_load_scattered_reservoir(uint partitionIndex, uint contributorIndex)
-{
-    if (partitionIndex == 0u) return ph_temporal_scatter_scattered_reservoirs_partition0_data[contributorIndex];
-    if (partitionIndex == 1u) return ph_temporal_scatter_scattered_reservoirs_partition1_data[contributorIndex];
-    if (partitionIndex == 2u) return ph_temporal_scatter_scattered_reservoirs_partition2_data[contributorIndex];
-    return ph_temporal_scatter_scattered_reservoirs_partition3_data[contributorIndex];
-}
-
-uint lt_temporal_scatter_cell_offset_value(uint partitionIndex, uint cellIndex)
-{
-    if (partitionIndex == 0u) return ph_temporal_scatter_cell_offsets_partition0_data[cellIndex];
-    if (partitionIndex == 1u) return ph_temporal_scatter_cell_offsets_partition1_data[cellIndex];
-    if (partitionIndex == 2u) return ph_temporal_scatter_cell_offsets_partition2_data[cellIndex];
-    return ph_temporal_scatter_cell_offsets_partition3_data[cellIndex];
-}
-
-void lt_temporal_scatter_store_cell_offset(uint partitionIndex, uint cellIndex, uint value)
-{
-    if (partitionIndex == 0u) { ph_temporal_scatter_cell_offsets_partition0_data[cellIndex] = value; return; }
-    if (partitionIndex == 1u) { ph_temporal_scatter_cell_offsets_partition1_data[cellIndex] = value; return; }
-    if (partitionIndex == 2u) { ph_temporal_scatter_cell_offsets_partition2_data[cellIndex] = value; return; }
-    ph_temporal_scatter_cell_offsets_partition3_data[cellIndex] = value;
-}
-
-void lt_temporal_scatter_store_sorted_reservoir(uint partitionIndex, uint contributorIndex, uvec2 sortedReservoir)
-{
-    if (partitionIndex == 0u) { ph_temporal_scatter_sorted_reservoirs_partition0_data[contributorIndex] = sortedReservoir; return; }
-    if (partitionIndex == 1u) { ph_temporal_scatter_sorted_reservoirs_partition1_data[contributorIndex] = sortedReservoir; return; }
-    if (partitionIndex == 2u) { ph_temporal_scatter_sorted_reservoirs_partition2_data[contributorIndex] = sortedReservoir; return; }
-    ph_temporal_scatter_sorted_reservoirs_partition3_data[contributorIndex] = sortedReservoir;
-}
-
-uvec2 lt_temporal_scatter_load_sorted_reservoir(uint partitionIndex, uint contributorIndex)
-{
-    if (partitionIndex == 0u) return ph_temporal_scatter_sorted_reservoirs_partition0_data[contributorIndex];
-    if (partitionIndex == 1u) return ph_temporal_scatter_sorted_reservoirs_partition1_data[contributorIndex];
-    if (partitionIndex == 2u) return ph_temporal_scatter_sorted_reservoirs_partition2_data[contributorIndex];
-    return ph_temporal_scatter_sorted_reservoirs_partition3_data[contributorIndex];
-}
-#endif
+void lt_SortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel);
+void lt_SortReprojectedReservoirs_sort_cell_data(uint scatterIndex);
+void lt_MultiSortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel);
+void lt_MultiSortReprojectedReservoirs_sort_cell_data(uint scatterIndex);
 
 #ifndef PH_LIGHTTREE_INITIAL_SAMPLE_COUNT_HELPERS
 #define PH_LIGHTTREE_INITIAL_SAMPLE_COUNT_HELPERS
@@ -316,7 +66,7 @@ layout(std430) restrict readonly buffer ph_global_light_cdf {
     float ph_global_light_cdf_data[];
 };
 
-// RTXDI: RTXDI_RIS_BUFFER — declared in light_tree.glsl (included above).
+// RTXDI: RTXDI_RIS_BUFFER -- declared in light_tree.glsl (included above).
 // Unified buffer containing presample tiles and ReGIR output.
 // Used as outside-grid fallback in RTXDI_SampleLocalLights, matching RTXDI InitialSampling.hlsli
 
@@ -324,14 +74,14 @@ uniform int  ph_ris_tile_size;            // RTXDI: risBufferSegmentParams.tileS
 uniform int  ph_ris_tile_count;           // RTXDI: risBufferSegmentParams.tileCount
 uniform int  ph_ris_tile_buffer_offset;   // RTXDI: risBufferSegmentParams.bufferOffset (typically 0)
 
-// Reverse light mapping: current-frame index → previous-frame index.
-// Inverse of ph_light_list_mapping (previous→current). Built in LightRegistry.java.
+// Reverse light mapping: current-frame index -> previous-frame index.
+// Inverse of ph_light_list_mapping (previous->current). Built in LightRegistry.java.
 // Returns -1 when no previous-frame equivalent exists for the current-frame light.
 layout(std430) restrict readonly buffer ph_light_reverse_mapping_buf {
     int ph_light_reverse_mapping[];
 };
 
-// Previous-frame light data — double-buffered copy of ph_light_list from the prior frame.
+// Previous-frame light data -- double-buffered copy of ph_light_list from the prior frame.
 // Enables RTXDI-style RAB_LoadLightInfo(id, true) semantics for temporal resampling.
 // Memory layout is identical to ph_light_list (std140, 4 vec4s per light).
 layout(std140) restrict readonly buffer ph_light_list_previous {
@@ -443,7 +193,7 @@ const int RTXDI_LOCAL_LIGHT_SAMPLING_UNIFORM   = 0;
 const int RTXDI_LOCAL_LIGHT_SAMPLING_POWER_RIS = 1;
 const int RTXDI_LOCAL_LIGHT_SAMPLING_REGIR_RIS = 2;
 
-// Initial sampling parameters — matches RTXDI_DIInitialSamplingParameters (ReSTIRDIParameters.h lines 69-85).
+// Initial sampling parameters -- matches RTXDI_DIInitialSamplingParameters (ReSTIRDIParameters.h lines 69-85).
 // When 0.0 (unbound), fall back to compile-time macro values.
 uniform float ph_restir_initial_num_local_samples;       // RTXDI: numLocalLightSamples
 // RTXDI: numEnvironmentSamples (SDK default 1, ReSTIRDI.cpp line 41).
@@ -457,13 +207,13 @@ uniform float ph_restir_debug_force_target_pdf_one;       // Hidden debug overri
 uniform float ph_restir_debug_force_shading_inv_pdf_one;  // Hidden debug override: force reservoir invPdf = 1 during shading.
 uniform float ph_restir_debug_force_solid_angle_pdf_one;  // Hidden debug override: force light sample solidAnglePdf = 1 during shading.
 
-// Local light sampling mode — matches RTXDI_DIInitialSamplingParameters::localLightSamplingMode
+// Local light sampling mode -- matches RTXDI_DIInitialSamplingParameters::localLightSamplingMode
 // (ReSTIRDI_LocalLightSamplingMode enum in RtxdiParameters.h lines 44-48):
-//   -1.0 → SDK default (Uniform, mode 0)
-//    0.0 (unbound) → SDK default (Uniform, mode 0)
-//    0 = ReSTIRDI_LocalLightSamplingMode_UNIFORM   — equal probability from light buffer
-//    1 = ReSTIRDI_LocalLightSamplingMode_POWER_RIS — power-CDF importance sampling (stratified)
-//    2 = ReSTIRDI_LocalLightSamplingMode_REGIR_RIS — ReGIR cell-based RIS (with Power_RIS fallback)
+//   -1.0 -> SDK default (Uniform, mode 0)
+//    0.0 (unbound) -> SDK default (Uniform, mode 0)
+//    0 = ReSTIRDI_LocalLightSamplingMode_UNIFORM   -- equal probability from light buffer
+//    1 = ReSTIRDI_LocalLightSamplingMode_POWER_RIS -- power-CDF importance sampling (stratified)
+//    2 = ReSTIRDI_LocalLightSamplingMode_REGIR_RIS -- ReGIR cell-based RIS (with Power_RIS fallback)
 // SDK default (ReSTIRDI.cpp line 45): Uniform (0).
 uniform float ph_restir_local_light_sampling_mode;
 
@@ -531,7 +281,7 @@ uvec2 lt_temporal_scatter_decode_linear_index(uint linearIndex) {
     return uvec2(linearIndex % width, linearIndex / width);
 }
 
-// RTXDI neighbor offset buffer — 8192 entries generated by FillNeighborOffsetBuffer (RtxdiUtils.cpp).
+// RTXDI neighbor offset buffer -- 8192 entries generated by FillNeighborOffsetBuffer (RtxdiUtils.cpp).
 // The SDK stores two signed 8-bit values per neighbor. Mirror that storage exactly here
 // and reconstruct signed offsets before multiplying by the sampling radius.
 // Populated once at init by LightRegistry.fillNeighborOffsets(); never written per-frame.
@@ -816,7 +566,7 @@ RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geoNormalValue, vec3 shadin
     return lt_make_surface(worldPosValue, geoNormalValue, shadingNormalValue, vec3(1.0f), RAB_EmptyMaterial());
 }
 
-// RTXDI: RAB_EmptySurface() — returns a zeroed surface with a well-defined up-normal.
+// RTXDI: RAB_EmptySurface() -- returns a zeroed surface with a well-defined up-normal.
 // Used to initialize temporalSurface before a valid temporal neighbor is found,
 // matching RTXDI TemporalResampling.hlsli line 69: RAB_Surface temporalSurface = RAB_EmptySurface();
 RAB_Surface lt_empty_surface() {
@@ -1241,6 +991,7 @@ ScatterReconnectionData scatter_load_gather_intermediate_reconnection(ivec2 uv) 
     );
 }
 
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
 struct LtTemporalGatherShiftedPathData {
     vec3 radiance;
     float secondaryPathJacobian;
@@ -1316,6 +1067,7 @@ void scatter_store_gather_shifted_path_data(
     shiftedPathData0 = vec4(max(shiftedPathData.radiance, vec3(0.0f)), max(shiftedPathData.secondaryPathJacobian, 1e-10f));
     shiftedPathData1 = vec4(max(shiftedPathData.lensVertexJacobian, 1e-10f), shiftedPathData.valid, 0.0f, 0.0f);
 }
+#endif
 
 vec2 scatter_load_gather_floating_coords(ivec2 uv) {
     return texelFetch(temporal_gather_floating_coords, uv, 0).xy;
@@ -1592,15 +1344,15 @@ vec3 lt_fresnel_schlick(float cosTheta, vec3 f0) {
 
 float lt_distribution_ggx(float nDotH, float roughness) {
     float clampedRoughness = max(roughness, lt_min_roughness);
-    float a = clampedRoughness * clampedRoughness;  // α = roughness²
-    float a2 = a * a;                                // α² = roughness⁴
+    float a = clampedRoughness * clampedRoughness;  // alpha = roughness^2
+    float a2 = a * a;                                // alpha^2 = roughness?
     float denom = nDotH * nDotH * (a2 - 1.0f) + 1.0f;
     return a2 / max(lt_pi * denom * denom, 1e-6f);
 }
 
 float lt_geometry_schlick_ggx(float nDotX, float roughness) {
-    float a = max(roughness, lt_min_roughness) * max(roughness, lt_min_roughness);  // α = roughness², clamped
-    float k = a * 0.5f;                                        // k = α/2 (analytic Smith-GGX)
+    float a = max(roughness, lt_min_roughness) * max(roughness, lt_min_roughness);  // alpha = roughness^2, clamped
+    float k = a * 0.5f;                                        // k = alpha/2 (analytic Smith-GGX)
     return nDotX / max(nDotX * (1.0f - k) + k, 1e-6f);
 }
 
@@ -2099,6 +1851,119 @@ struct RTXDI_DIReservoir {
 RTXDI_DIReservoir RTXDI_EmptyDIReservoir();
 bool RTXDI_IsValidDIReservoir(RTXDI_DIReservoir reservoir);
 
+// DI temporal scatter ABI prelude.
+// reuse_bridge.glsl references these Stage 2e helpers before
+// restir_di_scatter_impl.glsl is included, so declare the shared payload and
+// signatures once the shared DI reservoir layout is known.
+struct LtScatterCurrentSample {
+    bool                                  isValid;
+    bool                                  hasPositivePHat;
+    RTXDI_DIReservoir                     reservoir;
+    ReservoirSplattingReconnectionData    reconnectionData;
+    float                                 confidence;
+};
+
+float ScatterTemporalResampling_load_previous_reservoir_confidence(
+    ivec2 neighborPixel);
+
+RTXDI_DIReservoir lt_ScatterTemporalResampling_load_current_reservoir(
+    ivec2 pixel);
+
+LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
+    uint reservoirIdx,
+    ivec2 pixel,
+    RAB_Surface surface,
+    RTXDI_DIReservoir currReservoir);
+
+float ScatterTemporalResampling_compute_curr_sample_mis(
+    LtScatterCurrentSample currSample,
+    ivec2 pixel,
+    RAB_Surface surface);
+
+bool ScatterTemporalResampling_process_contributor(
+    inout RTXDI_DIReservoir dstReservoir,
+    inout ScatterReconnectionData dstReconnectionData,
+    inout float newConfidence,
+    ivec2 scatteredPixel,
+    ivec2 pixel,
+    RTXDI_DIReservoir currReservoir,
+    ScatterReconnectionData currReconnectionData,
+    float currReservoirConfidence,
+    inout RTXDI_RandomSamplerState sg);
+
+float ScatterTemporalResampling_motion_vector_confidence(
+    ivec2 pixel,
+    float newConfidence);
+
+struct LtScatterShiftedPath {
+    bool  valid;
+    ReservoirSplattingHitInfo firstHit;
+    vec2  fractionalPixel;
+    vec2  lensSample;
+    vec3  firstRayDir;
+    vec3  radiance;
+    float subPixelJacobian;
+    float secondaryPathJacobian;
+    float lensVertexJacobian;
+};
+
+struct ShiftedPathData {
+    vec3 primaryHit;
+    vec3 firstRayDir;
+    vec3 radiance;
+    vec2 fractionalPixel;
+    vec2 subPixel;
+    vec2 lensSample;
+    float subPixelJacobian;
+    float secondaryPathJacobian;
+    float lensVertexJacobian;
+};
+
+ShiftedPathData gatherLensVertexCopyShift(
+    RTXDI_RandomSamplerState rng,
+    ReservoirSplattingReconnectionData reconnectionData,
+    float time,
+    vec2 pixel,
+    vec2 lensSample);
+
+ReservoirSplattingReconnectionData ScatterTemporalReconnectionData_update(
+    ReservoirSplattingReconnectionData reconnectionData,
+    ShiftedPathData shiftedPathData);
+
+float lt_scatter_reservoir_confidence(
+    RTXDI_DIReservoir reservoir,
+    ScatterReconnectionData reconnection);
+
+float lt_scatter_radiance_phat(vec3 radiance);
+
+float lt_scatter_compute_ucw(
+    RTXDI_DIReservoir reservoir,
+    vec3 integrand);
+
+bool lt_scatter_add_sample_from_reservoir(
+    inout RTXDI_DIReservoir dstReservoir,
+    inout float dstConfidence,
+    float sampleMIS,
+    vec3 integrand,
+    float jacobian,
+    float ucw,
+    float sampleConfidence,
+    RTXDI_DIReservoir sampleReservoir,
+    inout RTXDI_RandomSamplerState rng
+);
+
+bool lt_scatter_update_shifted_reservoir(
+    ScatterReconnectionData sourceReconnection,
+    RTXDI_DIReservoir sourceReservoir,
+    bool sourcePreviousFrame,
+    bool targetPreviousFrame,
+    RAB_Surface targetSurface,
+    ivec2 targetPixel,
+    out LtScatterShiftedPath shifted,
+    out RTXDI_DIReservoir shiftedReservoir,
+    out ScatterReconnectionData shiftedReconnection,
+    out float shiftedJacobian);
+
 const uint RTXDI_PackedDIReservoir_VisibilityMask = 0x3ffffu;
 const uint RTXDI_PackedDIReservoir_VisibilityChannelMax = 0x3fu;
 const uint RTXDI_PackedDIReservoir_VisibilityChannelShift = 6u;
@@ -2336,7 +2201,7 @@ bool lt_pick_power_light(out int lightIndex, out float lightPdf) {
     return true;
 }
 
-// Primary — matches RTXDI naming (RTXDI_DIReservoir.hlsli: RTXDI_EmptyDIReservoir)
+// Primary -- matches RTXDI naming (RTXDI_DIReservoir.hlsli: RTXDI_EmptyDIReservoir)
 RTXDI_DIReservoir RTXDI_EmptyDIReservoir() {
     RTXDI_DIReservoir r;
     r.lightData = 0u;
@@ -2358,7 +2223,7 @@ RTXDI_DIReservoir RTXDI_EmptyDIReservoir() {
 // Backward-compat alias
 RTXDI_DIReservoir rtxdi_empty_reservoir() { return RTXDI_EmptyDIReservoir(); }
 
-// Primary — matches RTXDI semantics: only checks light index validity (RTXDI_DIReservoir.hlsli: lightData != 0)
+// Primary -- matches RTXDI semantics: only checks light index validity (RTXDI_DIReservoir.hlsli: lightData != 0)
 bool RTXDI_IsValidDIReservoir(RTXDI_DIReservoir reservoir) {
     return reservoir.lightData != 0u;
 }
@@ -2543,7 +2408,7 @@ void lt_area_seed_domain_samples(
 }
 
 float lt_area_confidence_from_samples(float sampleCount) {
-    // Reference: Reservoir.slang:75 — PathReservoir::confidenceCap = 20
+    // Reference: Reservoir.slang:75 -- PathReservoir::confidenceCap = 20
     return clamp(sampleCount, 0.0f, 20.0f);
 }
 
@@ -2643,13 +2508,13 @@ ivec2 lt_area_reproject_pixel(ivec2 pixelPosition) {
     return clamp(prevPixel, ivec2(0), ivec2(int(viewWidth) - 1, int(viewHeight) - 1));
 }
 
-// Stricter photonics validity check — also requires M > 0 and weightSum > 0.
+// Stricter photonics validity check -- also requires M > 0 and weightSum > 0.
 // Kept separate from RTXDI_IsValidDIReservoir for callers that need it.
 bool rtxdi_is_valid_reservoir(RTXDI_DIReservoir reservoir) {
     return reservoir.lightData != 0u && reservoir.M > 0.0f && reservoir.weightSum > 0.0f;
 }
 
-// Accessor wrappers — naming parity with RTXDI's RTXDI_DIReservoir.hlsli accessor functions.
+// Accessor wrappers -- naming parity with RTXDI's RTXDI_DIReservoir.hlsli accessor functions.
 int RTXDI_GetDIReservoirLightIndex(RTXDI_DIReservoir reservoir) {
     return rtxdi_get_light_index(reservoir);
 }
@@ -3289,7 +3154,7 @@ RTXDI_DIReservoir RTXDI_LoadDIReservoir(
     }
     else if (reservoirArrayIndex == RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_OUTPUT)
     {
-        // Scatter temporal resampling output — same packed format, different texture.
+        // Scatter temporal resampling output -- same packed format, different texture.
         rtxdi_unpack_reservoir_at_surface(
             reservoir,
             texelFetch(temporal_reservoir_data, reservoirPositionInt, 0),
@@ -3363,7 +3228,7 @@ void rtxdi_reset_visibility(inout RTXDI_DIReservoir reservoir) {
 
 void rtxdi_prepare_spatial_reuse(inout RTXDI_DIReservoir reservoir, ivec2 spatialOffset) {
     // RTXDI SpatialResampling.hlsli line 87: neighborSample.spatialDistance += spatialOffset;
-    // Unconditional — no visibility guard. Always track accumulated spatial distance.
+    // Unconditional -- no visibility guard. Always track accumulated spatial distance.
     reservoir.spatialDistance += spatialOffset;
 }
 
@@ -3400,13 +3265,13 @@ vec3 rtxdi_get_visibility(RTXDI_DIReservoir reservoir) {
     return rtxdi_unpack_visibility(reservoir.packedVisibility);
 }
 
-// Scalar visibility test — true when at least one channel exceeds 0 via luminance.
+// Scalar visibility test -- true when at least one channel exceeds 0 via luminance.
 // Uses per-channel luminance-weighted sum matching RTXDI's packedVisibility bit test.
 bool rtxdi_is_visible(RTXDI_DIReservoir reservoir) {
     return ph_luminance(rtxdi_get_visibility(reservoir)) > 0.0f;
 }
 
-// Primary — matches RTXDI_StoreVisibilityInDIReservoir (RTXDI_DIReservoir.hlsli).
+// Primary -- matches RTXDI_StoreVisibilityInDIReservoir (RTXDI_DIReservoir.hlsli).
 // discardIfInvisible: when true and visibility is fully zero, kill the reservoir light data
 // (equivalent to RTXDI discarding an occluded sample). M and targetPdf are always preserved.
 void RTXDI_StoreVisibilityInDIReservoir(inout RTXDI_DIReservoir reservoir, vec3 visibility, bool discardIfInvisible) {
@@ -3415,14 +3280,14 @@ void RTXDI_StoreVisibilityInDIReservoir(inout RTXDI_DIReservoir reservoir, vec3 
     reservoir.age = 0u;
     if (discardIfInvisible && visibility.x == 0.0f && visibility.y == 0.0f && visibility.z == 0.0f) {
         // RTXDI RTXDI_DIReservoir.hlsli lines 93-96: only clears lightData and weightSum.
-        // sampleUv (uvData) is intentionally NOT cleared — RTXDI leaves it intact.
+        // sampleUv (uvData) is intentionally NOT cleared -- RTXDI leaves it intact.
         // M and targetPdf are also preserved for correct downstream resampling.
         reservoir.lightData = 0u;
         reservoir.weightSum = 0.0f;
     }
 }
 
-// Backward-compat alias — preserves original bool-based call sites.
+// Backward-compat alias -- preserves original bool-based call sites.
 void rtxdi_store_visibility(inout RTXDI_DIReservoir reservoir, bool visible) {
     RTXDI_StoreVisibilityInDIReservoir(reservoir, visible ? vec3(1.0f) : vec3(0.0f), true);
 }
@@ -3465,7 +3330,7 @@ void rtxdi_inherit_visibility(
     }
 }
 
-// Primary — matches RTXDI_StreamSample signature (RTXDI_DIReservoir.hlsli).
+// Primary -- matches RTXDI_StreamSample signature (RTXDI_DIReservoir.hlsli).
 // Takes explicit lightIndex, position (RT-space), random value, targetPdf, and invSourcePdf.
 // Always increments M; does NOT reset visibility (caller manages visibility lifecycle).
 bool RTXDI_StreamSample(inout RTXDI_DIReservoir reservoir, int lightIndex, vec2 sampleUv, float random, float targetPdf, float invSourcePdf) {
@@ -3538,7 +3403,7 @@ float rtxdi_pairwise_mis_weight(float w0, float w1, float M0, float M1) {
     return balanceDenominator <= 0.0f ? 0.0f : max(M0 * w0, 0.0f) / balanceDenominator;
 }
 
-// Primary — matches RTXDI_InternalSimpleResample exactly (RTXDI_DIReservoir.hlsli lines 192-225).
+// Primary -- matches RTXDI_InternalSimpleResample exactly (RTXDI_DIReservoir.hlsli lines 192-225).
 // No early-return guards: risWeight=0 cases fall through naturally (M still accumulates).
 bool RTXDI_InternalSimpleResample(
     inout RTXDI_DIReservoir reservoir,
@@ -3689,7 +3554,7 @@ bool RTXDI_StreamCanonicalWithPairwiseStep(
 }
 
 // 3-parameter version matching RTXDI_FinalizeResampling exactly (RTXDI_DIReservoir.hlsli).
-// Uses reservoir.targetPdf as the denominator base — call this for temporal/bias-correction paths.
+// Uses reservoir.targetPdf as the denominator base -- call this for temporal/bias-correction paths.
 void RTXDI_FinalizeResampling(inout RTXDI_DIReservoir reservoir, float normalizationNumerator, float normalizationDenominator) {
     float denominator = reservoir.targetPdf * normalizationDenominator;
     reservoir.weightSum = (denominator == 0.0f) ? 0.0f : (reservoir.weightSum * normalizationNumerator) / denominator;
@@ -3806,7 +3671,7 @@ void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 c
         }
     }
     // When remap=false, lightData preserves the previous-frame packed ID and validity bit.
-    // RTXDI_LoadDIReservoir does not validate — remapping happens separately at the call site.
+    // RTXDI_LoadDIReservoir does not validate -- remapping happens separately at the call site.
 
     reservoir.lightData = lightData;
     reservoir.uvData = floatBitsToUint(sampleData.x);
@@ -3963,1121 +3828,23 @@ const uint AREA_RESTIR_SHIFT_MODE_MIS                = 2u;  // ShiftMappingModeI
 // NOTE: Previously there was a top-level `#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)`
 // wrapping the remainder of this file. That gated core RTXDI helpers such as
 // ``RTXDI_SampleLocalLights``, ``RTXDI_LightBrdfMisWeight``, the pairwise MIS
-// splat helpers, and ``lt_materials_similar``/``IsComplexSurface`` — all of
+// splat helpers, and ``lt_materials_similar``/``IsComplexSurface`` -- all of
 // which are consumed by non-scatter passes (GenerateInitialSamples,
 // SpatialResampling, GatherTemporalResampling, Shade*). The guard has been
 // removed; the narrower ``#if`` blocks below still protect the scatter-SSBO
 // touching code (append/sort/resolve cells) so non-scatter passes compile
 // cleanly while the splatting pipeline keeps its storage buffers.
-void lt_temporal_scatter_emit_empty_stage_output(out RTXDI_DIReservoir reservoir)
+// Tracks per-technique sample counts and their MIS weights for blended source PDF computation.
+// Defined here so RTXDI_LightBrdfMisWeight and rtxdi_stream_local_light can reference it.
+// MUST be declared before the RTXDI_Sample* forward declarations below, because
+// RTXDI_SampleBrdf's signature references this struct by value.
+struct RTXDI_InitialSamplingMisData
 {
-    reservoir = RTXDI_EmptyDIReservoir();
-}
-
-RTXDI_DIReservoir lt_area_temporal_spatial_passthrough(
-    ivec2 pixelPosition,
-    RAB_Surface currentSurface,
-    RTXDI_DIReservoir currentReservoir,
-    inout RTXDI_RandomSamplerState rng)
-{
-    return currentReservoir;
-}
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
-// Reference: ReprojectTemporalSamples.rt.slang:167-174.
-//   InterlockedAdd(globalCounters[kCounterIndexDataCount], 1, index);
-//   InterlockedAdd(cellCounters[linearizedIndex], 1, cellIndex);
-//   reservoirIndices[index]    = uint2(linearizedIndex, cellIndex);
-//   scatteredReservoirs[index] = pixel;
-// ``supportWeight`` is ignored so the scatter/sort tables stay in lockstep with
-// the reference (uniform weight 1.0 per splat). It is kept in the signature
-// because the Java pipeline still expects the 3-arg call shape.
-void lt_temporal_scatter_append_contributor(ivec2 targetPixel, ivec2 sourceReservoirPos, float supportWeight)
-{
-    if (!lt_is_viewport_uv_in_bounds(targetPixel) || supportWeight <= 0.0f) {
-        return;
-    }
-
-    ivec2 targetReservoirPos = RTXDI_PixelPosToReservoirPos(targetPixel, ph_restir_active_checkerboard_field);
-    if (!lt_is_active_reservoir_lane(targetReservoirPos)) {
-        return;
-    }
-
-    uint cellLinearIndex = lt_temporal_scatter_linear_index(targetReservoirPos);
-    uint localCellIndex  = lt_temporal_scatter_cell_counter_atomic_add(0u, cellLinearIndex, 1u);
-    uint appendIndex     = lt_temporal_scatter_global_counter_atomic_add(0u, 0u, 1u);
-    lt_temporal_scatter_store_reservoir_index(0u, appendIndex, uvec2(cellLinearIndex, localCellIndex));
-    lt_temporal_scatter_store_scattered_reservoir(0u, appendIndex, uvec2(sourceReservoirPos));
-}
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
-void lt_multi_temporal_scatter_append_contributor(
-    uint partitionIndex,
-    ivec2 targetPixel,
-    ivec2 sourceReservoirPos)
-{
-    if (!lt_is_viewport_uv_in_bounds(targetPixel)) {
-        return;
-    }
-
-    ivec2 targetReservoirPos = RTXDI_PixelPosToReservoirPos(targetPixel, ph_restir_active_checkerboard_field);
-    if (!lt_is_active_reservoir_lane(targetReservoirPos)) {
-        return;
-    }
-
-    uint cellLinearIndex = lt_temporal_scatter_linear_index(targetReservoirPos);
-    uint partitionedCellIndex = lt_temporal_partitioned_cell_index(partitionIndex, cellLinearIndex);
-    uint counterBaseIndex = lt_temporal_partitioned_counter_index(partitionIndex, LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT);
-    uint localCellIndex = lt_temporal_scatter_cell_counter_atomic_add(partitionIndex, partitionedCellIndex, 1u);
-    uint appendIndex = lt_temporal_scatter_global_counter_atomic_add(partitionIndex, counterBaseIndex, 1u);
-    uint scatteredBufferIndex = lt_temporal_partitioned_contributor_index(partitionIndex, appendIndex);
-    lt_temporal_scatter_store_reservoir_index(partitionIndex, scatteredBufferIndex, uvec2(cellLinearIndex, localCellIndex));
-    lt_temporal_scatter_store_scattered_reservoir(partitionIndex, scatteredBufferIndex, uvec2(sourceReservoirPos));
-}
-#endif
-#endif
-
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-// Reference: SortReprojectedReservoirs.cs.slang::computeCellOffsets (lines 56-73).
-//   InterlockedAdd(globalCounters[kCounterIndexPrefixSum], cellCounter, offset);
-//   cellOffsets[index] = offset;
-void lt_SortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel)
-{
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        return;
-    }
-
-    uint cellIndex = uint(pixel.y * viewWidth + pixel.x);
-    uint cellCounter = lt_temporal_scatter_cell_counter_value(0u, cellIndex);
-    if (cellCounter == 0u) {
-        return;
-    }
-    uint offset = lt_temporal_scatter_global_counter_atomic_add(0u, 1u, cellCounter);
-    lt_temporal_scatter_store_cell_offset(0u, cellIndex, offset);
-}
-
-// Reference: SortReprojectedReservoirs.cs.slang::sortCellData (lines 79-95).
-//   sortedReservoirs[cellOffsets[linearizedIndex] + cellIndex] = prevPixel;
-// Photonics matches: a single indirection writes the source pixel into the
-// sorted list at the per-cell offset computed by the prefix-sum pass.
-void lt_SortReprojectedReservoirs_sort_cell_data(uint scatterIndex)
-{
-    if (scatterIndex >= lt_temporal_scatter_global_counter_value(0u, 0u)) {
-        return;
-    }
-
-    uvec2 reservoirIndex = lt_temporal_scatter_load_reservoir_index(0u, scatterIndex);
-    uint targetCell      = reservoirIndex.x;
-    uint localCellIndex  = reservoirIndex.y;
-    uint sortedIndex     = lt_temporal_scatter_cell_offset_value(0u, targetCell) + localCellIndex;
-    lt_temporal_scatter_store_sorted_reservoir(0u, sortedIndex, lt_temporal_scatter_load_scattered_reservoir(0u, scatterIndex));
-}
-
-void lt_MultiSortReprojectedReservoirs_compute_cell_offsets(ivec2 pixel)
-{
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        return;
-    }
-
-    uint cellIndex = uint(pixel.y * viewWidth + pixel.x);
-    for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
-        uint partitionedCellIndex = lt_temporal_partitioned_cell_index(partitionIndex, cellIndex);
-        uint cellCounter = lt_temporal_scatter_cell_counter_value(partitionIndex, partitionedCellIndex);
-        if (cellCounter == 0u) {
-            continue;
-        }
-        uint counterIndex = lt_temporal_partitioned_counter_index(partitionIndex, LT_MULTI_TEMPORAL_COUNTER_INDEX_PREFIX_SUM);
-        uint offset = lt_temporal_scatter_global_counter_atomic_add(partitionIndex, counterIndex, cellCounter);
-        lt_temporal_scatter_store_cell_offset(partitionIndex, partitionedCellIndex, offset);
-    }
-}
-
-void lt_MultiSortReprojectedReservoirs_sort_cell_data(uint scatterIndex)
-{
-    for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
-        uint counterIndex = lt_temporal_partitioned_counter_index(partitionIndex, LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT);
-        uint partitionCount = lt_temporal_scatter_global_counter_value(partitionIndex, counterIndex);
-        if (scatterIndex >= partitionCount) {
-            continue;
-        }
-
-        uint scatteredBufferIndex = lt_temporal_partitioned_contributor_index(partitionIndex, scatterIndex);
-        uvec2 reservoirIndex = lt_temporal_scatter_load_reservoir_index(partitionIndex, scatteredBufferIndex);
-        uint cellLinearIndex = reservoirIndex.x;
-        uint localCellIndex = reservoirIndex.y;
-        uint partitionedCellIndex = lt_temporal_partitioned_cell_index(partitionIndex, cellLinearIndex);
-        uint sortedIndex = lt_temporal_scatter_cell_offset_value(partitionIndex, partitionedCellIndex) + localCellIndex;
-        uint sortedBufferIndex = lt_temporal_partitioned_contributor_index(partitionIndex, sortedIndex);
-        lt_temporal_scatter_store_sorted_reservoir(partitionIndex, sortedBufferIndex, lt_temporal_scatter_load_scattered_reservoir(partitionIndex, scatteredBufferIndex));
-    }
-}
-#endif
-
-// Legacy fused temporal resampling path removed.
-// The active implementation is the explicit reprojection -> binning -> scatter stage chain.
-
-// ============================================================================
-// Reservoir Splatting: Temporal Pairwise MIS (Liu et al. 2025, Eq 10-13)
-// ============================================================================
-// Replaces area_resample_reservoir_pairwise_mis for the temporal scatter path.
-// Splatting preserves x1 exactly, so we use the sub-pixel Jacobian (Eq 15-16)
-// instead of Area ReSTIR's reconnection/random-replay Jacobian.
-//
-// Parameters:
-//   state:              streaming RIS state being accumulated
-//   canonicalReservoir: current-frame initial candidate (the canonical sample Y*)
-//   canonicalSurface:   G-buffer surface at the current pixel
-//   canonicalPixel:     current pixel position
-//   candidateReservoir: splatted previous-frame reservoir (ALREADY translated + finalized)
-//   candidateSurface:   G-buffer surface from the previous frame at source pixel
-//   candidatePixel:     source pixel position in previous frame
-//   pHatPrev:           candidate's target PDF in the PREVIOUS frame (saved before finalization)
-//   confidenceWeightSum: sum of all M values (canonical + all valid contributors)
-//   splatJacobian:      |dT/dX_i| = J_subpixel_current / J_subpixel_prev (Eq 16)
-//   rng:                random state
-void splat_resample_temporal_pairwise_mis(
-    inout RTXDI_DIReservoir state,
-    RTXDI_DIReservoir canonicalReservoir,
-    RAB_Surface canonicalSurface,
-    ivec2 canonicalPixel,
-    RTXDI_DIReservoir candidateReservoir,
-    RAB_Surface candidateSurface,
-    ivec2 candidatePixel,
-    float pHatPrev,
-    float confidenceWeightSum,
-    float candidateNormalization,
-    float splatJacobian,
-    float supportWeight,
-    inout RTXDI_RandomSamplerState rng)
-{
-    float pHatCurrent = candidateReservoir.targetPdf;  // p_hat(Y_i) - evaluated at current surface after finalization
-    float pHatCanonical = canonicalReservoir.targetPdf; // p_hat(Y*) at current surface
-    float c_i = max(candidateReservoir.M, 0.0f);    // confidence of splatted candidate
-    float c_star = max(canonicalReservoir.M, 1.0f); // confidence of canonical sample
-
-    if (pHatCurrent <= 0.0f || pHatCanonical <= 0.0f || c_i <= 0.0f || candidateReservoir.weightSum <= 0.0f || supportWeight <= 0.0f) {
-        return;
-    }
-
-    float weightedCandidateConfidence = c_i * supportWeight;
-    float weightedCandidateNormalization = candidateNormalization * pHatPrev;
-
-    // --- Eq 11: Non-canonical MIS weight for the splatted sample ---
-    float m0Denominator = c_star * pHatCurrent + weightedCandidateNormalization;
-    float m0 = (m0Denominator > 0.0f) ? (weightedCandidateNormalization / m0Denominator) : 0.0f;
-
-    // --- Eq 13: Canonical MIS weight contribution ---
-    // For the reverse direction: evaluate canonical sample's light at the previous surface.
-    // This is the "reverse splat" of Y* to the candidate's previous-frame domain.
-    RAB_LightSample canonicalLightAtPrev = lt_decode_reservoir_sample_for_frame(
-        canonicalReservoir, candidateSurface, false, true);
-    float pHatCanonicalAtPrev = (RAB_IsSurfaceValid(candidateSurface) && canonicalLightAtPrev.index >= 0)
-        ? lt_surface_target_pdf(candidateSurface, canonicalLightAtPrev)
-        : 0.0;
-
-    float canonicalReverseContribution = weightedCandidateConfidence * pHatCanonicalAtPrev * splatJacobian;
-    float m1Denominator = c_star * pHatCanonical + canonicalReverseContribution;
-    float m1 = (m1Denominator > 0.0f) ? ((c_star * pHatCanonical) / m1Denominator) : 0.0f;
-
-    // --- Eq 10: Resampling weight ---
-    // w_i = m_i * p_hat(Y_i) * W_{X_i} * |J|
-    float sampleWeight = m0 * pHatCurrent * candidateReservoir.weightSum * splatJacobian;
-
-    state.M += weightedCandidateConfidence;
-    state.weightSum += sampleWeight;
-    state.canonicalWeight += m1;
-
-    bool selectSample = (sampleWeight > 0.0 && state.weightSum > 0.0)
-        ? (lt_next_random(rng) * state.weightSum < sampleWeight)
-        : false;
-
-    if (selectSample) {
-        state.targetPdf = pHatCurrent;
-        state.lightData = candidateReservoir.lightData;
-        state.uvData = candidateReservoir.uvData;
-        state.pixelSampleUV = candidateReservoir.pixelSampleUV;
-        state.pathSample = candidateReservoir.pathSample;
-        state.lensSampleUV = candidateReservoir.lensSampleUV;
-        state.packedVisibility = candidateReservoir.packedVisibility;
-        state.age = candidateReservoir.age;
-        state.spatialDistance = candidateReservoir.spatialDistance;
-    }
-}
-
-float lt_temporal_proposal_pdf(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
-    return max(reconnection.lightPdf, 0.0f);
-}
-
-float lt_temporal_proposal_weight(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
-    float proposalPdf = lt_temporal_proposal_pdf(reservoir, reconnection);
-    if (proposalPdf <= 0.0f) {
-        return 0.0f;
-    }
-
-    return 1.0f / proposalPdf;
-}
-
-float lt_temporal_candidate_confidence_weight(
-    RTXDI_DIReservoir reservoir,
-    ScatterReconnectionData reconnection,
-    float supportWeight)
-{
-    // Old confidence amplification kept for reference:
-    // return max(reservoir.M, 0.0f)
-    //     * max(supportWeight, 0.0f)
-    //     * lt_temporal_proposal_weight(reservoir, reconnection);
-    float proposalWeight = lt_temporal_proposal_weight(reservoir, reconnection);
-    float clampedProposalWeight = clamp(proposalWeight, 0.25f, 4.0f);
-    return max(reservoir.M, 0.0f)
-        * max(supportWeight, 0.0f)
-        * clampedProposalWeight;
-}
-
-float lt_temporal_scatter_debug_stage_marker()
-{
-    return 0.0f;
-}
-
-float lt_temporal_proposal_match_weight(
-    ScatterReconnectionData canonicalReconnection,
-    ScatterReconnectionData candidateReconnection)
-{
-    // Old hard mismatch penalties kept for reference:
-    // float weight = 1.0f;
-    // if (canonicalReconnection.proposalFamily != 0u
-    //     && candidateReconnection.proposalFamily != 0u
-    //     && canonicalReconnection.proposalFamily != candidateReconnection.proposalFamily)
-    // {
-    //     weight *= 0.2f;
-    // }
-    // if (canonicalReconnection.pathLength > 0u
-    //     && candidateReconnection.pathLength > 0u
-    //     && canonicalReconnection.pathLength != candidateReconnection.pathLength)
-    // {
-    //     weight *= 0.5f;
-    // }
-    // if (canonicalReconnection.firstBsdfComponentType > 0u
-    //     && candidateReconnection.firstBsdfComponentType > 0u
-    //     && canonicalReconnection.firstBsdfComponentType != candidateReconnection.firstBsdfComponentType)
-    // {
-    //     weight *= 0.5f;
-    // }
-    // if (canonicalReconnection.secondBsdfComponentType > 0u
-    //     && candidateReconnection.secondBsdfComponentType > 0u
-    //     && canonicalReconnection.secondBsdfComponentType != candidateReconnection.secondBsdfComponentType)
-    // {
-    //     weight *= 0.5f;
-    // }
-    // uint sharedFlags = canonicalReconnection.flags & candidateReconnection.flags;
-    // uint combinedFlags = canonicalReconnection.flags | candidateReconnection.flags;
-    // if (combinedFlags != 0u && sharedFlags == 0u) {
-    //     weight *= 0.35f;
-    // }
-
-    float weight = 1.0f;
-    float lightPdfA = max(canonicalReconnection.lightPdf, 0.0f);
-    float lightPdfB = max(candidateReconnection.lightPdf, 0.0f);
-    if (lightPdfA > 0.0f && lightPdfB > 0.0f) {
-        float pdfRatio = max(lightPdfA, lightPdfB) / max(min(lightPdfA, lightPdfB), 1e-6f);
-        weight *= clamp(1.0f / sqrt(pdfRatio), 0.35f, 1.0f);
-    }
-
-    return clamp(weight, 0.0f, 1.0f);
-}
-
-float lt_temporal_scatter_support_denominator(
-    ivec2 basePixel,
-    vec2 frac,
-    ScatterReconnectionData sourceReconnection,
-    RAB_Surface sourcePrevSurface,
-    RTXDI_DIReservoir sourcePrevReservoir,
-    vec3 prevCameraPos,
-    vec3 prevCameraForward)
-{
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-    return 0.0f;
-#else
-    float denominator = 0.0f;
-    vec3 currCameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
-    float sourceProposalWeight = lt_temporal_proposal_weight(sourcePrevReservoir, sourceReconnection);
-
-    for (int dy = 0; dy <= 1; ++dy) {
-        for (int dx = 0; dx <= 1; ++dx) {
-            ivec2 neighborPixel = basePixel + ivec2(dx, dy);
-            if (!lt_is_viewport_uv_in_bounds(neighborPixel)) {
-                continue;
-            }
-
-            float bilinearWeight = lt_scatter_bilinear_weight(frac, dx, dy);
-            if (bilinearWeight <= 1e-5f) {
-                continue;
-            }
-
-            RAB_Surface neighborSurface = RAB_GetGBufferSurface(neighborPixel, false);
-            if (!RAB_IsSurfaceValid(neighborSurface)) {
-                continue;
-            }
-
-            if (!lt_area_is_surface_neighbor_valid(neighborSurface, sourcePrevSurface)) {
-                continue;
-            }
-
-            RTXDI_DIReservoir shiftedNeighbor = lt_translate_reservoir_between_frames(sourcePrevReservoir, true, false);
-            if (!RTXDI_IsValidDIReservoir(shiftedNeighbor)) {
-                continue;
-            }
-
-            lt_area_finalize_candidate(shiftedNeighbor, neighborPixel, shiftedNeighbor.pathSample);
-            RAB_LightSample shiftedLight = lt_decode_reservoir_sample_for_frame(
-                shiftedNeighbor, neighborSurface, false, false);
-            float pHatNeighbor = lt_surface_target_pdf(neighborSurface, shiftedLight);
-            if (pHatNeighbor <= 0.0f) {
-                continue;
-            }
-
-            float jPrev = scatter_resolve_stored_subpixel_jacobian(
-                sourceReconnection, sourcePrevSurface, prevCameraPos, prevCameraForward);
-            float jCurr = scatter_compute_subpixel_jacobian(
-                neighborSurface.worldPos, neighborSurface.geoNormal, world_camera_position, currCameraForward);
-            float supportJacobian = scatter_compute_scatter_jacobian(
-                jPrev,
-                jCurr,
-                scatter_resolve_stored_secondary_jacobian(sourceReconnection),
-                1.0f
-            );
-            float invSupportJ = (supportJacobian > 1e-8f) ? (1.0f / supportJacobian) : 0.0f;
-
-            denominator += bilinearWeight * sourcePrevReservoir.M * sourceProposalWeight * invSupportJ;
-        }
-    }
-
-    return denominator;
-#endif
-}
-
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
-#include "/photonics/lighttree/restir_di_temporal.glsl"
-// Direct port of ``ReprojectTemporalSamples::run`` (lines 60-175 in the reference).
-//
-//   1. Load previous reservoir at ``pixel`` (pixel-linearized index).
-//   2. Bail if the previous reservoir carries zero integrand / is invalid.
-//   3. Load previous reconnection sidecar.
-//   4. Forward-project the stored ``worldPos`` through the current-frame
-//      view-projection. This is the photonics analogue of the reference
-//      "rotate the camera to ``prevReconnection.time`` then cast a ray"
-//      sequence — we collapse it to a single matrix projection because
-//      Minecraft has no sub-frame motion-blur time sample and uses a pinhole
-//      camera (no lens aperture). ``scatter_forward_project_to_current_frame``
-//      already handles behind-camera rejection and view bounds.
-//   5. Validate surface compatibility against the previous reconnection
-//      (paper §4.1.2 — target-domain reconnection test).
-//   6. Atomically append ``(cellIndex, localCellIndex)`` and the source pixel
-//      to the scatter tables, exactly like the reference InterlockedAdd pair.
-//
-// Per the reference there is exactly one scatter contributor per source
-// reservoir (``scatteredReservoirs[index] = pixel``). Earlier drafts of this
-// port splatted bilinearly across four neighbours with extra weight buffers;
-// that is removed here to match the reference structure.
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
-float lt_multi_temporal_reproject_partition(
-    ScatterReconnectionData prevReconnection,
-    uint partitionIndex,
-    out vec2 newFractionalPixel,
-    out bool hitValid,
-    out vec3 rayDirection)
-{
-    float fractionalTime = lt_multi_temporal_partition_fraction(prevReconnection.time);
-    float newTime = lt_multi_temporal_partition_time(fractionalTime, partitionIndex);
-    hitValid = prevReconnection.firstHit.viewDepth > 0.0f
-        && any(greaterThan(abs(prevReconnection.firstHit.worldPos), vec3(0.0f)));
-
-    if (hitValid) {
-        rayDirection = prevReconnection.firstHit.worldPos - world_camera_position;
-        newFractionalPixel = scatter_forward_project_to_current_frame(prevReconnection.firstHit.worldPos);
-        return newTime;
-    }
-
-    if (prevReconnection.lightIsDistant) {
-        rayDirection = -prevReconnection.firstWi;
-        vec3 farPoint = world_camera_position + rayDirection * 1e5f;
-        newFractionalPixel = scatter_forward_project_to_current_frame(farPoint);
-        return newTime;
-    }
-
-    rayDirection = vec3(0.0f);
-    newFractionalPixel = vec2(-1.0f);
-    return newTime;
-}
-
-void lt_di_multi_reproject_temporal_samples_stage(
-    ivec2 pixel)
-{
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return;
-    }
-
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        return;
-    }
-
-    RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(pixel)
-    );
-    if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
-        return;
-    }
-
-    ScatterReconnectionData prevReconnection = scatter_load_prev_reconnection(pixel);
-    RAB_Surface prevSurface = lt_load_previous_surface(pixel);
-    for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
-        vec2 newFractionalPixel;
-        bool hitValid;
-        vec3 rayDirection;
-        float newTime = lt_multi_temporal_reproject_partition(
-            prevReconnection,
-            partitionIndex,
-            newFractionalPixel,
-            hitValid,
-            rayDirection
-        );
-        if (newFractionalPixel.x < 0.0f || newFractionalPixel.y < 0.0f) {
-            continue;
-        }
-
-        ivec2 newPixel = ivec2(floor(newFractionalPixel));
-        if (!lt_is_viewport_uv_in_bounds(newPixel)) {
-            continue;
-        }
-
-        vec3 normalizedRayDirection = normalize(rayDirection);
-        vec3 cameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
-        float cameraFacing = dot(normalizedRayDirection, cameraForward);
-        if (cameraFacing <= 0.001f) {
-            continue;
-        }
-
-        RAB_Surface currentSurface = RAB_GetGBufferSurface(newPixel, false);
-        if (!RAB_IsSurfaceValid(currentSurface)) {
-            continue;
-        }
-
-        ScatterReconnectionData partitionedReconnection = prevReconnection;
-        partitionedReconnection.time = newTime;
-        if (hitValid) {
-            if (!lt_area_is_temporal_neighbor_valid(currentSurface, prevSurface, partitionedReconnection, newPixel)) {
-                continue;
-            }
-        } else if (!partitionedReconnection.lightIsDistant) {
-            continue;
-        }
-
-        lt_multi_temporal_scatter_append_contributor(partitionIndex, newPixel, pixel);
-    }
-}
-#endif
-
-void lt_di_reproject_temporal_samples_stage(
-    ivec2 pixel)
-{
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return;
-    }
-
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        return;
-    }
-
-    // ReprojectTemporalSamples.rt.slang:70-76 — load prev reservoir, reject empty.
-    RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(pixel)
-    );
-    if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
-        return;
-    }
-
-    // ReprojectTemporalSamples.rt.slang:78 — prev reconnection sidecar.
-    ScatterReconnectionData prevReconnection = scatter_load_prev_reconnection(pixel);
-
-    // ReprojectTemporalSamples.rt.slang:81-152 — determine the fractional pixel
-    // the stored primary hit projects to in the current frame.
-    vec2 newFractionalPixel = scatter_forward_project_to_current_frame(prevReconnection.firstHit.worldPos);
-    if (newFractionalPixel.x < 0.0f || newFractionalPixel.y < 0.0f) {
-        return;
-    }
-
-    ivec2 newPixel = ivec2(floor(newFractionalPixel));
-    if (!lt_is_viewport_uv_in_bounds(newPixel)) {
-        return;
-    }
-
-    // ReprojectTemporalSamples.rt.slang:139-143 — visibility test.
-    vec3 rayOrigin = world_camera_position;
-    vec3 rayDirection = normalize(prevReconnection.firstHit.worldPos - rayOrigin);
-    float traceDistance = length(prevReconnection.firstHit.worldPos - rayOrigin);
-    if (traceDistance <= 1e-5f) {
-        return;
-    }
-
-    ray.origin = rayOrigin;
-    ray.direction = rayDirection;
-    ray_target = ivec3(floor(prevReconnection.firstHit.worldPos));
-    ray_ignore_block_id = -1;
-    ray_stop_on_target = true;
-    ray_min_trace_distance = 0.001f * traceDistance;
-    ray_max_trace_distance = max(ray_min_trace_distance, 0.999f * traceDistance);
-    trace_ray(ray, true);
-    ray_target = ivec3(-9999);
-    ray_ignore_block_id = -1;
-    ray_stop_on_target = false;
-    ray_min_trace_distance = 0.0f;
-    ray_max_trace_distance = -1.0f;
-    if (!lt_visibility_trace_is_unoccluded()) {
-        return;
-    }
-
-    // ReprojectTemporalSamples.rt.slang:167-174 — atomic append to the scatter
-    // tables. Weight stays uniform across scattered samples (the reference
-    // does not store per-splat weights), so we call the single-pixel variant.
-    lt_temporal_scatter_append_contributor(newPixel, pixel, 1.0f);
-}
-
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
-void computeCellOffsetsStage(
-    ivec2 pixel)
-{
-    if (ph_scatter_temporal_enabled <= 0.5f) {
-        return;
-    }
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-    return;
-#else
-    lt_SortReprojectedReservoirs_compute_cell_offsets(pixel);
-#endif
-}
-#else
-void computeCellOffsetsStage(
-    ivec2 pixel)
-{
-}
-#endif
-
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-void sortCellDataStage(
-    uint index)
-{
-    if (ph_scatter_temporal_enabled <= 0.5f) {
-        return;
-    }
-
-    lt_SortReprojectedReservoirs_sort_cell_data(index);
-}
-#endif
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
-    #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
-    ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
-{
-    currReconnectionData = ReservoirSplattingReconnectionData_init();
-    return RTXDI_EmptyDIReservoir();
-}
-    #else
-// =============================================================================
-// Stage 2e — ScatterTemporalResampling (reference ScatterTemporalResampling.rt.slang)
-// =============================================================================
-// Port of ``ScatterTemporalResampling::run`` (lines 64-174 in the reference).
-//
-// For each pixel:
-//   1. Consider the current-frame canonical sample (loaded from the initial
-//      sampling output).
-//   2. Shift it forward to the *previous* frame domain, compute pairwise-MIS
-//      m_1 (self) and m_2 (prev-frame reservoir at the shifted pixel) and
-//      stream it into the destination reservoir.
-//   3. Iterate the scattered reservoirs landed in this cell by the Reproject
-//      stage (``sortedReservoirs[cellOffsets[idx] + i]``), shift each to the
-//      current domain, update their reconnection, and stream them in.
-//   4. Recompute ``dstReservoir.confidence`` using a bilinear-weighted
-//      history of the previous reservoirs hit by the current motion vector
-//      (paper §3.3 Area ReSTIR confidence cap is preserved in the helper).
-//   5. Store the resulting reservoir + reconnection as the stage output.
-RTXDI_DIReservoir lt_di_scatter_temporal_resampling_stage(
-    ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
-{
-    currReconnectionData = ReservoirSplattingReconnectionData_init();
-
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!lt_is_viewport_uv_in_bounds(pixel) || !RAB_IsSurfaceValid(surface)) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    RTXDI_RandomSamplerState sg = lt_init_random_sampler(
-        uvec2(pixel),
-        uint(frameCounter),
-        5u
-    );
-
-    // ScatterTemporalResampling.rt.slang:75-79 — load canonical sample.
-    uint reservoirIdx = uint(pixel.y * viewWidth + pixel.x);
-    RTXDI_DIReservoir currReservoir = lt_ScatterTemporalResampling_load_current_reservoir(pixel);
-    LtScatterCurrentSample currSample = lt_ScatterTemporalResampling_load_current_sample(
-        reservoirIdx,
-        pixel,
-        surface,
-        currReservoir
-    );
-
-    RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
-    ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
-    ReservoirSplattingReconnectionData currReconnectionDataLocal = currSample.reconnectionData;
-    vec3  currIntegrand            = currSample.isValid ? scatter_reconnection_integrand(currReconnectionDataLocal) : vec3(0.0f);
-    float currReservoirConfidence  = currSample.confidence;
-    float currUCW                  = currSample.isValid ? lt_scatter_compute_ucw(currReservoir, currIntegrand) : 0.0f;
-
-    // ScatterTemporalResampling.rt.slang:81-104 — canonical MIS.
-    float currSampleMIS = ScatterTemporalResampling_compute_curr_sample_mis(
-        currSample,
-        pixel,
-        surface
-    );
-    bool currSelected = lt_scatter_add_sample_from_reservoir(
-        dstReservoir,
-        dstReservoir.M,
-        currSampleMIS,
-        currIntegrand,
-        1.0f,
-        currUCW,
-        currReservoirConfidence,
-        currReservoir,
-        sg
-    );
-    dstReconnectionData = currSelected ? currReconnectionDataLocal : dstReconnectionData;
-
-    // ScatterTemporalResampling.rt.slang:110 — track confidence AFTER canonical.
-    float newConfidence = dstReservoir.M;
-
-    // ScatterTemporalResampling.rt.slang:112-147 — direct cell traversal.
-    uint numReservoirs = lt_temporal_scatter_cell_counter_value(0u, reservoirIdx);
-    uint cellOffset = lt_temporal_scatter_cell_offset_value(0u, reservoirIdx);
-    for (uint i = 0u; i < numReservoirs; ++i) {
-        ivec2 scatteredPixel = ivec2(lt_temporal_scatter_load_sorted_reservoir(0u, cellOffset + i));
-        ScatterTemporalResampling_process_contributor(
-            dstReservoir,
-            dstReconnectionData,
-            newConfidence,
-            scatteredPixel,
-            pixel,
-            currReservoir,
-            currReconnectionDataLocal,
-            currReservoirConfidence,
-            sg
-        );
-    }
-
-    dstReservoir.M = ScatterTemporalResampling_motion_vector_confidence(pixel, newConfidence);
-    // PathReservoir.confidence in the reference lives on RTXDI_DIReservoir.M
-    // in Photonics; no sidecar write is necessary.
-    currReconnectionData = dstReconnectionData;
-    return dstReservoir;
-}
-    #endif
-
-bool lt_multi_scatter_process_contributor(
-    inout RTXDI_DIReservoir dstReservoir,
-    inout ReservoirSplattingReconnectionData dstReconnectionData,
-    ivec2 scatteredPixel,
-    ivec2 resolvePixel,
-    uint partitionIndex,
-    RTXDI_DIReservoir currReservoir,
-    ScatterReconnectionData currReconnection,
-    float currReservoirConfidence,
-    inout RTXDI_RandomSamplerState sg)
-{
-    RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(scatteredPixel)
-    );
-    if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
-        return false;
-    }
-
-    ScatterReconnectionData prevReconnection = scatter_load_prev_reconnection(scatteredPixel);
-    RAB_Surface targetSurface = RAB_GetGBufferSurface(resolvePixel, false);
-    LtScatterShiftedPath shiftedPrev;
-    RTXDI_DIReservoir shiftedReservoir;
-    ScatterReconnectionData shiftedReconnection;
-    float shiftedJacobian;
-    if (!lt_scatter_update_shifted_reservoir(
-            prevReconnection,
-            prevReservoir,
-            true,
-            false,
-            targetSurface,
-            resolvePixel,
-            shiftedPrev,
-            shiftedReservoir,
-            shiftedReconnection,
-            shiftedJacobian)) {
-        return false;
-    }
-
-    float prevMIS = 0.0f;
-    if (any(greaterThan(scatter_reconnection_integrand(prevReconnection), vec3(0.0f)))) {
-        float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
-            * shiftedJacobian
-            * currReservoirConfidence;
-        float m2 = lt_scatter_radiance_phat(scatter_reconnection_integrand(prevReconnection))
-            * lt_scatter_reservoir_confidence(prevReservoir, prevReconnection);
-        float denominator = m1 + m2;
-        prevMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
-    }
-
-    bool prevSelected = lt_scatter_add_sample_from_reservoir(
-        dstReservoir,
-        dstReservoir.M,
-        prevMIS,
-        shiftedPrev.radiance,
-        shiftedJacobian * (1.0f / float(lt_multi_temporal_partition_count())),
-        lt_scatter_compute_ucw(shiftedReservoir, shiftedPrev.radiance),
-        lt_scatter_reservoir_confidence(prevReservoir, prevReconnection),
-        shiftedReservoir,
-        sg
-    );
-    if (prevSelected) {
-        float timePartitions = 1.0f / float(lt_multi_temporal_partition_count());
-        float fractionalTime = clamp(prevReconnection.time, 0.0f, 1.0f);
-        shiftedReconnection.time = (fractionalTime + float(partitionIndex)) * timePartitions;
-        shiftedReconnection.subPixel = clamp(
-            shiftedPrev.fractionalPixel - floor(shiftedPrev.fractionalPixel),
-            vec2(0.0f),
-            vec2(1.0f)
-        );
-        dstReconnectionData = shiftedReconnection;
-    }
-    return prevSelected;
-}
-
-void multiComputeCellOffsetsStage(
-    ivec2 pixel)
-{
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-    if (ph_scatter_temporal_enabled > 0.5f) {
-        lt_MultiSortReprojectedReservoirs_compute_cell_offsets(pixel);
-    }
-#endif
-}
-
-void multiSortCellDataStage(
-    uint index)
-{
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-    if (ph_scatter_temporal_enabled > 0.5f) {
-        lt_MultiSortReprojectedReservoirs_sort_cell_data(index);
-    }
-#endif
-}
-
-RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling_stage(
-    ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
-{
-    currReconnectionData = ReservoirSplattingReconnectionData_init();
-
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!lt_is_viewport_uv_in_bounds(pixel) || !RAB_IsSurfaceValid(surface)) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    RTXDI_RandomSamplerState sg = lt_init_random_sampler(
-        uvec2(pixel),
-        uint(frameCounter),
-        6u
-    );
-
-    uint reservoirIdx = uint(pixel.y * viewWidth + pixel.x);
-    RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
-    ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
-
-    RTXDI_DIReservoir currReservoir = lt_ScatterTemporalResampling_load_current_reservoir(pixel);
-    LtScatterCurrentSample currSample = lt_ScatterTemporalResampling_load_current_sample(
-        reservoirIdx,
-        pixel,
-        surface,
-        currReservoir
-    );
-
-    RTXDI_DIReservoir backupReservoir = RTXDI_LoadDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(pixel),
-        lt_build_restir_di_parameters().bufferIndices.spatialResamplingInputBufferIndex
-    );
-    ReservoirSplattingReconnectionData backupReconnectionData = scatter_load_gather_intermediate_reconnection(pixel);
-
-    // We first consider the current reservoir (the initial sample).
-    {
-        float currSampleMIS = 1.0f;
-        if (currSample.isValid && currSample.hasPositivePHat) {
-            float m1 = lt_scatter_radiance_phat(scatter_reconnection_integrand(currSample.reconnectionData))
-                * currSample.confidence;
-
-            float m2 = 0.0f;
-            LtScatterShiftedPath scatteredCurr;
-            RTXDI_DIReservoir shiftedCurrReservoir;
-            ScatterReconnectionData shiftedCurrReconnectionData;
-            float scatteredJacobian;
-            if (lt_scatter_update_shifted_reservoir(
-                    currSample.reconnectionData,
-                    currSample.reservoir,
-                    false,
-                    true,
-                    surface,
-                    pixel,
-                    scatteredCurr,
-                    shiftedCurrReservoir,
-                    shiftedCurrReconnectionData,
-                    scatteredJacobian)) {
-                ivec2 scatteredPixel = ivec2(floor(scatteredCurr.fractionalPixel));
-                if (lt_is_viewport_uv_in_bounds(scatteredPixel)) {
-                    float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
-                    m2 = lt_scatter_radiance_phat(scatteredCurr.radiance)
-                        * scatteredJacobian
-                        * 0.5f
-                        * prevReservoirConfidence;
-                    m2 = (isnan(m2) || isinf(m2)) ? 0.0f : m2;
-                }
-            }
-
-            float m3 = 0.0f;
-            vec2 floatingCoord = scatter_load_gather_floating_coords(pixel);
-            if (lt_is_viewport_uv_in_bounds(ivec2(floor(floatingCoord)))
-                && all(greaterThanEqual(floatingCoord, vec2(0.0f)))
-                && all(lessThan(floatingCoord, vec2(viewWidth, viewHeight)))) {
-                ShiftedPathData shiftedCurr = gatherLensVertexCopyShift(
-                    sg,
-                    currSample.reconnectionData,
-                    currSample.reconnectionData.time,
-                    floatingCoord + currReservoir.pixelSampleUV,
-                    currSample.reconnectionData.lensSample
-                );
-                float shiftedJacobian = shiftedCurr.secondaryPathJacobian
-                    / max(currSample.reconnectionData.secondaryPathJacobian, 1e-10f);
-                float backupReservoirConfidence = lt_scatter_reservoir_confidence(backupReservoir, backupReconnectionData);
-                m3 = lt_scatter_radiance_phat(shiftedCurr.radiance)
-                    * shiftedJacobian
-                    * 0.5f
-                    * backupReservoirConfidence;
-                m3 = (isnan(m3) || isinf(m3)) ? 0.0f : m3;
-            }
-
-            float denominator = m1 + m2 + m3;
-            currSampleMIS = (denominator > 0.0f) ? (m1 / denominator) : 0.0f;
-        }
-
-        bool currSelected = lt_scatter_add_sample_from_reservoir(
-            dstReservoir,
-            dstReservoir.M,
-            currSampleMIS,
-            scatter_reconnection_integrand(currSample.reconnectionData),
-            1.0f,
-            currSample.isValid ? lt_scatter_compute_ucw(currSample.reservoir, scatter_reconnection_integrand(currSample.reconnectionData)) : 0.0f,
-            currSample.confidence,
-            currSample.reservoir,
-            sg
-        );
-        dstReconnectionData = currSelected ? currSample.reconnectionData : dstReconnectionData;
-    }
-
-    // Next, consider the backup sample.
-    {
-        float backupSampleMIS = 0.0f;
-        vec3 backupPHat = vec3(0.0f);
-        float shiftedJacobian = 1.0f;
-        if (RTXDI_IsValidDIReservoir(backupReservoir) && any(greaterThan(scatter_reconnection_integrand(backupReconnectionData), vec3(0.0f)))) {
-            ShiftedPathData shiftedBackup = gatherLensVertexCopyShift(
-                sg,
-                backupReconnectionData,
-                backupReconnectionData.time,
-                vec2(pixel) + backupReservoir.pixelSampleUV,
-                backupReconnectionData.lensSample
-            );
-            shiftedJacobian = shiftedBackup.secondaryPathJacobian
-                / max(backupReconnectionData.secondaryPathJacobian, 1e-10f);
-            float m1 = lt_scatter_radiance_phat(shiftedBackup.radiance)
-                * shiftedJacobian
-                * currSample.confidence;
-            backupPHat = (isnan(m1) || isinf(m1)) ? vec3(0.0f) : max(shiftedBackup.radiance, vec3(0.0f));
-            shiftedJacobian = (isnan(m1) || isinf(m1)) ? 1.0f : shiftedJacobian;
-            m1 = (isnan(m1) || isinf(m1)) ? 0.0f : m1;
-
-            backupReconnectionData = ScatterTemporalReconnectionData_update(backupReconnectionData, shiftedBackup);
-
-            float m2 = 0.0f;
-            LtScatterShiftedPath scatteredBackup;
-            RTXDI_DIReservoir shiftedBackupReservoir;
-            ScatterReconnectionData shiftedBackupReconnectionData;
-            float scatteredJacobian;
-            if (lt_scatter_update_shifted_reservoir(
-                    backupReconnectionData,
-                    backupReservoir,
-                    false,
-                    true,
-                    surface,
-                    pixel,
-                    scatteredBackup,
-                    shiftedBackupReservoir,
-                    shiftedBackupReconnectionData,
-                    scatteredJacobian)) {
-                ivec2 scatteredPixel = ivec2(floor(scatteredBackup.fractionalPixel));
-                if (lt_is_viewport_uv_in_bounds(scatteredPixel)) {
-                    float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
-                    m2 = lt_scatter_radiance_phat(scatteredBackup.radiance)
-                        * scatteredJacobian
-                        * shiftedJacobian
-                        * 0.5f
-                        * prevReservoirConfidence;
-                    m2 = (isnan(m2) || isinf(m2)) ? 0.0f : m2;
-                }
-            }
-
-            float backupReservoirConfidence = lt_scatter_reservoir_confidence(backupReservoir, backupReconnectionData);
-            float m3 = lt_scatter_radiance_phat(scatter_reconnection_integrand(backupReconnectionData))
-                * 0.5f
-                * backupReservoirConfidence;
-            float denominator = m1 + m2 + m3;
-            backupSampleMIS = (denominator > 0.0f) ? (m3 / denominator) : 0.0f;
-        }
-
-        bool backupSelected = lt_scatter_add_sample_from_reservoir(
-            dstReservoir,
-            dstReservoir.M,
-            backupSampleMIS,
-            backupPHat,
-            shiftedJacobian,
-            lt_scatter_compute_ucw(backupReservoir, scatter_reconnection_integrand(backupReconnectionData)),
-            lt_scatter_reservoir_confidence(backupReservoir, backupReconnectionData),
-            backupReservoir,
-            sg
-        );
-        dstReconnectionData = backupSelected ? backupReconnectionData : dstReconnectionData;
-    }
-
-    float newConfidence = dstReservoir.M;
-
-    // Lastly, consider the scattered reservoirs from the previous frame.
-    uint numReservoirs = lt_temporal_scatter_cell_counter_value(0u, reservoirIdx);
-    uint cellOffset = lt_temporal_scatter_cell_offset_value(0u, reservoirIdx);
-    for (uint i = 0u; i < numReservoirs; ++i) {
-        ivec2 scatteredPixel = ivec2(lt_temporal_scatter_load_sorted_reservoir(0u, cellOffset + i));
-        ScatterTemporalResampling_process_contributor(
-            dstReservoir,
-            dstReconnectionData,
-            newConfidence,
-            scatteredPixel,
-            pixel,
-            currSample.reservoir,
-            currSample.reconnectionData,
-            currSample.confidence,
-            sg
-        );
-    }
-
-    dstReservoir.M = ScatterTemporalResampling_motion_vector_confidence(pixel, newConfidence);
-    currReconnectionData = dstReconnectionData;
-    return dstReservoir;
-}
-
-RTXDI_DIReservoir lt_di_multi_scatter_temporal_resampling_stage(
-    ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
-{
-    currReconnectionData = ReservoirSplattingReconnectionData_init();
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!lt_is_viewport_uv_in_bounds(pixel) || !RAB_IsSurfaceValid(surface)) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
-    RTXDI_RandomSamplerState sg = lt_init_random_sampler(uvec2(pixel), uint(frameCounter), 5u);
-    uint reservoirIdx = uint(pixel.y * viewWidth + pixel.x);
-    RTXDI_DIReservoir currReservoir = lt_ScatterTemporalResampling_load_current_reservoir(pixel);
-    LtScatterCurrentSample currSample = lt_ScatterTemporalResampling_load_current_sample(
-        reservoirIdx,
-        pixel,
-        surface,
-        currReservoir
-    );
-
-    RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
-    ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
-
-    // We first consider the current reservoir (the initial sample).
-    {
-        float currSampleMIS = ScatterTemporalResampling_compute_curr_sample_mis(
-            currSample,
-            pixel,
-            surface
-        );
-        bool currSelected = lt_scatter_add_sample_from_reservoir(
-            dstReservoir,
-            dstReservoir.M,
-            currSampleMIS,
-            scatter_reconnection_integrand(currSample.reconnectionData),
-            1.0f,
-            currSample.isValid ? lt_scatter_compute_ucw(currSample.reservoir, scatter_reconnection_integrand(currSample.reconnectionData)) : 0.0f,
-            currSample.confidence,
-            currSample.reservoir,
-            sg
-        );
-        dstReconnectionData = currSelected ? currSample.reconnectionData : dstReconnectionData;
-    }
-
-    float newConfidence = dstReservoir.M;
-
-    // Next, consider the scattered reservoirs from the previous frame.
-    for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
-        uint partitionedCellIndex = lt_temporal_partitioned_cell_index(partitionIndex, reservoirIdx);
-        uint numReservoirs = lt_temporal_scatter_cell_counter_value(partitionIndex, partitionedCellIndex);
-        uint cellOffset = lt_temporal_scatter_cell_offset_value(partitionIndex, partitionedCellIndex);
-
-        for (uint i = 0u; i < numReservoirs; ++i) {
-            uint sortedBufferIndex = lt_temporal_partitioned_contributor_index(partitionIndex, cellOffset + i);
-            ivec2 scatteredPixel = ivec2(lt_temporal_scatter_load_sorted_reservoir(partitionIndex, sortedBufferIndex));
-            bool prevSelected = lt_multi_scatter_process_contributor(
-                dstReservoir,
-                dstReconnectionData,
-                scatteredPixel,
-                pixel,
-                partitionIndex,
-                currSample.reservoir,
-                currSample.reconnectionData,
-                currSample.confidence,
-                sg
-            );
-            newConfidence = prevSelected ? dstReservoir.M : newConfidence;
-        }
-    }
-
-    dstReservoir.M = ScatterTemporalResampling_motion_vector_confidence(pixel, newConfidence);
-    currReconnectionData = dstReconnectionData;
-    return dstReservoir;
-}
-#endif // closes #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS) (opened line 4358) — RTXDI infrastructure below must always compile, regardless of scatter-buffer build flags.
+    int numMisSamples;
+    float localLightMisWeight;
+    float environmentMapMisWeight;
+    float brdfMisWeight;
+};
 
 RTXDI_DIReservoir RTXDI_SampleLocalLights(
     inout RTXDI_RandomSamplerState rng,
@@ -5100,20 +3867,9 @@ bool RAB_SurfaceImportanceSampleBrdf(RAB_Surface surface, inout RTXDI_RandomSamp
 float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir);
 float RTXDI_BrdfMaxDistanceFromPdf(float brdfCutoff, float pdf);
 
-// Tracks per-technique sample counts and their MIS weights for blended source PDF computation.
-// Defined here so RTXDI_LightBrdfMisWeight and rtxdi_stream_local_light can reference it.
-
 bool lt_bridge_supports_environment_sampling() {
     return false;
 }
-
-struct RTXDI_InitialSamplingMisData
-{
-    int numMisSamples;
-    float localLightMisWeight;
-    float environmentMapMisWeight;
-    float brdfMisWeight;
-};
 
 int lt_resolve_initial_num_environment_samples() {
     if (!lt_bridge_supports_environment_sampling()) {
@@ -5234,7 +3990,7 @@ void rtxdi_stream_local_light(inout RTXDI_DIReservoir reservoir, RAB_Surface sur
     rtxdi_stream_local_light(reservoir, surface, lightIndex, sourcePdf, misData, 0.0);
 }
 
-// Backward-compat overload — passes localLightMisWeight=1.0 (no MIS blending).
+// Backward-compat overload -- passes localLightMisWeight=1.0 (no MIS blending).
 void rtxdi_stream_local_light(inout RTXDI_DIReservoir reservoir, RAB_Surface surface, int lightIndex, float sourcePdf) {
     rtxdi_stream_local_light(reservoir, surface, lightIndex, sourcePdf, 1.0);
 }
@@ -5285,14 +4041,14 @@ bool lt_pick_power_light_stratified(int sampleIndex, int totalSamples, out int l
 // RTXDI_SampleLocalLights (InitialSampling.hlsli lines 301-333)
 // Returns the initial local-light reservoir for the given surface.
 // ph_restir_local_light_sampling_mode selects the sampling strategy at runtime:
-//   -1.0 or 0.0 (unbound) → SDK default = Uniform (mode 0)
+//   -1.0 or 0.0 (unbound) -> SDK default = Uniform (mode 0)
 //   0 = Uniform:   lt_pick_uniform_light for all samples
 //   1 = Power_RIS: stratified RIS tile sampling for all samples
 //   2 = ReGIR_RIS: regir_pick_light inside grid cell, Power_RIS (RIS tile) fallback outside
 //
-// Split RNG streams — matches RTXDI InitialSampling.hlsli:
-//   rng         (per-pixel random)   — drives per-sample light selection and UV draws.
-//   coherentRng (spatially coherent) — drives ReGIR cell jitter and RIS tile selection.
+// Split RNG streams -- matches RTXDI InitialSampling.hlsli:
+//   rng         (per-pixel random)   -- drives per-sample light selection and UV draws.
+//   coherentRng (spatially coherent) -- drives ReGIR cell jitter and RIS tile selection.
 // RTXDI uses coherentRng exclusively for RTXDI_CalculateReGIRCellIndex and
 // RTXDI_SelectLocalLightReGIRRISTile so neighboring pixels share the same ReGIR cell.
 bool rtxdi_stream_local_light_rng(

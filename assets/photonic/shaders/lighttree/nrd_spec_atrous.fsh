@@ -18,14 +18,14 @@ const float spec_phi_luminance = 1.0;
 const float spec_lobe_angle_fraction = 0.5;
 
 // NRD RELAX: max luminance relative difference cap.
-// Reference: -log(saturate(specularMinLuminanceWeight)) where minLuminanceWeight=0.0 (default) → +Inf.
+// Reference: -log(saturate(specularMinLuminanceWeight)) where minLuminanceWeight=0.0 (default) -> +Inf.
 // Use a large finite value to match uncapped behaviour.
 const float gSpecMaxLuminanceRelativeDifference = 1e9;
-// NRD RELAX default: confidenceDrivenLuminanceEdgeStoppingRelaxation = 0.0 — disabled.
+// NRD RELAX default: confidenceDrivenLuminanceEdgeStoppingRelaxation = 0.0 -- disabled.
 const float gConfidenceDrivenLuminanceRelaxation = 0.0;
 // NRD RELAX default: roughnessFraction = 0.15
 const float gRoughnessFraction = 0.15;
-// NRD RELAX default: specularLobeAngleSlack = 0.15 degrees → converted to radians (Relax.cpp:141 radians())
+// NRD RELAX default: specularLobeAngleSlack = 0.15 degrees -> converted to radians (Relax.cpp:141 radians())
 const float gSpecLobeAngleSlack = 0.002618;
 // NRD RELAX default: roughnessEdgeStoppingRelaxation = 1.0
 const float gRoughnessEdgeStoppingRelaxation = 1.0;
@@ -82,15 +82,15 @@ void main() {
 
     // NRD RELAX: luminance relaxation (RELAX_Atrous.cs.hlsl:63-65)
     // Reference: specularLuminanceWeightRelaxation = lerp(1.0, specReprojConfidence, gLuminanceEdgeStoppingRelaxation)
-    // Low confidence → relaxation closer to 1.0 → stricter; high confidence → closer to specConfidence
+    // Low confidence -> relaxation closer to 1.0 -> stricter; high confidence -> closer to specConfidence
     float specLuminanceWeightRelaxation = 1.0;
     if (direct_atrous_step_size <= 4)
         specLuminanceWeightRelaxation = mix(1.0, specReprojectionConfidence, gConfidenceDrivenLuminanceRelaxation);
 
     float centerWeight = gaussian3x3[0] * gaussian3x3[0];
     vec3 sumColor = centerColor * centerWeight;
-    // NRD RELAX: .a channel is the temporally accumulated second moment of luminance (E[luma²]).
-    // Variance = E[luma²] - E[luma]² (standard variance formula).
+    // NRD RELAX: .a channel is the temporally accumulated second moment of luminance (E[luma^2]).
+    // Variance = E[luma^2] - E[luma]^2 (standard variance formula).
     float centerVariance = max(centerData.a - centerLuma * centerLuma, 0.0);
     float sumVariance = centerVariance * centerWeight * centerWeight;
     float sumWeight = centerWeight;

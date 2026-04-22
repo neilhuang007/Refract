@@ -55,7 +55,7 @@ float nrd_luminance(vec3 value) {
     return dot(value, PH_NRD_LUMA_COEFF);
 }
 
-// NRD Common.hlsli:244 UnpackViewZ — compute linear view-space depth from world position
+// NRD Common.hlsli:244 UnpackViewZ -- compute linear view-space depth from world position
 float nrd_compute_view_z(vec3 worldPos) {
     return length(worldPos - world_camera_position);
 }
@@ -68,7 +68,7 @@ vec3 nrd_rgb_to_ycocg(vec3 value) {
     return vec3(y, co, cg);
 }
 
-// NRD.hlsli STL::Color::YCoCgToLinear — clamps to >= 0 to match NRD inverse
+// NRD.hlsli STL::Color::YCoCgToLinear -- clamps to >= 0 to match NRD inverse
 vec3 nrd_ycocg_to_rgb(vec3 value) {
     float t = value.x - value.z;
     float g = value.x + value.z;
@@ -85,7 +85,7 @@ vec3 nrd_saturate(vec3 value) {
     return clamp(value, vec3(0.0), vec3(1.0));
 }
 
-// NRD _NRD_SafeNormalize: rsqrt(lenSq + 1e-9) — additive epsilon, not max
+// NRD _NRD_SafeNormalize: rsqrt(lenSq + 1e-9) -- additive epsilon, not max
 vec3 nrd_safe_normal(vec3 normalValue) {
     float lenSq = dot(normalValue, normalValue);
     return normalValue * inversesqrt(lenSq + 1e-9);
@@ -100,24 +100,24 @@ vec3 nrd_select_surface_normal(vec3 geometryNormal, vec3 mappedNormal) {
     return mappedNormal * inversesqrt(mappedLenSq);
 }
 
-// NRD: historyLength / 255.0 — no saturate, purely linear
+// NRD: historyLength / 255.0 -- no saturate, purely linear
 float nrd_encoded_history(float historyLength) {
     return historyLength / PH_NRD_HISTORY_SCALE;
 }
 
-// NRD: 255.0 * historyTex — no extra clamp
+// NRD: 255.0 * historyTex -- no extra clamp
 float nrd_decoded_history(vec4 encodedHistory) {
     return encodedHistory.r * PH_NRD_HISTORY_SCALE;
 }
 
-// NRD RELAX_Common.hlsli:105 GetPlaneDistanceWeight_Atrous — binary A-trous variant
+// NRD RELAX_Common.hlsli:105 GetPlaneDistanceWeight_Atrous -- binary A-trous variant
 // threshold is pre-scaled by caller using viewZ
 float nrd_plane_distance_weight(vec3 centerPos, vec3 centerNormal, vec3 samplePos, float threshold) {
     float planeDistance = abs(dot(samplePos - centerPos, centerNormal));
     return planeDistance < threshold ? 1.0 : 0.0;
 }
 
-// NRD RELAX_Common.hlsli:98 GetPlaneDistanceWeight — normalized form for temporal/history passes
+// NRD RELAX_Common.hlsli:98 GetPlaneDistanceWeight -- normalized form for temporal/history passes
 // Uses abs(dot(dp, n)) / centerViewZ <= threshold
 float nrd_plane_distance_weight_normalized(vec3 centerPos, vec3 centerNormal, vec3 samplePos, float centerViewZ, float threshold) {
     float planeDistance = abs(dot(samplePos - centerPos, centerNormal));
@@ -200,7 +200,7 @@ float nrd_is_in_screen_nearest(vec2 uv) {
     return (all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) ? 1.0 : 0.0;
 }
 
-// NRD Common.hlsli:302 IsInScreenBilinear — per-tap screen validity for 2x2 footprint
+// NRD Common.hlsli:302 IsInScreenBilinear -- per-tap screen validity for 2x2 footprint
 // Returns vec4(tap00, tap10, tap01, tap11) validity
 vec4 nrd_is_in_screen_bilinear(vec2 footprintOrigin, vec2 rectSize) {
     vec4 p = vec4(footprintOrigin, footprintOrigin + vec2(1.0));
@@ -223,13 +223,13 @@ vec4 nrd_bilinear_custom_vec4(vec4 s00, vec4 s10, vec4 s01, vec4 s11, vec4 weigh
     return sumWeights < 0.0001 ? vec4(0.0) : result / sumWeights;
 }
 
-// NRD Common.hlsli:30 isReprojectionTapValid — world-space plane distance check
+// NRD Common.hlsli:30 isReprojectionTapValid -- world-space plane distance check
 float nrd_is_reprojection_tap_valid(vec3 currentWorldPos, vec3 previousWorldPos, vec3 currentNormal, float disocclusionThreshold) {
     float maxPlaneDistance = abs(dot(currentWorldPos - previousWorldPos, currentNormal));
     return maxPlaneDistance > disocclusionThreshold ? 0.0 : 1.0;
 }
 
-// NRD Common.hlsli:23 ApplyThinLensEquation — virtual position depth correction for curved specular
+// NRD Common.hlsli:23 ApplyThinLensEquation -- virtual position depth correction for curved specular
 float nrd_apply_thin_lens_equation(float O, float curvature) {
     return O / (2.0 * curvature * O + 1.0);
 }
@@ -241,7 +241,7 @@ vec2 nrd_relaxed_roughness_weight_params(float m, float fraction) {
     return vec2(a, -b);
 }
 
-// NRD: GetSpecMagicCurve — roughness-dependent interpolation factor
+// NRD: GetSpecMagicCurve -- roughness-dependent interpolation factor
 float nrd_spec_magic_curve(float roughness) {
     return 1.0 - exp(-200.0 * roughness * roughness);
 }
@@ -253,7 +253,7 @@ float nrd_modified_roughness_from_normal_variance(float roughness, vec3 avgNorma
     return clamp(roughness + normalVariance * 0.25, 0.0, 1.0);
 }
 
-// NRD: GetXvirtual — compute virtual world position for specular reprojection
+// NRD: GetXvirtual -- compute virtual world position for specular reprojection
 // Uses thin-lens equation with curvature to find virtual reflection point
 vec3 nrd_get_xvirtual(float hitDist, float curvature, vec3 X, vec3 Xprev, vec3 N, vec3 V, float roughness) {
     float NoV = abs(dot(N, V));
@@ -263,14 +263,14 @@ vec3 nrd_get_xvirtual(float hitDist, float curvature, vec3 X, vec3 Xprev, vec3 N
     return Xvirtual;
 }
 
-// NRD: GetSpecularDominantFactor — how much virtual motion matters based on roughness
+// NRD: GetSpecularDominantFactor -- how much virtual motion matters based on roughness
 float nrd_specular_dominant_factor(vec3 N, vec3 V, float roughness) {
     float NoV = abs(dot(N, V));
     float dominantFactor = (1.0 - roughness * roughness) / (1.0 + roughness);
     return clamp(dominantFactor, 0.0, 1.0);
 }
 
-// NRD Common.hlsli:554 GetEncodingAwareNormalWeight — for VMB normal validation
+// NRD Common.hlsli:554 GetEncodingAwareNormalWeight -- for VMB normal validation
 float nrd_encoding_aware_normal_weight(vec3 Ncurr, vec3 Nprev, float maxAngle, float curvatureAngle, float thresholdAngle) {
     float cosa = dot(Ncurr, Nprev);
     float angle = acos(clamp(cosa, -1.0, 1.0));
@@ -331,7 +331,7 @@ float nrd_compute_variance(float secondMoment, float mean) {
     return max(secondMoment - mean * mean, 0.0);
 }
 
-// NRD.hlsli:516 _NRD_EnvironmentTerm_Rtg — Ray Tracing Gems Chapter 32 Eq 4
+// NRD.hlsli:516 _NRD_EnvironmentTerm_Rtg -- Ray Tracing Gems Chapter 32 Eq 4
 // GGX VNDF + Schlick approximation for environment BRDF integral
 vec3 nrd_environment_term_rtg(vec3 Rf0, float NoV, float roughness) {
     float m = clamp(roughness * roughness, 0.0, 1.0);
@@ -356,8 +356,8 @@ vec3 nrd_environment_term_rtg(vec3 Rf0, float NoV, float roughness) {
     return clamp(Rf0 * scale + bias, vec3(0.0), vec3(1.0));
 }
 
-// NRD.hlsli:733 NRD_MaterialFactors — view-dependent demodulation/remodulation
-// NRD.hlsli:101,105 — NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02, NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1
+// NRD.hlsli:733 NRD_MaterialFactors -- view-dependent demodulation/remodulation
+// NRD.hlsli:101,105 -- NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02, NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1
 const float NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02;
 const float NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1;
 
@@ -431,7 +431,7 @@ vec4 nrd_pack_direct_signal(vec3 radiance, float hitDistance) {
     return vec4(radiance, hitDistance);
 }
 
-// NRD RELAX unpack is passthrough — no clamping
+// NRD RELAX unpack is passthrough -- no clamping
 NrdDirectSignal nrd_unpack_direct_signal(vec4 encodedSignal) {
     return NrdDirectSignal(encodedSignal.rgb, encodedSignal.a);
 }

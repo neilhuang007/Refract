@@ -139,7 +139,7 @@ void main() {
     float noisySecondMoment;
     nrd_accumulate_noisy_stats(tex_coord, noisyMean, noisySecondMoment);
 
-    // --- Build YCoCg clamping box from responsive history (5x5 mean ± sigma) ---
+    // --- Build YCoCg clamping box from responsive history (5x5 mean +/- sigma) ---
     // Expand to include the responsive center pixel to minimize bias.
     vec3 minBox = fastMeanYcocg - fastSigmaYcocg * nrd_fast_history_clamping_sigma_scale;
     vec3 maxBox = fastMeanYcocg + fastSigmaYcocg * nrd_fast_history_clamping_sigma_scale;

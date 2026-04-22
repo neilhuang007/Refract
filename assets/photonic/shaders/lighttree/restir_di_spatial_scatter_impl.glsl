@@ -6,16 +6,16 @@
 // (reference/repos/Reservoir-Splatting/Source/RenderPasses/ReservoirSplatting/ShiftMapping.slang).
 //
 // The slang reference relies on two shift helpers:
-//   * gatherLensVertexCopyShift        — re-traces a primary ray through
+//   * gatherLensVertexCopyShift        -- re-traces a primary ray through
 //     `fractionalPixel` with the stored lens sample, producing a new primary
 //     hit. The lens vertex Jacobian is INTENTIONALLY NOT applied because the
 //     lens sample is kept fixed.
-//   * gatherPrimaryHitReconnectionShift — keeps the stored primary hit and
+//   * gatherPrimaryHitReconnectionShift -- keeps the stored primary hit and
 //     solves for a new implicit lens position on the aperture. The lens vertex
 //     Jacobian IS applied when combining shift ratios.
 //
 // Minecraft uses a pinhole camera (`apertureRadius == 0`), so the two shifts
-// collapse onto each other — the ray origin in both cases is the current
+// collapse onto each other -- the ray origin in both cases is the current
 // camera position (there is no lens aperture to choose from). To preserve
 // exact parity with the reference when future DoF is added we still carry
 // the `d0*d0/(d1*d1) * |cosNormal|/|cosSensor|` lens vertex Jacobian formula
@@ -30,7 +30,7 @@
 //   The reference `SampleGenerator` is used to seed `path.sg` inside each
 //   shift. We emulate that with our `RTXDI_RandomSamplerState` because the
 //   draws become part of the reconstructed light sample's unit-interval UV
-//   — our light samples are analytic point lights and ignore UV, so the exact
+//   -- our light samples are analytic point lights and ignore UV, so the exact
 //   consumption count of the random stream inside `gatherX` is not observable
 //   by the light-sample outputs. We still advance the RNG to match control
 //   flow with the reference shift.
@@ -181,13 +181,13 @@ vec3 spatial_reconnect_and_evaluate_radiance(
 }
 
 // ----------------------------------------------------------------------------
-// gatherLensVertexCopyShift — reference SpatialResampling.rt.slang:131
+// gatherLensVertexCopyShift -- reference SpatialResampling.rt.slang:131
 // ----------------------------------------------------------------------------
 // Re-trace a primary ray through the virtual film at `fractionalPixel` with
 // the source's stored lens sample. For pinhole camera, the lens sample is
 // ignored (aperture radius == 0) and the ray origin is `world_camera_position`.
 // Instead of issuing a new ray trace we read the G-buffer at the rounded
-// pixel — that is the Minecraft-style analog of "trace the primary ray".
+// pixel -- that is the Minecraft-style analog of "trace the primary ray".
 //
 // The returned `primaryHit` is the G-buffer hit position at the landing
 // pixel; if the landing pixel is out-of-bounds or hits the sky, the shift
@@ -245,7 +245,7 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
         lt_decode_reservoir_sample_for_frame(sourceReservoir, landingSurface, false, false)
     );
 
-    // Radiance recomputation at the new first hit — this matches the reference's
+    // Radiance recomputation at the new first hit -- this matches the reference's
     // `gPathTracer.handleReconnectionPrimaryLight(path)` for pathLength==1
     // and `pathReconnectionShift` for pathLength==2 DI. Both collapse to
     // `f * L * cos / pdf` evaluated at the shifted surface for Minecraft DI.
@@ -255,7 +255,7 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
 }
 
 // ----------------------------------------------------------------------------
-// gatherPrimaryHitReconnectionShift — reference SpatialResampling.rt.slang:132,183
+// gatherPrimaryHitReconnectionShift -- reference SpatialResampling.rt.slang:132,183
 // ----------------------------------------------------------------------------
 // Keep the stored primary hit (`primaryHit = sourceReconnection.worldPos`)
 // and solve for a new lens-plane intersection that still views the hit from
@@ -377,7 +377,7 @@ SpatialShiftedPathData spatial_gather_shift(
 
 // Reference: ShiftMapping.slang:75-79
 //   gamma = 0.2 + 6.2 / (r - 5.6)        [clamped to [0.2, 1]]
-//   gamma = 1 when r <= 0.2 (small CoC → always lens-vertex-copy)
+//   gamma = 1 when r <= 0.2 (small CoC -> always lens-vertex-copy)
 vec2 spatial_compute_depth_of_field_gather_shift_probabilities(float circleOfConfusion)
 {
     float gamma;

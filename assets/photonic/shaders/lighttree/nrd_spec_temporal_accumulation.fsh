@@ -290,7 +290,7 @@ void main() {
     float disocclusionThreshold = ph_nrd_depth_threshold * viewDistance * disocclusionScale;
 
     // -------------------------------------------------------------------------
-    // Pixel size (world-space size of one pixel at current depth) — approximation
+    // Pixel size (world-space size of one pixel at current depth) -- approximation
     // -------------------------------------------------------------------------
     float pixelSize = viewDistance / max(0.5 * viewHeight, 1.0);
 
@@ -373,7 +373,7 @@ void main() {
     smbFootprintQuality *= mix(0.1, 1.0, clamp(sizeQuality, 0.0, 1.0));
 
     // -------------------------------------------------------------------------
-    // SMB history sampling — slow + fast + history length + accumulated hit distance
+    // SMB history sampling -- slow + fast + history length + accumulated hit distance
     // -------------------------------------------------------------------------
     vec4  smbPrevSlow       = vec4(0.0);
     vec4  smbPrevFast       = vec4(0.0);
@@ -683,7 +683,7 @@ void main() {
     }
 
     // -------------------------------------------------------------------------
-    // Virtual history amount — dominant factor (NRD ref lines 774-820)
+    // Virtual history amount -- dominant factor (NRD ref lines 774-820)
     // -------------------------------------------------------------------------
     float dominantFactor     = nrd_specular_dominant_factor(currentNormal, V, currentRoughnessModified);
     float virtualHistoryAmount = vmbReprojectionFound * dominantFactor;

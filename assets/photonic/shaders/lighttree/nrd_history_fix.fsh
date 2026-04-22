@@ -18,7 +18,7 @@ const float direct_history_fix_base_stride = 14.0;
 const float direct_history_fix_normal_power = 8.0;
 const float direct_min_weight = 1e-4;
 
-// Reference: MirrorUv — reflects OOB taps back into the screen instead of wasting them on clamped border pixels
+// Reference: MirrorUv -- reflects OOB taps back into the screen instead of wasting them on clamped border pixels
 vec2 nrd_mirror_uv(vec2 uv) {
     return 1.0 - abs(1.0 - fract(uv * 0.5) * 2.0);
 }
@@ -52,7 +52,7 @@ void main() {
 
     float centerViewDist = max(length(centerPosition - world_camera_position), 1e-3);
 
-    // NRD: round(baseStride / (1 + historyLength)) — no explicit lower bound of 1
+    // NRD: round(baseStride / (1 + historyLength)) -- no explicit lower bound of 1
     float strideValue = round(direct_history_fix_base_stride / (1.0 + historyLength));
     int stride = max(int(strideValue), 1);
     ivec2 texSize = textureSize(direct_historyfix_input, 0);

@@ -1,5 +1,5 @@
 #version 430
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY 1
 #define floating_coords_frag_out temporal_gather_floating_coords_frag_out
 #define intermediate_reservoir_frag_out temporal_gather_intermediate_reservoir_frag_out
 #define intermediate_reservoir_sample_frag_out temporal_gather_intermediate_reservoir_sample_frag_out
@@ -19,7 +19,8 @@ layout(location = 5) out vec4 temporal_gather_intermediate_reconnection1_frag_ou
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_di_temporal_impl.glsl"
 
 void CollectTemporalSamples_storeEmptyResult()
 {

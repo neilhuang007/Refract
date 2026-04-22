@@ -21,7 +21,7 @@ vec3 ph_compute_attenuation(
         result_color *= max(cos(max(axisAngle - light.orientationSpread, 0.0)), 0.0);
     }
 
-    // Paper Eq. 3: f_a * |cos θ_i| — use physical cosine falloff
+    // Paper Eq. 3: f_a * |cos theta_i| -- use physical cosine falloff
     result_color *= max(dot(texture_normal, normal_dir), 0.0);
 
     return result_color;

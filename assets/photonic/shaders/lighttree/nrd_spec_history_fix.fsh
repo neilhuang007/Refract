@@ -16,7 +16,7 @@ const float spec_history_fix_frame_num = 4.0;
 const float spec_history_fix_base_stride = 14.0;
 const float spec_min_weight = 1e-4;
 
-// Reference: MirrorUv — reflects OOB taps back into the screen instead of wasting them on clamped border pixels
+// Reference: MirrorUv -- reflects OOB taps back into the screen instead of wasting them on clamped border pixels
 vec2 spec_mirror_uv(vec2 uv) {
     return 1.0 - abs(1.0 - fract(uv * 0.5) * 2.0);
 }
@@ -53,11 +53,11 @@ void main() {
     // lobeAngleFraction=gLobeAngleFraction(0.5), lobeAngleSlack=gSpecLobeAngleSlack(0.15)
     vec2 specNormalWeightParams = nrd_spec_normal_weight_params_atrous(
         centerRoughness,
-        5.0,  // numFramesInHistory — fixed at 5 per NRD reference comment
-        1.0,  // specReprojConfidence — 1.0 (no confidence signal in history fix)
-        0.0,  // normalEdgeStoppingRelaxation — 0 per reference
-        0.5,  // lobeAngleFraction — gLobeAngleFraction default
-        0.15  // lobeAngleSlack — gSpecLobeAngleSlack default
+        5.0,  // numFramesInHistory -- fixed at 5 per NRD reference comment
+        1.0,  // specReprojConfidence -- 1.0 (no confidence signal in history fix)
+        0.0,  // normalEdgeStoppingRelaxation -- 0 per reference
+        0.5,  // lobeAngleFraction -- gLobeAngleFraction default
+        0.15  // lobeAngleSlack -- gSpecLobeAngleSlack default
     );
 
     float centerViewDist = max(length(centerPosition - world_camera_position), 1e-3);

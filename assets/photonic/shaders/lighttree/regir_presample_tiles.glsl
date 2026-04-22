@@ -1,10 +1,10 @@
 #version 430
 
-// RTXDI_PresampleLocalLights — presample tiles compute shader.
+// RTXDI_PresampleLocalLights -- presample tiles compute shader.
 // Reference: PresamplingFunctions.hlsli:31-134, PresampleLights.hlsl
 // Uses 2D PDF mipmap texture traversal (RTXDI_SamplePdfMipmap) instead of 1D CDF binary search.
 
-// RTXDI presample dispatch: 2D groups — x = sampleInTile, y = tileIndex.
+// RTXDI presample dispatch: 2D groups -- x = sampleInTile, y = tileIndex.
 // glDispatchCompute(tileSize/GROUP_SIZE, tileCount, 1)
 layout(local_size_x = 256, local_size_y = 1) in;
 
@@ -24,7 +24,7 @@ layout(std430, binding = 6) restrict buffer ph_ris_compact_light_data {
 
 const uint ph_compact_light_stride = 4u;
 
-// Light list — needed to read light data for compact storage.
+// Light list -- needed to read light data for compact storage.
 // vec4[0]: position.xyz, blockId(w)
 // vec4[1]: color.xyz, intensity(w)
 // vec4[2]: attenuation.xy, falloff(z), block_radius(w)
@@ -47,10 +47,10 @@ uniform sampler2D u_LocalLightPdfTexture;
 uniform ivec2     ph_pdf_texture_size;
 
 // ---------------------------------------------------------------------------
-// RTXDI RNG — exact port of RandomSamplerState.hlsli + Math.hlsli
+// RTXDI RNG -- exact port of RandomSamplerState.hlsli + Math.hlsli
 // ---------------------------------------------------------------------------
 
-// RTXDI_IntegerExplode: inserts a 0 between each bit (16-bit input → 32-bit output)
+// RTXDI_IntegerExplode: inserts a 0 between each bit (16-bit input -> 32-bit output)
 uint RTXDI_IntegerExplode(uint x) {
     x = (x | (x << 8u)) & 0x00FF00FFu;
     x = (x | (x << 4u)) & 0x0F0F0F0Fu;
@@ -59,7 +59,7 @@ uint RTXDI_IntegerExplode(uint x) {
     return x;
 }
 
-// RTXDI_ZCurveToLinearIndex: 2D→1D Morton/Z-curve interleave
+// RTXDI_ZCurveToLinearIndex: 2D->1D Morton/Z-curve interleave
 uint RTXDI_ZCurveToLinearIndex(uvec2 xy) {
     return RTXDI_IntegerExplode(xy.x) | (RTXDI_IntegerExplode(xy.y) << 1u);
 }
@@ -118,7 +118,7 @@ uint RTXDI_murmur3(inout RTXDI_RandomSamplerState r) {
     return hash;
 }
 
-// RTXDI_GetNextRandom — returns [0, 1)
+// RTXDI_GetNextRandom -- returns [0, 1)
 float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     uint v = RTXDI_murmur3(rng);
     const uint one = 0x3f800000u; // asuint(1.0f)
@@ -127,10 +127,10 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
 }
 
 // ---------------------------------------------------------------------------
-// RTXDI_SamplePdfMipmap — exact port of PresamplingFunctions.hlsli:31-95
+// RTXDI_SamplePdfMipmap -- exact port of PresamplingFunctions.hlsli:31-95
 // Traverses from the coarsest mip down to mip 0, picking 1 of 4 children
 // at each level proportional to their weight.
-// Child sampling order: (0,0), (0,1), (1,0), (1,1) — y increments before x.
+// Child sampling order: (0,0), (0,1), (1,0), (1,1) -- y increments before x.
 // ---------------------------------------------------------------------------
 float RTXDI_LoadPdfTexel(sampler2D pdfTexture, ivec2 texelPosition, int mipLevel) {
     ivec2 mipSize = textureSize(pdfTexture, mipLevel);
@@ -200,13 +200,13 @@ void RTXDI_SamplePdfMipmap(
     }
 }
 
-// RTXDI COMPACT_BIT / INDEX_MASK — stored on lightIndex in RIS tile entries.
+// RTXDI COMPACT_BIT / INDEX_MASK -- stored on lightIndex in RIS tile entries.
 // bit 31 = 1 when compact light data is available in ph_compact_light_data.
 const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
 const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
 
 // ---------------------------------------------------------------------------
-// RAB_StoreCompactLightInfo — Photonics compact-light packer.
+// RAB_StoreCompactLightInfo -- Photonics compact-light packer.
 // Stores the full 4xvec4 light record in 4xuvec4 companion payload so the
 // compact entry reloads one coherent light object instead of a truncated subset.
 // Returns true on success (compact bit should be set on the RIS entry).
@@ -223,7 +223,7 @@ bool RAB_StoreCompactLightInfo(uint risBufferPtr, int lightIndex) {
 }
 
 // ---------------------------------------------------------------------------
-// Main — RTXDI_PresampleLocalLights
+// Main -- RTXDI_PresampleLocalLights
 // Reference: PresampleLights.hlsl
 //   dispatch: glDispatchCompute(tileSize/GROUP_SIZE, tileCount, 1)
 //   gl_GlobalInvocationID.x = sampleInTile (within [0, tileSize))

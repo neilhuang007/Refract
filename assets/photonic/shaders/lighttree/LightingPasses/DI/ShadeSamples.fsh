@@ -289,7 +289,7 @@ void main() {
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
 
     // ------------------------------------------------------------------
-    // Stage 6 (ResolveReSTIR.cs.slang) — direct port of ResolveReSTIR.cs.slang:45-62
+    // Stage 6 (ResolveReSTIR.cs.slang) -- direct port of ResolveReSTIR.cs.slang:45-62
     //   PathReservoir currReservoir = currReservoirs[reservoirIdx];
     //   float3 color = currReservoir.integrand * currReservoir.computeUCW();
     //   outputColor[pixel] = float4(color, 1);

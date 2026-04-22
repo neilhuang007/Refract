@@ -47,7 +47,7 @@ void main() {
     // Cross-bilateral RCRS (Rank-Conditioned Rank-Selection) filter.
     // Tracks the min/max luminance neighbor coords in the 3x3 neighbourhood,
     // gated by material compatibility. Sentinel initialisation to tex_coord
-    // means no-compatible-neighbour keeps the center value — matches NRD.
+    // means no-compatible-neighbour keeps the center value -- matches NRD.
     float maxLuma = -1.0;
     float minLuma = 1.0e6;
     ivec2 maxLumaCoord = tex_coord;
@@ -62,9 +62,9 @@ void main() {
             ivec2 sampleCoord = tex_coord + ivec2(dx, dy);
             if (any(lessThan(sampleCoord, ivec2(0))) || any(greaterThanEqual(sampleCoord, texSize))) continue;
 
-            // NRD CompareMaterials with gSpecMinMaterial — gated per-sample.
+            // NRD CompareMaterials with gSpecMinMaterial -- gated per-sample.
             // Reference has NO per-sample viewZ check inside the RCRS loop.
-            // (RELAX_AntiFirefly.cs.hlsl:115-148 — only material gate, no viewZ per tap.)
+            // (RELAX_AntiFirefly.cs.hlsl:115-148 -- only material gate, no viewZ per tap.)
             vec4 sampleMaterial = texelFetch(stage_radiosity_material, sampleCoord, 0);
             if (nrd_material_weight(centerMaterial, sampleMaterial) <= 0.0) continue;
 
@@ -83,7 +83,7 @@ void main() {
 
     // Replace center with the min/max neighbor when the center is outside the
     // neighbor luminance range. The 2nd moment (center.a) is always taken from
-    // the center pixel, not the replacement — matching the NRD reference:
+    // the center pixel, not the replacement -- matching the NRD reference:
     //   outSpecular = float4(s_Spec[specularCoords].rgb, specular2ndMomentCenter)
     ivec2 resultCoord = tex_coord;
     if (centerLuma > maxLuma)

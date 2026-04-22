@@ -1,5 +1,6 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE 1
 
 in vec4 direction_vert_out;
 
@@ -10,7 +11,6 @@ layout(location = 3) out vec4 reconnection0_frag_out;
 layout(location = 4) out vec4 reconnection1_frag_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
 
 void ScatterTemporalResampling_storeResult(
@@ -42,7 +42,7 @@ void ScatterTemporalResampling_storeEmptyResult()
 void ScatterTemporalResampling_execute(ivec2 pixel)
 {
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir currReservoir = lt_di_scatter_temporal_resampling_stage(pixel, currReconnectionData);
+    RTXDI_DIReservoir currReservoir = lt_di_scatter_temporal_resampling(pixel, currReconnectionData);
     ScatterTemporalResampling_storeResult(currReservoir, currReconnectionData);
 }
 

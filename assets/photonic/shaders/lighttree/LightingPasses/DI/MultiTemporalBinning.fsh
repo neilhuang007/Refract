@@ -1,5 +1,6 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+#define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORTING 1
 
 // Reference stage 2g.2 -- MultiSortReprojectedReservoirs::sortCellData

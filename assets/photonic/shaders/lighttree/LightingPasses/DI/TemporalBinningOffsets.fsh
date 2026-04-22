@@ -1,9 +1,6 @@
 #version 430
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORTING 1
-
-// Reference stage 2d.1 -- SortReprojectedReservoirs::computeCellOffsets
-
+#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORT_STAGE
+#define PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE 1
 in vec4 direction_vert_out;
 
 layout(location = 0) out vec4 reservoir_frag_out;

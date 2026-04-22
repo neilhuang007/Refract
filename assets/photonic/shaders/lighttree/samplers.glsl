@@ -96,6 +96,7 @@ uniform sampler2D prev_scatter_reconnection1;
 #define previous_frame_reconnection0 prev_scatter_reconnection0
 #define previous_frame_reconnection1 prev_scatter_reconnection1
 
+uniform sampler2D prev_spec_slow_input;
 uniform sampler2D prev_spec_fast_input;
 uniform sampler2D prev_spec_history_length_input;
 

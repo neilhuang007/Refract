@@ -7,6 +7,10 @@
 #include "/photonics/lighttree/restir_di_spatial_impl.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
+#ifndef PH_LIGHTTREE_GI_INITIAL_SAMPLES
+#define PH_LIGHTTREE_GI_INITIAL_SAMPLES PH_LIGHTTREE_INITIAL_SAMPLES
+#endif
+
 RTXDI_DIReservoir RTXDI_DISpatialResampling(
     uvec2 pixelPosition,
     RAB_Surface centerSurface,
@@ -153,15 +157,15 @@ float gi_surface_diffuse_probability(RAB_Surface surface) {
 
 float gi_distribution_ggx(float nDotH, float roughness) {
     float clampedRoughness = max(roughness, 0.03f);
-    float a = clampedRoughness * clampedRoughness;  // α = roughness²
-    float a2 = a * a;                                // α² = roughness⁴
+    float a = clampedRoughness * clampedRoughness;  // alpha = roughness^2
+    float a2 = a * a;                                // alpha^2 = roughness?
     float denom = nDotH * nDotH * (a2 - 1.0f) + 1.0f;
     return a2 / max(lt_gi_pi * denom * denom, 1e-6f);
 }
 
 float gi_geometry_schlick_ggx(float nDotX, float roughness) {
-    float a = max(roughness, 0.03f) * max(roughness, 0.03f);  // α = roughness², clamped
-    float k = a * 0.5f;                                        // k = α/2 (analytic Smith-GGX)
+    float a = max(roughness, 0.03f) * max(roughness, 0.03f);  // alpha = roughness^2, clamped
+    float k = a * 0.5f;                                        // k = alpha/2 (analytic Smith-GGX)
     return nDotX / max(nDotX * (1.0f - k) + k, 1e-6f);
 }
 
@@ -547,7 +551,7 @@ RTXDI_GIReservoirStore gi_make_reservoir_store(RTXDI_GIReservoir reservoir) {
 }
 
 RTXDI_GIReservoirStore gi_make_initial_reservoir_store(RTXDI_GIReservoir reservoir) {
-    // The reference InitialCandidates pass writes reservoir state only — no side-channel radiance payload.
+    // The reference InitialCandidates pass writes reservoir state only -- no side-channel radiance payload.
     // Final-MIS consumers must reconstruct initial radiance from the selected sample, not from a dedicated texture.
     return gi_make_reservoir_store(reservoir);
 }
@@ -792,7 +796,7 @@ bool gi_shade_secondary_surface(
 }
 
 // -----------------------------------------------------------------------------
-// Initial-candidate generation — reference parity layer
+// Initial-candidate generation -- reference parity layer
 //
 // Reference: InitialCandidates.cs.slang
 //   tracePath -> addCandidateReservoir with MIS weight 1/SamplesPerPixel

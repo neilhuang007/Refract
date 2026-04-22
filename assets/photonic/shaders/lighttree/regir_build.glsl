@@ -1,6 +1,6 @@
 #version 430
 
-// RTXDI_PresampleLocalLightsForReGIR — ReGIR grid build compute shader.
+// RTXDI_PresampleLocalLightsForReGIR -- ReGIR grid build compute shader.
 // Each thread populates one light slot in a grid cell via RIS, drawing
 // candidates from the presampled RIS tile buffer (regir_presample_tiles.glsl).
 //
@@ -8,7 +8,7 @@
 //
 // Key RTXDI design: a "coherent RNG" (shared seed across nearby threads)
 // selects ONE tile per thread; all numRegirBuildSamples proposals then draw
-// from that same tile.  This keeps nearby threads reading the same tile → cache
+// from that same tile.  This keeps nearby threads reading the same tile -> cache
 // coherent.  A separate per-thread RNG picks the within-tile entry each
 // iteration, giving independent samples.
 
@@ -28,12 +28,12 @@ layout(std140, binding = 0) restrict readonly buffer ph_light_list {
     vec4 ph_lights_array[];
 };
 
-// Power CDF — kept for potential fallback; not used in the tile-based path.
+// Power CDF -- kept for potential fallback; not used in the tile-based path.
 layout(std430, binding = 1) restrict readonly buffer ph_global_light_cdf {
     float ph_global_light_cdf_data[];
 };
 
-// RTXDI: RTXDI_RIS_BUFFER — unified buffer for both presample tiles and ReGIR output.
+// RTXDI: RTXDI_RIS_BUFFER -- unified buffer for both presample tiles and ReGIR output.
 // Presample tiles occupy [ph_ris_tile_buffer_offset, ph_ris_tile_buffer_offset + tileCount*tileSize).
 // ReGIR output occupies [ph_regir_ris_buffer_offset, ph_regir_ris_buffer_offset + gridRes^3*lightsPerCell).
 // Must be restrict (not readonly/writeonly) since this pass reads tiles and writes ReGIR in different regions.
@@ -51,12 +51,12 @@ layout(std430, binding = 6) restrict buffer ph_ris_compact_light_data {
 const uint ph_compact_light_stride = 4u;
 
 // ---------------------------------------------------------------------------
-// RTXDI COMPACT_BIT / INDEX_MASK — same constants as regir_presample_tiles.glsl
+// RTXDI COMPACT_BIT / INDEX_MASK -- same constants as regir_presample_tiles.glsl
 const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
 const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
 
 // ---------------------------------------------------------------------------
-// RAB_StoreCompactLightInfo — stores the compact-light payload for
+// RAB_StoreCompactLightInfo -- stores the compact-light payload for
 // light[lightIndex] into ph_compact_light_data at risBufferPtr*ph_compact_light_stride.
 // Stores the full 4xvec4 light record so compact reload is self-contained.
 // Returns true so the caller sets RTXDI_LIGHT_COMPACT_BIT on the stored index.
@@ -73,7 +73,7 @@ bool RAB_StoreCompactLightInfo(uint risBufferPtr, int lightIndex) {
 }
 
 // ---------------------------------------------------------------------------
-// RAB_LoadCompactLightData — loads the compact-light payload into in-register
+// RAB_LoadCompactLightData -- loads the compact-light payload into in-register
 // light state needed by ReGIR importance evaluation.
 // ---------------------------------------------------------------------------
 void RAB_LoadCompactLightData(uint risBufferPtr,
@@ -115,7 +115,7 @@ uniform uint  ph_ris_tile_buffer_offset;       // RTXDI: risBufferSegmentParams.
 uniform uint  ph_regir_ris_buffer_offset;      // RTXDI: offset into unified RIS buffer where ReGIR data starts
 
 // ---------------------------------------------------------------------------
-// RTXDI RNG — exact port of RandomSamplerState.hlsli + Math.hlsli
+// RTXDI RNG -- exact port of RandomSamplerState.hlsli + Math.hlsli
 // Same system as regir_presample_tiles.glsl.
 // ---------------------------------------------------------------------------
 
@@ -183,14 +183,14 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0;
 }
 
-// Grid origin: snapped to cell boundaries — must match light_tree.glsl::regir_grid_origin().
+// Grid origin: snapped to cell boundaries -- must match light_tree.glsl::regir_grid_origin().
 vec3 regir_grid_origin() {
     vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
     return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
 }
 
 // ---------------------------------------------------------------------------
-// RTXDI_RandomlySelectRISTile — picks ONE tile using the coherent RNG.
+// RTXDI_RandomlySelectRISTile -- picks ONE tile using the coherent RNG.
 // Called ONCE per thread, outside the RIS loop.
 //
 // Reference: RISBuffer.hlsli
@@ -209,7 +209,7 @@ struct RISTileInfo {
 
 RISTileInfo RTXDI_RandomlySelectRISTile(inout RTXDI_RandomSamplerState coherentRng) {
     float tileRnd = RTXDI_GetNextRandom(coherentRng);
-    // RTXDI: uint tileIndex = uint(tileRnd * params.tileCount)  — no min() clamp
+    // RTXDI: uint tileIndex = uint(tileRnd * params.tileCount)  -- no min() clamp
     uint tileIndex = uint(tileRnd * float(ph_ris_tile_count));
     RISTileInfo info;
     info.risTileOffset = ph_ris_tile_buffer_offset + tileIndex * uint(ph_ris_tile_size);
@@ -218,7 +218,7 @@ RISTileInfo RTXDI_RandomlySelectRISTile(inout RTXDI_RandomSamplerState coherentR
 }
 
 // ---------------------------------------------------------------------------
-// RTXDI_RandomlySelectLightDataFromRISTile — picks one entry from the tile.
+// RTXDI_RandomlySelectLightDataFromRISTile -- picks one entry from the tile.
 // Called each iteration inside the RIS loop using the per-thread rng.
 //
 // Reference: RISBuffer.hlsli
@@ -240,7 +240,7 @@ void RTXDI_RandomlySelectLightDataFromRISTile(
     uint risSample = min(uint(floor(rnd * float(tileInfo.risTileSize))), tileInfo.risTileSize - 1u);
     outRisBufferPtr = risSample + tileInfo.risTileOffset;
     uvec2 tileData = ph_ris_data[outRisBufferPtr];
-    // RTXDI: check COMPACT_BIT — if set, compact data is available in ph_compact_light_data.
+    // RTXDI: check COMPACT_BIT -- if set, compact data is available in ph_compact_light_data.
     hasCompact   = (tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u;
     rndLight     = int(tileData.x & RTXDI_LIGHT_INDEX_MASK);
     invSourcePdf = uintBitsToFloat(tileData.y);
@@ -257,7 +257,7 @@ void RTXDI_RandomlySelectLightDataFromRISTile(
 }
 
 // ---------------------------------------------------------------------------
-// RAB_GetLightTargetPdfForVolume — full attenuation-model importance.
+// RAB_GetLightTargetPdfForVolume -- full attenuation-model importance.
 // Mirrors ph_compute_attenuation (attenuation.glsl):
 //   result_color = color * intensity / dot(vec2(1, dist_sq * falloff), attenuation)
 // Plus directional emission-cone shaping.
@@ -303,7 +303,7 @@ float RAB_GetLightTargetPdfForVolume(int lightIndex, bool hasCompact, uint risBu
     vec3  delta = cellCenter - lightPos;
     float dist  = length(delta);
 
-    // regirAverageDistanceToVolume — nonlinear approximation
+    // regirAverageDistanceToVolume -- nonlinear approximation
     float nonlinearFactor = 1.1547;
     float radiusSq        = cellRadius * cellRadius;
     float denom           = dist + cellRadius * nonlinearFactor;
@@ -330,7 +330,7 @@ float RAB_GetLightTargetPdfForVolume(int lightIndex, bool hasCompact, uint risBu
 }
 
 // ---------------------------------------------------------------------------
-// Main — RTXDI_PresampleLocalLightsForReGIR
+// Main -- RTXDI_PresampleLocalLightsForReGIR
 // ---------------------------------------------------------------------------
 void main() {
     // RTXDI: uint lightSlot = GlobalIndex
@@ -355,12 +355,12 @@ void main() {
         return;
     }
 
-    // RTXDI: RTXDI_ReGIR_CellIndexToWorldPos → cellCenter, cellRadius
+    // RTXDI: RTXDI_ReGIR_CellIndexToWorldPos -> cellCenter, cellRadius
     uint cx = cellIndex % uint(ph_regir_grid_cells.x);
     uint cy = (cellIndex / uint(ph_regir_grid_cells.x)) % uint(ph_regir_grid_cells.y);
     uint cz = cellIndex / uint(ph_regir_grid_cells.x * ph_regir_grid_cells.y);
 
-    // RTXDI ReGIRSampling.hlsli: bounds check — reject over-dispatched threads
+    // RTXDI ReGIRSampling.hlsli: bounds check -- reject over-dispatched threads
     if (cz >= uint(ph_regir_grid_cells.z)) {
         ph_ris_data[risBufferPtr] = uvec2(0u, 0u);
         return;
@@ -391,7 +391,7 @@ void main() {
     RISTileInfo risTileInfo = RTXDI_RandomlySelectRISTile(coherentRng);
 
     // RTXDI: float invNumSamples = 1.0 / float(numRegirBuildSamples)
-    // numRegirBuildSamples comes from ph_regir_build_samples uniform (default 8 — RTXDI default)
+    // numRegirBuildSamples comes from ph_regir_build_samples uniform (default 8 -- RTXDI default)
     uint numBuildSamples = ph_regir_build_samples;
     float invNumSamples = 1.0 / float(numBuildSamples);
 
@@ -417,7 +417,7 @@ void main() {
             continue;
         }
 
-        // RTXDI: no early rejection — invalid entries produce zero risWeight naturally.
+        // RTXDI: no early rejection -- invalid entries produce zero risWeight naturally.
         // invSourcePdf *= invNumSamples
         invSourcePdf *= invNumSamples;
 
@@ -432,7 +432,7 @@ void main() {
         float risWeight = targetPdf * invSourcePdf;
         weightSum += risWeight;
 
-        // RTXDI: if (risRnd * weightSum < risWeight) → accept
+        // RTXDI: if (risRnd * weightSum < risWeight) -> accept
         if (risRnd * weightSum < risWeight) {
             selectedLight     = rndLight;
             selectedTargetPdf = targetPdf;

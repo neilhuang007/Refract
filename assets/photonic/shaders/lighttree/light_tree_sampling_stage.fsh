@@ -55,7 +55,7 @@ void main() {
     load_fragment_variables(albedo, world_pos, block_normal, normal);
 
     // Store linear view depth in .w for temporal neighbor validation (RTXDI: RAB_GetSurfaceLinearDepth).
-    // Avoids the unproject→reproject round-trip error that produces a ~1.58x depth ratio mismatch.
+    // Avoids the unproject->reproject round-trip error that produces a ~1.58x depth ratio mismatch.
     position_frag_out = vec4(world_pos, ph_linear_view_depth(modelview_projection, world_pos));
     normal_frag_out = vec4(block_normal, 1.0f);
     mapped_normal_frag_out = vec4(normal, 1.0f);

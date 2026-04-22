@@ -16,7 +16,7 @@ layout(location = 7) out vec4 direct_soft_frag_out;
 #include "/photonics/lighttree/nrd_material_id.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
-// Samplers NOT already declared in lighttree/samplers.glsl — declare only the extras here
+// Samplers NOT already declared in lighttree/samplers.glsl -- declare only the extras here
 uniform sampler2D denoised_direct_diffuse;
 uniform sampler2D denoised_direct_specular;
 

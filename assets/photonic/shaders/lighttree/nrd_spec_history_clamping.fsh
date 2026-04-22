@@ -125,7 +125,7 @@ void main() {
     float noisySecondMoment;
     spec_accumulate_noisy_stats(tex_coord, noisyMean, noisySecondMoment);
 
-    // --- Build YCoCg clamping box from responsive history (5x5 mean ± sigma) ---
+    // --- Build YCoCg clamping box from responsive history (5x5 mean +/- sigma) ---
     vec3 minBox = fastMeanYcocg - fastSigmaYcocg * spec_fast_history_clamping_sigma_scale;
     vec3 maxBox = fastMeanYcocg + fastSigmaYcocg * spec_fast_history_clamping_sigma_scale;
     minBox = min(minBox, fastYcocg);

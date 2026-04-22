@@ -1,7 +1,7 @@
 #ifndef PH_RESTIR_REGIR_INCLUDE
 #define PH_RESTIR_REGIR_INCLUDE
 
-// ReGIR output buffer — each cell has lightsPerCell fixed-position slots.
+// ReGIR output buffer -- each cell has lightsPerCell fixed-position slots.
 // Stored as uvec2 matching the RIS tile buffer format:
 //   .x = lightIndex & RTXDI_LIGHT_INDEX_MASK  (bit 31 = RTXDI_LIGHT_COMPACT_BIT when set by build pass)
 //   .y = floatBitsToUint(weight), which the selection path reuses as the slot's invSourcePdf
@@ -142,7 +142,7 @@ vec3 regir_grid_origin() {
     return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
 }
 
-// RTXDI: RTXDI_ReGIR_WorldPosToCellIndex — maps world position to grid cell
+// RTXDI: RTXDI_ReGIR_WorldPosToCellIndex -- maps world position to grid cell
 // coords. Returns false when outside the grid.
 bool regir_cell_in_bounds(ivec3 cellCoord);
 bool regir_world_to_cell(vec3 shadingWorldPos, out ivec3 cellCoord) {
@@ -161,9 +161,9 @@ bool regir_cell_in_bounds(ivec3 cellCoord) {
         && all(lessThan(cellCoord, ph_regir_grid_cells));
 }
 
-// Unpack a ReGIR output slot — same format as a RIS tile entry.
+// Unpack a ReGIR output slot -- same format as a RIS tile entry.
 // Returns false if the slot is invalid (RTXDI invalid entry uint2(0,0) or a zero invSourcePdf payload).
-// outHasCompact: true when RTXDI_LIGHT_COMPACT_BIT is set — compact companion data is available
+// outHasCompact: true when RTXDI_LIGHT_COMPACT_BIT is set -- compact companion data is available
 //   in ph_compact_light_data at outRisBufferPtr*ph_compact_light_stride + [0..3].
 bool regir_unpack_slot(int flatCellIndex, int cellSlot,
     out int lightIndex, out float invSourcePdf,
@@ -188,7 +188,7 @@ bool regir_unpack_slot(int flatCellIndex, int cellSlot,
     return true;
 }
 
-// RTXDI: RTXDI_CalculateReGIRCellIndex — determines which cell this pixel falls in.
+// RTXDI: RTXDI_CalculateReGIRCellIndex -- determines which cell this pixel falls in.
 // Returns true if inside the grid, with flatCellIndex set.
 // Match RTXDI by using the same sampling jitter parameter that the build path uses.
 bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng, out int flatCellIndex) {
@@ -213,7 +213,7 @@ bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng
 }
 
 
-// RTXDI: RTXDI_SelectLocalLightReGIRRISTile — creates a RISTileInfo from the cell and
+// RTXDI: RTXDI_SelectLocalLightReGIRRISTile -- creates a RISTileInfo from the cell and
 // uses RTXDI_RandomlySelectLightDataFromRISTile, exactly matching the tile path.
 // The ReGIR output buffer uses the same uvec2 format as the tile buffer so the
 // unpack logic is identical.  Per-pixel code treats the cell's slots as a mini-tile.

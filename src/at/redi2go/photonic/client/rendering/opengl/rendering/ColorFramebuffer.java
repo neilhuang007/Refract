@@ -3,6 +3,7 @@ package at.redi2go.photonic.client.rendering.opengl.rendering;
 import at.redi2go.photonic.client.rendering.opengl.GL;
 import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.util.BufferUtils;
+import java.nio.FloatBuffer;
 import com.mojang.blaze3d.platform.GlStateManager;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
@@ -20,6 +21,7 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL42;
+import org.lwjgl.opengl.GL44;
 
 public class ColorFramebuffer extends GlFramebuffer {
    private final Supplier<Vector2f> resolutionSupplier;
@@ -122,10 +124,17 @@ public class ColorFramebuffer extends GlFramebuffer {
    }
 
    public void clear(Vector4f clearColor) {
-      this.bind();
-      GL11.glClearColor(clearColor.x, clearColor.y, clearColor.z, clearColor.w);
-      GL11.glClear(16640);
-      this.unbind();
+      this.updatePerFrame();
+
+      for (String name : this.attachmentNames) {
+         if (Objects.equals(name, "depth")) {
+            continue;
+         }
+
+         this.writeAttachment.get(name).clear(clearColor);
+      }
+
+      this.needsClear = false;
    }
 
    public void clearBothSides(Vector4f clearColor) {
@@ -318,6 +327,33 @@ public class ColorFramebuffer extends GlFramebuffer {
       @Override
       public void clear(int value) {
          throw new UnsupportedOperationException();
+      }
+
+      private void clear(Vector4f clearColor) {
+         FloatBuffer clearValue = this.buildClearValue(clearColor);
+         GL44.glClearTexImage(this.getTextureId(), 0, this.getClearFormat(), GL11.GL_FLOAT, clearValue);
+         GL.logGlError("ColorFramebuffer.FramebufferAttachment.glClearTexImage(format=" + this.internalFormat + ")");
+      }
+
+      private int getClearFormat() {
+         return switch (this.internalFormat) {
+            case "RG32F" -> GL30.GL_RG;
+            default -> GL11.GL_RGBA;
+         };
+      }
+
+      private FloatBuffer buildClearValue(Vector4f clearColor) {
+         if (this.getClearFormat() == GL30.GL_RG) {
+            FloatBuffer clearValue = BufferUtils.createFloatBuffer(2);
+            clearValue.put(clearColor.x).put(clearColor.y);
+            clearValue.flip();
+            return clearValue;
+         }
+
+         FloatBuffer clearValue = BufferUtils.createFloatBuffer(4);
+         clearValue.put(clearColor.x).put(clearColor.y).put(clearColor.z).put(clearColor.w);
+         clearValue.flip();
+         return clearValue;
       }
 
       @Override

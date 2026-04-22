@@ -333,7 +333,7 @@ void main() {
     float sizeQuality = (NoVprev + 1e-3) / (NoV + 1e-3);
     sizeQuality *= sizeQuality;
     sizeQuality *= sizeQuality;
-    // Reference line 563: saturate(sizeQuality + abs(gOrthoMode)) — orthoMode=0 so +0.0.
+    // Reference line 563: saturate(sizeQuality + abs(gOrthoMode)) -- orthoMode=0 so +0.0.
     footprintQuality *= mix(0.1, 1.0, clamp(sizeQuality + 0.0, 0.0, 1.0));
 
     // --- Temporal accumulation ---

@@ -1,6 +1,7 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY 1
+#define PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE 1
 
 // Reference stage 2e backup variant -- ScatterBackupTemporalResampling::run
 
@@ -14,7 +15,11 @@ layout(location = 4) out vec4 reconnection1_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/restir_di_temporal_bridge.glsl"
+#include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_di_scatter_impl.glsl"
+#include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
+#include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
+#include "/photonics/lighttree/restir_di_temporal_scatter_pipeline.glsl"
 
 void storeScatterBackupTemporalResamplingResult(
     RTXDI_DIReservoir reservoir,
@@ -45,7 +50,7 @@ void storeEmptyScatterBackupTemporalResamplingResult()
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    if (!RTXDI_IsActiveCheckerboardPixel(pixel, int(ph_restir_active_checkerboard_field))) {
+    if (!RTXDI_IsActiveCheckerboardPixel(pixel, false, int(ph_restir_active_checkerboard_field))) {
         storeEmptyScatterBackupTemporalResamplingResult();
         return;
     }
@@ -73,7 +78,7 @@ void main()
     );
 
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
-    RTXDI_DIReservoir dstReservoir = lt_di_scatter_backup_temporal_resampling(
+    RTXDI_DIReservoir dstReservoir = lt_di_scatter_backup_temporal_resampling_stage(
         pixel,
         currReconnectionData
     );

@@ -18,12 +18,12 @@ const float direct_phi_luminance = 1.0;
 const float direct_lobe_angle_fraction = 0.5;
 
 // NRD RELAX: max luminance relative difference cap.
-// Reference: -log(saturate(diffuseMinLuminanceWeight)) where minLuminanceWeight=0.0 (default) → +Inf.
-// Use a large finite value to match the uncapped behaviour (exp(-1e9) ≈ 0 for any real lumaDiff).
+// Reference: -log(saturate(diffuseMinLuminanceWeight)) where minLuminanceWeight=0.0 (default) -> +Inf.
+// Use a large finite value to match the uncapped behaviour (exp(-1e9) ~= 0 for any real lumaDiff).
 const float gDiffMaxLuminanceRelativeDifference = 1e9;
-// NRD RELAX default: confidenceDrivenLuminanceEdgeStoppingRelaxation = 0.0 — relaxation disabled.
+// NRD RELAX default: confidenceDrivenLuminanceEdgeStoppingRelaxation = 0.0 -- relaxation disabled.
 const float gConfidenceDrivenLuminanceRelaxation = 0.0;
-// NRD RELAX default: confidenceDrivenNormalEdgeStoppingRelaxation = 0.0 — relaxation disabled.
+// NRD RELAX default: confidenceDrivenNormalEdgeStoppingRelaxation = 0.0 -- relaxation disabled.
 const float gConfidenceDrivenNormalRelaxation = 0.0;
 
 const float gaussian3x3[2] = float[](0.44198, 0.27901);
@@ -36,9 +36,9 @@ uint nrd_hash(uint x) {
 }
 
 // Reference: diffuseLobeAngleFraction / sqrt(stepSize), relaxed by history,
-// then GetNormalWeightParam2(1.0, fraction) → 1/max(atan(tanHalf), RELAX_NORMAL_ULP)
+// then GetNormalWeightParam2(1.0, fraction) -> 1/max(atan(tanHalf), RELAX_NORMAL_ULP)
 // NRD RELAX confidence-driven relaxation (RELAX_Atrous.cs.hlsl:111-114):
-// lerp(1.0, lobeAngleFraction, diffuseConfidence) — low confidence → fraction → 1.0 (permissive)
+// lerp(1.0, lobeAngleFraction, diffuseConfidence) -- low confidence -> fraction -> 1.0 (permissive)
 float direct_normal_weight_param(float historyLength, float diffuseConfidence) {
     float normalFraction = direct_lobe_angle_fraction / sqrt(float(max(direct_atrous_step_size, 1)));
     float historyFactor = clamp(historyLength / 5.0, 0.0, 1.0);
@@ -61,7 +61,7 @@ void main() {
     vec4 centerMaterial = texelFetch(radiosity_material, tex_coord, 0);
     vec3 centerColor = centerData.rgb;
     float centerLuma = nrd_luminance(centerColor);
-    // NRD RELAX: do not clamp history to >= 1.0 — use raw decoded value
+    // NRD RELAX: do not clamp history to >= 1.0 -- use raw decoded value
     float historyLength = nrd_decoded_history(texelFetch(nrd_history_length_tex, tex_coord, 0));
 
     vec3 centerPosition = texelFetch(radiosity_position, tex_coord, 0).xyz;
@@ -73,8 +73,8 @@ void main() {
 
     float centerWeight = gaussian3x3[0] * gaussian3x3[0];
     vec3 sumColor = centerColor * centerWeight;
-    // NRD RELAX: .a channel is the temporally accumulated second moment of luminance (E[luma²]).
-    // Variance = E[luma²] - E[luma]² (standard variance formula). The reference computes this
+    // NRD RELAX: .a channel is the temporally accumulated second moment of luminance (E[luma^2]).
+    // Variance = E[luma^2] - E[luma]^2 (standard variance formula). The reference computes this
     // inline in the A-trous filter (RELAX_Atrous.cs.hlsl).
     float centerVariance = max(centerData.a - centerLuma * centerLuma, 0.0);
     float sumVariance = centerVariance * centerWeight * centerWeight;
@@ -125,13 +125,13 @@ void main() {
             }
             float sampleLuma = nrd_luminance(sampleRadiance);
 
-            // NRD RELAX luminance weight: exp(-min(|ΔL|/sigma, maxRelDiff) * relaxation)
-            // (RELAX_Atrous.cs.hlsl:219) — relaxation scales toward permissive as confidence drops
+            // NRD RELAX luminance weight: exp(-min(|?L|/sigma, maxRelDiff) * relaxation)
+            // (RELAX_Atrous.cs.hlsl:219) -- relaxation scales toward permissive as confidence drops
             float diffusePhiLInv = 1.0 / max(lumaSigma, 1e-7);
             float lumaDiff = abs(centerLuma - sampleLuma) * diffusePhiLInv;
             float cappedLumaDiff = min(lumaDiff, gDiffMaxLuminanceRelativeDifference);
             // NRD RELAX confidence-driven relaxation (RELAX_Atrous.cs.hlsl:107-119):
-            // Low confidence → high relaxation → more permissive luminance and normal weights.
+            // Low confidence -> high relaxation -> more permissive luminance and normal weights.
             float diffConfidenceRelaxation = clamp(1.0 * (1.0 - diffuseConfidence), 0.0, 1.0);
             float lumaRelaxation = 1.0 - clamp(diffConfidenceRelaxation * gConfidenceDrivenLuminanceRelaxation, 0.0, 1.0);
             float lumaWeight = exp(-cappedLumaDiff * lumaRelaxation);
@@ -152,7 +152,7 @@ void main() {
     vec3 resolvedColor = sumColor / max(sumWeight, 1e-4);
     // NRD RELAX: variance is w^2-weighted, normalized by total weight squared
     float resolvedVariance = sumVariance / max(sumWeight * sumWeight, 1e-8);
-    // NRD RELAX: always write filtered variance in .a — no special last-pass branch.
+    // NRD RELAX: always write filtered variance in .a -- no special last-pass branch.
     // History length is a separate resource and is not written by the A-trous pass.
     direct_atrous_out = vec4(resolvedColor, resolvedVariance);
 }

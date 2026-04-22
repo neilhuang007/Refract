@@ -44,9 +44,7 @@ def expand(file_path, defines, depth=0, log=None):
                         else:
                             inc_file = os.path.join(cur_dir, inc_path)
                         inc_file = os.path.normpath(inc_file)
-                        out.append(f"// BEGIN {inc_file}")
                         out.extend(expand(inc_file, defines, depth+1, log))
-                        out.append(f"// END   {inc_file}")
                 elif directive == 'define' and keep:
                     dm = re.match(r'(\w+)(\s+.*)?', rest)
                     if dm:
