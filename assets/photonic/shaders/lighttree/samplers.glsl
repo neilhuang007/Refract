@@ -52,7 +52,6 @@ uniform sampler2D temporal_reservoir_sample;
 uniform sampler2D temporal_reservoir_meta;
 
 // Gather-side temporal intermediates for the full Reservoir Splatting reference pipeline.
-uniform sampler2D temporal_gather_floating_coords;
 uniform sampler2D temporal_gather_intermediate_reservoir_data;
 uniform sampler2D temporal_gather_intermediate_reservoir_sample;
 uniform sampler2D temporal_gather_intermediate_reservoir_meta;

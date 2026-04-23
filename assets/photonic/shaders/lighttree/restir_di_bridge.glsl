@@ -61,7 +61,7 @@ bool lt_spatial_reservoir_add_sample_from_reservoir(
     bool overwriteSubPixel)
 {
     float risWeight = sampleMIS
-        * ph_luminance(max(samplePHat, vec3(0.0f)))
+        * ph_luminance(samplePHat)
         * lt_spatial_reconnection_compute_ucw(sampleReservoir, sampleReconnectionData)
         * shiftedJacobian;
 
@@ -233,7 +233,7 @@ void SpatialResampling_execute(
             float shiftedJacobian = shiftedCentralLensRatio
                 * (shiftedCentral.secondaryPathJacobian / max(centralReconnection.secondaryPathJacobian, 1e-10f));
 
-            m1 = ph_luminance(max(shiftedCentral.radiance, vec3(0.0f)))
+            m1 = ph_luminance(shiftedCentral.radiance)
                 * shiftedJacobian
                 * (spatialResampling.useConfidenceWeights ? lt_spatial_reservoir_confidence(neighborReservoir) : 1.0f);
             m1 = isnan(m1) ? 0.0f : m1;
@@ -264,10 +264,10 @@ void SpatialResampling_execute(
             shiftedJacobian = shiftedNeighborLensRatio
                 * (shiftedNeighbor.secondaryPathJacobian / max(neighborReconnection.secondaryPathJacobian, 1e-10f));
 
-            float neighborWeight = ph_luminance(max(shiftedNeighbor.radiance, vec3(0.0f)))
+            float neighborWeight = ph_luminance(shiftedNeighbor.radiance)
                 * shiftedJacobian
                 * (spatialResampling.useConfidenceWeights ? lt_spatial_reservoir_confidence(centralReservoir) : 1.0f);
-            neighborPHat = isnan(neighborWeight) ? vec3(0.0f) : max(shiftedNeighbor.radiance, vec3(0.0f));
+            neighborPHat = isnan(neighborWeight) ? vec3(0.0f) : shiftedNeighbor.radiance;
             shiftedJacobian = isnan(neighborWeight) ? 1.0f : shiftedJacobian;
             neighborWeight = isnan(neighborWeight) ? 0.0f : neighborWeight / float(spatialResampling.neighborCount);
 

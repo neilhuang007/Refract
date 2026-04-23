@@ -22,7 +22,7 @@ uint scatter_compute_surface_hash(vec3 worldPos)
 
 vec2 scatter_load_gather_floating_coords(ivec2 uv)
 {
-    return texelFetch(temporal_gather_floating_coords, uv, 0).xy;
+    return lt_load_floating_coords(uv);
 }
 
 bool scatter_reconnection_matches_surface(

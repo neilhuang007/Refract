@@ -62,20 +62,6 @@ struct LtScatterShiftedPath {
 };
 #endif
 
-#ifndef PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
-#define PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
-struct ShiftedPathData {
-    ReservoirSplattingHitInfo primaryHit;
-    vec2 fractionalPixel;
-    vec2 lensSample;
-    vec3 firstRayDir;
-    float subPixelJacobian;
-    float lensVertexJacobian;
-    float secondaryPathJacobian;
-    vec3 radiance;
-};
-#endif
-
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
 ShiftedPathData lt_temporal_empty_shifted_path();
 
@@ -99,7 +85,7 @@ LtTemporalGatherShiftedPathData LtTemporalGatherShiftedPathData_init()
 ShiftedPathData lt_temporal_load_shifted_path(ivec2 pixel, int offsetIndex)
 {
     ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
-    LtTemporalGatherShiftedPathRecord shiftedPathRecord = ph_temporal_gather_shifted_paths_data[
+    ShiftedPathStorageRecord shiftedPathRecord = shiftedPathRecords[
         lt_temporal_gather_shifted_path_record_index(pixel, offsetIndex)
     ];
 
@@ -123,7 +109,7 @@ ShiftedPathData lt_temporal_load_shifted_path(ivec2 pixel, int offsetIndex)
 
 void lt_temporal_store_shifted_path(ivec2 pixel, int offsetIndex, ShiftedPathData shiftedPath)
 {
-    LtTemporalGatherShiftedPathRecord shiftedPathRecord;
+    ShiftedPathStorageRecord shiftedPathRecord;
     shiftedPathRecord.primaryHitData = vec4(
         shiftedPath.primaryHit.worldPos,
         shiftedPath.primaryHit.viewDepth
@@ -141,7 +127,7 @@ void lt_temporal_store_shifted_path(ivec2 pixel, int offsetIndex, ShiftedPathDat
         0.0f
     );
     shiftedPathRecord.radianceData = vec4(shiftedPath.radiance, 0.0f);
-    ph_temporal_gather_shifted_paths_data[
+    shiftedPathRecords[
         lt_temporal_gather_shifted_path_record_index(pixel, offsetIndex)
     ] = shiftedPathRecord;
 }

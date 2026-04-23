@@ -25,9 +25,31 @@
 #define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS 1
 #endif
 
+#ifndef PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED
+#define PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED
+layout(std430) restrict buffer floatingCoords {
+    vec2 floatingCoordsData[];
+};
+
+uint lt_floating_coords_pixel_index(ivec2 pixel)
+{
+    return uint(pixel.y * viewWidth + pixel.x);
+}
+
+void lt_store_floating_coords(ivec2 pixel, vec2 floatingCoord)
+{
+    floatingCoordsData[lt_floating_coords_pixel_index(pixel)] = floatingCoord;
+}
+
+vec2 lt_load_floating_coords(ivec2 pixel)
+{
+    return floatingCoordsData[lt_floating_coords_pixel_index(pixel)];
+}
+#endif
+
 #if (defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)) && !defined(PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED)
 #define PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED
-struct LtTemporalGatherShiftedPathRecord {
+struct ShiftedPathStorageRecord {
     vec4 primaryHitData;
     vec4 primaryHitFaceFractionalPixelLensX;
     vec4 lensYFirstRayDir;
@@ -35,8 +57,8 @@ struct LtTemporalGatherShiftedPathRecord {
     vec4 radianceData;
 };
 
-layout(std430) restrict buffer ph_temporal_gather_shifted_paths {
-    LtTemporalGatherShiftedPathRecord ph_temporal_gather_shifted_paths_data[];
+layout(std430) restrict buffer shiftedPaths {
+    ShiftedPathStorageRecord shiftedPathRecords[];
 };
 
 const uint LT_TEMPORAL_GATHER_SHIFT_COUNT = 8u;

@@ -43,7 +43,8 @@ void InitialCandidates_tracePath(
             path.surface,
             path.reservoir,
             path.selectedLightSample,
-            PathState_getPixel(path)
+            PathState_getPixel(path),
+            path.time
         )
         : ReservoirSplattingReconnectionData_init();
 
@@ -52,10 +53,9 @@ void InitialCandidates_tracePath(
 
 void InitialCandidates_run(ivec2 pixel)
 {
-    InitialCandidates_storeEmptyReservoir();
-
     if (!lt_is_viewport_uv_in_bounds(pixel))
     {
+        InitialCandidates_storeEmptyReservoir();
         return;
     }
 
@@ -63,6 +63,7 @@ void InitialCandidates_run(ivec2 pixel)
     ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
     if (!lt_is_active_reservoir_lane(reservoirPosition))
     {
+        InitialCandidates_storeEmptyReservoir();
         return;
     }
 

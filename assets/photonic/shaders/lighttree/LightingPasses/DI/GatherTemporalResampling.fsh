@@ -20,10 +20,12 @@ void storeGatherTemporalResamplingResult(
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
 {
+    float reconnectionTransportAux0;
+    float reconnectionTransportAux1;
     scatter_pack_reconnection_fields(
         reconnectionData,
-        reservoir.transportAux0,
-        reservoir.transportAux1,
+        reconnectionTransportAux0,
+        reconnectionTransportAux1,
         reconnection0_frag_out,
         reconnection1_frag_out,
         reconnection2_frag_out,
@@ -33,7 +35,7 @@ void storeGatherTemporalResamplingResult(
 
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
 void storeEmptyGatherTemporalResamplingResult()

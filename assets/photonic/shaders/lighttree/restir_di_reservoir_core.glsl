@@ -16,21 +16,17 @@ struct RTXDI_DIReservoir {
 };
 
 vec3 PathReservoir_getIntegrand(RTXDI_DIReservoir reservoir) {
-    return max(
-        vec3(
-            reservoir.canonicalWeight,
-            reservoir.transportAux0,
-            reservoir.transportAux1
-        ),
-        vec3(0.0f)
+    return vec3(
+        reservoir.canonicalWeight,
+        reservoir.transportAux0,
+        reservoir.transportAux1
     );
 }
 
 void PathReservoir_setIntegrand(inout RTXDI_DIReservoir reservoir, vec3 integrand) {
-    vec3 clampedIntegrand = max(integrand, vec3(0.0f));
-    reservoir.canonicalWeight = clampedIntegrand.x;
-    reservoir.transportAux0 = clampedIntegrand.y;
-    reservoir.transportAux1 = clampedIntegrand.z;
+    reservoir.canonicalWeight = integrand.x;
+    reservoir.transportAux0 = integrand.y;
+    reservoir.transportAux1 = integrand.z;
 }
 
 float PathReservoir_getConfidence(RTXDI_DIReservoir reservoir) {

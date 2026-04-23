@@ -6,6 +6,7 @@ const int kSamplesPerPixel = (PH_LIGHTTREE_INITIAL_SAMPLES > 0 ? PH_LIGHTTREE_IN
 struct PathState
 {
     uint id;
+    float time;
     RAB_Surface surface;
     RTXDI_RandomSamplerState sg;
     RTXDI_RandomSamplerState coherentRng;
@@ -44,6 +45,7 @@ void InitialCandidates_generatePath(out PathState path, ivec2 pixel, uint sample
         sampleIdx,
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
     );
+    path.time = lt_next_random(path.sg);
     path.reservoir = RTXDI_EmptyDIReservoir();
     path.reconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();

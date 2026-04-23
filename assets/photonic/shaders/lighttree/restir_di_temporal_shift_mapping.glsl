@@ -79,11 +79,7 @@ ReservoirSplattingReconnectionData ReconnectionData_update(
     ReservoirSplattingReconnectionData updated = source;
     updated.firstHit = shiftedPath.primaryHit;
     updated.firstWi = -shiftedPath.firstRayDir;
-    updated.subPixel = clamp(
-        shiftedPath.fractionalPixel - floor(shiftedPath.fractionalPixel),
-        vec2(0.0f),
-        vec2(1.0f)
-    );
+    updated.subPixel = shiftedPath.fractionalPixel - floor(shiftedPath.fractionalPixel);
     updated.lensSample = shiftedPath.lensSample;
     updated.subPixelJacobian = shiftedPath.subPixelJacobian;
     updated.lensVertexJacobian = shiftedPath.lensVertexJacobian;

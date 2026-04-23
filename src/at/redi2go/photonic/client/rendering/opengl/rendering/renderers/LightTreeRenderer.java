@@ -78,7 +78,7 @@ public class LightTreeRenderer extends MainRenderer {
    private static final int[] shadeSamplesReservoirDrawBuffers = new int[]{-1, -1, 0, 1, 2};
    private static final int profilerLogIntervalFrames = 60;
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_COUNT = 8;
-   // Matches one std430 LtTemporalGatherShiftedPathRecord in restir_di_temporal_buffer_bridge.glsl.
+   // Matches one std430 ShiftedPathStorageRecord in restir_di_temporal_buffer_bridge.glsl.
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_RECORD_VEC4_COUNT = 5;
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_STRIDE_BYTES =
       TEMPORAL_GATHER_SHIFTED_PATH_RECORD_VEC4_COUNT * 4 * Float.BYTES;
@@ -153,6 +153,7 @@ public class LightTreeRenderer extends MainRenderer {
   private final ColorFramebuffer scatterReconnectionBuffer;
   private final ColorFramebuffer temporalReservoirBuffer;
   private final ColorFramebuffer temporalGatherBuffer;
+  private GlMemoryManager temporalGatherFloatingCoordsMemoryManager;
   private GlMemoryManager temporalGatherShiftedPathsMemoryManager;
   private GlMemoryManager temporalScatterCurrentGlobalCountersMemoryManager;
   private GlMemoryManager temporalScatterCurrentCellCountersMemoryManager;
@@ -396,6 +397,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void addTemporalScatterMemoryManagers(GLMemoryCollection memoryCollection) {
+      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalGatherFloatingCoordsMemoryManager);
       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalGatherShiftedPathsMemoryManager);
       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentGlobalCountersMemoryManager);
       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentCellCountersMemoryManager);
@@ -697,7 +699,6 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "temporal_reservoir_data", () -> this.temporalReservoirBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "temporal_reservoir_sample", () -> this.temporalReservoirBuffer.getWriteAttachment("sample"));
       this.addTextureSampler(samplers, "temporal_reservoir_meta", () -> this.temporalReservoirBuffer.getWriteAttachment("meta"));
-      this.addTextureSampler(samplers, "temporal_gather_floating_coords", () -> this.temporalGatherBuffer.getWriteAttachment("floating_coords"));
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_data", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_data"));
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_sample", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_sample"));
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_meta", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"));
@@ -1050,8 +1051,12 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void allocateTemporalScatterMemoryManagers() {
+      this.temporalGatherFloatingCoordsMemoryManager = this.createTemporalScatterMemoryManager(
+         "floatingCoords",
+         this.temporalScatterPixelCapacity * 2 * Float.BYTES
+      );
       this.temporalGatherShiftedPathsMemoryManager = this.createTemporalScatterMemoryManager(
-         "ph_temporal_gather_shifted_paths",
+         "shiftedPaths",
          this.temporalScatterPixelCapacity
             * TEMPORAL_GATHER_SHIFTED_PATH_COUNT
             * TEMPORAL_GATHER_SHIFTED_PATH_STRIDE_BYTES
@@ -1145,6 +1150,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void clearTemporalGatherBuffers() {
+      this.clearFloat2Buffer(this.temporalGatherFloatingCoordsMemoryManager);
       this.clearFloat4Buffer(this.temporalGatherShiftedPathsMemoryManager);
       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
    }
@@ -1194,7 +1200,21 @@ public class LightTreeRenderer extends MainRenderer {
       GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
    }
 
+   private void clearFloat2Buffer(GlMemoryManager memoryManager) {
+      if (memoryManager == null) {
+         return;
+      }
+
+      java.nio.FloatBuffer clearValue = BufferUtils.createFloatBuffer(2);
+      clearValue.put(-1.0f).put(-1.0f);
+      clearValue.flip();
+      GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, memoryManager.getId());
+      GL43.glClearBufferData(GL43.GL_SHADER_STORAGE_BUFFER, GL30.GL_RG32F, GL30.GL_RG, GL11.GL_FLOAT, clearValue);
+      GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+   }
+
    private void destroyTemporalScatterMemoryManagers() {
+      this.temporalGatherFloatingCoordsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalGatherFloatingCoordsMemoryManager);
       this.temporalGatherShiftedPathsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalGatherShiftedPathsMemoryManager);
       this.temporalScatterCurrentGlobalCountersMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentGlobalCountersMemoryManager);
       this.temporalScatterCurrentCellCountersMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentCellCountersMemoryManager);
@@ -1599,7 +1619,6 @@ public class LightTreeRenderer extends MainRenderer {
 
    private ColorFramebuffer createTemporalGatherFramebuffer(float renderScale) {
       ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
-      framebuffer.createAttachment("floating_coords", "RG32F", false);
       framebuffer.createAttachment("intermediate_data", "RGBA32F", false);
       framebuffer.createAttachment("intermediate_sample", "RGBA32F", false);
       framebuffer.createAttachment("intermediate_meta", "RGBA32F", false);
@@ -1613,7 +1632,6 @@ public class LightTreeRenderer extends MainRenderer {
 
    private RoutingFramebuffer createTemporalCollectFramebuffer() {
       return this.createDirectPackedRoutingFramebuffer(
-         () -> this.temporalGatherBuffer.getWriteAttachment("floating_coords"),
          () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_data"),
          () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_sample"),
          () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"),

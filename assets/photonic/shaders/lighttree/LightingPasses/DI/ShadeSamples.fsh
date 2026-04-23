@@ -199,7 +199,7 @@ void storeEmptyShadeOutputs() {
 void storeDIReservoir(RTXDI_DIReservoir reservoir) {
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
 float lt_resolve_shading_hit_distance(RAB_Surface surface) {

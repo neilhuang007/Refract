@@ -52,16 +52,19 @@ ReservoirSplattingReconnectionData CollectTemporalSamples_update_reconnection(
 }
 
 void CollectTemporalSamples_storeResult(
+    ivec2 currPixel,
     vec2 floatingCoord,
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
 {
-    floating_coords_frag_out = floatingCoord;
+    lt_store_floating_coords(currPixel, floatingCoord);
 
+    float reconnectionTransportAux0;
+    float reconnectionTransportAux1;
     scatter_pack_reconnection_fields(
         reconnectionData,
-        reservoir.transportAux0,
-        reservoir.transportAux1,
+        reconnectionTransportAux0,
+        reconnectionTransportAux1,
         intermediate_reconnection0_frag_out,
         intermediate_reconnection1_frag_out,
         intermediate_reconnection2_frag_out,
@@ -71,12 +74,11 @@ void CollectTemporalSamples_storeResult(
 
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    intermediate_reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
 void CollectTemporalSamples_store_empty_result()
 {
-    floating_coords_frag_out = vec2(-1.0f);
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(RTXDI_EmptyDIReservoir());
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(RTXDI_EmptyDIReservoir());
     intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(RTXDI_EmptyDIReservoir());
@@ -89,6 +91,7 @@ void CollectTemporalSamples_store_empty_result()
 
 void CollectTemporalSamples_execute(ivec2 currPixel)
 {
+    lt_store_floating_coords(currPixel, vec2(-1.0f));
     vec2 prevPixel = lt_temporal_previous_pixel_center(currPixel) - vec2(0.5f);
     if (any(lessThan(prevPixel, vec2(0.0f))))
     {
@@ -173,7 +176,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
         }
 
         PathReservoir_setConfidence(dstReservoir, totalConfidence);
-        CollectTemporalSamples_storeResult(prevPixel, dstReservoir, dstReconnectionData);
+        CollectTemporalSamples_storeResult(currPixel, prevPixel, dstReservoir, dstReconnectionData);
         return;
     }
 
@@ -182,7 +185,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
         ivec2 roundedPrevPixel = ivec2(round(prevPixel));
         if (!lt_is_viewport_uv_in_bounds(roundedPrevPixel))
         {
-            CollectTemporalSamples_storeResult(vec2(roundedPrevPixel), dstReservoir, dstReconnectionData);
+            CollectTemporalSamples_storeResult(currPixel, vec2(roundedPrevPixel), dstReservoir, dstReconnectionData);
             return;
         }
 
@@ -191,7 +194,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
             uvec2(roundedPrevPixel)
         );
         dstReconnectionData = RestirDI_loadPreviousFrameReconnection(roundedPrevPixel);
-        CollectTemporalSamples_storeResult(vec2(roundedPrevPixel), dstReservoir, dstReconnectionData);
+        CollectTemporalSamples_storeResult(currPixel, vec2(roundedPrevPixel), dstReservoir, dstReconnectionData);
         return;
     }
 
@@ -371,6 +374,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
 
     PathReservoir_setConfidence(dstReservoir, totalConfidence);
     CollectTemporalSamples_storeResult(
+        currPixel,
         prevPixel,
         dstReservoir,
         dstReconnectionData

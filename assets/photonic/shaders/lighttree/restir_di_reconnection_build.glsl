@@ -132,6 +132,7 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     RTXDI_DIReservoir reservoir,
     RAB_LightSample lightSample,
     ivec2 pixelPosition,
+    float time,
     float confidenceIgnored,
     float subPixelJacobian)
 {
@@ -146,7 +147,7 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     d.lensSample = lt_area_has_valid_domain(reservoir)
         ? clamp(reservoir.lensSampleUV, vec2(0.0f), vec2(1.0f))
         : lt_area_default_lens_sample();
-    d.time = fract(float(max(ph_restir_frame_index, 0)) * 0.61803398875f);
+    d.time = clamp(time, 0.0f, 1.0f);
 
     d.pathLength = (lightSample.index >= 0) ? 2u : 1u;
 

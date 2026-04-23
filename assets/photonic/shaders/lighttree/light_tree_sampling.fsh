@@ -68,7 +68,7 @@ void main() {
 
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 
     vec2 currentPixelCenter = vec2(pixelPosition) + vec2(0.5f);
     motion_frag_out = ph_compute_temporal_motion(

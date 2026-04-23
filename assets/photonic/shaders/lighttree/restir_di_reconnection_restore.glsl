@@ -7,7 +7,21 @@ bool RestirDI_restoreReconnectionRadiometry(
     RTXDI_DIReservoir reservoir,
     inout ReservoirSplattingReconnectionData reconnection)
 {
-    return lt_is_viewport_uv_in_bounds(pixelPosition) && RTXDI_IsValidDIReservoir(reservoir);
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition) || !RTXDI_IsValidDIReservoir(reservoir)) {
+        return false;
+    }
+
+    RAB_Surface sourceSurface = RAB_GetGBufferSurface(pixelPosition, previousFrame);
+    if (!RAB_IsSurfaceValid(sourceSurface)) {
+        return false;
+    }
+
+    if (dot(reconnection.firstHit.worldPos, reconnection.firstHit.worldPos) <= 0.0f) {
+        reconnection.firstHit.worldPos = sourceSurface.worldPos;
+    }
+    reconnection.firstHit.viewDepth = sourceSurface.viewDepth;
+    reconnection.secondHit.viewDepth = sourceSurface.viewDepth;
+    return true;
 }
 
 ScatterReconnectionData RestirDI_loadPreviousFrameReconnection(ivec2 pixelPosition)

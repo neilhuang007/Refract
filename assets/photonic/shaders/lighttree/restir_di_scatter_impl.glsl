@@ -31,11 +31,13 @@ vec3 lt_previous_camera_forward() {
 }
 
 float lt_scatter_reservoir_confidence(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
-    return PathReservoir_getConfidence(reservoir);
+    return lt_restir_temporal_use_confidence_weights()
+        ? PathReservoir_getConfidence(reservoir)
+        : 1.0f;
 }
 
 float lt_scatter_radiance_phat(vec3 radiance) {
-    return ph_luminance(max(radiance, vec3(0.0f)));
+    return ph_luminance(radiance);
 }
 
 // Reference parity (ScatterTemporalResampling.rt.slang:88,130):

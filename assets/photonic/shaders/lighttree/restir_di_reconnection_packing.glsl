@@ -124,8 +124,8 @@ void scatter_pack_reconnection_data(
         clamp(reconnectionData.secondaryPathJacobian, 0.0f, 65504.0f)
     ));
 
-    data0 = vec4(reconnectionData.firstHit.worldPos, reconnectionData.firstHit.viewDepth);
-    data1 = vec4(reconnectionData.secondHit.worldPos, reconnectionData.secondHit.viewDepth);
+    data0 = vec4(reconnectionData.firstHit.worldPos, transportAux0);
+    data1 = vec4(reconnectionData.secondHit.worldPos, transportAux1);
     data2 = vec4(
         reconnectionData.irradiance,
         uintBitsToFloat(scatter_pack_reconnection_meta(reconnectionData))
@@ -157,16 +157,20 @@ void scatter_unpack_reconnection(
     vec2 packedLightPdfSubPixelJacobian;
     vec2 packedLensJacobians;
     bool hasPackedTransport;
+    float packedTransportAux0;
+    float packedTransportAux1;
 
-    packedLightPdfSubPixelJacobian = scatter_unpack_half2(transportAux0);
-    packedLensJacobians = scatter_unpack_half2(transportAux1);
-    hasPackedTransport = transportAux0 != 0.0f || transportAux1 != 0.0f;
+    packedTransportAux0 = (data0.w != 0.0f || data1.w != 0.0f) ? data0.w : transportAux0;
+    packedTransportAux1 = (data0.w != 0.0f || data1.w != 0.0f) ? data1.w : transportAux1;
+    packedLightPdfSubPixelJacobian = scatter_unpack_half2(packedTransportAux0);
+    packedLensJacobians = scatter_unpack_half2(packedTransportAux1);
+    hasPackedTransport = packedTransportAux0 != 0.0f || packedTransportAux1 != 0.0f;
     reconnectionData = ReconnectionData_init();
 
     reconnectionData.firstHit.worldPos = data0.xyz;
-    reconnectionData.firstHit.viewDepth = data0.w;
+    reconnectionData.firstHit.viewDepth = 0.0f;
     reconnectionData.secondHit.worldPos = data1.xyz;
-    reconnectionData.secondHit.viewDepth = data1.w;
+    reconnectionData.secondHit.viewDepth = 0.0f;
     reconnectionData.irradiance = data2.xyz;
     reconnectionData.earlyThroughput = data3.xyz;
     reconnectionData.time = clamp(data3.w, 0.0f, 1.0f);
