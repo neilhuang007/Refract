@@ -58,21 +58,16 @@ float scatter_resolve_secondary_path_jacobian_from_reconnection(
     vec3 earlyThroughput,
     vec3 irradiance)
 {
+    surface = surface;
+    secondPos = secondPos;
+    earlyThroughput = earlyThroughput;
+    irradiance = irradiance;
+
     if (lightSample.index < 0) {
         return 1.0f;
     }
 
-    vec3 surfaceToSecond = secondPos - surface.worldPos;
-    float distanceSq = dot(surfaceToSecond, surfaceToSecond);
-    if (distanceSq <= 1e-6f) {
-        return 1.0f;
-    }
-
-    vec3 directionToSecond = surfaceToSecond * inversesqrt(distanceSq);
-    float cosSurface = max(abs(dot(surface.geoNormal, directionToSecond)), 1e-4f);
-    float throughputScale = max(ph_luminance(max(earlyThroughput, vec3(0.0f))), 1e-4f);
-    float irradianceScale = max(ph_luminance(max(irradiance, vec3(0.0f))), 1e-4f);
-    return clamp((cosSurface * irradianceScale) / (distanceSq * throughputScale), 1e-4f, 1e4f);
+    return max(lightSample.solidAnglePdf, 1e-10f);
 }
 
 float scatter_resolve_secondary_path_jacobian(

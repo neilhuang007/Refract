@@ -49,12 +49,5 @@ void main()
         return;
     }
 
-    const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
-    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(currPixel, int(runtimeParameters.activeCheckerboardField));
-    if (!lt_is_active_reservoir_lane(reservoirPosition))
-    {
-        return;
-    }
-
     CollectTemporalSamples_execute(currPixel);
 }

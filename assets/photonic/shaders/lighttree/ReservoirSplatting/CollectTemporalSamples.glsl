@@ -18,6 +18,11 @@ float CollectTemporalSamples_confidence_weight(float confidence)
     return lt_restir_temporal_use_confidence_weights() ? confidence : 1.0f;
 }
 
+float CollectTemporalSamples_reservoir_confidence(RTXDI_DIReservoir reservoir)
+{
+    return PathReservoir_getConfidence(reservoir);
+}
+
 ShiftedPathData CollectTemporalSamples_make_no_shift_path(
     ivec2 neighborPixel,
     RTXDI_DIReservoir neighborReservoir,
@@ -74,11 +79,7 @@ void CollectTemporalSamples_storeResult(
 
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(
-        reservoir,
-        reconnectionTransportAux0,
-        reconnectionTransportAux1
-    );
+    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 }
 
 void CollectTemporalSamples_store_empty_result()
@@ -139,12 +140,10 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                 );
                 ReservoirSplattingReconnectionData neighborReconnectionData =
                     RestirDI_loadPreviousFrameReconnection(neighborPixel);
-                float neighborConfidence = lt_scatter_reservoir_confidence(
-                    neighborReservoir,
-                    neighborReconnectionData
-                );
+                float neighborReservoirConfidence =
+                    CollectTemporalSamples_reservoir_confidence(neighborReservoir);
                 totalConfidence += bilinearWeight
-                    * CollectTemporalSamples_confidence_weight(neighborConfidence);
+                    * CollectTemporalSamples_confidence_weight(neighborReservoirConfidence);
 
                 vec3 sourceIntegrand = PathReservoir_getIntegrand(neighborReservoir);
                 vec2 relativeSubPixel = vec2(offset)
@@ -169,7 +168,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                     sourceIntegrand,
                     1.0f,
                     lt_scatter_compute_ucw(neighborReservoir, sourceIntegrand),
-                    CollectTemporalSamples_confidence_weight(neighborConfidence),
+                    neighborReservoirConfidence,
                     shiftedReservoir,
                     rng
                 );
@@ -223,12 +222,10 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
             );
             ReservoirSplattingReconnectionData neighborReconnectionData =
                 RestirDI_loadPreviousFrameReconnection(neighborPixel);
-                float neighborConfidence = lt_scatter_reservoir_confidence(
-                    neighborReservoir,
-                    neighborReconnectionData
-                );
-                totalConfidence += bilinearWeight
-                    * CollectTemporalSamples_confidence_weight(neighborConfidence);
+            float neighborReservoirConfidence =
+                CollectTemporalSamples_reservoir_confidence(neighborReservoir);
+            totalConfidence += bilinearWeight
+                * CollectTemporalSamples_confidence_weight(neighborReservoirConfidence);
 
             vec3 sourceIntegrand = PathReservoir_getIntegrand(neighborReservoir);
             if (!RTXDI_IsValidDIReservoir(neighborReservoir))
@@ -290,7 +287,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
 
             float sourceWeight = bilinearWeight
                 * lt_scatter_radiance_phat(sourceIntegrand)
-                * CollectTemporalSamples_confidence_weight(neighborConfidence);
+                * CollectTemporalSamples_confidence_weight(neighborReservoirConfidence);
             float totalPHat = sourceWeight;
 
             for (int tempX = 0; tempX < 2; ++tempX)
@@ -327,12 +324,11 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                     float tempPHat = lt_scatter_radiance_phat(tempShiftedPath.radiance);
                     float tempJacobian = tempShiftedPath.secondaryPathJacobian
                         / neighborReconnectionData.secondaryPathJacobian;
-                    float tempConfidence = lt_scatter_reservoir_confidence(
+                    float tempConfidence = CollectTemporalSamples_reservoir_confidence(
                         RTXDI_LoadPreviousDIReservoir(
                             lt_build_restir_di_parameters().reservoirBufferParams,
                             uvec2(tempOffsetPixel)
-                        ),
-                        RestirDI_loadPreviousFrameReconnection(tempOffsetPixel)
+                        )
                     );
                     totalPHat += tempBilinearWeight
                         * tempPHat
@@ -352,7 +348,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                 shiftedPath.radiance,
                 shiftedJacobian,
                 lt_scatter_compute_ucw(neighborReservoir, sourceIntegrand),
-                CollectTemporalSamples_confidence_weight(neighborConfidence),
+                neighborReservoirConfidence,
                 shiftedReservoir,
                 rng
             );

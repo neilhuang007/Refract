@@ -21,10 +21,52 @@ ShiftedPathData lt_temporal_empty_shifted_path()
     return shiftedPathData;
 }
 
+vec4 lt_temporal_load_current_surface_identity(ivec2 pixel)
+{
+    return texelFetch(radiosity_identity, pixel, 0);
+}
+
+RAB_Surface lt_temporal_load_current_surface(ivec2 pixel)
+{
+    vec4 positionData = texelFetch(radiosity_position, pixel, 0);
+    if (positionData.w == BACKGROUND_DEPTH)
+    {
+        return RAB_EmptySurface();
+    }
+
+    return lt_make_surface(
+        positionData.xyz,
+        texelFetch(radiosity_normal, pixel, 0).xyz,
+        texelFetch(radiosity_mapped_normal, pixel, 0).xyz,
+        clamp(texelFetch(radiosity_albedo, pixel, 0).rgb, vec3(0.04f), vec3(1.0f)),
+        texelFetch(radiosity_material, pixel, 0),
+        positionData.w
+    );
+}
+
+bool lt_temporal_reconnection_matches_current_surface(
+    ReservoirSplattingReconnectionData reconnectionData,
+    ivec2 pixel,
+    RAB_Surface currentSurface)
+{
+    vec4 currentIdentity = lt_temporal_load_current_surface_identity(pixel);
+    uint currentFaceId = uint(round(currentIdentity.w));
+
+    float maxDepth = max(reconnectionData.firstHit.viewDepth, currentSurface.viewDepth);
+    float depthTolerance = max(1e-4f, 1e-3f * maxDepth);
+    float worldTolerance = max(1e-4f, 1e-3f * maxDepth);
+    float worldDistance = distance(reconnectionData.firstHit.worldPos, currentSurface.worldPos);
+    bool depthCompatible = abs(reconnectionData.firstHit.viewDepth - currentSurface.viewDepth) <= depthTolerance;
+    bool faceCompatible = reconnectionData.firstHit.faceId == currentFaceId;
+    bool positionCompatible = worldDistance <= worldTolerance;
+
+    return depthCompatible && faceCompatible && positionCompatible;
+}
+
 ReservoirSplattingHitInfo lt_temporal_make_shifted_hit_info(ivec2 pixel, RAB_Surface surface)
 {
     ReservoirSplattingHitInfo hitInfo = ReservoirSplattingHitInfo_empty();
-    vec4 identityData = scatter_load_surface_identity(pixel, false);
+    vec4 identityData = lt_temporal_load_current_surface_identity(pixel);
     hitInfo.worldPos = surface.worldPos;
     hitInfo.viewDepth = surface.viewDepth;
     hitInfo.faceId = uint(round(identityData.w));
@@ -150,26 +192,9 @@ bool lt_temporal_trace_reconnection_visibility(
 }
 
 vec3 lt_temporal_path_reconnection_shift(
-    RTXDI_DIReservoir sourceReservoir,
-    RAB_Surface shiftedSurface)
+    ReservoirSplattingReconnectionData reconnectionData)
 {
-    if (!RTXDI_IsValidDIReservoir(sourceReservoir))
-    {
-        return vec3(0.0f);
-    }
-
-    RAB_LightSample shiftedLight = lt_decode_reservoir_sample_for_frame(
-        sourceReservoir,
-        shiftedSurface,
-        false,
-        false
-    );
-    if (shiftedLight.index < 0 || shiftedLight.solidAnglePdf <= 0.0f)
-    {
-        return vec3(0.0f);
-    }
-
-    return max(lt_shade_surface_light_sample(shiftedSurface, shiftedLight), vec3(0.0f));
+    return scatter_reconnection_integrand(reconnectionData);
 }
 
 ShiftedPathData gatherLensVertexCopyShift(
@@ -194,7 +219,7 @@ ShiftedPathData gatherLensVertexCopyShift(
         ivec2(0),
         ivec2(int(viewWidth) - 1, int(viewHeight) - 1)
     );
-    RAB_Surface landingSurface = RAB_GetGBufferSurface(landingPixel, false);
+    RAB_Surface landingSurface = lt_temporal_load_current_surface(landingPixel);
     if (!RAB_IsSurfaceValid(landingSurface))
     {
         return shiftedPath;
@@ -232,12 +257,8 @@ ShiftedPathData gatherLensVertexCopyShift(
         rayDir,
         cameraForward
     );
-    shiftedPath.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
-        landingSurface,
-        sourceReservoir,
-        lt_decode_reservoir_sample_for_frame(sourceReservoir, landingSurface, false, false)
-    );
-    shiftedPath.radiance = lt_temporal_path_reconnection_shift(sourceReservoir, landingSurface);
+    shiftedPath.secondaryPathJacobian = max(reconnectionData.secondaryPathJacobian, 1e-10f);
+    shiftedPath.radiance = lt_temporal_path_reconnection_shift(reconnectionData);
     return shiftedPath;
 }
 
@@ -317,12 +338,12 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
         ivec2(0),
         ivec2(int(viewWidth) - 1, int(viewHeight) - 1)
     );
-    RAB_Surface primaryHitSurface = RAB_GetGBufferSurface(landingPixel, false);
+    RAB_Surface primaryHitSurface = lt_temporal_load_current_surface(landingPixel);
     if (!RAB_IsSurfaceValid(primaryHitSurface))
     {
         return shiftedPath;
     }
-    if (!scatter_reconnection_matches_surface(reconnectionData, landingPixel, primaryHitSurface, false))
+    if (!lt_temporal_reconnection_matches_current_surface(reconnectionData, landingPixel, primaryHitSurface))
     {
         return shiftedPath;
     }
@@ -354,12 +375,8 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
         rayDir,
         cameraForward
     );
-    shiftedPath.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
-        shiftedSurface,
-        sourceReservoir,
-        lt_decode_reservoir_sample_for_frame(sourceReservoir, shiftedSurface, false, false)
-    );
-    shiftedPath.radiance = lt_temporal_path_reconnection_shift(sourceReservoir, shiftedSurface);
+    shiftedPath.secondaryPathJacobian = max(reconnectionData.secondaryPathJacobian, 1e-10f);
+    shiftedPath.radiance = lt_temporal_path_reconnection_shift(reconnectionData);
     return shiftedPath;
 }
 

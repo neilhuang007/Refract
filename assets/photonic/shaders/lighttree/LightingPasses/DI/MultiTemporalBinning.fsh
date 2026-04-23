@@ -23,6 +23,6 @@ void main()
 {
     MultiSortReprojectedReservoirs_storeEmptySortCellDataResult();
 
-    uint index = uint(gl_FragCoord.x);
+    uint index = uint(gl_FragCoord.y) * uint(viewWidth) + uint(gl_FragCoord.x);
     MultiSortReprojectedReservoirs_sortCellData(index);
 }

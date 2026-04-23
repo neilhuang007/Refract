@@ -32,7 +32,8 @@ bool RestirDI_restoreReconnectionRadiometry(
     RTXDI_DIReservoir reservoir,
     inout ReservoirSplattingReconnectionData reconnection)
 {
-    return lt_is_viewport_uv_in_bounds(pixelPosition) && RTXDI_IsValidDIReservoir(reservoir);
+    return lt_is_viewport_uv_in_bounds(pixelPosition)
+        && RTXDI_IsValidDIReservoir(reservoir);
 }
 
 ScatterReconnectionData RestirDI_loadPreviousFrameReconnection(ivec2 pixelPosition)

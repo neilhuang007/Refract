@@ -55,7 +55,7 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
     );
     bool currSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
-        currReservoirConfidence,
+        dstConfidence,
         currSampleMIS,
         currIntegrand,
         1.0f,
@@ -66,7 +66,7 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
     );
     dstReconnectionData = currSelected ? currReconnectionDataLocal : dstReconnectionData;
 
-    float newConfidence = currReservoirConfidence;
+    float newConfidence = dstConfidence;
 
     uint numReservoirs = lt_reproject_temporal_samples_cell_counter_value(reservoirIdx);
     uint cellOffset = lt_scatter_temporal_resampling_cell_offset_value(reservoirIdx);

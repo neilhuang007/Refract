@@ -1167,7 +1167,6 @@ public class LightTreeRenderer extends MainRenderer {
 
    private void clearTemporalGatherBuffers() {
       this.clearFloat2Buffer(this.temporalGatherFloatingCoordsMemoryManager);
-      this.clearFloat4Buffer(this.temporalGatherShiftedPathsMemoryManager);
       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
    }
 
@@ -1466,7 +1465,6 @@ public class LightTreeRenderer extends MainRenderer {
       this.recalculateRenderer(this.shadeSamplesMonolithicRenderer);
       this.recalculateRenderer(this.shadeSamplesReservoirRenderer);
       this.recalculateRenderer(this.shadeSamplesRenderer);
-      this.invalidateDirectReuseHistory();
    }
 
    @Override
@@ -1692,10 +1690,6 @@ public class LightTreeRenderer extends MainRenderer {
          MinecraftClient.getInstance().getWindow().getFramebufferWidth(),
          MinecraftClient.getInstance().getWindow().getFramebufferHeight()
       );
-      if (this.getActiveCheckerboardField() == 0) {
-         return framebufferSize;
-      }
-      framebufferSize.x = Math.max(1.0f, (float) Math.ceil(framebufferSize.x * 0.5f));
       return framebufferSize;
    }
 
@@ -2285,6 +2279,7 @@ public class LightTreeRenderer extends MainRenderer {
       boolean gatherTemporalBranch = "gather_only".equals(temporalScatterIsolationMode)
          || scatterBackupTemporalBranch;
       boolean gatherTemporalResolveBranch = "gather_only".equals(temporalScatterIsolationMode);
+      boolean wroteTemporalOutput = false;
       if (gatherTemporalBranch && robustTemporalGather) {
          this.clearTemporalGatherBuffers();
       }
@@ -2317,6 +2312,7 @@ public class LightTreeRenderer extends MainRenderer {
       if (gatherTemporalResolveBranch && this.temporalGatherRenderer != null) {
          this.temporalGatherRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+         wroteTemporalOutput = true;
       }
       if (multiScatterTemporalBranch) {
          if (this.temporalMultiScatterReprojectionRenderer != null) {
@@ -2333,6 +2329,7 @@ public class LightTreeRenderer extends MainRenderer {
          }
          if (this.multiScatterTemporalRenderer != null) {
             this.multiScatterTemporalRenderer.renderAll();
+            wroteTemporalOutput = true;
          }
       } else if (scatterOnlyTemporalBranch && this.temporalScatterReprojectionRenderer != null) {
          this.temporalScatterReprojectionRenderer.renderAll();
@@ -2367,8 +2364,13 @@ public class LightTreeRenderer extends MainRenderer {
             this.barrierTemporalScatterResolveInputs();
          }
          this.scatterBackupTemporalRenderer.renderAll();
+         wroteTemporalOutput = true;
       } else if (scatterOnlyTemporalBranch && this.scatterTemporalRenderer != null) {
          this.scatterTemporalRenderer.renderAll();
+         wroteTemporalOutput = true;
+      }
+      if (wroteTemporalOutput) {
+         GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
       this.endGpuRegion(diTemporalResamplingRegionIndex);
    }
@@ -2424,8 +2426,13 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void renderDISpatialResamplingProfiled() {
+      if (!this.isDirectSpatialReuseEnabled()) {
+         return;
+      }
+
       this.setCurrentDiReconnectionSource(this.getSpatialResamplingInputReconnectionSource());
       this.renderProfiled(diSpatialResamplingRegionIndex, this.reuseResolveRenderer);
+      GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       this.setCurrentDiReconnectionSource(DiReconnectionSource.FINAL);
    }
 
@@ -2464,7 +2471,7 @@ public class LightTreeRenderer extends MainRenderer {
 
    private void renderShadeSamplesProfiled() {
       this.setCurrentDiReconnectionSource(this.getShadingInputReconnectionSource());
-      boolean useMonolithic = false;
+      boolean useMonolithic = true;
       if (useMonolithic) {
          if (this.shadeSamplesMonolithicRenderer == null) {
             return;

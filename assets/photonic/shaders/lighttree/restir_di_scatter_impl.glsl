@@ -990,10 +990,9 @@ bool ScatterTemporalResampling_process_contributor(
         prevSampleMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
     }
 
-    float contributorConfidence = newConfidence;
     bool prevSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
-        contributorConfidence,
+        newConfidence,
         prevSampleMIS,
         shiftedPrev.radiance,
         shiftedJacobian,

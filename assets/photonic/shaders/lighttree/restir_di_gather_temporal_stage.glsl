@@ -4,8 +4,6 @@
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE)
 
 #include "/photonics/lighttree/reuse_bridge.glsl"
-#include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
-#include "/photonics/lighttree/restir_di_scatter_impl.glsl"
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
 #include "/photonics/lighttree/restir_di_temporal_dof.glsl"
 #include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
@@ -19,21 +17,134 @@
 #ifndef temporal_gather_previous_reservoir_meta
 #define temporal_gather_previous_reservoir_meta temporal_gather_intermediate_reservoir_meta
 #endif
+#ifndef temporal_gather_previous_reconnection0
+#define temporal_gather_previous_reconnection0 temporal_gather_intermediate_reconnection0
+#endif
+#ifndef temporal_gather_previous_reconnection1
+#define temporal_gather_previous_reconnection1 temporal_gather_intermediate_reconnection1
+#endif
+#ifndef temporal_gather_previous_reconnection2
+#define temporal_gather_previous_reconnection2 temporal_gather_intermediate_reconnection2
+#endif
+#ifndef temporal_gather_previous_reconnection3
+#define temporal_gather_previous_reconnection3 temporal_gather_intermediate_reconnection3
+#endif
+#ifndef temporal_gather_previous_reconnection4
+#define temporal_gather_previous_reconnection4 temporal_gather_intermediate_reconnection4
+#endif
+
+float lt_scatter_radiance_phat(vec3 radiance)
+{
+    return ph_luminance(radiance);
+}
+
+float lt_scatter_compute_ucw(
+    RTXDI_DIReservoir reservoir,
+    vec3 storedIntegrand)
+{
+    float pHatStored = lt_scatter_radiance_phat(storedIntegrand);
+    if (pHatStored <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float totalWeight = max(reservoir.weightSum, 0.0f);
+    if (totalWeight <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float ucw = totalWeight / pHatStored;
+    return (isnan(ucw) || isinf(ucw) || ucw < 0.0f) ? 0.0f : ucw;
+}
+
+bool lt_scatter_add_sample_from_reservoir(
+    inout RTXDI_DIReservoir dstReservoir,
+    inout float dstConfidence,
+    float sampleMIS,
+    vec3 integrand,
+    float jacobian,
+    float ucw,
+    float sampleConfidence,
+    RTXDI_DIReservoir sampleReservoir,
+    inout RTXDI_RandomSamplerState rng)
+{
+    float samplePHat = lt_scatter_radiance_phat(integrand);
+    float candidateWeight = max(sampleMIS, 0.0f)
+        * samplePHat
+        * max(ucw, 0.0f)
+        * max(jacobian, 0.0f);
+    if (isnan(candidateWeight) || isinf(candidateWeight) || candidateWeight < 0.0f)
+    {
+        candidateWeight = 0.0f;
+    }
+
+    PathReservoir_setTotalWeight(
+        dstReservoir,
+        PathReservoir_getTotalWeight(dstReservoir) + candidateWeight
+    );
+
+    bool selected = (candidateWeight > 0.0f)
+        && RTXDI_IsValidDIReservoir(sampleReservoir)
+        && (lt_next_random(rng) * PathReservoir_getTotalWeight(dstReservoir) < candidateWeight);
+    if (selected)
+    {
+        dstReservoir.lightData = sampleReservoir.lightData;
+        dstReservoir.uvData = sampleReservoir.uvData;
+        dstReservoir.targetPdf = sampleReservoir.targetPdf;
+        dstReservoir.packedVisibility = sampleReservoir.packedVisibility;
+        dstReservoir.age = sampleReservoir.age;
+        dstReservoir.spatialDistance = sampleReservoir.spatialDistance;
+        PathReservoir_setIntegrand(dstReservoir, integrand);
+        dstReservoir.pixelSampleUV = sampleReservoir.pixelSampleUV;
+        dstReservoir.lensSampleUV = sampleReservoir.lensSampleUV;
+        dstReservoir.pathSample = sampleReservoir.pathSample;
+    }
+
+    dstConfidence = min(
+        SCATTER_RECONNECTION_CONFIDENCE_MAX,
+        dstConfidence + scatter_clamp_reconnection_confidence(sampleConfidence)
+    );
+
+    return selected;
+}
+
+RAB_Surface GatherTemporalResampling_load_current_surface(ivec2 pixel)
+{
+    vec4 positionData = texelFetch(radiosity_position, pixel, 0);
+    if (positionData.w == BACKGROUND_DEPTH)
+    {
+        return RAB_EmptySurface();
+    }
+
+    return lt_make_surface(
+        positionData.xyz,
+        texelFetch(radiosity_normal, pixel, 0).xyz,
+        texelFetch(radiosity_mapped_normal, pixel, 0).xyz,
+        clamp(texelFetch(radiosity_albedo, pixel, 0).rgb, vec3(0.04f), vec3(1.0f)),
+        texelFetch(radiosity_material, pixel, 0),
+        positionData.w
+    );
+}
 
 RTXDI_DIReservoir GatherTemporalResampling_load_current_reservoir(
     ivec2 pixel)
 {
-    return RTXDI_LoadDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(pixel),
-        lt_build_restir_di_parameters().bufferIndices.initialSamplingOutputBufferIndex
+    RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
+    rtxdi_unpack_reservoir_at_surface(
+        reservoir,
+        texelFetch(radiosity_proposal_reservoirs, pixel, 0),
+        texelFetch(radiosity_proposal_reservoir_samples, pixel, 0),
+        texelFetch(radiosity_proposal_reservoir_meta, pixel, 0),
+        RAB_EmptySurface(),
+        false
     );
+    return reservoir;
 }
 
 ReservoirSplattingReconnectionData GatherTemporalResampling_load_current_reconnection(
     ivec2 pixel)
 {
-    RTXDI_DIReservoir reservoir = GatherTemporalResampling_load_current_reservoir(pixel);
     ReservoirSplattingReconnectionData reconnectionData;
     scatter_unpack_reconnection(
         texelFetch(current_stage_reconnection0, pixel, 0),
@@ -45,7 +156,6 @@ ReservoirSplattingReconnectionData GatherTemporalResampling_load_current_reconne
         0.0f,
         reconnectionData
     );
-    RestirDI_restoreReconnectionRadiometry(pixel, false, reservoir, reconnectionData);
     return reconnectionData;
 }
 
@@ -63,6 +173,23 @@ RTXDI_DIReservoir GatherTemporalResampling_load_previous_reservoir(ivec2 pixel)
     return reservoir;
 }
 
+ReservoirSplattingReconnectionData GatherTemporalResampling_load_previous_temporal_reconnection(
+    ivec2 pixel)
+{
+    ReservoirSplattingReconnectionData reconnectionData;
+    scatter_unpack_reconnection(
+        texelFetch(temporal_gather_previous_reconnection0, pixel, 0),
+        texelFetch(temporal_gather_previous_reconnection1, pixel, 0),
+        texelFetch(temporal_gather_previous_reconnection2, pixel, 0),
+        texelFetch(temporal_gather_previous_reconnection3, pixel, 0),
+        texelFetch(temporal_gather_previous_reconnection4, pixel, 0),
+        0.0f,
+        0.0f,
+        reconnectionData
+    );
+    return reconnectionData;
+}
+
 bool GatherTemporalResampling_load_current_sample(
     ivec2 pixel,
     out RTXDI_DIReservoir currReservoir,
@@ -71,7 +198,7 @@ bool GatherTemporalResampling_load_current_sample(
 {
     currReservoir = GatherTemporalResampling_load_current_reservoir(pixel);
     currReconnectionData = GatherTemporalResampling_load_current_reconnection(pixel);
-    currConfidence = lt_scatter_reservoir_confidence(currReservoir, currReconnectionData);
+    currConfidence = PathReservoir_getConfidence(currReservoir);
     return RTXDI_IsValidDIReservoir(currReservoir)
         && ph_luminance(PathReservoir_getIntegrand(currReservoir)) > 0.0f;
 }
@@ -83,11 +210,8 @@ bool GatherTemporalResampling_load_previous_sample(
     out float prevConfidence)
 {
     prevReservoir = GatherTemporalResampling_load_previous_reservoir(pixel);
-    prevReconnectionData = RestirDI_loadPreviousTemporalReconnection(pixel);
-    prevConfidence = lt_scatter_reservoir_confidence(
-        prevReservoir,
-        prevReconnectionData
-    );
+    prevReconnectionData = GatherTemporalResampling_load_previous_temporal_reconnection(pixel);
+    prevConfidence = PathReservoir_getConfidence(prevReservoir);
     return RTXDI_IsValidDIReservoir(prevReservoir)
         && ph_luminance(PathReservoir_getIntegrand(prevReservoir)) > 0.0f;
 }
@@ -297,7 +421,7 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
         prevConfidence
     );
 
-    RAB_Surface centerSurface = RAB_GetGBufferSurface(pixel, false);
+    RAB_Surface centerSurface = GatherTemporalResampling_load_current_surface(pixel);
     const bool hasDepthOfField = lt_di_temporal_camera_aperture_radius() > 0.0f;
     vec2 depthOfFieldProbs = hasDepthOfField
         ? lt_di_temporal_resolve_dof_probabilities(centerSurface)

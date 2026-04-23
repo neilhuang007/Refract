@@ -75,22 +75,23 @@ vec4 rtxdi_pack_reservoir_meta_with_transport(
 {
     return vec4(
         reservoir.canonicalWeight,
-        transportAux0,
-        transportAux1,
+        reservoir.transportAux0,
+        reservoir.transportAux1,
         uintBitsToFloat(rtxdi_pack_age_distance(reservoir.age, reservoir.spatialDistance))
     );
 }
 
 vec4 rtxdi_pack_reservoir_meta(RTXDI_DIReservoir reservoir) {
-    return rtxdi_pack_reservoir_meta_with_transport(reservoir, 0.0f, 0.0f);
+    return vec4(
+        reservoir.canonicalWeight,
+        reservoir.transportAux0,
+        reservoir.transportAux1,
+        uintBitsToFloat(rtxdi_pack_age_distance(reservoir.age, reservoir.spatialDistance))
+    );
 }
 
 vec4 PathReservoir_packMeta(RTXDI_DIReservoir reservoir) {
-    return rtxdi_pack_reservoir_meta_with_transport(
-        reservoir,
-        reservoir.transportAux0,
-        reservoir.transportAux1
-    );
+    return rtxdi_pack_reservoir_meta(reservoir);
 }
 
 void rtxdi_unpack_reservoir_at_surface(

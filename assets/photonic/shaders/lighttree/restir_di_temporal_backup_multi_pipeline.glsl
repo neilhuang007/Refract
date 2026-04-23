@@ -61,14 +61,14 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
         vec2 floatingCoord = GatherHelper_getFloatingCoords(gatherHelper);
         if (lt_is_viewport_uv_in_bounds(floatingCoord))
         {
-            ShiftedPathData shiftedCurr = gatherLensVertexCopyShift(
-                sg,
-                currSample.reconnectionData,
-                currSample.reconnectionData.time,
-                floatingCoord + PathReservoir_getSubPixel(currSample.reservoir, pixel),
-                currSample.reconnectionData.lensSample,
-                currSample.reservoir
-            );
+        ShiftedPathData shiftedCurr = gatherLensVertexCopyShift(
+            sg,
+            currSample.reconnectionData,
+            currSample.reconnectionData.time + lt_di_temporal_artificial_frame_time(),
+            floatingCoord + PathReservoir_getSubPixel(currSample.reservoir, pixel),
+            currSample.reconnectionData.lensSample,
+            currSample.reservoir
+        );
             float shiftedJacobian = shiftedCurr.secondaryPathJacobian
                 / max(currSample.reconnectionData.secondaryPathJacobian, 1e-10f);
             float backupReservoirConfidence = lt_scatter_reservoir_confidence(backupReservoir, backupReconnectionData);
@@ -278,7 +278,7 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
                 ShiftedPathData shiftedPrevBackup = gatherLensVertexCopyShift(
                     sg,
                     shiftedReconnection,
-                    shiftedReconnection.time,
+                    prevReconnectionData.time + lt_di_temporal_artificial_frame_time(),
                     floatingCoord + relativeSubPixel,
                     shiftedReconnection.lensSample,
                     shiftedReservoir

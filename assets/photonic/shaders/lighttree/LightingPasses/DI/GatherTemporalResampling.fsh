@@ -35,11 +35,7 @@ void storeGatherTemporalResamplingResult(
 
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(
-        reservoir,
-        reconnectionTransportAux0,
-        reconnectionTransportAux1
-    );
+    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 }
 
 void storeEmptyGatherTemporalResamplingResult()
@@ -53,13 +49,6 @@ void main()
     storeEmptyGatherTemporalResamplingResult();
 
     if (!lt_is_viewport_uv_in_bounds(pixel))
-    {
-        return;
-    }
-
-    const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
-    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
-    if (!lt_is_active_reservoir_lane(reservoirPosition))
     {
         return;
     }
