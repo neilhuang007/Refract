@@ -5,11 +5,20 @@
 
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
-#include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
 #include "/photonics/lighttree/restir_di_scatter_impl.glsl"
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
 #include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 #include "/photonics/lighttree/restir_di_temporal_dof.glsl"
+
+#ifndef temporal_gather_previous_reservoir_data
+#define temporal_gather_previous_reservoir_data temporal_gather_intermediate_reservoir_data
+#endif
+#ifndef temporal_gather_previous_reservoir_sample
+#define temporal_gather_previous_reservoir_sample temporal_gather_intermediate_reservoir_sample
+#endif
+#ifndef temporal_gather_previous_reservoir_meta
+#define temporal_gather_previous_reservoir_meta temporal_gather_intermediate_reservoir_meta
+#endif
 
 RTXDI_DIReservoir GatherTemporalResampling_load_current_reservoir(
     ivec2 pixel)
@@ -24,7 +33,6 @@ RTXDI_DIReservoir GatherTemporalResampling_load_current_reservoir(
 ReservoirSplattingReconnectionData GatherTemporalResampling_load_current_reconnection(
     ivec2 pixel)
 {
-    vec4 proposalReservoirMeta = texelFetch(radiosity_proposal_reservoir_meta, pixel, 0);
     RTXDI_DIReservoir reservoir = GatherTemporalResampling_load_current_reservoir(pixel);
     ReservoirSplattingReconnectionData reconnectionData;
     scatter_unpack_reconnection(
@@ -33,22 +41,22 @@ ReservoirSplattingReconnectionData GatherTemporalResampling_load_current_reconne
         texelFetch(current_stage_reconnection2, pixel, 0),
         texelFetch(current_stage_reconnection3, pixel, 0),
         texelFetch(current_stage_reconnection4, pixel, 0),
-        proposalReservoirMeta.y,
-        proposalReservoirMeta.z,
+        0.0f,
+        0.0f,
         reconnectionData
     );
     RestirDI_restoreReconnectionRadiometry(pixel, false, reservoir, reconnectionData);
     return reconnectionData;
 }
 
-RTXDI_DIReservoir GatherTemporalResampling_load_intermediate_reservoir(ivec2 pixel)
+RTXDI_DIReservoir GatherTemporalResampling_load_previous_reservoir(ivec2 pixel)
 {
     RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
     rtxdi_unpack_reservoir_at_surface(
         reservoir,
-        texelFetch(temporal_gather_intermediate_reservoir_data, pixel, 0),
-        texelFetch(temporal_gather_intermediate_reservoir_sample, pixel, 0),
-        texelFetch(temporal_gather_intermediate_reservoir_meta, pixel, 0),
+        texelFetch(temporal_gather_previous_reservoir_data, pixel, 0),
+        texelFetch(temporal_gather_previous_reservoir_sample, pixel, 0),
+        texelFetch(temporal_gather_previous_reservoir_meta, pixel, 0),
         RAB_EmptySurface(),
         false
     );
@@ -68,25 +76,25 @@ bool GatherTemporalResampling_load_current_sample(
         && ph_luminance(PathReservoir_getIntegrand(currReservoir)) > 0.0f;
 }
 
-bool GatherTemporalResampling_load_intermediate_sample(
+bool GatherTemporalResampling_load_previous_sample(
     ivec2 pixel,
-    out RTXDI_DIReservoir intermediateReservoir,
-    out ReservoirSplattingReconnectionData intermediateReconnectionData,
-    out float intermediateConfidence)
+    out RTXDI_DIReservoir prevReservoir,
+    out ReservoirSplattingReconnectionData prevReconnectionData,
+    out float prevConfidence)
 {
-    intermediateReservoir = GatherTemporalResampling_load_intermediate_reservoir(pixel);
-    intermediateReconnectionData = RestirDI_loadGatherIntermediateReconnection(pixel);
-    intermediateConfidence = lt_scatter_reservoir_confidence(
-        intermediateReservoir,
-        intermediateReconnectionData
+    prevReservoir = GatherTemporalResampling_load_previous_reservoir(pixel);
+    prevReconnectionData = RestirDI_loadPreviousTemporalReconnection(pixel);
+    prevConfidence = lt_scatter_reservoir_confidence(
+        prevReservoir,
+        prevReconnectionData
     );
-    return RTXDI_IsValidDIReservoir(intermediateReservoir)
-        && ph_luminance(PathReservoir_getIntegrand(intermediateReservoir)) > 0.0f;
+    return RTXDI_IsValidDIReservoir(prevReservoir)
+        && ph_luminance(PathReservoir_getIntegrand(prevReservoir)) > 0.0f;
 }
 
 float GatherTemporalResampling_current_to_previous_time(float time)
 {
-    return time + frameTime;
+    return time + lt_di_temporal_artificial_frame_time();
 }
 
 float GatherTemporalResampling_confidence_weight(float confidence)
@@ -128,7 +136,8 @@ bool GatherTemporalResampling_add_current_sample(
     {
         currPHat = currIntegrand;
 
-        vec2 floatingCoord = scatter_load_gather_floating_coords(pixel);
+        GatherHelper gatherHelper = GatherHelper_init(pixel);
+        vec2 floatingCoord = GatherHelper_getFloatingCoords(gatherHelper);
         vec2 shiftedPixel = floatingCoord + currReconnectionData.subPixel;
         ShiftedPathData shiftedCurr = primaryHitReconnection
             ? gatherPrimaryHitReconnectionShift(
@@ -278,14 +287,14 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
         currConfidence
     );
 
-    RTXDI_DIReservoir intermediateReservoir;
-    ReservoirSplattingReconnectionData intermediateReconnectionData;
-    float intermediateConfidence = 0.0f;
-    bool hasIntermediateSample = GatherTemporalResampling_load_intermediate_sample(
+    RTXDI_DIReservoir prevReservoir;
+    ReservoirSplattingReconnectionData prevReconnectionData;
+    float prevConfidence = 0.0f;
+    bool hasPreviousSample = GatherTemporalResampling_load_previous_sample(
         pixel,
-        intermediateReservoir,
-        intermediateReconnectionData,
-        intermediateConfidence
+        prevReservoir,
+        prevReconnectionData,
+        prevConfidence
     );
 
     RAB_Surface centerSurface = RAB_GetGBufferSurface(pixel, false);
@@ -308,24 +317,24 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
                 currReservoir,
                 currentReconnectionData,
                 currConfidence,
-                intermediateConfidence,
+                prevConfidence,
                 false,
                 depthOfFieldProbs.x,
                 sg
             );
         }
 
-        if (hasIntermediateSample)
+        if (hasPreviousSample)
         {
             GatherTemporalResampling_add_previous_sample(
                 pixel,
                 dstReservoir,
                 dstConfidence,
                 currReconnectionData,
-                intermediateReservoir,
-                intermediateReconnectionData,
+                prevReservoir,
+                prevReconnectionData,
                 currConfidence,
-                intermediateConfidence,
+                prevConfidence,
                 false,
                 depthOfFieldProbs.x,
                 sg
@@ -368,24 +377,24 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
                 currentDomainReservoir,
                 currentDomainReconnectionData,
                 currentDomainConfidence,
-                intermediateConfidence,
+                prevConfidence,
                 true,
                 depthOfFieldProbs.y,
                 sg
             );
         }
 
-        if (hasIntermediateSample)
+        if (hasPreviousSample)
         {
             GatherTemporalResampling_add_previous_sample(
                 pixel,
                 dstReservoir,
                 dstConfidence,
                 currReconnectionData,
-                intermediateReservoir,
-                intermediateReconnectionData,
+                prevReservoir,
+                prevReconnectionData,
                 currentDomainConfidence,
-                intermediateConfidence,
+                prevConfidence,
                 true,
                 depthOfFieldProbs.y,
                 sg

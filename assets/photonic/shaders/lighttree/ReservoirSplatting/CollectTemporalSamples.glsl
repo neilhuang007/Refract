@@ -57,7 +57,7 @@ void CollectTemporalSamples_storeResult(
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
 {
-    lt_store_floating_coords(currPixel, floatingCoord);
+    GatherData_storeFloatingCoords(currPixel, floatingCoord);
 
     float reconnectionTransportAux0;
     float reconnectionTransportAux1;
@@ -74,7 +74,11 @@ void CollectTemporalSamples_storeResult(
 
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    intermediate_reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
+    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta_with_transport(
+        reservoir,
+        reconnectionTransportAux0,
+        reconnectionTransportAux1
+    );
 }
 
 void CollectTemporalSamples_store_empty_result()
@@ -91,8 +95,9 @@ void CollectTemporalSamples_store_empty_result()
 
 void CollectTemporalSamples_execute(ivec2 currPixel)
 {
-    lt_store_floating_coords(currPixel, vec2(-1.0f));
-    vec2 prevPixel = lt_temporal_previous_pixel_center(currPixel) - vec2(0.5f);
+    GatherData_storeFloatingCoords(currPixel, vec2(-1.0f));
+    GatherHelper gatherHelper = GatherHelper_init(currPixel, ivec2(viewWidth, viewHeight));
+    vec2 prevPixel = gatherHelper.prevPixel;
     if (any(lessThan(prevPixel, vec2(0.0f))))
     {
         CollectTemporalSamples_store_empty_result();
@@ -111,7 +116,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
 
     ivec2 prevPixelTopLeft = ivec2(floor(prevPixel));
     vec2 fractionalCoord = clamp(prevPixel - vec2(prevPixelTopLeft), vec2(0.0f), vec2(1.0f));
-    int gatherMode = lt_restir_temporal_gather_mode();
+    int gatherMode = GatherData_getGatherOption();
 
     if (gatherMode == 0)
     {

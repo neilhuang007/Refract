@@ -31,6 +31,13 @@ layout(std430) restrict buffer floatingCoords {
     vec2 floatingCoordsData[];
 };
 
+int lt_restir_temporal_gather_mode();
+
+struct GatherData
+{
+    int gatherOption;
+};
+
 uint lt_floating_coords_pixel_index(ivec2 pixel)
 {
     return uint(pixel.y * viewWidth + pixel.x);
@@ -44,6 +51,57 @@ void lt_store_floating_coords(ivec2 pixel, vec2 floatingCoord)
 vec2 lt_load_floating_coords(ivec2 pixel)
 {
     return floatingCoordsData[lt_floating_coords_pixel_index(pixel)];
+}
+
+int GatherData_getGatherOption()
+{
+    return lt_restir_temporal_gather_mode();
+}
+
+vec2 GatherData_getMotionVector(ivec2 pixel)
+{
+    vec4 motionSample = texelFetch(radiosity_motion, pixel, 0);
+    if (motionSample.w <= 0.0f)
+    {
+        return vec2(0.0f);
+    }
+
+    vec2 motionVector = motionSample.xy / vec2(viewWidth, viewHeight);
+    return (length(motionVector) < 1e-06f) ? vec2(0.0f) : motionVector;
+}
+
+vec2 GatherData_getFloatingCoords(ivec2 pixel)
+{
+    return lt_load_floating_coords(pixel);
+}
+
+void GatherData_storeFloatingCoords(ivec2 pixel, vec2 floatingCoord)
+{
+    lt_store_floating_coords(pixel, floatingCoord);
+}
+
+struct GatherHelper
+{
+    ivec2 pixel;
+    vec2 prevPixel;
+};
+
+GatherHelper GatherHelper_init(ivec2 pixel, ivec2 frameDim)
+{
+    GatherHelper gatherHelper;
+    gatherHelper.pixel = pixel;
+    gatherHelper.prevPixel = vec2(pixel) + GatherData_getMotionVector(pixel) * vec2(frameDim);
+    return gatherHelper;
+}
+
+GatherHelper GatherHelper_init(ivec2 pixel)
+{
+    return GatherHelper_init(pixel, ivec2(viewWidth, viewHeight));
+}
+
+vec2 GatherHelper_getFloatingCoords(GatherHelper gatherHelper)
+{
+    return GatherData_getFloatingCoords(gatherHelper.pixel);
 }
 #endif
 

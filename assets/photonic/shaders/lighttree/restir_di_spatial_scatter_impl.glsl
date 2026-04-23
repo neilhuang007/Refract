@@ -1,6 +1,8 @@
 #ifndef PHOTONICS_RESTIR_DI_SPATIAL_SCATTER_IMPL_GLSL
 #define PHOTONICS_RESTIR_DI_SPATIAL_SCATTER_IMPL_GLSL
 
+#include "/photonics/lighttree/restir_di_temporal_dof.glsl"
+
 // ============================================================================
 // GLSL port of SpatialResampling.rt.slang helpers
 // (reference/repos/Reservoir-Splatting/Source/RenderPasses/ReservoirSplatting/ShiftMapping.slang).
@@ -52,12 +54,12 @@ SpatialShiftedPathData spatial_empty_shifted_path()
 {
     SpatialShiftedPathData s;
     s.radiance              = vec3(0.0f);
-    s.fractionalPixel       = vec2(0.0f);
-    s.lensSample            = vec2(0.5f);
+    s.fractionalPixel       = vec2(-1.0f);
+    s.lensSample            = vec2(0.0f);
     s.primaryHit            = ReservoirSplattingHitInfo_empty();
     s.primaryHitNormal      = vec3(0.0f, 1.0f, 0.0f);
     s.firstRayDir           = vec3(0.0f, 0.0f, -1.0f);
-    s.subPixel              = vec2(0.5f);
+    s.subPixel              = vec2(0.0f);
     s.subPixelJacobian      = 1.0f;
     s.lensVertexJacobian    = 1.0f;
     s.secondaryPathJacobian = 1.0f;
@@ -85,6 +87,54 @@ vec2 spatial_fractional_pixel_to_uv(vec2 fractionalPixel)
         vec2(0.0f),
         vec2(1.0f)
     );
+}
+
+vec3 spatial_camera_pos(float time)
+{
+    return world_camera_position;
+}
+
+vec3 spatial_camera_u(float time)
+{
+    return lt_di_temporal_camera_u();
+}
+
+vec3 spatial_camera_v(float time)
+{
+    return lt_di_temporal_camera_v();
+}
+
+vec3 spatial_camera_w(float time)
+{
+    return lt_di_temporal_camera_w();
+}
+
+vec3 spatial_camera_forward(float time)
+{
+    return normalize(spatial_camera_w(time));
+}
+
+vec3 spatial_lens_world_offset(float time, vec2 lensSample)
+{
+    float apertureRadius = lt_di_temporal_camera_aperture_radius();
+    if (apertureRadius <= 0.0f)
+    {
+        return vec3(0.0f);
+    }
+
+    return apertureRadius
+        * (lensSample.x * normalize(spatial_camera_u(time))
+            + lensSample.y * normalize(spatial_camera_v(time)));
+}
+
+vec3 spatial_film_world(float time, vec2 fractionalPixel)
+{
+    vec2 p = spatial_fractional_pixel_to_uv(fractionalPixel);
+    vec2 ndc = vec2(2.0f, -2.0f) * p + vec2(-1.0f, 1.0f);
+    return spatial_camera_pos(time)
+        + ndc.x * spatial_camera_u(time)
+        + ndc.y * spatial_camera_v(time)
+        + spatial_camera_w(time);
 }
 
 // Reference: ShiftMapping.slang:141,278
@@ -120,6 +170,7 @@ float spatial_compute_lens_vertex_jacobian(
     vec3 primaryHitNormalW,
     vec3 rayOriginW,
     vec3 rayDir,
+    float time,
     vec3 camForward)
 {
     vec3 toHit = primaryHitPosW - rayOriginW;
@@ -129,7 +180,7 @@ float spatial_compute_lens_vertex_jacobian(
     float cosNormal = abs(dot(rayDir, primaryHitNormalW));
     float cosSensor = max(abs(dot(camForward, rayDir)), 1e-6f);
 
-    const float focalDistance = 1.0f;               // |camera.cameraW| analog
+    float focalDistance = length(spatial_camera_w(time));
     float camZ = max(abs(dot(toHit, camForward)), 1e-6f);
     float d0 = focalDistance / camZ * dist;
     float d1 = max(dist - d0, 1e-6f);
@@ -228,8 +279,8 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
         return shifted;
     }
 
-    vec3 cameraPosW   = world_camera_position;
-    vec3 camForward   = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
+    vec3 cameraPosW   = spatial_camera_pos(time) + spatial_lens_world_offset(time, lensSample);
+    vec3 camForward   = spatial_camera_forward(time);
     vec3 hitPosW      = landingSurface.worldPos;
     vec3 hitNormalW   = landingSurface.geoNormal;
 
@@ -249,7 +300,7 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
     shifted.subPixelJacobian      = spatial_compute_subpixel_jacobian(
         hitPosW, hitNormalW, cameraPosW, rayDir, camForward);
     shifted.lensVertexJacobian    = spatial_compute_lens_vertex_jacobian(
-        hitPosW, hitNormalW, cameraPosW, rayDir, camForward);
+        hitPosW, hitNormalW, cameraPosW, rayDir, time, camForward);
     shifted.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
         landingSurface,
         sourceReservoir,
@@ -294,10 +345,13 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
 
     lt_next_random(rng);
 
-    vec3 cameraPosW = world_camera_position;
-    vec3 camForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
+    vec3 cameraPosW = spatial_camera_pos(time);
+    vec3 camU = normalize(spatial_camera_u(time));
+    vec3 camV = normalize(spatial_camera_v(time));
+    vec3 camForward = spatial_camera_forward(time);
+    vec3 filmWorld = spatial_film_world(time, fractionalPixel);
 
-    vec3 toHit = primaryHitPosW - cameraPosW;
+    vec3 toHit = primaryHitPosW - filmWorld;
     float dist = length(toHit);
     if (dist < 1e-6f) {
         return shifted;
@@ -310,10 +364,34 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
         return shifted;
     }
 
+    float camZ = dot(primaryHitPosW - cameraPosW, camForward);
+    float rayT = camZ / cosSensor;
+    vec3 rayOrigin = primaryHitPosW - rayT * rayDir;
+    float apertureRadius = lt_di_temporal_camera_aperture_radius();
+    vec2 lensLocalNormalized = vec2(0.0f);
+    if (apertureRadius > 0.0f)
+    {
+        vec3 lensOffsetWorld = rayOrigin - cameraPosW;
+        lensLocalNormalized = vec2(
+            dot(lensOffsetWorld, camU),
+            dot(lensOffsetWorld, camV)
+        ) / apertureRadius;
+        if (length(lensLocalNormalized) > 1.0f)
+        {
+            return shifted;
+        }
+    }
+    else
+    {
+        rayOrigin = cameraPosW;
+        rayDir = normalize(primaryHitPosW - rayOrigin);
+        dist = length(primaryHitPosW - rayOrigin);
+    }
+
     // Visibility test: the bounded segment from camera to primaryHit must be
     // unoccluded within `0.999 * dist`, matching ShiftMapping.slang:239.
     float traceMaxDistance = 0.999f * dist;
-    if (!spatial_trace_reconnection_visibility(cameraPosW, rayDir, traceMaxDistance)) {
+    if (!spatial_trace_reconnection_visibility(rayOrigin, rayDir, traceMaxDistance)) {
         return shifted;
     }
 
@@ -351,12 +429,12 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
     shifted.primaryHitNormal      = primaryHitNormalW;
     shifted.firstRayDir           = rayDir;
     shifted.fractionalPixel       = fractionalPixel;
-    shifted.lensSample            = vec2(0.5f);          // pinhole: lens center
+    shifted.lensSample            = lensLocalNormalized;
     shifted.subPixel              = clamp(fractionalPixel - floor(fractionalPixel), vec2(0.0f), vec2(1.0f));
     shifted.subPixelJacobian      = spatial_compute_subpixel_jacobian(
-        primaryHitPosW, primaryHitNormalW, cameraPosW, rayDir, camForward);
+        primaryHitPosW, primaryHitNormalW, rayOrigin, rayDir, camForward);
     shifted.lensVertexJacobian    = spatial_compute_lens_vertex_jacobian(
-        primaryHitPosW, primaryHitNormalW, cameraPosW, rayDir, camForward);
+        primaryHitPosW, primaryHitNormalW, rayOrigin, rayDir, time, camForward);
     shifted.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
         shiftedSurface,
         sourceReservoir,
@@ -408,24 +486,12 @@ vec2 spatial_compute_depth_of_field_gather_shift_probabilities(float circleOfCon
 // dynamically so a future DoF hookup only needs to feed a non-zero aperture.
 float spatial_compute_primary_hit_circle_of_confusion(vec3 primaryHitPosW)
 {
-    const float apertureRadius = 0.0f;  // pinhole
-    if (apertureRadius <= 0.0f) return 0.0f;
-
-    // Reference formula (ShiftMapping.slang:43-58) reduced for the pinhole case.
-    vec3 camForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
-    float camZ = max(abs(dot(primaryHitPosW - world_camera_position, camForward)), 1e-6f);
-    float focalZ = 1.0f;              // |cameraW| analog
-    float filmZ = camZ - focalZ;
-    float filmRadius = abs(apertureRadius / camZ * filmZ);
-    // Normalize by the pixel-space extent of the camera basis; for the
-    // pinhole-limit we short-circuit above.
-    return filmRadius;
+    return computePrimaryHitCircleOfConfusion(primaryHitPosW);
 }
 
 float spatial_compute_env_map_circle_of_confusion()
 {
-    const float apertureRadius = 0.0f;
-    return apertureRadius;
+    return computeEnvMapCircleOfConfusion();
 }
 
 #endif

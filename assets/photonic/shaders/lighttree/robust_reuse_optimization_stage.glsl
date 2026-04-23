@@ -6,6 +6,7 @@
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
 #include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
+#include "/photonics/lighttree/restir_di_temporal_dof.glsl"
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
 #include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 
@@ -50,7 +51,7 @@ void RobustReuseOptimization_run(ivec2 pixel)
             ? gatherLensVertexCopyShift(
                 sg,
                 prevReconnection,
-                prevReconnection.time + frameTime,
+                prevReconnection.time + lt_di_temporal_artificial_frame_time(),
                 vec2(neighborPixel) + prevSubPixel,
                 prevReconnection.lensSample,
                 prevReservoir

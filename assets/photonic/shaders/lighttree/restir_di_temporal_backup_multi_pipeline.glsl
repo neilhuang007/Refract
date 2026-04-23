@@ -57,7 +57,8 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
         }
 
         float m3 = 0.0f;
-        vec2 floatingCoord = scatter_load_gather_floating_coords(pixel);
+        GatherHelper gatherHelper = GatherHelper_init(pixel);
+        vec2 floatingCoord = GatherHelper_getFloatingCoords(gatherHelper);
         if (lt_is_viewport_uv_in_bounds(floatingCoord))
         {
             ShiftedPathData shiftedCurr = gatherLensVertexCopyShift(
@@ -269,7 +270,8 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
         float m3 = 0.0f;
         if (!lt_ScatterBackupTemporalResampling_use_pairwise_mis())
         {
-            vec2 floatingCoord = scatter_load_gather_floating_coords(pixel);
+            GatherHelper gatherHelper = GatherHelper_init(pixel);
+            vec2 floatingCoord = GatherHelper_getFloatingCoords(gatherHelper);
             vec2 relativeSubPixel = PathReservoir_getSubPixel(shiftedReservoir, pixel);
             if (lt_is_viewport_uv_in_bounds(floatingCoord + relativeSubPixel))
             {

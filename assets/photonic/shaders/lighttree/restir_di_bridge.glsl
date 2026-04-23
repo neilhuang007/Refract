@@ -117,7 +117,6 @@ ReservoirSplattingReconnectionData ReconnectionData_update(
 
 ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ivec2 pixel, RTXDI_DIReservoir reservoir)
 {
-    vec4 reservoirMeta = PathReservoir_packMeta(reservoir);
     ReservoirSplattingReconnectionData reconnection;
     scatter_unpack_reconnection(
         texelFetch(current_stage_reconnection0, pixel, 0),
@@ -125,8 +124,8 @@ ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ive
         texelFetch(current_stage_reconnection2, pixel, 0),
         texelFetch(current_stage_reconnection3, pixel, 0),
         texelFetch(current_stage_reconnection4, pixel, 0),
-        reservoirMeta.y,
-        reservoirMeta.z,
+        0.0f,
+        0.0f,
         reconnection
     );
     RestirDI_restoreReconnectionRadiometry(pixel, false, reservoir, reconnection);

@@ -1,57 +1,97 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_DOF_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_DOF_GLSL
 
-// Minimal temporal-stage DoF helper surface extracted for stage 2 gather.
-// This keeps GatherTemporalResampling on the narrow temporal include graph
-// without pulling the full spatial bridge / scatter implementation surface.
+uniform float ph_reservoir_splatting_camera_aperture_radius;
+uniform float ph_reservoir_splatting_artificial_frame_time;
+
+vec3 lt_di_temporal_camera_relative_world_from_ndc(vec2 ndc)
+{
+    vec4 viewPoint = gbufferProjectionInverse * vec4(ndc, -1.0f, 1.0f);
+    float viewW = (abs(viewPoint.w) > 1e-6f) ? viewPoint.w : 1.0f;
+    vec3 viewPosition = viewPoint.xyz / viewW;
+    vec3 worldPosition = (gbufferModelViewInverse * vec4(viewPosition, 1.0f)).xyz;
+    return worldPosition - world_camera_position;
+}
 
 float lt_di_temporal_camera_aperture_radius()
 {
-    return 0.0f;
+    return ph_reservoir_splatting_camera_aperture_radius;
 }
 
-vec2 lt_di_temporal_depth_of_field_shift_probabilities(float circleOfConfusion)
+float lt_di_temporal_artificial_frame_time()
 {
-    float gamma;
-    if (circleOfConfusion <= 0.2f)
-    {
-        gamma = 1.0f;
-    }
-    else
-    {
-        gamma = 0.2f + 6.2f / (circleOfConfusion - 5.6f);
-        gamma = clamp(gamma, 0.2f, 1.0f);
-    }
-    return vec2(gamma, 1.0f - gamma);
+    return ph_reservoir_splatting_artificial_frame_time;
 }
 
-float lt_di_temporal_primary_hit_circle_of_confusion(vec3 primaryHitPosW)
+vec3 lt_di_temporal_camera_u()
 {
-    const float apertureRadius = 0.0f;
-    if (apertureRadius <= 0.0f)
+    return lt_di_temporal_camera_relative_world_from_ndc(vec2(1.0f, 0.0f))
+        - lt_di_temporal_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+}
+
+vec3 lt_di_temporal_camera_v()
+{
+    return lt_di_temporal_camera_relative_world_from_ndc(vec2(0.0f, 1.0f))
+        - lt_di_temporal_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+}
+
+vec3 lt_di_temporal_camera_w()
+{
+    return lt_di_temporal_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+}
+
+float computePrimaryHitCircleOfConfusion(vec3 x1)
+{
+    float lensRadius = lt_di_temporal_camera_aperture_radius();
+    if (lensRadius <= 0.0f)
     {
         return 0.0f;
     }
 
-    vec3 cameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
-    float cameraDepth = max(abs(dot(primaryHitPosW - world_camera_position, cameraForward)), 1e-6f);
-    float focalDepth = 1.0f;
-    float filmDepth = cameraDepth - focalDepth;
-    float filmRadius = abs(apertureRadius / cameraDepth * filmDepth);
-    return filmRadius;
+    vec3 cameraW = lt_di_temporal_camera_w();
+    vec3 camDir = normalize(cameraW);
+    float camZ = dot(x1 - world_camera_position, camDir);
+    if (abs(camZ) <= 1e-6f)
+    {
+        return 0.0f;
+    }
+    float filmZ = camZ - length(cameraW);
+    float filmRadius = abs(lensRadius / camZ * filmZ);
+    float normalizedFilm = length(
+        lt_di_temporal_camera_u() / max(viewWidth, 1.0f)
+        + lt_di_temporal_camera_v() / max(viewHeight, 1.0f)
+    );
+    return filmRadius / max(normalizedFilm, 1e-6f);
 }
 
-float lt_di_temporal_env_map_circle_of_confusion()
+float computeEnvMapCircleOfConfusion()
 {
-    return 0.0f;
+    float lensRadius = lt_di_temporal_camera_aperture_radius();
+    if (lensRadius <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float normalizedFilm = length(
+        lt_di_temporal_camera_u() / max(viewWidth, 1.0f)
+        + lt_di_temporal_camera_v() / max(viewHeight, 1.0f)
+    );
+    return lensRadius / max(normalizedFilm, 1e-6f);
+}
+
+vec2 computeDepthOfFieldGatherShiftProbabilities(float r)
+{
+    float gamma = 0.2f + 6.2f / (r - 5.6f);
+    gamma = (r <= 0.2f) ? 1.0f : clamp(gamma, 0.2f, 1.0f);
+    return vec2(gamma, 1.0f - gamma);
 }
 
 vec2 lt_di_temporal_resolve_dof_probabilities(RAB_Surface centerSurface)
 {
     float circleOfConfusion = RAB_IsSurfaceValid(centerSurface)
-        ? lt_di_temporal_primary_hit_circle_of_confusion(centerSurface.worldPos)
-        : lt_di_temporal_env_map_circle_of_confusion();
-    return lt_di_temporal_depth_of_field_shift_probabilities(circleOfConfusion);
+        ? computePrimaryHitCircleOfConfusion(centerSurface.worldPos)
+        : computeEnvMapCircleOfConfusion();
+    return computeDepthOfFieldGatherShiftProbabilities(circleOfConfusion);
 }
 
 #endif

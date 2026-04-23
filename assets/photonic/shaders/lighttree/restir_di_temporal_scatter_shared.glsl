@@ -158,10 +158,18 @@ void scatter_store_gather_shifted_path_data(
 
 ShiftedPathData gatherLensVertexCopyShift(
     inout RTXDI_RandomSamplerState rng,
-    ReservoirSplattingReconnectionData reconnectionData,
+    inout ReservoirSplattingReconnectionData reconnectionData,
     float time,
-    vec2 pixel,
+    vec2 fractionalPixel,
     vec2 lensSample,
+    RTXDI_DIReservoir sourceReservoir);
+
+ShiftedPathData gatherPrimaryHitReconnectionShift(
+    inout RTXDI_RandomSamplerState rng,
+    inout ReservoirSplattingReconnectionData reconnectionData,
+    float time,
+    vec2 fractionalPixel,
+    ReservoirSplattingHitInfo primaryHit,
     RTXDI_DIReservoir sourceReservoir);
 
 ReservoirSplattingReconnectionData ReconnectionData_update(

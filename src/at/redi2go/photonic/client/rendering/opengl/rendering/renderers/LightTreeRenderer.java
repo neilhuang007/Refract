@@ -42,6 +42,12 @@ import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
 
 public class LightTreeRenderer extends MainRenderer {
+   private enum DiReconnectionSource {
+      PROPOSAL,
+      TEMPORAL,
+      FINAL
+   }
+
    private static final String relaxDiffuseTemporalAccumulationFragment = "lighttree/nrd_temporal_accumulation.fsh";
    private static final String relaxDiffuseHistoryFixFragment = "lighttree/nrd_history_fix.fsh";
    private static final String relaxDiffuseAntiFireflyFragment = "lighttree/nrd_anti_firefly.fsh";
@@ -145,14 +151,15 @@ public class LightTreeRenderer extends MainRenderer {
   private final ColorFramebuffer indirectInitialReservoirBuffer;
   private final ColorFramebuffer indirectReservoirBuffer;
   private final ColorFramebuffer indirectDenoisedBuffer;
-  // -- Shared DI reconnection payload / temporal scatter history --
-  // Persistent resources:
-  //   * scatterReconnectionBuffer: shared current-stage + previous-frame reconnection payload
-  //   * temporalReservoirBuffer: same-frame temporal DI output consumed by spatial reuse
-  //   * temporalGatherBuffer: intermediate gather-side storage for CollectTemporalSamples / GatherTemporalResampling
+  // -- DI reconnection payloads --
+  // Proposal and temporal reconnection outputs stay stage-local. Only the
+  // frame-final spatial output is double-buffered as previous-frame history.
+  private final ColorFramebuffer proposalReconnectionBuffer;
+  private final ColorFramebuffer temporalReconnectionBuffer;
   private final ColorFramebuffer scatterReconnectionBuffer;
   private final ColorFramebuffer temporalReservoirBuffer;
   private final ColorFramebuffer temporalGatherBuffer;
+  private DiReconnectionSource currentDiReconnectionSource = DiReconnectionSource.PROPOSAL;
   private GlMemoryManager temporalGatherFloatingCoordsMemoryManager;
   private GlMemoryManager temporalGatherShiftedPathsMemoryManager;
   private GlMemoryManager temporalScatterCurrentGlobalCountersMemoryManager;
@@ -313,7 +320,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.motionVectorBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.directReservoirBuffer = this.createDirectReservoirFramebuffer(renderScale);
       this.directSpatialReservoirBuffer = this.createDirectReservoirFramebuffer(renderScale);
-      this.scatterReconnectionBuffer = this.createScatterReconnectionFramebuffer(renderScale);
+      this.proposalReconnectionBuffer = this.createReconnectionFramebuffer(renderScale);
+      this.temporalReconnectionBuffer = this.createReconnectionFramebuffer(renderScale);
+      this.scatterReconnectionBuffer = this.createReconnectionFramebuffer(renderScale);
       this.temporalReservoirBuffer = this.createTemporalReservoirFramebuffer(renderScale);
       this.temporalGatherBuffer = this.createTemporalGatherFramebuffer(renderScale);
       this.temporalCollectFramebuffer = this.createTemporalCollectFramebuffer();
@@ -680,16 +689,11 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "prev_radiosity_reservoirs", () -> this.directReservoirBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_radiosity_reservoir_samples", () -> this.directReservoirBuffer.getReadAttachment("sample"));
       this.addTextureSampler(samplers, "prev_radiosity_reservoir_meta", () -> this.directReservoirBuffer.getReadAttachment("meta"));
-      // Stage-input shadow copies expose the authoritative current-stage reconnection payload.
-      // The historical sampler names remain for compatibility, but the read side is explicitly
-      // split from the live write attachments so InitialCandidates, ScatterTemporalResolve,
-      // SpatialResampling, and the local final resolve all consume the copied stage input rather than
-      // sampling an attachment that is simultaneously bound as a color target.
-      this.addTextureSampler(samplers, "scatter_reconnection0", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection0"));
-      this.addTextureSampler(samplers, "scatter_reconnection1", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection1"));
-      this.addTextureSampler(samplers, "scatter_reconnection2", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection2"));
-      this.addTextureSampler(samplers, "scatter_reconnection3", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection3"));
-      this.addTextureSampler(samplers, "scatter_reconnection4", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection4"));
+      this.addTextureSampler(samplers, "scatter_reconnection0", () -> this.getCurrentStageReconnectionAttachment("reconnection0"));
+      this.addTextureSampler(samplers, "scatter_reconnection1", () -> this.getCurrentStageReconnectionAttachment("reconnection1"));
+      this.addTextureSampler(samplers, "scatter_reconnection2", () -> this.getCurrentStageReconnectionAttachment("reconnection2"));
+      this.addTextureSampler(samplers, "scatter_reconnection3", () -> this.getCurrentStageReconnectionAttachment("reconnection3"));
+      this.addTextureSampler(samplers, "scatter_reconnection4", () -> this.getCurrentStageReconnectionAttachment("reconnection4"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection0", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection0"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection1", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection1"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection2", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection2"));
@@ -922,6 +926,16 @@ public class LightTreeRenderer extends MainRenderer {
       );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
+         "ph_reservoir_splatting_camera_aperture_radius",
+         () -> this.getOptionalFloatSystemProperty("photonics.reservoirSplattingCameraApertureRadius", 0.0f)
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_reservoir_splatting_artificial_frame_time",
+         () -> this.getOptionalFloatSystemProperty("photonics.reservoirSplattingArtificialFrameTime", 1.0f / 60.0f)
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
          "ph_debug_enable_direct_temporal_reuse",
          () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE.value ? 1.0f : 0.0f
       );
@@ -1037,17 +1051,19 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void swapScatterTemporalHistory() {
-      // Previous-frame reconnection data is double-buffered and becomes readable after the
-      // frame-start swap. The temporal DI output is intentionally NOT swapped because it is a
-      // same-frame producer/consumer resource between the current local scatter temporal stage
-      // and spatial reuse.
+      // Match the reference ownership model more closely by publishing the just-finished
+      // frame's final reconnection payload at end-of-frame rather than pre-emptively at
+      // frame start. The temporal DI output buffer remains single-frame local.
       this.scatterReconnectionBuffer.swap();
    }
 
    private void updateScatterTemporalResourcesPerFrame() {
       this.ensureTemporalScatterMemoryCapacity();
+      this.proposalReconnectionBuffer.updatePerFrame();
+      this.temporalReconnectionBuffer.updatePerFrame();
       this.scatterReconnectionBuffer.updatePerFrame();
       this.temporalReservoirBuffer.updatePerFrame();
+      this.temporalGatherBuffer.updatePerFrame();
    }
 
    private void allocateTemporalScatterMemoryManagers() {
@@ -1158,20 +1174,12 @@ public class LightTreeRenderer extends MainRenderer {
    private void clearCurrentTemporalScatterBuffers() {
       this.clearUintBuffer(this.temporalScatterCurrentGlobalCountersMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterCurrentCellCountersMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterCurrentReservoirIndicesMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterCurrentScatteredReservoirsMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterCurrentCellOffsetsMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterCurrentSortedReservoirsMemoryManager, 0);
       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
    }
 
    private void clearMultiTemporalScatterBuffers() {
       this.clearUintBuffer(this.temporalScatterMultiGlobalCountersMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterMultiCellCountersMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterMultiReservoirIndicesMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterMultiScatteredReservoirsMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterMultiCellOffsetsMemoryManager, 0);
-      this.clearUintBuffer(this.temporalScatterMultiSortedReservoirsMemoryManager, 0);
       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
    }
 
@@ -1243,18 +1251,28 @@ public class LightTreeRenderer extends MainRenderer {
       this.robustReuseOptimizationFramebuffer.destroy();
       this.temporalScatterStageFramebuffer.destroy();
       this.temporalReservoirFramebuffer.destroy();
+      this.proposalReconnectionBuffer.destroy();
+      this.temporalReconnectionBuffer.destroy();
       this.scatterReconnectionBuffer.destroy();
       this.temporalReservoirBuffer.destroy();
       this.temporalGatherBuffer.destroy();
       this.destroyTemporalScatterMemoryManagers();
    }
 
-   private void clearScatterTemporalHistory(Vector4f clearColor) {
-      // Reset both the previous/current reconnection history and the same-frame temporal
-      // output so later scatter modes can assume empty histories after a camera jump/reload.
+   private void clearCurrentTemporalStageBuffers(Vector4f clearColor) {
+      // Reference topology keeps only prev/curr history persistent across frames.
+      // Proposal/current-write and intermediate gather targets are frame-local and
+      // should not be treated as double-buffered history on resets.
+      this.proposalReconnectionBuffer.clear(clearColor);
+      this.temporalReconnectionBuffer.clear(clearColor);
+      this.temporalReservoirBuffer.clear(clearColor);
+      this.temporalGatherBuffer.clear(clearColor);
+   }
+
+   private void clearPreviousTemporalHistory(Vector4f clearColor) {
+      // Final temporal/spatial reconnection history is the only DI reconnection
+      // payload that survives across frames in the current topology.
       this.scatterReconnectionBuffer.clearBothSides(clearColor);
-      this.temporalReservoirBuffer.clearBothSides(clearColor);
-      this.temporalGatherBuffer.clearBothSides(clearColor);
    }
 
    @Override
@@ -1272,7 +1290,6 @@ public class LightTreeRenderer extends MainRenderer {
       this.compatDirectSoftBuffer.swap();
       this.motionVectorBuffer.swap();
       this.directReservoirBuffer.swap();
-      this.swapScatterTemporalHistory();
       this.directConfidenceBuffer.swap();
       this.directHistoryLengthBuffer.swap();
       this.directNoisyBuffer.swap();
@@ -1341,6 +1358,7 @@ public class LightTreeRenderer extends MainRenderer {
       long t19 = System.nanoTime();
       this.renderProfiled(indirectCompositeRegionIndex, this.indirectRenderer);
       long t20 = System.nanoTime();
+      this.swapScatterTemporalHistory();
       this.recordCpuPassTimes(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20);
       this.worldRegistry.advanceLightBlendFrame(this.renderFrameIndex);
       this.logRenderProfileIfNeeded(t20 - t0);
@@ -1578,32 +1596,20 @@ public class LightTreeRenderer extends MainRenderer {
       return framebuffer;
    }
 
-   private ColorFramebuffer createScatterReconnectionFramebuffer(float renderScale) {
+   private ColorFramebuffer createReconnectionFramebuffer(float renderScale) {
       ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
-      // Shared DI reconnection payload split across five RGBA32F targets:
+      // DI reconnection payload split across five RGBA32F targets:
       // reconnection0: firstHit.worldPos.xyz, firstHit.viewDepth
-      // reconnection1: secondHit.worldPos.xyz, secondHit.viewDepth
-      // reconnection2: irradiance.xyz, packed meta/time
-      // reconnection3: earlyThroughput.xyz, packed lightPdf/subPixelJacobian
-      // reconnection4: packed lensVertexJacobian/secondaryPathJacobian,
-      //                packed subPixel, packed lensSample, packed directions
+      // reconnection1: secondHit.worldPos.xyz, packed lightPdf/subPixelJacobian
+      // reconnection2: irradiance.xyz, packed discrete metadata
+      // reconnection3: earlyThroughput.xyz, packed lensVertexJacobian/secondaryPathJacobian
+      // reconnection4: packed subPixel, packed lensSample, packed firstWi, packed secondWo
+      // reservoir transport aux: secondHit.viewDepth, packed face ids
       framebuffer.createAttachment("reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("reconnection1", "RGBA32F", false);
       framebuffer.createAttachment("reconnection2", "RGBA32F", false);
       framebuffer.createAttachment("reconnection3", "RGBA32F", false);
       framebuffer.createAttachment("reconnection4", "RGBA32F", false);
-      // Stage-input shadow copies of reconnection0/1. These are NEVER bound as
-      // color attachments during a draw call — they only receive
-      // glCopyImageSubData payloads between pipeline stages and are read as
-      // current_stage_reconnection0/1 samplers. Decoupling the
-      // read-side from the write-side avoids the undefined behaviour of
-      // sampling an attachment that is also bound as a draw-framebuffer color
-      // output in the same draw call (Stage 4 / Stage 5 feedback loop).
-      framebuffer.createAttachment("stage_in_reconnection0", "RGBA32F", false);
-      framebuffer.createAttachment("stage_in_reconnection1", "RGBA32F", false);
-      framebuffer.createAttachment("stage_in_reconnection2", "RGBA32F", false);
-      framebuffer.createAttachment("stage_in_reconnection3", "RGBA32F", false);
-      framebuffer.createAttachment("stage_in_reconnection4", "RGBA32F", false);
       return framebuffer;
    }
 
@@ -1652,22 +1658,15 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createTemporalReservoirRoutingFramebuffer() {
-      // Outputs 8 textures: 3 reservoir (data/sample/meta) + 5 reconnection payloads.
-      // The reconnection writes go to the current-frame scatterReconnectionBuffer
-      // (write side), which is ping-ponged next frame into previous-frame history.
-      // Strict reference parity would require additional gather-stage storage here
-      // (e.g. floating coordinates and intermediate reservoir/reconnection buffers),
-      // so the next concrete implementation step must extend the render graph rather
-      // than continue audit-only cleanup.
       return this.createDirectPackedRoutingFramebuffer(
          () -> this.temporalReservoirBuffer.getWriteAttachment("data"),
          () -> this.temporalReservoirBuffer.getWriteAttachment("sample"),
          () -> this.temporalReservoirBuffer.getWriteAttachment("meta"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
+         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
@@ -1841,18 +1840,15 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createProposalReservoirFramebuffer() {
-      // Reference parity (InitialCandidates.cs.slang:63-66): initial-candidate stage
-      // Initial candidates write the packed DI reservoir (data/sample/meta) plus the
-      // full five-target reconnection payload.
       return this.createDirectPackedRoutingFramebuffer(
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
+         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
@@ -2268,15 +2264,13 @@ public class LightTreeRenderer extends MainRenderer {
       } else {
          this.clearProposalReservoirOutputs();
       }
+      this.setCurrentDiReconnectionSource(DiReconnectionSource.PROPOSAL);
       this.endGpuRegion(initialCandidatesRegionIndex);
    }
 
    private void renderDIScatterTemporalProfiled() {
       this.beginGpuRegion(diTemporalResamplingRegionIndex);
-      // Publish Stage 1 (InitialCandidates) reconnection output into the
-      // read-side shadow copies so the temporal/scatter stage below can sample
-      // `scatter_reconnection0/1` without aliasing the live draw attachments.
-      this.publishScatterReconnectionStageInputs();
+      this.setCurrentDiReconnectionSource(DiReconnectionSource.PROPOSAL);
       String temporalScatterIsolationMode = PhotonicsStorage.normalizeRestirTemporalReuse(
          PhotonicsStorage.RESTIR_TEMPORAL_REUSE.value
       );
@@ -2407,59 +2401,32 @@ public class LightTreeRenderer extends MainRenderer {
       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
    }
 
-   // Stage-boundary barrier + copy helper for the shared DI reconnection payload.
-   //
-   // The scatterReconnectionBuffer owns the authoritative write-side attachments
-   // `reconnection0..4`, plus read-side shadow copies `stage_in_reconnection0..4`
-   // that the legacy `scatter_reconnection0..4` samplers resolve to. Stage 1
-   // (InitialCandidates), Stage 2 (ScatterTemporalResolve), Stage 3
-   // (SpatialResampling), and Stage 6 (resolve/final shading) all multiplex the
-   // same payload attachments across consecutive passes. OpenGL does not allow a
-   // fragment stage to sample from an attachment that is simultaneously bound as a
-   // draw target, so every consumer stage reads from the copied stage-input side.
-   //
-   // To decouple reads from writes we:
-   //   1. Issue a FRAMEBUFFER + TEXTURE_FETCH barrier so the producing stage's
-   //      color writes are committed and available for texture operations.
-   //   2. Copy reconnection0..4 -> stage_in_reconnection0..4 via glCopyImageSubData.
-   //   3. Issue a second TEXTURE_FETCH barrier so the sampler reads in the
-   //      consuming stage observe the copied data.
-   private void publishScatterReconnectionStageInputs() {
-      GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
-      this.copyScatterReconnectionAttachment("reconnection0", "stage_in_reconnection0");
-      this.copyScatterReconnectionAttachment("reconnection1", "stage_in_reconnection1");
-      this.copyScatterReconnectionAttachment("reconnection2", "stage_in_reconnection2");
-      this.copyScatterReconnectionAttachment("reconnection3", "stage_in_reconnection3");
-      this.copyScatterReconnectionAttachment("reconnection4", "stage_in_reconnection4");
-      GL42.glMemoryBarrier(GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+   private boolean isDirectTemporalReuseEnabled() {
+      return PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_REUSE.value;
    }
 
-   private void copyScatterReconnectionAttachment(String sourceName, String destName) {
-      TextureObject source = this.scatterReconnectionBuffer.getWriteAttachment(sourceName);
-      TextureObject dest = this.scatterReconnectionBuffer.getWriteAttachment(destName);
-      int[] dims = source.getTextureDimensions();
-      int width = dims.length > 0 ? dims[0] : 0;
-      int height = dims.length > 1 ? dims[1] : 0;
-      if (width <= 0 || height <= 0) {
-         return;
+   private boolean isDirectSpatialReuseEnabled() {
+      return PhotonicsStorage.DEBUG_ENABLE_DIRECT_SPATIAL_REUSE.value;
+   }
+
+   private DiReconnectionSource getSpatialResamplingInputReconnectionSource() {
+      return this.isDirectTemporalReuseEnabled()
+         ? DiReconnectionSource.TEMPORAL
+         : DiReconnectionSource.PROPOSAL;
+   }
+
+   private DiReconnectionSource getShadingInputReconnectionSource() {
+      if (this.isDirectSpatialReuseEnabled()) {
+         return DiReconnectionSource.FINAL;
       }
-      GL43.glCopyImageSubData(
-         source.getTextureId(), GL11.GL_TEXTURE_2D, 0, 0, 0, 0,
-         dest.getTextureId(), GL11.GL_TEXTURE_2D, 0, 0, 0, 0,
-         width, height, 1
-      );
+
+      return this.getSpatialResamplingInputReconnectionSource();
    }
 
    private void renderDISpatialResamplingProfiled() {
-      // Publish Stage 4 (ScatterTemporalResolve) reconnection output into the
-      // read-side shadow copies so Stage 5 can sample the post-temporal
-      // reconnection data without aliasing its own draw attachments.
-      this.publishScatterReconnectionStageInputs();
+      this.setCurrentDiReconnectionSource(this.getSpatialResamplingInputReconnectionSource());
       this.renderProfiled(diSpatialResamplingRegionIndex, this.reuseResolveRenderer);
-      // Publish Stage 5 (SpatialResampling) reconnection output so subsequent
-      // shading passes (ShadeSamples / ShadeSamplesReservoir) that only read
-      // `scatter_reconnection0/1` observe the final post-spatial payload.
-      this.publishScatterReconnectionStageInputs();
+      this.setCurrentDiReconnectionSource(DiReconnectionSource.FINAL);
    }
 
    private void renderIndirectAccumulationProfiled() {
@@ -2496,6 +2463,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void renderShadeSamplesProfiled() {
+      this.setCurrentDiReconnectionSource(this.getShadingInputReconnectionSource());
       boolean useMonolithic = false;
       if (useMonolithic) {
          if (this.shadeSamplesMonolithicRenderer == null) {
@@ -2515,13 +2483,27 @@ public class LightTreeRenderer extends MainRenderer {
          return;
       }
       this.beginGpuRegion(diShadeSamplesRegionIndex);
+      this.shadeSamplesReservoirRenderer.renderAll();
       if (this.isDirectShadeSamplesEnabled()) {
-         this.shadeSamplesReservoirRenderer.renderAll();
          this.shadeSamplesRenderer.renderAll();
       } else {
-         this.clearShadeSamplesSplitOutputs();
+         this.clearShadeSamplesLightingOutputs();
       }
       this.endGpuRegion(diShadeSamplesRegionIndex);
+   }
+
+   private void setCurrentDiReconnectionSource(DiReconnectionSource source) {
+      this.currentDiReconnectionSource = source;
+   }
+
+   private TextureObject getCurrentStageReconnectionAttachment(String name) {
+      if (this.currentDiReconnectionSource == DiReconnectionSource.PROPOSAL) {
+         return this.proposalReconnectionBuffer.getWriteAttachment(name);
+      }
+      if (this.currentDiReconnectionSource == DiReconnectionSource.TEMPORAL) {
+         return this.temporalReconnectionBuffer.getWriteAttachment(name);
+      }
+      return this.scatterReconnectionBuffer.getWriteAttachment(name);
    }
 
    private void renderSpecAtrousProfiled() {
@@ -2703,6 +2685,10 @@ public class LightTreeRenderer extends MainRenderer {
       this.shadeSamplesMonolithicFramebuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
    }
 
+   private void clearShadeSamplesLightingOutputs() {
+      this.shadeSamplesFramebuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
+   }
+
    private void clearShadeSamplesSplitOutputs() {
       Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
       this.shadeSamplesFramebuffer.clear(clearColor);
@@ -2733,7 +2719,8 @@ public class LightTreeRenderer extends MainRenderer {
       Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
       this.directReservoirBuffer.clearBothSides(clearColor);
       this.directSpatialReservoirBuffer.clear(clearColor);
-      this.clearScatterTemporalHistory(clearColor);
+      this.clearCurrentTemporalStageBuffers(clearColor);
+      this.clearPreviousTemporalHistory(clearColor);
       this.indirectInitialReservoirBuffer.clearBothSides(clearColor);
       this.indirectReservoirBuffer.clearBothSides(clearColor);
       this.reservoirHistoryDirty = false;

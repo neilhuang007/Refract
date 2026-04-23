@@ -10,16 +10,6 @@ vec4 scatter_load_surface_identity(ivec2 uv, bool previousFrame)
 
 #if !defined(PH_LIGHTTREE_RECONNECTION_PACK_ONLY)
 
-uint scatter_compute_surface_hash(vec3 worldPos)
-{
-    ivec3 blockPos = ivec3(floor(worldPos));
-    uint h = uint(blockPos.x) ^ (uint(blockPos.y) * 2654435761u) ^ (uint(blockPos.z) * 2246822519u);
-    h = ((h >> 16u) ^ h) * 0x45d9f3bu;
-    h = ((h >> 16u) ^ h) * 0x45d9f3bu;
-    h = (h >> 16u) ^ h;
-    return h;
-}
-
 vec2 scatter_load_gather_floating_coords(ivec2 uv)
 {
     return lt_load_floating_coords(uv);
@@ -33,21 +23,14 @@ bool scatter_reconnection_matches_surface(
 {
     vec4 currentIdentity = scatter_load_surface_identity(pixelPosition, previousFrame);
     uint currentFaceId = uint(round(currentIdentity.w));
-    uint reconnectionSurfaceHash = scatter_compute_surface_hash(reconnection.firstHit.worldPos);
-    uint currentSurfaceHash = scatter_compute_surface_hash(currentSurface.worldPos);
 
     float maxDepth = max(reconnection.firstHit.viewDepth, currentSurface.viewDepth);
-    float depthTolerance = max(1e-3f, 0.05f * maxDepth);
-    float worldTolerance = max(0.05f, 0.03f * maxDepth);
-    float fractionalTolerance = 12.0f / 256.0f;
-
-    float fractionalDistance = distance(fract(reconnection.firstHit.worldPos), currentIdentity.xyz);
+    float depthTolerance = max(1e-4f, 1e-3f * maxDepth);
+    float worldTolerance = max(1e-4f, 1e-3f * maxDepth);
     float worldDistance = distance(reconnection.firstHit.worldPos, currentSurface.worldPos);
     bool depthCompatible = abs(reconnection.firstHit.viewDepth - currentSurface.viewDepth) <= depthTolerance;
-    bool nearSurface = worldDistance <= worldTolerance;
-    bool sameHashedBlock = reconnectionSurfaceHash == currentSurfaceHash;
-    bool faceCompatible = reconnection.firstHit.faceId == currentFaceId || nearSurface;
-    bool positionCompatible = (sameHashedBlock && fractionalDistance <= fractionalTolerance) || nearSurface;
+    bool faceCompatible = reconnection.firstHit.faceId == currentFaceId;
+    bool positionCompatible = worldDistance <= worldTolerance;
 
     return depthCompatible && faceCompatible && positionCompatible;
 }

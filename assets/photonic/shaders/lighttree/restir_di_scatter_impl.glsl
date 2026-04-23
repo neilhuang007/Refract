@@ -85,8 +85,8 @@ LtScatterShiftedPath lt_scatter_empty_shifted_path() {
     LtScatterShiftedPath s;
     s.valid = false;
     s.primaryHit = ReservoirSplattingHitInfo_empty();
-    s.fractionalPixel = vec2(0.0f);
-    s.lensSample = vec2(0.5f);
+    s.fractionalPixel = vec2(-1.0f);
+    s.lensSample = vec2(0.0f);
     s.firstRayDir = vec3(0.0f);
     s.radiance = vec3(0.0f);
     s.subPixelJacobian = 1.0f;
@@ -850,7 +850,6 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
     vec4 reconnection2 = texelFetch(current_stage_reconnection2, reservoirPosition, 0);
     vec4 reconnection3 = texelFetch(current_stage_reconnection3, reservoirPosition, 0);
     vec4 reconnection4 = texelFetch(current_stage_reconnection4, reservoirPosition, 0);
-    vec4 reservoirMeta = texelFetch(radiosity_proposal_reservoir_meta, reservoirPosition, 0);
     ReservoirSplattingReconnectionData storedReconnection;
     scatter_unpack_reconnection(
         reconnection0,
@@ -858,8 +857,8 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
         reconnection2,
         reconnection3,
         reconnection4,
-        reservoirMeta.y,
-        reservoirMeta.z,
+        0.0f,
+        0.0f,
         storedReconnection
     );
     RestirDI_restoreReconnectionRadiometry(reservoirPosition, false, currentSample.reservoir, storedReconnection);
