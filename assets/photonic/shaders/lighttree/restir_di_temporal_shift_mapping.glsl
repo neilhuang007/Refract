@@ -1,6 +1,12 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_SHIFT_MAPPING_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_SHIFT_MAPPING_GLSL
 
+float lt_di_temporal_camera_aperture_radius();
+float lt_di_temporal_artificial_frame_time();
+vec3 lt_di_temporal_camera_u();
+vec3 lt_di_temporal_camera_v();
+vec3 lt_di_temporal_camera_w();
+
 ShiftedPathData lt_temporal_empty_shifted_path()
 {
     ShiftedPathData shiftedPathData;

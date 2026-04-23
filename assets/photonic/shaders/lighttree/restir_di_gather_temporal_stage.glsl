@@ -7,8 +7,8 @@
 #include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
 #include "/photonics/lighttree/restir_di_scatter_impl.glsl"
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
-#include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 #include "/photonics/lighttree/restir_di_temporal_dof.glsl"
+#include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 
 #ifndef temporal_gather_previous_reservoir_data
 #define temporal_gather_previous_reservoir_data temporal_gather_intermediate_reservoir_data
