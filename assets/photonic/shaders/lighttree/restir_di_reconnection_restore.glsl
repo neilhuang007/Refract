@@ -7,91 +7,7 @@ bool RestirDI_restoreReconnectionRadiometry(
     RTXDI_DIReservoir reservoir,
     inout ReservoirSplattingReconnectionData reconnection)
 {
-    bool hasPrimaryHit = reconnection.firstHit.viewDepth > 0.0f
-        && any(greaterThan(abs(reconnection.firstHit.worldPos), vec3(0.0f)));
-    if (hasPrimaryHit)
-    {
-        reconnection.firstWi = normalize(
-            (previousFrame ? previous_world_camera_position : world_camera_position)
-            - reconnection.firstHit.worldPos
-        );
-    }
-
-    if (!lt_is_viewport_uv_in_bounds(pixelPosition) || !RTXDI_IsValidDIReservoir(reservoir)) {
-        reconnection.irradiance = vec3(0.0f);
-        reconnection.earlyThroughput = vec3(1.0f);
-        return false;
-    }
-
-    RAB_Surface surface = RAB_GetGBufferSurface(pixelPosition, previousFrame);
-    if (!RAB_IsSurfaceValid(surface)) {
-        reconnection.irradiance = vec3(0.0f);
-        reconnection.earlyThroughput = vec3(1.0f);
-        return false;
-    }
-
-    RAB_LightSample lightSample = lt_decode_reservoir_sample_for_frame(
-        reservoir,
-        surface,
-        previousFrame,
-        previousFrame
-    );
-    if (lightSample.index < 0) {
-        reconnection.irradiance = vec3(0.0f);
-        reconnection.earlyThroughput = vec3(1.0f);
-        return false;
-    }
-
-    reconnection.lightPdf = scatter_resolve_light_pdf(reservoir, lightSample);
-    reconnection.irradiance = scatter_resolve_irradiance(surface, reservoir, lightSample);
-    reconnection.earlyThroughput = scatter_resolve_early_throughput(surface, reservoir, lightSample);
-    return true;
-}
-
-bool RestirDI_findGatherIntermediateSourcePixel(
-    vec2 prevPixel,
-    ScatterReconnectionData reconnection,
-    out ivec2 sourcePixel)
-{
-    ivec2 prevPixelTopLeft = ivec2(floor(prevPixel));
-    float bestScore = 3.402823e38f;
-    bool found = false;
-    sourcePixel = ivec2(0);
-
-    for (int x = 0; x < 2; ++x)
-    {
-        for (int y = 0; y < 2; ++y)
-        {
-            ivec2 candidatePixel = prevPixelTopLeft + ivec2(x, y);
-            if (!lt_is_viewport_uv_in_bounds(candidatePixel))
-            {
-                continue;
-            }
-
-            RAB_Surface candidateSurface = RAB_GetGBufferSurface(candidatePixel, true);
-            if (!RAB_IsSurfaceValid(candidateSurface))
-            {
-                continue;
-            }
-
-            if (!scatter_reconnection_matches_surface(reconnection, candidatePixel, candidateSurface, true))
-            {
-                continue;
-            }
-
-            float worldDistance = distance(reconnection.firstHit.worldPos, candidateSurface.worldPos);
-            float pixelDistance = distance(prevPixel, vec2(candidatePixel) + vec2(0.5f));
-            float candidateScore = worldDistance + pixelDistance * 1e-3f;
-            if (!found || candidateScore < bestScore)
-            {
-                found = true;
-                bestScore = candidateScore;
-                sourcePixel = candidatePixel;
-            }
-        }
-    }
-
-    return found;
+    return lt_is_viewport_uv_in_bounds(pixelPosition) && RTXDI_IsValidDIReservoir(reservoir);
 }
 
 ScatterReconnectionData RestirDI_loadPreviousFrameReconnection(ivec2 pixelPosition)
@@ -105,7 +21,9 @@ ScatterReconnectionData RestirDI_loadPreviousFrameReconnection(ivec2 pixelPositi
     scatter_unpack_reconnection(
         texelFetch(previous_frame_reconnection0, pixelPosition, 0),
         texelFetch(previous_frame_reconnection1, pixelPosition, 0),
-        texelFetch(prev_radiosity_reservoir_samples, pixelPosition, 0),
+        texelFetch(previous_frame_reconnection2, pixelPosition, 0),
+        texelFetch(previous_frame_reconnection3, pixelPosition, 0),
+        texelFetch(previous_frame_reconnection4, pixelPosition, 0),
         prevReservoirMeta.y,
         prevReservoirMeta.z,
         reconnection
@@ -131,26 +49,14 @@ ScatterReconnectionData RestirDI_loadGatherIntermediateReconnection(ivec2 pixelP
     scatter_unpack_reconnection(
         texelFetch(temporal_gather_intermediate_reconnection0, pixelPosition, 0),
         texelFetch(temporal_gather_intermediate_reconnection1, pixelPosition, 0),
-        texelFetch(temporal_gather_intermediate_reservoir_sample, pixelPosition, 0),
+        texelFetch(temporal_gather_intermediate_reconnection2, pixelPosition, 0),
+        texelFetch(temporal_gather_intermediate_reconnection3, pixelPosition, 0),
+        texelFetch(temporal_gather_intermediate_reconnection4, pixelPosition, 0),
         intermediateReservoirMeta.y,
         intermediateReservoirMeta.z,
         reconnection
     );
-
-    ivec2 sourcePreviousPixel;
-    if (RestirDI_findGatherIntermediateSourcePixel(
-        scatter_load_gather_floating_coords(pixelPosition),
-        reconnection,
-        sourcePreviousPixel
-    ))
-    {
-        RestirDI_restoreReconnectionRadiometry(sourcePreviousPixel, true, intermediateReservoir, reconnection);
-    }
-    else
-    {
-        reconnection.irradiance = vec3(0.0f);
-        reconnection.earlyThroughput = vec3(1.0f);
-    }
+    RestirDI_restoreReconnectionRadiometry(pixelPosition, true, intermediateReservoir, reconnection);
     return reconnection;
 }
 

@@ -156,9 +156,11 @@ void scatter_unpack_reconnection(
 {
     vec2 packedLightPdfSubPixelJacobian;
     vec2 packedLensJacobians;
+    bool hasPackedTransport;
 
     packedLightPdfSubPixelJacobian = scatter_unpack_half2(transportAux0);
     packedLensJacobians = scatter_unpack_half2(transportAux1);
+    hasPackedTransport = transportAux0 != 0.0f || transportAux1 != 0.0f;
     reconnectionData = ReconnectionData_init();
 
     reconnectionData.firstHit.worldPos = data0.xyz;
@@ -172,10 +174,13 @@ void scatter_unpack_reconnection(
     reconnectionData.lensSample = clamp(scatter_unpack_half2(data4.y), vec2(0.0f), vec2(1.0f));
     reconnectionData.firstWi = scatter_unpack_unit_vector(data4.z);
     reconnectionData.secondWo = scatter_unpack_unit_vector(data4.w);
-    reconnectionData.lightPdf = scatter_unpack_reconnection_proposal_pdf(max(packedLightPdfSubPixelJacobian.x, 0.0f));
-    reconnectionData.subPixelJacobian = max(packedLightPdfSubPixelJacobian.y, 1e-10f);
-    reconnectionData.lensVertexJacobian = max(packedLensJacobians.x, 1e-10f);
-    reconnectionData.secondaryPathJacobian = max(packedLensJacobians.y, 1e-10f);
+    if (hasPackedTransport)
+    {
+        reconnectionData.lightPdf = scatter_unpack_reconnection_proposal_pdf(max(packedLightPdfSubPixelJacobian.x, 0.0f));
+        reconnectionData.subPixelJacobian = max(packedLightPdfSubPixelJacobian.y, 1e-10f);
+        reconnectionData.lensVertexJacobian = max(packedLensJacobians.x, 1e-10f);
+        reconnectionData.secondaryPathJacobian = max(packedLensJacobians.y, 1e-10f);
+    }
     scatter_unpack_reconnection_meta(floatBitsToUint(data2.w), reconnectionData);
 }
 

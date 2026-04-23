@@ -845,13 +845,17 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
     );
     vec4 reconnection0 = texelFetch(current_stage_reconnection0, reservoirPosition, 0);
     vec4 reconnection1 = texelFetch(current_stage_reconnection1, reservoirPosition, 0);
+    vec4 reconnection2 = texelFetch(current_stage_reconnection2, reservoirPosition, 0);
+    vec4 reconnection3 = texelFetch(current_stage_reconnection3, reservoirPosition, 0);
+    vec4 reconnection4 = texelFetch(current_stage_reconnection4, reservoirPosition, 0);
     vec4 reservoirMeta = texelFetch(radiosity_proposal_reservoir_meta, reservoirPosition, 0);
-    vec4 sampleData    = texelFetch(radiosity_proposal_reservoir_samples, reservoirPosition, 0);
     ReservoirSplattingReconnectionData storedReconnection;
     scatter_unpack_reconnection(
         reconnection0,
         reconnection1,
-        sampleData,
+        reconnection2,
+        reconnection3,
+        reconnection4,
         reservoirMeta.y,
         reservoirMeta.z,
         storedReconnection

@@ -30,7 +30,9 @@ ReservoirSplattingReconnectionData GatherTemporalResampling_load_current_reconne
     scatter_unpack_reconnection(
         texelFetch(current_stage_reconnection0, pixel, 0),
         texelFetch(current_stage_reconnection1, pixel, 0),
-        texelFetch(radiosity_proposal_reservoir_samples, pixel, 0),
+        texelFetch(current_stage_reconnection2, pixel, 0),
+        texelFetch(current_stage_reconnection3, pixel, 0),
+        texelFetch(current_stage_reconnection4, pixel, 0),
         proposalReservoirMeta.y,
         proposalReservoirMeta.z,
         reconnectionData

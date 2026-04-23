@@ -5,12 +5,10 @@ void InitialCandidates_storeReservoir(
     RTXDI_DIReservoir reservoir,
     ReservoirSplattingReconnectionData reconnectionData)
 {
-    float transportAux0;
-    float transportAux1;
     scatter_pack_reconnection_fields(
         reconnectionData,
-        transportAux0,
-        transportAux1,
+        reservoir.transportAux0,
+        reservoir.transportAux1,
         reconnection0_frag_out,
         reconnection1_frag_out,
         reconnection2_frag_out,
@@ -20,7 +18,7 @@ void InitialCandidates_storeReservoir(
 
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
+    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 }
 
 void InitialCandidates_storeEmptyReservoir()

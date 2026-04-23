@@ -118,12 +118,13 @@ ReservoirSplattingReconnectionData ReconnectionData_update(
 ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ivec2 pixel, RTXDI_DIReservoir reservoir)
 {
     vec4 reservoirMeta = PathReservoir_packMeta(reservoir);
-    vec4 sampleData    = rtxdi_pack_reservoir_sample(reservoir);
     ReservoirSplattingReconnectionData reconnection;
     scatter_unpack_reconnection(
         texelFetch(current_stage_reconnection0, pixel, 0),
         texelFetch(current_stage_reconnection1, pixel, 0),
-        sampleData,
+        texelFetch(current_stage_reconnection2, pixel, 0),
+        texelFetch(current_stage_reconnection3, pixel, 0),
+        texelFetch(current_stage_reconnection4, pixel, 0),
         reservoirMeta.y,
         reservoirMeta.z,
         reconnection

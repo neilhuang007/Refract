@@ -58,12 +58,10 @@ void CollectTemporalSamples_storeResult(
 {
     floating_coords_frag_out = floatingCoord;
 
-    float transportAux0;
-    float transportAux1;
     scatter_pack_reconnection_fields(
         reconnectionData,
-        transportAux0,
-        transportAux1,
+        reservoir.transportAux0,
+        reservoir.transportAux1,
         intermediate_reconnection0_frag_out,
         intermediate_reconnection1_frag_out,
         intermediate_reconnection2_frag_out,
@@ -73,7 +71,7 @@ void CollectTemporalSamples_storeResult(
 
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    intermediate_reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
+    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
 }
 
 void CollectTemporalSamples_store_empty_result()

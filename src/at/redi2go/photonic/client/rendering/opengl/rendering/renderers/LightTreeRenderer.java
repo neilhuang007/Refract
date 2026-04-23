@@ -685,8 +685,14 @@ public class LightTreeRenderer extends MainRenderer {
       // sampling an attachment that is simultaneously bound as a color target.
       this.addTextureSampler(samplers, "scatter_reconnection0", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection0"));
       this.addTextureSampler(samplers, "scatter_reconnection1", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection1"));
+      this.addTextureSampler(samplers, "scatter_reconnection2", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection2"));
+      this.addTextureSampler(samplers, "scatter_reconnection3", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection3"));
+      this.addTextureSampler(samplers, "scatter_reconnection4", () -> this.scatterReconnectionBuffer.getWriteAttachment("stage_in_reconnection4"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection0", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection0"));
       this.addTextureSampler(samplers, "prev_scatter_reconnection1", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection1"));
+      this.addTextureSampler(samplers, "prev_scatter_reconnection2", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection2"));
+      this.addTextureSampler(samplers, "prev_scatter_reconnection3", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection3"));
+      this.addTextureSampler(samplers, "prev_scatter_reconnection4", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection4"));
       // Scatter temporal resampling output: consumed by the current local spatial resampling stage
       this.addTextureSampler(samplers, "temporal_reservoir_data", () -> this.temporalReservoirBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "temporal_reservoir_sample", () -> this.temporalReservoirBuffer.getWriteAttachment("sample"));
@@ -697,6 +703,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_meta", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"));
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection0", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"));
       this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection1", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"));
+      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection2", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection2"));
+      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection3", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection3"));
+      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection4", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection4"));
       this.addTextureSampler(samplers, "prev_radiosity_direct_soft", this::getPreviousCompatDirectSoftTexture);
       this.addTextureSampler(samplers, "prev_radiosity_handheld", () -> this.lightingBuffer.getReadAttachment("handheld"));
       this.addTextureSampler(samplers, "prev_radiosity_lighting_variance", () -> this.lightingBuffer.getReadAttachment("lighting_variance"));
@@ -1551,11 +1560,18 @@ public class LightTreeRenderer extends MainRenderer {
 
    private ColorFramebuffer createScatterReconnectionFramebuffer(float renderScale) {
       ColorFramebuffer framebuffer = new ColorFramebuffer(this::getDirectReservoirResolution, renderScale);
-      // Shared DI reconnection payload split across two finite-float targets:
-      // reconnection0: worldPos.xyz, viewDepth
-      // reconnection1: packed confidence/lightPdf, packed meta flags, subPixel, packed Jacobians
+      // Shared DI reconnection payload split across five RGBA32F targets:
+      // reconnection0: firstHit.worldPos.xyz, firstHit.viewDepth
+      // reconnection1: secondHit.worldPos.xyz, secondHit.viewDepth
+      // reconnection2: irradiance.xyz, packed meta/time
+      // reconnection3: earlyThroughput.xyz, packed lightPdf/subPixelJacobian
+      // reconnection4: packed lensVertexJacobian/secondaryPathJacobian,
+      //                packed subPixel, packed lensSample, packed directions
       framebuffer.createAttachment("reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("reconnection1", "RGBA32F", false);
+      framebuffer.createAttachment("reconnection2", "RGBA32F", false);
+      framebuffer.createAttachment("reconnection3", "RGBA32F", false);
+      framebuffer.createAttachment("reconnection4", "RGBA32F", false);
       // Stage-input shadow copies of reconnection0/1. These are NEVER bound as
       // color attachments during a draw call — they only receive
       // glCopyImageSubData payloads between pipeline stages and are read as
@@ -1565,6 +1581,9 @@ public class LightTreeRenderer extends MainRenderer {
       // output in the same draw call (Stage 4 / Stage 5 feedback loop).
       framebuffer.createAttachment("stage_in_reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("stage_in_reconnection1", "RGBA32F", false);
+      framebuffer.createAttachment("stage_in_reconnection2", "RGBA32F", false);
+      framebuffer.createAttachment("stage_in_reconnection3", "RGBA32F", false);
+      framebuffer.createAttachment("stage_in_reconnection4", "RGBA32F", false);
       return framebuffer;
    }
 
@@ -1586,6 +1605,9 @@ public class LightTreeRenderer extends MainRenderer {
       framebuffer.createAttachment("intermediate_meta", "RGBA32F", false);
       framebuffer.createAttachment("intermediate_reconnection0", "RGBA32F", false);
       framebuffer.createAttachment("intermediate_reconnection1", "RGBA32F", false);
+      framebuffer.createAttachment("intermediate_reconnection2", "RGBA32F", false);
+      framebuffer.createAttachment("intermediate_reconnection3", "RGBA32F", false);
+      framebuffer.createAttachment("intermediate_reconnection4", "RGBA32F", false);
       return framebuffer;
    }
 
@@ -1596,7 +1618,10 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_sample"),
          () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"),
          () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1")
+         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"),
+         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection2"),
+         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection3"),
+         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection4")
       );
    }
 
@@ -1609,7 +1634,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createTemporalReservoirRoutingFramebuffer() {
-      // Outputs 5 textures: 3 reservoir (data/sample/meta) + 2 reconnection payloads.
+      // Outputs 8 textures: 3 reservoir (data/sample/meta) + 5 reconnection payloads.
       // The reconnection writes go to the current-frame scatterReconnectionBuffer
       // (write side), which is ping-ponged next frame into previous-frame history.
       // Strict reference parity would require additional gather-stage storage here
@@ -1621,7 +1646,10 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.temporalReservoirBuffer.getWriteAttachment("sample"),
          () -> this.temporalReservoirBuffer.getWriteAttachment("meta"),
          () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1")
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
@@ -1796,16 +1824,17 @@ public class LightTreeRenderer extends MainRenderer {
 
    private RoutingFramebuffer createProposalReservoirFramebuffer() {
       // Reference parity (InitialCandidates.cs.slang:63-66): initial-candidate stage
-      // writes exactly two logical outputs — the packed DI reservoir (data/sample/meta)
-      // and the selected reconnection data (reconnection0/reconnection1). No side
-      // debug channel. Removing the orphan `direct_initial_debug` binding aligns the
-      // FBO attachment count with the 5 fragment outputs in InitialCandidates.fsh.
+      // Initial candidates write the packed DI reservoir (data/sample/meta) plus the
+      // full five-target reconnection payload.
       return this.createDirectPackedRoutingFramebuffer(
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta"),
          () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1")
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
@@ -1817,7 +1846,10 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.directSpatialReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directSpatialReservoirBuffer.getWriteAttachment("meta"),
          () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1")
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
@@ -2360,8 +2392,8 @@ public class LightTreeRenderer extends MainRenderer {
    // Stage-boundary barrier + copy helper for the shared DI reconnection payload.
    //
    // The scatterReconnectionBuffer owns the authoritative write-side attachments
-   // `reconnection0/1`, plus read-side shadow copies `stage_in_reconnection0/1`
-   // that the legacy `scatter_reconnection0/1` samplers resolve to. Stage 1
+   // `reconnection0..4`, plus read-side shadow copies `stage_in_reconnection0..4`
+   // that the legacy `scatter_reconnection0..4` samplers resolve to. Stage 1
    // (InitialCandidates), Stage 2 (ScatterTemporalResolve), Stage 3
    // (SpatialResampling), and Stage 6 (resolve/final shading) all multiplex the
    // same payload attachments across consecutive passes. OpenGL does not allow a
@@ -2371,14 +2403,16 @@ public class LightTreeRenderer extends MainRenderer {
    // To decouple reads from writes we:
    //   1. Issue a FRAMEBUFFER + TEXTURE_FETCH barrier so the producing stage's
    //      color writes are committed and available for texture operations.
-   //   2. Copy reconnection0 -> stage_in_reconnection0 and
-   //      reconnection1 -> stage_in_reconnection1 via glCopyImageSubData.
+   //   2. Copy reconnection0..4 -> stage_in_reconnection0..4 via glCopyImageSubData.
    //   3. Issue a second TEXTURE_FETCH barrier so the sampler reads in the
    //      consuming stage observe the copied data.
    private void publishScatterReconnectionStageInputs() {
       GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       this.copyScatterReconnectionAttachment("reconnection0", "stage_in_reconnection0");
       this.copyScatterReconnectionAttachment("reconnection1", "stage_in_reconnection1");
+      this.copyScatterReconnectionAttachment("reconnection2", "stage_in_reconnection2");
+      this.copyScatterReconnectionAttachment("reconnection3", "stage_in_reconnection3");
+      this.copyScatterReconnectionAttachment("reconnection4", "stage_in_reconnection4");
       GL42.glMemoryBarrier(GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
    }
 
