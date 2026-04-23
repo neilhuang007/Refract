@@ -6,6 +6,9 @@
 #define intermediate_reservoir_meta_frag_out temporal_gather_intermediate_reservoir_meta_frag_out
 #define intermediate_reconnection0_frag_out temporal_gather_intermediate_reconnection0_frag_out
 #define intermediate_reconnection1_frag_out temporal_gather_intermediate_reconnection1_frag_out
+#define intermediate_reconnection2_frag_out temporal_gather_intermediate_reconnection2_frag_out
+#define intermediate_reconnection3_frag_out temporal_gather_intermediate_reconnection3_frag_out
+#define intermediate_reconnection4_frag_out temporal_gather_intermediate_reconnection4_frag_out
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE 1
 
 in vec4 direction_vert_out;
@@ -16,6 +19,9 @@ layout(location = 2) out vec4 temporal_gather_intermediate_reservoir_sample_frag
 layout(location = 3) out vec4 temporal_gather_intermediate_reservoir_meta_frag_out;
 layout(location = 4) out vec4 temporal_gather_intermediate_reconnection0_frag_out;
 layout(location = 5) out vec4 temporal_gather_intermediate_reconnection1_frag_out;
+layout(location = 6) out vec4 temporal_gather_intermediate_reconnection2_frag_out;
+layout(location = 7) out vec4 temporal_gather_intermediate_reconnection3_frag_out;
+layout(location = 8) out vec4 temporal_gather_intermediate_reconnection4_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
@@ -31,6 +37,9 @@ void CollectTemporalSamples_storeEmptyResult()
     temporal_gather_intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(RTXDI_EmptyDIReservoir());
     temporal_gather_intermediate_reconnection0_frag_out = vec4(0.0f);
     temporal_gather_intermediate_reconnection1_frag_out = vec4(0.0f);
+    temporal_gather_intermediate_reconnection2_frag_out = vec4(0.0f);
+    temporal_gather_intermediate_reconnection3_frag_out = vec4(0.0f);
+    temporal_gather_intermediate_reconnection4_frag_out = vec4(0.0f);
 }
 
 void main()

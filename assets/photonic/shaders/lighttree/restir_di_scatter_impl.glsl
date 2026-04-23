@@ -68,7 +68,7 @@ float lt_scatter_shift_jacobian_ratio(
 #define PH_LIGHTTREE_LT_SCATTER_SHIFTED_PATH_DECLARED
 struct LtScatterShiftedPath {
     bool  valid;
-    ReservoirSplattingHitInfo firstHit;
+    ReservoirSplattingHitInfo primaryHit;
     vec2  fractionalPixel;
     vec2  lensSample;
     vec3  firstRayDir;
@@ -82,7 +82,7 @@ struct LtScatterShiftedPath {
 LtScatterShiftedPath lt_scatter_empty_shifted_path() {
     LtScatterShiftedPath s;
     s.valid = false;
-    s.firstHit = ReservoirSplattingHitInfo_empty();
+    s.primaryHit = ReservoirSplattingHitInfo_empty();
     s.fractionalPixel = vec2(0.0f);
     s.lensSample = vec2(0.5f);
     s.firstRayDir = vec3(0.0f);
@@ -303,7 +303,7 @@ bool lt_scatter_reprojection_shift(
     );
 
     shifted.valid = true;
-    shifted.firstHit = reconnectionData.firstHit;
+    shifted.primaryHit = reconnectionData.firstHit;
     shifted.fractionalPixel = projectedPixelF;
     shifted.lensSample = clamp(reconnectionData.lensSample, vec2(0.0f), vec2(1.0f));
     shifted.firstRayDir = projectedRayDirection;

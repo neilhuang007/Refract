@@ -54,7 +54,9 @@ public final class PhotonicsStorage {
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
    public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "regir_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
-   public static final Parameter<String> RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE = stringParam("restir_temporal_scatter_isolation_mode", "scatter_only");
+   public static final Parameter<String> RESTIR_TEMPORAL_REUSE = stringParam("restir_temporal_reuse", "gather_only");
+   public static final Parameter<String> RESTIR_TEMPORAL_GATHER_MODE = stringParam("restir_temporal_gather_mode", "fast");
+   public static final Parameter<String> RESTIR_SCATTER_BACKUP_MIS_OPTION = stringParam("restir_scatter_backup_mis_option", "balance");
    // Performance tuning — individual per-parameter overrides.
    // A value of -1 means "use shaderpack default" (auto).  Any positive
    // value overrides the shaderpack setting at runtime.
@@ -63,6 +65,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Float> RESTIR_INITIAL_SAMPLES = floatParam("restir_initial_samples", -1.0F);
    public static final Parameter<Float> RESTIR_SPATIAL_SAMPLES = floatParam("restir_spatial_samples", -1.0F);
    public static final Parameter<Float> RESTIR_GI_SPATIAL_SAMPLES = floatParam("restir_gi_spatial_samples", -1.0F);
+   public static final Parameter<Float> RESTIR_TIME_PARTITIONS = floatParam("restir_time_partitions", 2.0F);
    public static final Parameter<Float> RESTIR_SPATIAL_RADIUS = floatParam("restir_spatial_radius", -1.0F);
    public static final Parameter<Float> RESTIR_SPATIAL_BIAS_MODE = floatParam("restir_spatial_bias_mode", -1.0F);
    public static final Parameter<Boolean> DEBUG_CONSTANT_ALBEDO = boolParam("debug_constant_albedo", false);
@@ -127,7 +130,9 @@ public final class PhotonicsStorage {
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectAntiFirefly", DEBUG_ENABLE_DIRECT_ANTI_FIREFLY);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectAtrous", DEBUG_ENABLE_DIRECT_ATROUS);
       applyStringSystemPropertyOverride("photonics.restirLocalLightSamplingMode", RESTIR_LOCAL_LIGHT_SAMPLING_MODE);
-      applyStringSystemPropertyOverride("photonics.temporalScatterIsolationMode", RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE);
+      applyStringSystemPropertyOverride("photonics.temporalReuse", RESTIR_TEMPORAL_REUSE);
+      applyStringSystemPropertyOverride("photonics.temporalGatherMode", RESTIR_TEMPORAL_GATHER_MODE);
+      applyStringSystemPropertyOverride("photonics.scatterBackupMisOption", RESTIR_SCATTER_BACKUP_MIS_OPTION);
    }
 
    private static void applyBooleanSystemPropertyOverride(String key, Parameter<Boolean> parameter) {
@@ -210,19 +215,43 @@ public final class PhotonicsStorage {
       };
    }
 
-   public static String normalizeTemporalScatterIsolationMode(String isolationMode) {
-      if (isolationMode == null) {
-         return "scatter_only";
+   public static String normalizeRestirTemporalReuse(String temporalReuse) {
+      if (temporalReuse == null) {
+         return "gather_only";
       }
 
-      return switch (isolationMode.trim().toLowerCase(Locale.ROOT)) {
-         case "", "0", "scatter_only", "scatter-only", "scatter", "scatter_merge", "scatter-merge", "default", "splat", "splat_only", "splat-only" -> "scatter_only";
-         case "1", "off", "gather", "gather_only", "gather-only", "legacy", "robust_gather", "robust-gather" -> "off";
-         case "2", "ownership_only", "ownership-only", "ownership", "ownership_append", "ownership-append" -> "ownership_only";
-         case "3", "scatter_backup", "scatter-backup", "backup", "backup_gather", "backup-gather" -> "scatter_backup";
-         case "4", "multi_scatter", "multi-scatter", "multi", "multi_splat", "multi-splat" -> "multi_scatter";
-         case "5", "temporal_off", "temporal-off", "disable_temporal", "full_bypass", "full-bypass", "canonical" -> "temporal_off";
-         default -> "scatter_only";
+      return switch (temporalReuse.trim().toLowerCase(Locale.ROOT)) {
+         case "", "0", "gather", "gather_only", "gather-only", "off", "legacy" -> "gather_only";
+         case "1", "scatter", "scatter_only", "scatter-only", "splat", "splat_only", "splat-only", "ownership_only", "ownership-only", "ownership" -> "scatter_only";
+         case "2", "scatter_backup", "scatter-backup", "backup", "backup_gather", "backup-gather" -> "scatter_backup";
+         case "3", "multi_scatter", "multi-scatter", "multi", "multi_splat", "multi-splat" -> "multi_scatter";
+         case "temporal_off", "temporal-off", "disable_temporal", "full_bypass", "canonical" -> "gather_only";
+         default -> "gather_only";
+      };
+   }
+
+   public static String normalizeRestirScatterBackupMisOption(String misOption) {
+      if (misOption == null) {
+         return "balance";
+      }
+
+      return switch (misOption.trim().toLowerCase(Locale.ROOT)) {
+         case "", "0", "balance" -> "balance";
+         case "1", "pairwise" -> "pairwise";
+         default -> "balance";
+      };
+   }
+
+   public static String normalizeRestirTemporalGatherMode(String gatherMode) {
+      if (gatherMode == null) {
+         return "fast";
+      }
+
+      return switch (gatherMode.trim().toLowerCase(Locale.ROOT)) {
+         case "", "0", "fast" -> "fast";
+         case "1", "clamped", "clamp" -> "clamped";
+         case "2", "robust", "full_robust", "full-robust" -> "robust";
+         default -> "fast";
       };
    }
 

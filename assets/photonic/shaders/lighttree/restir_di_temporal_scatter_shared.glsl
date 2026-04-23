@@ -51,7 +51,7 @@ float ScatterTemporalResampling_motion_vector_confidence(
 #define PH_LIGHTTREE_LT_SCATTER_SHIFTED_PATH_DECLARED
 struct LtScatterShiftedPath {
     bool  valid;
-    ReservoirSplattingHitInfo firstHit;
+    ReservoirSplattingHitInfo primaryHit;
     vec2  fractionalPixel;
     vec2  lensSample;
     vec3  firstRayDir;

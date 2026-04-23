@@ -105,25 +105,13 @@ ReservoirSplattingReconnectionData ReconnectionData_update(
     SpatialShiftedPathData shifted)
 {
     ReservoirSplattingReconnectionData updated = source;
-    ivec2 landingPixel = clamp(
-        ivec2(floor(shifted.fractionalPixel)),
-        ivec2(0),
-        ivec2(int(viewWidth) - 1, int(viewHeight) - 1)
-    );
-    updated.firstHit.worldPos       = shifted.primaryHit;
-    updated.firstHit.viewDepth      = length(shifted.primaryHit - world_camera_position);
-    updated.firstWi                 = -shifted.firstRayDir;
-    updated.firstHit.faceId         = uint(round(scatter_load_surface_identity(landingPixel, false).w));
-    updated.secondHit.faceId        = updated.firstHit.faceId;
-    updated.subPixel                = clamp(
-        shifted.fractionalPixel - floor(shifted.fractionalPixel),
-        vec2(0.0f),
-        vec2(1.0f)
-    );
-    updated.lensSample              = shifted.lensSample;
-    updated.subPixelJacobian        = max(shifted.subPixelJacobian, 1e-10f);
-    updated.lensVertexJacobian      = max(shifted.lensVertexJacobian, 1e-10f);
-    updated.secondaryPathJacobian   = max(shifted.secondaryPathJacobian, 1e-10f);
+    updated.firstHit = shifted.primaryHit;
+    updated.subPixel = shifted.fractionalPixel - floor(shifted.fractionalPixel);
+    updated.lensSample = shifted.lensSample;
+    updated.firstWi = -shifted.firstRayDir;
+    updated.subPixelJacobian = shifted.subPixelJacobian;
+    updated.lensVertexJacobian = shifted.lensVertexJacobian;
+    updated.secondaryPathJacobian = shifted.secondaryPathJacobian;
     return updated;
 }
 

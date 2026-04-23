@@ -38,8 +38,14 @@ uniform sampler2D radiosity_motion;
 // Historical scatter-prefixed names are retained for ABI compatibility.
 uniform sampler2D scatter_reconnection0;
 uniform sampler2D scatter_reconnection1;
+uniform sampler2D scatter_reconnection2;
+uniform sampler2D scatter_reconnection3;
+uniform sampler2D scatter_reconnection4;
 #define current_stage_reconnection0 scatter_reconnection0
 #define current_stage_reconnection1 scatter_reconnection1
+#define current_stage_reconnection2 scatter_reconnection2
+#define current_stage_reconnection3 scatter_reconnection3
+#define current_stage_reconnection4 scatter_reconnection4
 // Single-buffered temporal resampling staging/output consumed within the same frame
 uniform sampler2D temporal_reservoir_data;
 uniform sampler2D temporal_reservoir_sample;
@@ -52,6 +58,9 @@ uniform sampler2D temporal_gather_intermediate_reservoir_sample;
 uniform sampler2D temporal_gather_intermediate_reservoir_meta;
 uniform sampler2D temporal_gather_intermediate_reconnection0;
 uniform sampler2D temporal_gather_intermediate_reconnection1;
+uniform sampler2D temporal_gather_intermediate_reconnection2;
+uniform sampler2D temporal_gather_intermediate_reconnection3;
+uniform sampler2D temporal_gather_intermediate_reconnection4;
 uniform sampler2D prev_radiosity_position;
 uniform sampler2D prev_radiosity_normal;
 uniform sampler2D prev_radiosity_mapped_normal;
@@ -77,8 +86,14 @@ uniform sampler2D prev_radiosity_motion;
 // Historical scatter-prefixed names are retained for ABI compatibility.
 uniform sampler2D prev_scatter_reconnection0;
 uniform sampler2D prev_scatter_reconnection1;
+uniform sampler2D prev_scatter_reconnection2;
+uniform sampler2D prev_scatter_reconnection3;
+uniform sampler2D prev_scatter_reconnection4;
 #define previous_frame_reconnection0 prev_scatter_reconnection0
 #define previous_frame_reconnection1 prev_scatter_reconnection1
+#define previous_frame_reconnection2 prev_scatter_reconnection2
+#define previous_frame_reconnection3 prev_scatter_reconnection3
+#define previous_frame_reconnection4 prev_scatter_reconnection4
 
 uniform sampler2D prev_spec_slow_input;
 uniform sampler2D prev_spec_fast_input;

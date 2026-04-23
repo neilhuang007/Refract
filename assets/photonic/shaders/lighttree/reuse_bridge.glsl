@@ -220,6 +220,8 @@ uniform float ph_restir_debug_force_solid_angle_pdf_one;  // Hidden debug overri
 // SDK default (ReSTIRDI.cpp line 45): Uniform (0).
 uniform float ph_restir_local_light_sampling_mode;
 uniform float ph_restir_scatter_backup_mis_mode;
+uniform float ph_restir_temporal_gather_mode;
+uniform float ph_restir_temporal_use_confidence_weights;
 
 float lt_debug_resolve_target_pdf(float targetPdf) {
     return (ph_restir_debug_force_target_pdf_one >= 0.5f) ? 1.0f : targetPdf;
@@ -231,6 +233,22 @@ float lt_debug_resolve_shading_inv_pdf(float invPdf) {
 
 float lt_debug_resolve_solid_angle_pdf(float solidAnglePdf) {
     return (ph_restir_debug_force_solid_angle_pdf_one >= 0.5f) ? 1.0f : solidAnglePdf;
+}
+
+int lt_restir_temporal_gather_mode()
+{
+    int gatherMode = int(round(ph_restir_temporal_gather_mode));
+    return clamp(gatherMode, 0, 2);
+}
+
+bool lt_restir_temporal_gather_mode_is_robust()
+{
+    return lt_restir_temporal_gather_mode() == 2;
+}
+
+bool lt_restir_temporal_use_confidence_weights()
+{
+    return ph_restir_temporal_use_confidence_weights >= 0.5f;
 }
 
 // GLSL requires declarations before first use; these helpers are defined later in the file.
@@ -650,34 +668,32 @@ RAB_Material RAB_GetMaterial(RAB_Surface surface);
 // fields here -- those belong on the per-pixel reservoir header or the
 // surface identity texture, NOT on the reconnection payload.
 //
-// In Falcor the `HitInfo` struct packs instance+primitive+barycentric;
-// on GLSL we substitute two block-coordinate channels (worldPos + faceId)
-// because that IS the Minecraft-block addressing scheme the g-buffer
-// writes out. These channels collectively play the role of Falcor
-// `HitInfo`, so `firstHit.worldPos`, `firstHit.faceId`, and
-// `firstHit.viewDepth` together substitute for the reference's
-// `ReconnectionData::firstHit`. Same for `secondHit.*`. This matches the
-// paper's implementation note that Area ReSTIR reservoir storage is
-// extended with "the explicit object-space primary hit".
+// Falcor's `HitInfo` packs instance/primitive/barycentric state. This GLSL
+// port keeps the same top-level type name and payload role, but carries the
+// scene-space data the Minecraft g-buffer can authoritatively reproduce for
+// reuse and surface matching.
 // =====================================================================
-struct ReservoirSplattingHitInfo {
+struct HitInfo {
     vec3  worldPos;    // Object/world-space hit position
     float viewDepth;   // Linear view depth (for bilateral tests)
     uint  faceId;      // Dominant signed block face identifier
 };
 
-ReservoirSplattingHitInfo ReservoirSplattingHitInfo_empty() {
-    ReservoirSplattingHitInfo h;
+HitInfo HitInfo_empty() {
+    HitInfo h;
     h.worldPos = vec3(0.0f);
     h.viewDepth = 0.0f;
     h.faceId = 0u;
     return h;
 }
 
+#define ReservoirSplattingHitInfo HitInfo
+#define ReservoirSplattingHitInfo_empty HitInfo_empty
+
 #ifndef PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
 #define PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
 struct ShiftedPathData {
-    ReservoirSplattingHitInfo primaryHit;
+    HitInfo primaryHit;
     vec2 fractionalPixel;
     vec2 lensSample;
     vec3 firstRayDir;
@@ -689,7 +705,7 @@ struct ShiftedPathData {
 #endif
 
 // Reference-parity ``ReconnectionData`` (ReconnectionData.slang:89-166).
-struct ReservoirSplattingReconnectionData {
+struct ReconnectionData {
     // Some camera / film parameters used generally.
     vec2  subPixel;                     // ReconnectionData.slang:92
     vec2  lensSample;                   // ReconnectionData.slang:93
@@ -701,12 +717,12 @@ struct ReservoirSplattingReconnectionData {
     uint  pathLength;                   // ReconnectionData.slang:98
 
     // Information about the first vertex.
-    ReservoirSplattingHitInfo firstHit; // ReconnectionData.slang:101 (HitInfo)
+    HitInfo firstHit;                   // ReconnectionData.slang:101 (HitInfo)
     uint  firstBSDFComponentType;       // ReconnectionData.slang:102 (NOTE camelcase)
     vec3  firstWi;                      // ReconnectionData.slang:103 (toward camera)
 
     // Information about the second vertex.
-    ReservoirSplattingHitInfo secondHit; // ReconnectionData.slang:106 (HitInfo)
+    HitInfo secondHit;                  // ReconnectionData.slang:106 (HitInfo)
     uint  secondBSDFComponentType;       // ReconnectionData.slang:107 (NOTE camelcase)
     vec3  secondWo;                      // ReconnectionData.slang:108 (outgoing at x2)
 
@@ -725,14 +741,15 @@ struct ReservoirSplattingReconnectionData {
     vec3  earlyThroughput;               // ReconnectionData.slang:123 (prefix thp)
 };
 
+#define ReservoirSplattingReconnectionData ReconnectionData
+#define ScatterReconnectionData ReconnectionData
+
 // Back-compat alias macros. The rest of the Photonics shader layer still
 // refers to this type as ``ScatterReconnectionData`` through the sidecar
 // plumbing; these macros let both spellings resolve to the reference
 // struct without any adaptation.
-#define ScatterReconnectionData ReservoirSplattingReconnectionData
-
-ReservoirSplattingReconnectionData ReservoirSplattingReconnectionData_init() {
-    ReservoirSplattingReconnectionData d;
+ReconnectionData ReconnectionData_init() {
+    ReconnectionData d;
     // ReconnectionData.slang:127-129 -- camera / film parameters.
     d.subPixel = vec2(0.5f, 0.5f);
     d.lensSample = vec2(0.0f, 0.0f);            // Reference: float2(0, 0) (NOT 0.5).
@@ -768,17 +785,21 @@ ReservoirSplattingReconnectionData ReservoirSplattingReconnectionData_init() {
     return d;
 }
 
+#define ReservoirSplattingReconnectionData_init ReconnectionData_init
+
 // Legacy spelling alias -- kept because existing callers use either name.
 // The `scatter_empty_reconnection` helper pre-dates the reference-aligned
 // rename; both resolve to the same constructor body.
-ReservoirSplattingReconnectionData scatter_empty_reconnection() {
-    return ReservoirSplattingReconnectionData_init();
+ReconnectionData scatter_empty_reconnection() {
+    return ReconnectionData_init();
 }
 
 #include "/photonics/lighttree/restir_di_reconnection_surface.glsl"
 
 const uint SCATTER_RECONNECTION_FLAG_LIGHT_IS_NEE = 1u << 0u;
 const uint SCATTER_RECONNECTION_FLAG_LIGHT_IS_DISTANT = 1u << 1u;
+const uint SCATTER_RECONNECTION_FLAG_FIRST_WI_VALID = 1u << 2u;
+const uint SCATTER_RECONNECTION_FLAG_SECOND_WO_VALID = 1u << 3u;
 const uint SCATTER_RECONNECTION_EVENT_TRANSMISSION = 1u << 0u;
 const uint SCATTER_BSDF_COMPONENT_DIFFUSE = 0u;
 const uint SCATTER_BSDF_COMPONENT_SPECULAR = 1u;
@@ -793,16 +814,16 @@ const uint SCATTER_RECONNECTION_CONFIDENCE_MASK = 0x00000FFFu;
 const uint SCATTER_RECONNECTION_CONFIDENCE_SHIFT = 16u;
 const uint SCATTER_RECONNECTION_FACE_MASK = 0xFu;
 const uint SCATTER_RECONNECTION_FACE_SHIFT = 0u;
-const uint SCATTER_RECONNECTION_FLAGS_MASK = 0x3u;
-const uint SCATTER_RECONNECTION_FLAGS_SHIFT = 4u;
+const uint SCATTER_RECONNECTION_SECOND_FACE_SHIFT = 4u;
+const uint SCATTER_RECONNECTION_FLAGS_MASK = 0xFu;
+const uint SCATTER_RECONNECTION_FLAGS_SHIFT = 8u;
 const uint SCATTER_RECONNECTION_PATH_LENGTH_MASK = 0x3Fu;
-const uint SCATTER_RECONNECTION_PATH_LENGTH_SHIFT = 6u;
+const uint SCATTER_RECONNECTION_PATH_LENGTH_SHIFT = 12u;
 const uint SCATTER_RECONNECTION_FIRST_BSDF_MASK = 0x3u;
-const uint SCATTER_RECONNECTION_FIRST_BSDF_SHIFT = 12u;
+const uint SCATTER_RECONNECTION_FIRST_BSDF_SHIFT = 18u;
 const uint SCATTER_RECONNECTION_SECOND_BSDF_MASK = 0x3u;
-const uint SCATTER_RECONNECTION_SECOND_BSDF_SHIFT = 14u;
-const uint SCATTER_RECONNECTION_TIME_MASK = 0x7FFFu;
-const uint SCATTER_RECONNECTION_TIME_SHIFT = 17u;
+const uint SCATTER_RECONNECTION_SECOND_BSDF_SHIFT = 20u;
+const uint SCATTER_RECONNECTION_TRANSMISSION_SHIFT = 22u;
 
 float scatter_pack_half2(vec2 value) {
     return uintBitsToFloat(packHalf2x16(value));

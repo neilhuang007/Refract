@@ -268,7 +268,6 @@ public class LightTreeRenderer extends MainRenderer {
   private final int[] directAtrousStepSizes;
   private final Consumer<String> localLightSamplingModeObserver;
   private final Consumer<String> temporalScatterIsolationModeObserver;
-   private static final int RESERVOIR_SPLATTING_TIME_PARTITION_COUNT = 4;
    private int temporalScatterPixelCapacity;
   private int temporalScatterContributorCapacity;
   private int directAtrousIteration = 0;
@@ -378,7 +377,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.localLightSamplingModeObserver = ignored -> this.invalidateDirectReuseHistory();
       this.temporalScatterIsolationModeObserver = ignored -> this.invalidateDirectReuseHistory();
       PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.addObserver(this.localLightSamplingModeObserver);
-      PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.addObserver(this.temporalScatterIsolationModeObserver);
+      PhotonicsStorage.RESTIR_TEMPORAL_REUSE.addObserver(this.temporalScatterIsolationModeObserver);
    }
 
    @Override
@@ -525,7 +524,13 @@ public class LightTreeRenderer extends MainRenderer {
       if (this.temporalCollectRenderer == null) {
          this.temporalCollectRenderer = this.createLazyRenderer(diCollectTemporalSamplesFragment, this.temporalCollectFramebuffer);
       }
-      if (this.robustReuseOptimizationRenderer == null && this.compositeRendererCreator != null) {
+      if (
+         this.robustReuseOptimizationRenderer == null
+            && this.compositeRendererCreator != null
+            && "robust".equals(
+               PhotonicsStorage.normalizeRestirTemporalGatherMode(PhotonicsStorage.RESTIR_TEMPORAL_GATHER_MODE.value)
+            )
+      ) {
          this.robustReuseOptimizationRenderer = this.createLazyRenderer(
             List.of(new PhotonicsShader(diRobustReuseOptimizationFragment, "common/screen.vsh", this.memoryCollection, this.robustReuseOptimizationFramebuffer))
          );
@@ -764,7 +769,7 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1i("direct_atrous_is_last_pass", this::getCurrentDirectAtrousIsLastPass, listener -> {});
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_active_checkerboard_field", this::getActiveCheckerboardField);
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_frame_index", this::getRestirFrameIndex);
-      uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_reservoir_splatting_time_partition_count", () -> RESERVOIR_SPLATTING_TIME_PARTITION_COUNT);
+      uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_reservoir_splatting_time_partition_count", this::getReservoirSplattingTimePartitionCount);
       uniforms.uniform1f("ph_direct_sample_budget_scale", this::getDirectSampleBudgetScale, listener -> {});
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_depth_threshold", () -> this.properties.getRestirDepthThreshold());
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_normal_threshold", () -> this.properties.getRestirNormalThreshold());
@@ -824,7 +829,11 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_restir_scatter_backup_mis_mode",
-         () -> this.getOptionalFloatSystemProperty("photonics.restirScatterBackupMisMode", 0.0f)
+         () -> "pairwise".equals(
+            PhotonicsStorage.normalizeRestirScatterBackupMisOption(
+               PhotonicsStorage.RESTIR_SCATTER_BACKUP_MIS_OPTION.value
+            )
+         ) ? 1.0f : 0.0f
       );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
@@ -871,18 +880,35 @@ public class LightTreeRenderer extends MainRenderer {
          UniformUpdateFrequency.PER_FRAME,
          "ph_restir_temporal_scatter_isolation_mode",
          () -> {
-            String isolationMode = PhotonicsStorage.normalizeTemporalScatterIsolationMode(
-               PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.value
+            String isolationMode = PhotonicsStorage.normalizeRestirTemporalReuse(
+               PhotonicsStorage.RESTIR_TEMPORAL_REUSE.value
             );
             return switch (isolationMode) {
-               case "ownership_only" -> 1.0f;
+               case "scatter_only" -> 1.0f;
                case "scatter_backup" -> 2.0f;
-               case "scatter_only" -> 3.0f;
-               case "multi_scatter" -> 4.0f;
-               case "temporal_off" -> 5.0f;
+               case "multi_scatter" -> 3.0f;
                default -> 0.0f;
             };
          }
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_restir_temporal_gather_mode",
+         () -> {
+            String gatherMode = PhotonicsStorage.normalizeRestirTemporalGatherMode(
+               PhotonicsStorage.RESTIR_TEMPORAL_GATHER_MODE.value
+            );
+            return switch (gatherMode) {
+               case "clamped" -> 1.0f;
+               case "robust" -> 2.0f;
+               default -> 0.0f;
+            };
+         }
+      );
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_restir_temporal_use_confidence_weights",
+         () -> this.getOptionalFloatSystemProperty("photonics.restirTemporalUseConfidenceWeights", 1.0f)
       );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
@@ -1024,7 +1050,7 @@ public class LightTreeRenderer extends MainRenderer {
       int currentCounterBytes = 2 * Integer.BYTES;
       int currentCellBytes = this.temporalScatterPixelCapacity * Integer.BYTES;
       int currentContributorBytes = this.temporalScatterPixelCapacity * 2 * Integer.BYTES;
-      int multiCounterBytes = RESERVOIR_SPLATTING_TIME_PARTITION_COUNT * 2 * Integer.BYTES;
+      int multiCounterBytes = this.getReservoirSplattingTimePartitionCount() * 2 * Integer.BYTES;
       int multiCellBytes = this.temporalScatterContributorCapacity * Integer.BYTES;
       int multiContributorBytes = this.temporalScatterContributorCapacity * 2 * Integer.BYTES;
 
@@ -1098,21 +1124,33 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int getTemporalScatterContributorCapacity() {
-      return this.getTemporalScatterPixelCapacity() * RESERVOIR_SPLATTING_TIME_PARTITION_COUNT;
+      return this.getTemporalScatterPixelCapacity() * this.getReservoirSplattingTimePartitionCount();
+   }
+
+   private int getReservoirSplattingTimePartitionCount() {
+      return Math.max(1, Math.round(PhotonicsStorage.RESTIR_TIME_PARTITIONS.value));
    }
 
    private GlMemoryManager createTemporalScatterMemoryManager(String name, int byteSize) {
       return new GlMemoryManager(at.redi2go.photonic.client.rendering.opengl.objects.GlTarget.SSBO, name, Math.max(byteSize, Integer.BYTES), false);
    }
 
-   private void clearTemporalScatterOwnershipBuffers() {
+   private void clearTemporalGatherBuffers() {
       this.clearFloat4Buffer(this.temporalGatherShiftedPathsMemoryManager);
+      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+   }
+
+   private void clearCurrentTemporalScatterBuffers() {
       this.clearUintBuffer(this.temporalScatterCurrentGlobalCountersMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterCurrentCellCountersMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterCurrentReservoirIndicesMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterCurrentScatteredReservoirsMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterCurrentCellOffsetsMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterCurrentSortedReservoirsMemoryManager, 0);
+      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+   }
+
+   private void clearMultiTemporalScatterBuffers() {
       this.clearUintBuffer(this.temporalScatterMultiGlobalCountersMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterMultiCellCountersMemoryManager, 0);
       this.clearUintBuffer(this.temporalScatterMultiReservoirIndicesMemoryManager, 0);
@@ -1387,7 +1425,7 @@ public class LightTreeRenderer extends MainRenderer {
    @Override
    public void free() {
       PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.removeObserver(this.localLightSamplingModeObserver);
-      PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.removeObserver(this.temporalScatterIsolationModeObserver);
+      PhotonicsStorage.RESTIR_TEMPORAL_REUSE.removeObserver(this.temporalScatterIsolationModeObserver);
       this.proposalFramebuffer.destroy();
       this.proposalReservoirFramebuffer.destroy();
       this.reuseResolveFramebuffer.destroy();
@@ -1563,7 +1601,9 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createRobustReuseOptimizationFramebuffer() {
-      RoutingFramebuffer framebuffer = this.createDirectPackedRoutingFramebuffer();
+      RoutingFramebuffer framebuffer = this.createDirectPackedRoutingFramebuffer(
+         () -> this.directInitialDebugBuffer.getWriteAttachment("data")
+      );
       framebuffer.setDrawBuffers(new int[] {-1});
       return framebuffer;
    }
@@ -2187,22 +2227,29 @@ public class LightTreeRenderer extends MainRenderer {
       // read-side shadow copies so the temporal/scatter stage below can sample
       // `scatter_reconnection0/1` without aliasing the live draw attachments.
       this.publishScatterReconnectionStageInputs();
-      this.clearTemporalScatterOwnershipBuffers();
-      String temporalScatterIsolationMode = PhotonicsStorage.normalizeTemporalScatterIsolationMode(
-         PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE.value
+      String temporalScatterIsolationMode = PhotonicsStorage.normalizeRestirTemporalReuse(
+         PhotonicsStorage.RESTIR_TEMPORAL_REUSE.value
       );
-      boolean temporalOffBranch = "temporal_off".equals(temporalScatterIsolationMode);
-      boolean ownershipOnlyTemporalBranch = "ownership_only".equals(temporalScatterIsolationMode);
       boolean scatterBackupTemporalBranch = "scatter_backup".equals(temporalScatterIsolationMode);
       boolean multiScatterTemporalBranch = "multi_scatter".equals(temporalScatterIsolationMode);
-      boolean scatterOnlyTemporalBranch = !"off".equals(temporalScatterIsolationMode)
-         && !temporalOffBranch
-         && !ownershipOnlyTemporalBranch
+      boolean robustTemporalGather = "robust".equals(
+         PhotonicsStorage.normalizeRestirTemporalGatherMode(PhotonicsStorage.RESTIR_TEMPORAL_GATHER_MODE.value)
+      );
+      boolean scatterOnlyTemporalBranch = !"gather_only".equals(temporalScatterIsolationMode)
          && !scatterBackupTemporalBranch
          && !multiScatterTemporalBranch;
-      boolean gatherTemporalBranch = "off".equals(temporalScatterIsolationMode)
-         || ownershipOnlyTemporalBranch
+      boolean gatherTemporalBranch = "gather_only".equals(temporalScatterIsolationMode)
          || scatterBackupTemporalBranch;
+      boolean gatherTemporalResolveBranch = "gather_only".equals(temporalScatterIsolationMode);
+      if (gatherTemporalBranch && robustTemporalGather) {
+         this.clearTemporalGatherBuffers();
+      }
+      if (scatterOnlyTemporalBranch || scatterBackupTemporalBranch) {
+         this.clearCurrentTemporalScatterBuffers();
+      }
+      if (multiScatterTemporalBranch) {
+         this.clearMultiTemporalScatterBuffers();
+      }
       if (gatherTemporalBranch) {
          this.ensureTemporalGatherRenderers();
       }
@@ -2215,7 +2262,7 @@ public class LightTreeRenderer extends MainRenderer {
       if (scatterBackupTemporalBranch) {
          this.ensureScatterBackupTemporalRenderer();
       }
-      if (gatherTemporalBranch && this.robustReuseOptimizationRenderer != null) {
+      if (gatherTemporalBranch && robustTemporalGather && this.robustReuseOptimizationRenderer != null) {
          this.robustReuseOptimizationRenderer.renderAll();
          GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
       }
@@ -2223,7 +2270,7 @@ public class LightTreeRenderer extends MainRenderer {
          this.temporalCollectRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
-      if (gatherTemporalBranch && this.temporalGatherRenderer != null) {
+      if (gatherTemporalResolveBranch && this.temporalGatherRenderer != null) {
          this.temporalGatherRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }

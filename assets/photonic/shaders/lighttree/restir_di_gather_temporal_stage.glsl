@@ -39,7 +39,7 @@ ReservoirSplattingReconnectionData GatherTemporalResampling_load_current_reconne
     return reconnectionData;
 }
 
-RTXDI_DIReservoir GatherTemporalResampling_load_previous_reservoir(ivec2 pixel)
+RTXDI_DIReservoir GatherTemporalResampling_load_intermediate_reservoir(ivec2 pixel)
 {
     RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
     rtxdi_unpack_reservoir_at_surface(
@@ -66,27 +66,30 @@ bool GatherTemporalResampling_load_current_sample(
         && ph_luminance(PathReservoir_getIntegrand(currReservoir)) > 0.0f;
 }
 
-bool GatherTemporalResampling_load_previous_sample(
+bool GatherTemporalResampling_load_intermediate_sample(
     ivec2 pixel,
-    out RTXDI_DIReservoir prevReservoir,
-    out ReservoirSplattingReconnectionData prevReconnectionData,
-    out float prevConfidence)
+    out RTXDI_DIReservoir intermediateReservoir,
+    out ReservoirSplattingReconnectionData intermediateReconnectionData,
+    out float intermediateConfidence)
 {
-    prevReservoir = GatherTemporalResampling_load_previous_reservoir(pixel);
-    prevReconnectionData = RestirDI_loadGatherIntermediateReconnection(pixel);
-    prevConfidence = lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
-    return RTXDI_IsValidDIReservoir(prevReservoir)
-        && ph_luminance(PathReservoir_getIntegrand(prevReservoir)) > 0.0f;
+    intermediateReservoir = GatherTemporalResampling_load_intermediate_reservoir(pixel);
+    intermediateReconnectionData = RestirDI_loadGatherIntermediateReconnection(pixel);
+    intermediateConfidence = lt_scatter_reservoir_confidence(
+        intermediateReservoir,
+        intermediateReconnectionData
+    );
+    return RTXDI_IsValidDIReservoir(intermediateReservoir)
+        && ph_luminance(PathReservoir_getIntegrand(intermediateReservoir)) > 0.0f;
 }
 
 float GatherTemporalResampling_current_to_previous_time(float time)
 {
-    return clamp(time + frameTime, 0.0f, 1.0f);
+    return time + frameTime;
 }
 
 float GatherTemporalResampling_confidence_weight(float confidence)
 {
-    return confidence;
+    return lt_restir_temporal_use_confidence_weights() ? confidence : 1.0f;
 }
 
 float GatherTemporalResampling_shifted_jacobian(
@@ -96,29 +99,11 @@ float GatherTemporalResampling_shifted_jacobian(
 {
     if (primaryHitReconnection)
     {
-        float baseJacobian = reconnectionData.lensVertexJacobian
-            * reconnectionData.secondaryPathJacobian;
-        if (baseJacobian <= 1e-10f)
-        {
-            return 0.0f;
-        }
-
-        float shiftedJacobian = (shiftedPathData.lensVertexJacobian * shiftedPathData.secondaryPathJacobian)
-            / baseJacobian;
-        return (isnan(shiftedJacobian) || isinf(shiftedJacobian) || shiftedJacobian < 0.0f)
-            ? 0.0f
-            : shiftedJacobian;
+        return (shiftedPathData.lensVertexJacobian * shiftedPathData.secondaryPathJacobian)
+            / (reconnectionData.lensVertexJacobian * reconnectionData.secondaryPathJacobian);
     }
 
-    if (reconnectionData.secondaryPathJacobian <= 1e-10f)
-    {
-        return 0.0f;
-    }
-
-    float shiftedJacobian = shiftedPathData.secondaryPathJacobian / reconnectionData.secondaryPathJacobian;
-    return (isnan(shiftedJacobian) || isinf(shiftedJacobian) || shiftedJacobian < 0.0f)
-        ? 0.0f
-        : shiftedJacobian;
+    return shiftedPathData.secondaryPathJacobian / reconnectionData.secondaryPathJacobian;
 }
 
 bool GatherTemporalResampling_add_current_sample(
@@ -142,9 +127,7 @@ bool GatherTemporalResampling_add_current_sample(
         currPHat = currIntegrand;
 
         vec2 floatingCoord = scatter_load_gather_floating_coords(pixel);
-        vec2 shiftedPixel = primaryHitReconnection
-            ? (vec2(pixel) + currReconnectionData.subPixel)
-            : (floatingCoord + currReconnectionData.subPixel);
+        vec2 shiftedPixel = floatingCoord + currReconnectionData.subPixel;
         ShiftedPathData shiftedCurr = primaryHitReconnection
             ? gatherPrimaryHitReconnectionShift(
                 sg,
@@ -243,20 +226,16 @@ bool GatherTemporalResampling_add_previous_sample(
         float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
             * shiftedJacobian
             * GatherTemporalResampling_confidence_weight(currConfidence);
-        prevPHat = isnan(m1) ? vec3(0.0f) : max(shiftedPrev.radiance, vec3(0.0f));
+        prevPHat = isnan(m1) ? vec3(0.0f) : shiftedPrev.radiance;
         shiftedJacobian = isnan(m1) ? 1.0f : shiftedJacobian;
+        m1 = isnan(m1) ? 0.0f : m1;
 
         float m2 = lt_scatter_radiance_phat(prevIntegrand)
             * GatherTemporalResampling_confidence_weight(prevConfidence)
             * shiftProbability;
-        prevSampleMIS = isnan(m1) ? 0.0f : (((m1 + m2) > 0.0f) ? (m2 / (m1 + m2)) : 0.0f);
+        prevSampleMIS = ((m1 + m2) > 0.0f) ? (m2 / (m1 + m2)) : 0.0f;
 
-        bool shiftedPrevValid = shiftedPrev.primaryHit.viewDepth > 0.0f
-            || any(greaterThan(max(shiftedPrev.radiance, vec3(0.0f)), vec3(0.0f)));
-        if (shiftedPrevValid)
-        {
-            prevReconnectionData = ReconnectionData_update(prevReconnectionData, shiftedPrev);
-        }
+        prevReconnectionData = ReconnectionData_update(prevReconnectionData, shiftedPrev);
     }
 
     bool prevSelected = lt_scatter_add_sample_from_reservoir(
@@ -297,14 +276,14 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
         currConfidence
     );
 
-    RTXDI_DIReservoir prevReservoir;
-    ReservoirSplattingReconnectionData prevReconnectionData;
-    float prevConfidence = 0.0f;
-    bool hasPreviousSample = GatherTemporalResampling_load_previous_sample(
+    RTXDI_DIReservoir intermediateReservoir;
+    ReservoirSplattingReconnectionData intermediateReconnectionData;
+    float intermediateConfidence = 0.0f;
+    bool hasIntermediateSample = GatherTemporalResampling_load_intermediate_sample(
         pixel,
-        prevReservoir,
-        prevReconnectionData,
-        prevConfidence
+        intermediateReservoir,
+        intermediateReconnectionData,
+        intermediateConfidence
     );
 
     RAB_Surface centerSurface = RAB_GetGBufferSurface(pixel, false);
@@ -327,24 +306,24 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
                 currReservoir,
                 currentReconnectionData,
                 currConfidence,
-                prevConfidence,
+                intermediateConfidence,
                 false,
                 depthOfFieldProbs.x,
                 sg
             );
         }
 
-        if (hasPreviousSample)
+        if (hasIntermediateSample)
         {
             GatherTemporalResampling_add_previous_sample(
                 pixel,
                 dstReservoir,
                 dstConfidence,
                 currReconnectionData,
-                prevReservoir,
-                prevReconnectionData,
+                intermediateReservoir,
+                intermediateReconnectionData,
                 currConfidence,
-                prevConfidence,
+                intermediateConfidence,
                 false,
                 depthOfFieldProbs.x,
                 sg
@@ -363,13 +342,21 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
         dstConfidence = 0.0f;
         currReconnectionData = ReservoirSplattingReconnectionData_init();
 
-        RTXDI_DIReservoir currentDomainReservoir = hasCurrentSample ? lensVertexCopyReservoir : currReservoir;
-        ReservoirSplattingReconnectionData currentDomainReconnectionData = hasCurrentSample
+        RTXDI_DIReservoir currentDomainReservoir = doLensVertexCopy
+            ? lensVertexCopyReservoir
+            : currReservoir;
+        ReservoirSplattingReconnectionData currentDomainReconnectionData = doLensVertexCopy
             ? lensVertexCopyReconnectionData
             : currentReconnectionData;
-        float currentDomainConfidence = hasCurrentSample ? lensVertexCopyConfidence : currConfidence;
+        float currentDomainConfidence = doLensVertexCopy
+            ? lensVertexCopyConfidence
+            : currConfidence;
+        bool hasCurrentDomainSample = doLensVertexCopy
+            ? (RTXDI_IsValidDIReservoir(currentDomainReservoir)
+                && ph_luminance(PathReservoir_getIntegrand(currentDomainReservoir)) > 0.0f)
+            : hasCurrentSample;
 
-        if (hasCurrentSample)
+        if (hasCurrentDomainSample)
         {
             GatherTemporalResampling_add_current_sample(
                 pixel,
@@ -379,24 +366,24 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
                 currentDomainReservoir,
                 currentDomainReconnectionData,
                 currentDomainConfidence,
-                prevConfidence,
+                intermediateConfidence,
                 true,
                 depthOfFieldProbs.y,
                 sg
             );
         }
 
-        if (doLensVertexCopy && hasPreviousSample)
+        if (hasIntermediateSample)
         {
             GatherTemporalResampling_add_previous_sample(
                 pixel,
                 dstReservoir,
                 dstConfidence,
                 currReconnectionData,
-                prevReservoir,
-                prevReconnectionData,
+                intermediateReservoir,
+                intermediateReconnectionData,
                 currentDomainConfidence,
-                prevConfidence,
+                intermediateConfidence,
                 true,
                 depthOfFieldProbs.y,
                 sg

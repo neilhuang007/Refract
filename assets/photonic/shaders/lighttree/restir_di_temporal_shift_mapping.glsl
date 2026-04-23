@@ -18,24 +18,10 @@ ShiftedPathData lt_temporal_empty_shifted_path()
     return shiftedPathData;
 }
 
-ReservoirSplattingHitInfo lt_temporal_make_shifted_primary_hit(SpatialShiftedPathData spatialShiftedPath)
-{
-    ReservoirSplattingHitInfo primaryHit = ReservoirSplattingHitInfo_empty();
-    ivec2 landingPixel = clamp(
-        ivec2(floor(spatialShiftedPath.fractionalPixel)),
-        ivec2(0),
-        ivec2(int(viewWidth) - 1, int(viewHeight) - 1)
-    );
-    primaryHit.worldPos = spatialShiftedPath.primaryHit;
-    primaryHit.viewDepth = length(spatialShiftedPath.primaryHit - world_camera_position);
-    primaryHit.faceId = uint(round(scatter_load_surface_identity(landingPixel, false).w));
-    return primaryHit;
-}
-
 ShiftedPathData lt_temporal_shifted_path_from_spatial(SpatialShiftedPathData spatialShiftedPath)
 {
     ShiftedPathData shiftedPathData = lt_temporal_empty_shifted_path();
-    shiftedPathData.primaryHit = lt_temporal_make_shifted_primary_hit(spatialShiftedPath);
+    shiftedPathData.primaryHit = spatialShiftedPath.primaryHit;
     shiftedPathData.fractionalPixel = spatialShiftedPath.fractionalPixel;
     shiftedPathData.lensSample = spatialShiftedPath.lensSample;
     shiftedPathData.firstRayDir = spatialShiftedPath.firstRayDir;
@@ -99,9 +85,9 @@ ReservoirSplattingReconnectionData ReconnectionData_update(
         vec2(1.0f)
     );
     updated.lensSample = shiftedPath.lensSample;
-    updated.subPixelJacobian = max(shiftedPath.subPixelJacobian, 1e-10f);
-    updated.lensVertexJacobian = max(shiftedPath.lensVertexJacobian, 1e-10f);
-    updated.secondaryPathJacobian = max(shiftedPath.secondaryPathJacobian, 1e-10f);
+    updated.subPixelJacobian = shiftedPath.subPixelJacobian;
+    updated.lensVertexJacobian = shiftedPath.lensVertexJacobian;
+    updated.secondaryPathJacobian = shiftedPath.secondaryPathJacobian;
     return updated;
 }
 

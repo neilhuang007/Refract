@@ -38,7 +38,7 @@ struct SpatialShiftedPathData {
     vec3  radiance;                 // f / p after reconnection (identical to reference ShiftedPathData.radiance)
     vec2  fractionalPixel;          // subpixel-weighted pixel where the shift lands (float pixel coords)
     vec2  lensSample;               // lens-domain sample carried by the shifted path (0.5 for pinhole)
-    vec3  primaryHit;               // world-space first hit position (HitInfo analog)
+    ReservoirSplattingHitInfo primaryHit; // reference-aligned first-hit payload carried across stages
     vec3  primaryHitNormal;         // world-space first hit geometric normal
     vec3  firstRayDir;              // normalized primary ray direction at the new film point
     vec2  subPixel;                 // fract-part of `fractionalPixel`; mirrors reference sp.subPixel
@@ -54,7 +54,7 @@ SpatialShiftedPathData spatial_empty_shifted_path()
     s.radiance              = vec3(0.0f);
     s.fractionalPixel       = vec2(0.0f);
     s.lensSample            = vec2(0.5f);
-    s.primaryHit            = vec3(0.0f);
+    s.primaryHit            = ReservoirSplattingHitInfo_empty();
     s.primaryHitNormal      = vec3(0.0f, 1.0f, 0.0f);
     s.firstRayDir           = vec3(0.0f, 0.0f, -1.0f);
     s.subPixel              = vec2(0.5f);
@@ -63,6 +63,16 @@ SpatialShiftedPathData spatial_empty_shifted_path()
     s.secondaryPathJacobian = 1.0f;
     s.isValid               = false;
     return s;
+}
+
+ReservoirSplattingHitInfo spatial_make_shifted_hit_info(ivec2 pixel, RAB_Surface surface)
+{
+    ReservoirSplattingHitInfo hitInfo = ReservoirSplattingHitInfo_empty();
+    vec4 identityData = scatter_load_surface_identity(pixel, false);
+    hitInfo.worldPos = surface.worldPos;
+    hitInfo.viewDepth = surface.viewDepth;
+    hitInfo.faceId = uint(round(identityData.w));
+    return hitInfo;
 }
 
 // Converts a fractional pixel coordinate to a normalized [0,1]^2 pixel-sample
@@ -230,7 +240,7 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
     }
     vec3 rayDir = toHit / dist;
 
-    shifted.primaryHit            = hitPosW;
+    shifted.primaryHit            = spatial_make_shifted_hit_info(landingPixel, landingSurface);
     shifted.primaryHitNormal      = hitNormalW;
     shifted.firstRayDir           = rayDir;
     shifted.fractionalPixel       = fractionalPixel;
@@ -336,7 +346,8 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
     shiftedSurface.viewDir    = -rayDir;
     shiftedSurface.viewDepth  = dist;
 
-    shifted.primaryHit            = sourceReconnection.firstHit.worldPos;
+    shifted.primaryHit            = sourceReconnection.firstHit;
+    shifted.primaryHit.viewDepth  = dist;
     shifted.primaryHitNormal      = primaryHitNormalW;
     shifted.firstRayDir           = rayDir;
     shifted.fractionalPixel       = fractionalPixel;

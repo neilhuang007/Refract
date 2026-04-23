@@ -143,13 +143,34 @@ public class ModSettingsScreen extends Screen {
          spatialMisMode.modified();
          w.setMessage(Text.of("Spatial MIS: " + formatRestirSpatialMisMode(spatialMisMode.value)));
       }, "Chooses the RTXDI spatial reuse bias correction mode:\nBasic MIS or Pairwise MIS. Pairwise MIS is the default and matches the current RTXDI reference intent for spatial reuse.", () -> true));
-      PhotonicsStorage.Parameter<String> temporalScatterIsolationMode = PhotonicsStorage.RESTIR_TEMPORAL_SCATTER_ISOLATION_MODE;
-      temporalScatterIsolationMode.value = PhotonicsStorage.normalizeTemporalScatterIsolationMode(temporalScatterIsolationMode.value);
-      buttons.add(new ModSettingsScreen.PButton("Temporal Scatter Isolation: " + formatTemporalScatterIsolationMode(temporalScatterIsolationMode.value), w -> {
-         temporalScatterIsolationMode.value = getNextTemporalScatterIsolationMode(temporalScatterIsolationMode.value);
-         temporalScatterIsolationMode.modified();
-         w.setMessage(Text.of("Temporal Scatter Isolation: " + formatTemporalScatterIsolationMode(temporalScatterIsolationMode.value)));
-      }, "Controls temporal scatter isolation while auditing temporal reuse:\nOff = full Area ReSTIR temporal pipeline, Temporal Off = bypass temporal input entirely and feed spatial reuse from initial samples.", () -> true));
+      PhotonicsStorage.Parameter<String> temporalReuse = PhotonicsStorage.RESTIR_TEMPORAL_REUSE;
+      temporalReuse.value = PhotonicsStorage.normalizeRestirTemporalReuse(temporalReuse.value);
+      buttons.add(new ModSettingsScreen.PButton("Temporal Reuse: " + formatRestirTemporalReuse(temporalReuse.value), w -> {
+         temporalReuse.value = getNextRestirTemporalReuse(temporalReuse.value);
+         temporalReuse.modified();
+         w.setMessage(Text.of("Temporal Reuse: " + formatRestirTemporalReuse(temporalReuse.value)));
+      }, "Chooses the reference temporal reuse option:\nGather Only, Scatter Only, Scatter + Backup, or Multi Scatter.", () -> true));
+      PhotonicsStorage.Parameter<String> temporalGatherMode = PhotonicsStorage.RESTIR_TEMPORAL_GATHER_MODE;
+      temporalGatherMode.value = PhotonicsStorage.normalizeRestirTemporalGatherMode(temporalGatherMode.value);
+      buttons.add(new ModSettingsScreen.PButton("Temporal Gather Mode: " + formatTemporalGatherMode(temporalGatherMode.value), w -> {
+         temporalGatherMode.value = getNextTemporalGatherMode(temporalGatherMode.value);
+         temporalGatherMode.modified();
+         w.setMessage(Text.of("Temporal Gather Mode: " + formatTemporalGatherMode(temporalGatherMode.value)));
+      }, "Chooses the reference temporal gather mechanism:\nFast, Clamped, or Robust.", () -> true));
+      PhotonicsStorage.Parameter<Float> timePartitions = PhotonicsStorage.RESTIR_TIME_PARTITIONS;
+      buttons.add(new ModSettingsScreen.PButton("Time Partitions: " + formatRestirTimePartitions(timePartitions.value), w -> {
+         timePartitions.value = getNextRestirTimePartitions(timePartitions.value);
+         timePartitions.modified();
+         w.setMessage(Text.of("Time Partitions: " + formatRestirTimePartitions(timePartitions.value)));
+         this.reloadShaders();
+      }, "Chooses the Multi Scatter time partition count used by reservoir splatting.", () -> true));
+      PhotonicsStorage.Parameter<String> scatterBackupMisOption = PhotonicsStorage.RESTIR_SCATTER_BACKUP_MIS_OPTION;
+      scatterBackupMisOption.value = PhotonicsStorage.normalizeRestirScatterBackupMisOption(scatterBackupMisOption.value);
+      buttons.add(new ModSettingsScreen.PButton("Scatter Backup MIS: " + formatRestirScatterBackupMisOption(scatterBackupMisOption.value), w -> {
+         scatterBackupMisOption.value = getNextRestirScatterBackupMisOption(scatterBackupMisOption.value);
+         scatterBackupMisOption.modified();
+         w.setMessage(Text.of("Scatter Backup MIS: " + formatRestirScatterBackupMisOption(scatterBackupMisOption.value)));
+      }, "Chooses the reference Scatter Backup MIS weighting scheme:\nBalance or Pairwise.", () -> true));
       PhotonicsStorage.Parameter<Float> debugViewMode = PhotonicsStorage.DEBUG_VIEW_MODE;
       buttons.add(new ModSettingsScreen.PButton("Debug View: " + formatDebugViewMode(debugViewMode.value), w -> {
          debugViewMode.value = getNextDebugViewMode(debugViewMode.value);
@@ -328,26 +349,67 @@ public class ModSettingsScreen extends Screen {
       };
    }
 
-   private static String getNextTemporalScatterIsolationMode(String isolationMode) {
-      return switch (PhotonicsStorage.normalizeTemporalScatterIsolationMode(isolationMode)) {
-         case "scatter_only" -> "off";
-         case "off" -> "ownership_only";
-         case "ownership_only" -> "scatter_backup";
+   private static String getNextRestirTemporalReuse(String temporalReuse) {
+      return switch (PhotonicsStorage.normalizeRestirTemporalReuse(temporalReuse)) {
+         case "gather_only" -> "scatter_only";
+         case "scatter_only" -> "scatter_backup";
          case "scatter_backup" -> "multi_scatter";
-         case "multi_scatter" -> "temporal_off";
-         default -> "scatter_only";
+         default -> "gather_only";
       };
    }
 
-   private static String formatTemporalScatterIsolationMode(String isolationMode) {
-      return switch (PhotonicsStorage.normalizeTemporalScatterIsolationMode(isolationMode)) {
+   private static String formatRestirTemporalReuse(String temporalReuse) {
+      return switch (PhotonicsStorage.normalizeRestirTemporalReuse(temporalReuse)) {
          case "scatter_only" -> "Scatter Only";
-         case "off" -> "Gather Only";
-         case "ownership_only" -> "Ownership Only";
          case "scatter_backup" -> "Scatter + Backup";
          case "multi_scatter" -> "Multi Scatter";
-         case "temporal_off" -> "Temporal Off";
-         default -> "Scatter Only";
+         default -> "Gather Only";
+      };
+   }
+
+   private static float getNextRestirTimePartitions(float timePartitions) {
+      int current = Math.max(1, Math.round(timePartitions));
+      return switch (current) {
+         case 1 -> 2.0f;
+         case 2 -> 3.0f;
+         case 3 -> 4.0f;
+         case 4 -> 6.0f;
+         case 6 -> 8.0f;
+         default -> 1.0f;
+      };
+   }
+
+   private static String formatRestirTimePartitions(float timePartitions) {
+      return Integer.toString(Math.max(1, Math.round(timePartitions)));
+   }
+
+   private static String getNextRestirScatterBackupMisOption(String misOption) {
+      return switch (PhotonicsStorage.normalizeRestirScatterBackupMisOption(misOption)) {
+         case "pairwise" -> "balance";
+         default -> "pairwise";
+      };
+   }
+
+   private static String formatRestirScatterBackupMisOption(String misOption) {
+      return switch (PhotonicsStorage.normalizeRestirScatterBackupMisOption(misOption)) {
+         case "pairwise" -> "Pairwise";
+         default -> "Balance";
+      };
+   }
+
+   private static String getNextTemporalGatherMode(String gatherMode) {
+      return switch (PhotonicsStorage.normalizeRestirTemporalGatherMode(gatherMode)) {
+         case "fast" -> "clamped";
+         case "clamped" -> "robust";
+         default -> "fast";
+      };
+   }
+
+   private static String formatTemporalGatherMode(String gatherMode) {
+      return switch (PhotonicsStorage.normalizeRestirTemporalGatherMode(gatherMode)) {
+         case "clamped" -> "Clamped";
+         case "robust" -> "Robust";
+         default -> "Fast";
       };
    }
 
