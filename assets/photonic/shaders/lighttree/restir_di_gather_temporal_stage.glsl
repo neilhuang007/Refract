@@ -4,6 +4,7 @@
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE)
 
 #include "/photonics/lighttree/reuse_bridge.glsl"
+#include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
 #include "/photonics/lighttree/restir_di_temporal_dof.glsl"
 #include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
@@ -143,7 +144,8 @@ RTXDI_DIReservoir GatherTemporalResampling_load_current_reservoir(
 }
 
 ReservoirSplattingReconnectionData GatherTemporalResampling_load_current_reconnection(
-    ivec2 pixel)
+    ivec2 pixel,
+    RTXDI_DIReservoir reservoir)
 {
     ReservoirSplattingReconnectionData reconnectionData;
     scatter_unpack_reconnection(
@@ -156,6 +158,7 @@ ReservoirSplattingReconnectionData GatherTemporalResampling_load_current_reconne
         0.0f,
         reconnectionData
     );
+    RestirDI_restoreReconnectionRadiometry(pixel, false, reservoir, reconnectionData);
     return reconnectionData;
 }
 
@@ -174,7 +177,8 @@ RTXDI_DIReservoir GatherTemporalResampling_load_previous_reservoir(ivec2 pixel)
 }
 
 ReservoirSplattingReconnectionData GatherTemporalResampling_load_previous_temporal_reconnection(
-    ivec2 pixel)
+    ivec2 pixel,
+    RTXDI_DIReservoir reservoir)
 {
     ReservoirSplattingReconnectionData reconnectionData;
     scatter_unpack_reconnection(
@@ -187,6 +191,7 @@ ReservoirSplattingReconnectionData GatherTemporalResampling_load_previous_tempor
         0.0f,
         reconnectionData
     );
+    RestirDI_restoreReconnectionRadiometry(pixel, true, reservoir, reconnectionData);
     return reconnectionData;
 }
 
@@ -197,7 +202,7 @@ bool GatherTemporalResampling_load_current_sample(
     out float currConfidence)
 {
     currReservoir = GatherTemporalResampling_load_current_reservoir(pixel);
-    currReconnectionData = GatherTemporalResampling_load_current_reconnection(pixel);
+    currReconnectionData = GatherTemporalResampling_load_current_reconnection(pixel, currReservoir);
     currConfidence = PathReservoir_getConfidence(currReservoir);
     return RTXDI_IsValidDIReservoir(currReservoir)
         && ph_luminance(PathReservoir_getIntegrand(currReservoir)) > 0.0f;
@@ -210,7 +215,7 @@ bool GatherTemporalResampling_load_previous_sample(
     out float prevConfidence)
 {
     prevReservoir = GatherTemporalResampling_load_previous_reservoir(pixel);
-    prevReconnectionData = GatherTemporalResampling_load_previous_temporal_reconnection(pixel);
+    prevReconnectionData = GatherTemporalResampling_load_previous_temporal_reconnection(pixel, prevReservoir);
     prevConfidence = PathReservoir_getConfidence(prevReservoir);
     return RTXDI_IsValidDIReservoir(prevReservoir)
         && ph_luminance(PathReservoir_getIntegrand(prevReservoir)) > 0.0f;
@@ -270,7 +275,8 @@ bool GatherTemporalResampling_add_current_sample(
                 GatherTemporalResampling_current_to_previous_time(currReconnectionData.time),
                 shiftedPixel,
                 currReconnectionData.firstHit,
-                currReservoir
+                currReservoir,
+                true
             )
             : gatherLensVertexCopyShift(
                 sg,
@@ -278,7 +284,8 @@ bool GatherTemporalResampling_add_current_sample(
                 GatherTemporalResampling_current_to_previous_time(currReconnectionData.time),
                 shiftedPixel,
                 currReconnectionData.lensSample,
-                currReservoir
+                currReservoir,
+                true
             );
         float shiftedJacobian = GatherTemporalResampling_shifted_jacobian(
             shiftedCurr,
@@ -342,7 +349,8 @@ bool GatherTemporalResampling_add_previous_sample(
                 prevReconnectionData.time,
                 shiftedPixel,
                 prevReconnectionData.firstHit,
-                prevReservoir
+                prevReservoir,
+                false
             )
             : gatherLensVertexCopyShift(
                 sg,
@@ -350,7 +358,8 @@ bool GatherTemporalResampling_add_previous_sample(
                 prevReconnectionData.time,
                 shiftedPixel,
                 prevReconnectionData.lensSample,
-                prevReservoir
+                prevReservoir,
+                false
             );
         shiftedJacobian = GatherTemporalResampling_shifted_jacobian(
             shiftedPrev,

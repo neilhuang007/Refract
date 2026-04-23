@@ -1349,13 +1349,21 @@ public class LightTreeRenderer extends MainRenderer {
       long t15 = System.nanoTime();
       this.renderSpecAtrousProfiled();
       long t16 = System.nanoTime();
-      this.renderIndirectAccumulationProfiled();
+      if (this.shouldRunReservoirSplattingIndirectPipeline()) {
+         this.renderIndirectAccumulationProfiled();
+      } else {
+         this.clearDisabledIndirectOutputs();
+      }
       long t17 = System.nanoTime();
-      this.renderProfiled(indirectDenoiseRegionIndex, this.indirectDenoisingRenderer);
+      if (this.shouldRunReservoirSplattingIndirectPipeline()) {
+         this.renderProfiled(indirectDenoiseRegionIndex, this.indirectDenoisingRenderer);
+      }
       long t18 = System.nanoTime();
       this.renderProfiled(lightingAccumulationRegionIndex, this.accumulationRenderer);
       long t19 = System.nanoTime();
-      this.renderProfiled(indirectCompositeRegionIndex, this.indirectRenderer);
+      if (this.shouldRunReservoirSplattingIndirectPipeline()) {
+         this.renderProfiled(indirectCompositeRegionIndex, this.indirectRenderer);
+      }
       long t20 = System.nanoTime();
       this.swapScatterTemporalHistory();
       this.recordCpuPassTimes(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20);
@@ -2437,6 +2445,9 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void renderIndirectAccumulationProfiled() {
+      if (!this.shouldRunReservoirSplattingIndirectPipeline()) {
+         return;
+      }
       if (this.indirectInitialRenderer == null && this.indirectBoilingRenderer == null && this.indirectAccumulationRenderer == null) {
          return;
       }
@@ -2454,6 +2465,17 @@ public class LightTreeRenderer extends MainRenderer {
          this.indirectAccumulationRenderer.renderAll();
       }
       this.endGpuRegion(restirGIRegionIndex);
+   }
+
+   private boolean shouldRunReservoirSplattingIndirectPipeline() {
+      return false;
+   }
+
+   private void clearDisabledIndirectOutputs() {
+      Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+      this.indirectInitialReservoirBuffer.clear(clearColor);
+      this.indirectReservoirBuffer.clear(clearColor);
+      this.indirectDenoisedBuffer.clear(clearColor);
    }
 
    private void renderDirectAtrousProfiled() {

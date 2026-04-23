@@ -8,6 +8,52 @@ vec4 scatter_load_surface_identity(ivec2 uv, bool previousFrame)
         : texelFetch(radiosity_identity, uv, 0);
 }
 
+vec3 scatter_decode_surface_face_normal(uint faceId)
+{
+    switch (int(faceId))
+    {
+        case 0: return vec3(1.0f, 0.0f, 0.0f);
+        case 1: return vec3(-1.0f, 0.0f, 0.0f);
+        case 2: return vec3(0.0f, 1.0f, 0.0f);
+        case 3: return vec3(0.0f, -1.0f, 0.0f);
+        case 4: return vec3(0.0f, 0.0f, 1.0f);
+        case 5: return vec3(0.0f, 0.0f, -1.0f);
+    }
+
+    return vec3(0.0f);
+}
+
+ivec3 scatter_surface_identity_cell(vec3 worldPos, uint faceId)
+{
+    vec3 faceNormal = scatter_decode_surface_face_normal(faceId);
+    return ivec3(floor(worldPos - faceNormal * 1e-4f));
+}
+
+uvec2 scatter_surface_identity_face_uv(vec3 localPos, uint faceId)
+{
+    vec2 faceUv = vec2(0.0f);
+    switch (int(faceId))
+    {
+        case 0:
+        case 1:
+            faceUv = localPos.yz;
+            break;
+        case 2:
+        case 3:
+            faceUv = localPos.xz;
+            break;
+        case 4:
+        case 5:
+            faceUv = localPos.xy;
+            break;
+        default:
+            break;
+    }
+
+    vec2 clampedFaceUv = clamp(faceUv, vec2(0.0f), vec2(1.0f));
+    return uvec2(clampedFaceUv * 1023.0f + 0.5f);
+}
+
 #if !defined(PH_LIGHTTREE_RECONNECTION_PACK_ONLY)
 
 vec2 scatter_load_gather_floating_coords(ivec2 uv)
@@ -23,16 +69,31 @@ bool scatter_reconnection_matches_surface(
 {
     vec4 currentIdentity = scatter_load_surface_identity(pixelPosition, previousFrame);
     uint currentFaceId = uint(round(currentIdentity.w));
+    if (reconnection.firstHit.faceId != currentFaceId) {
+        return false;
+    }
 
-    float maxDepth = max(reconnection.firstHit.viewDepth, currentSurface.viewDepth);
-    float depthTolerance = max(1e-4f, 1e-3f * maxDepth);
-    float worldTolerance = max(1e-4f, 1e-3f * maxDepth);
-    float worldDistance = distance(reconnection.firstHit.worldPos, currentSurface.worldPos);
-    bool depthCompatible = abs(reconnection.firstHit.viewDepth - currentSurface.viewDepth) <= depthTolerance;
-    bool faceCompatible = reconnection.firstHit.faceId == currentFaceId;
-    bool positionCompatible = worldDistance <= worldTolerance;
+    ivec3 storedCell = scatter_surface_identity_cell(
+        reconnection.firstHit.worldPos,
+        reconnection.firstHit.faceId
+    );
+    ivec3 currentCell = scatter_surface_identity_cell(
+        currentSurface.worldPos,
+        currentFaceId
+    );
+    if (any(notEqual(storedCell, currentCell))) {
+        return false;
+    }
 
-    return depthCompatible && faceCompatible && positionCompatible;
+    uvec2 storedFaceUv = scatter_surface_identity_face_uv(
+        fract(reconnection.firstHit.worldPos),
+        reconnection.firstHit.faceId
+    );
+    uvec2 currentFaceUv = scatter_surface_identity_face_uv(
+        currentIdentity.xyz,
+        currentFaceId
+    );
+    return all(equal(storedFaceUv, currentFaceUv));
 }
 
 bool scatter_reconnection_matches_surface(

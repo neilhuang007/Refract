@@ -32,8 +32,33 @@ bool RestirDI_restoreReconnectionRadiometry(
     RTXDI_DIReservoir reservoir,
     inout ReservoirSplattingReconnectionData reconnection)
 {
-    return lt_is_viewport_uv_in_bounds(pixelPosition)
-        && RTXDI_IsValidDIReservoir(reservoir);
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition) || !RTXDI_IsValidDIReservoir(reservoir))
+    {
+        return false;
+    }
+
+    RAB_Surface surface = previousFrame
+        ? lt_load_previous_surface(pixelPosition)
+        : RAB_GetGBufferSurface(pixelPosition, false);
+    if (!RAB_IsSurfaceValid(surface))
+    {
+        return false;
+    }
+
+    uint restoredFaceId = uint(round(scatter_load_surface_identity(pixelPosition, previousFrame).w));
+    reconnection.firstHit.faceId = restoredFaceId;
+    reconnection.secondHit.faceId = restoredFaceId;
+
+    if (!(reconnection.firstHit.viewDepth > 0.0f))
+    {
+        reconnection.firstHit.viewDepth = surface.viewDepth;
+    }
+    if (!(reconnection.secondHit.viewDepth > 0.0f))
+    {
+        reconnection.secondHit.viewDepth = max(reconnection.firstHit.viewDepth, surface.viewDepth);
+    }
+
+    return true;
 }
 
 ScatterReconnectionData RestirDI_loadPreviousFrameReconnection(ivec2 pixelPosition)

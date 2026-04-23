@@ -4,13 +4,37 @@
 uniform float ph_reservoir_splatting_camera_aperture_radius;
 uniform float ph_reservoir_splatting_artificial_frame_time;
 
-vec3 lt_di_temporal_camera_relative_world_from_ndc(vec2 ndc)
+vec3 lt_di_temporal_camera_relative_world_from_ndc(
+    vec2 ndc,
+    mat4 projectionInverse,
+    mat4 modelViewInverse,
+    vec3 cameraPosition)
 {
-    vec4 viewPoint = gbufferProjectionInverse * vec4(ndc, -1.0f, 1.0f);
+    vec4 viewPoint = projectionInverse * vec4(ndc, -1.0f, 1.0f);
     float viewW = (abs(viewPoint.w) > 1e-6f) ? viewPoint.w : 1.0f;
     vec3 viewPosition = viewPoint.xyz / viewW;
-    vec3 worldPosition = (gbufferModelViewInverse * vec4(viewPosition, 1.0f)).xyz;
-    return worldPosition - world_camera_position;
+    vec3 worldPosition = (modelViewInverse * vec4(viewPosition, 1.0f)).xyz;
+    return worldPosition - cameraPosition;
+}
+
+vec3 lt_di_temporal_current_camera_relative_world_from_ndc(vec2 ndc)
+{
+    return lt_di_temporal_camera_relative_world_from_ndc(
+        ndc,
+        gbufferProjectionInverse,
+        gbufferModelViewInverse,
+        world_camera_position
+    );
+}
+
+vec3 lt_di_temporal_previous_camera_relative_world_from_ndc(vec2 ndc)
+{
+    return lt_di_temporal_camera_relative_world_from_ndc(
+        ndc,
+        inverse(gbufferPreviousProjection),
+        inverse(gbufferPreviousModelView),
+        previous_world_camera_position
+    );
 }
 
 float lt_di_temporal_camera_aperture_radius()
@@ -25,19 +49,36 @@ float lt_di_temporal_artificial_frame_time()
 
 vec3 lt_di_temporal_camera_u()
 {
-    return lt_di_temporal_camera_relative_world_from_ndc(vec2(1.0f, 0.0f))
-        - lt_di_temporal_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+    return lt_di_temporal_current_camera_relative_world_from_ndc(vec2(1.0f, 0.0f))
+        - lt_di_temporal_current_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
 }
 
 vec3 lt_di_temporal_camera_v()
 {
-    return lt_di_temporal_camera_relative_world_from_ndc(vec2(0.0f, 1.0f))
-        - lt_di_temporal_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+    return lt_di_temporal_current_camera_relative_world_from_ndc(vec2(0.0f, 1.0f))
+        - lt_di_temporal_current_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
 }
 
 vec3 lt_di_temporal_camera_w()
 {
-    return lt_di_temporal_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+    return lt_di_temporal_current_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+}
+
+vec3 lt_di_temporal_previous_camera_u()
+{
+    return lt_di_temporal_previous_camera_relative_world_from_ndc(vec2(1.0f, 0.0f))
+        - lt_di_temporal_previous_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+}
+
+vec3 lt_di_temporal_previous_camera_v()
+{
+    return lt_di_temporal_previous_camera_relative_world_from_ndc(vec2(0.0f, 1.0f))
+        - lt_di_temporal_previous_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
+}
+
+vec3 lt_di_temporal_previous_camera_w()
+{
+    return lt_di_temporal_previous_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
 }
 
 float computePrimaryHitCircleOfConfusion(vec3 x1)

@@ -67,7 +67,8 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
             currSample.reconnectionData.time + lt_di_temporal_artificial_frame_time(),
             floatingCoord + PathReservoir_getSubPixel(currSample.reservoir, pixel),
             currSample.reconnectionData.lensSample,
-            currSample.reservoir
+            currSample.reservoir,
+            true
         );
             float shiftedJacobian = shiftedCurr.secondaryPathJacobian
                 / max(currSample.reconnectionData.secondaryPathJacobian, 1e-10f);
@@ -133,7 +134,8 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
             backupReconnectionData.time,
             vec2(pixel) + PathReservoir_getSubPixel(backupReservoir, pixel),
             backupReconnectionData.lensSample,
-            backupReservoir
+            backupReservoir,
+            false
         );
         shiftedJacobian = shiftedBackup.secondaryPathJacobian
             / max(backupReconnectionData.secondaryPathJacobian, 1e-10f);
@@ -281,7 +283,8 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
                     prevReconnectionData.time + lt_di_temporal_artificial_frame_time(),
                     floatingCoord + relativeSubPixel,
                     shiftedReconnection.lensSample,
-                    shiftedReservoir
+                    shiftedReservoir,
+                    true
                 );
                 float shiftedJacobian = shiftedPrevBackup.secondaryPathJacobian
                     / max(shiftedReconnection.secondaryPathJacobian, 1e-10f);

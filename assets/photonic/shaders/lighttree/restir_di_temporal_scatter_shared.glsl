@@ -162,7 +162,25 @@ ShiftedPathData gatherLensVertexCopyShift(
     float time,
     vec2 fractionalPixel,
     vec2 lensSample,
+    RTXDI_DIReservoir sourceReservoir,
+    bool targetPreviousFrame);
+
+ShiftedPathData gatherLensVertexCopyShift(
+    inout RTXDI_RandomSamplerState rng,
+    inout ReservoirSplattingReconnectionData reconnectionData,
+    float time,
+    vec2 fractionalPixel,
+    vec2 lensSample,
     RTXDI_DIReservoir sourceReservoir);
+
+ShiftedPathData gatherPrimaryHitReconnectionShift(
+    inout RTXDI_RandomSamplerState rng,
+    inout ReservoirSplattingReconnectionData reconnectionData,
+    float time,
+    vec2 fractionalPixel,
+    ReservoirSplattingHitInfo primaryHit,
+    RTXDI_DIReservoir sourceReservoir,
+    bool targetPreviousFrame);
 
 ShiftedPathData gatherPrimaryHitReconnectionShift(
     inout RTXDI_RandomSamplerState rng,

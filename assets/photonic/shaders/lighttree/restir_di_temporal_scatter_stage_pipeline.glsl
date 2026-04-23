@@ -42,6 +42,7 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
     );
 
     RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
+    float dstConfidence = 0.0f;
     ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
     ReservoirSplattingReconnectionData currReconnectionDataLocal = currSample.reconnectionData;
     vec3 currIntegrand = currSample.isValid ? PathReservoir_getIntegrand(currReservoir) : vec3(0.0f);
