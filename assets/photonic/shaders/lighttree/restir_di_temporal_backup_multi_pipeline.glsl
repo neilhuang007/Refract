@@ -216,16 +216,17 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
     ReservoirSplattingReconnectionData backupReconnectionData,
     inout RTXDI_RandomSamplerState sg)
 {
+    ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
     RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
         lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(scatteredPixel)
+        uvec2(previousReservoirPixel)
     );
     if (!RTXDI_IsValidDIReservoir(prevReservoir))
     {
         return false;
     }
 
-    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(scatteredPixel);
+    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
     RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(targetSurface))
@@ -335,16 +336,17 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
     LtScatterCurrentSample currSample,
     inout RTXDI_RandomSamplerState sg)
 {
+    ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
     RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
         lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(scatteredPixel)
+        uvec2(previousReservoirPixel)
     );
     if (!RTXDI_IsValidDIReservoir(prevReservoir))
     {
         return false;
     }
 
-    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(scatteredPixel);
+    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     ScatterReconnectionData partitionedReconnectionData = prevReconnectionData;
     float fractionalTime = lt_multi_temporal_partition_fraction(prevReconnectionData.time);
     float newTime = lt_multi_temporal_partition_time(fractionalTime, partitionIndex);
@@ -447,9 +449,10 @@ float lt_MultiScatterTemporalResampling_current_sample_mis(
     }
 
     ivec2 scatteredPixel = ivec2(floor(shiftedCurr.fractionalPixel));
+    ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
     RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
         lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(scatteredPixel)
+        uvec2(previousReservoirPixel)
     );
     float prevReservoirConfidence = RTXDI_IsValidDIReservoir(prevReservoir)
         ? ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel)
@@ -511,7 +514,7 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
         6u
     );
 
-    uint reservoirIdx = uint(pixel.y * viewWidth + pixel.x);
+    uint reservoirIdx = lt_temporal_scatter_cell_index_from_pixel(pixel);
     RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
     float dstConfidence = 0.0f;
     ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
@@ -556,10 +559,11 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
     for (uint i = 0u; i < numReservoirs; ++i)
     {
         ivec2 scatteredPixel = ivec2(lt_scatter_temporal_resampling_load_sorted_reservoir(cellOffset + i));
+        float contributorConfidence = dstConfidence;
         lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
             pixel,
             dstReservoir,
-            dstConfidence,
+            contributorConfidence,
             dstReconnectionData,
             scatteredPixel,
             currSample,
@@ -594,7 +598,7 @@ RTXDI_DIReservoir MultiScatterTemporalResampling_run(
     }
 
     RTXDI_RandomSamplerState sg = lt_init_random_sampler(uvec2(pixel), uint(frameCounter), 5u);
-    uint reservoirIdx = uint(pixel.y * viewWidth + pixel.x);
+    uint reservoirIdx = lt_temporal_scatter_cell_index_from_pixel(pixel);
     RTXDI_DIReservoir currReservoir = lt_ScatterTemporalResampling_load_current_reservoir(pixel);
     LtScatterCurrentSample currSample = lt_ScatterTemporalResampling_load_current_sample(
         reservoirIdx,
@@ -635,10 +639,11 @@ RTXDI_DIReservoir MultiScatterTemporalResampling_run(
             ivec2 scatteredPixel = ivec2(
                 lt_multi_scatter_temporal_resampling_load_sorted_reservoir(partitionIndex, cellOffset + i)
             );
+            float contributorConfidence = dstConfidence;
             lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
                 pixel,
                 dstReservoir,
-                dstConfidence,
+                contributorConfidence,
                 dstReconnectionData,
                 scatteredPixel,
                 partitionIndex,

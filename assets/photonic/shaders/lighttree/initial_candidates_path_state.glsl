@@ -32,11 +32,11 @@ uint InitialCandidates_makePathID(ivec2 pixel, uint sampleIdx)
     return uint(pixel.x) | (uint(pixel.y) << 12u) | (sampleIdx << 24u);
 }
 
-void InitialCandidates_generatePath(out PathState path, ivec2 pixel, uint sampleIdx)
+void InitialCandidates_generatePath(out PathState path, ivec2 pixel, uint sampleIdx, RAB_Surface surface)
 {
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
     path.id = InitialCandidates_makePathID(pixel, sampleIdx);
-    path.surface = RAB_GetGBufferSurface(pixel, false);
+    path.surface = surface;
     path.sg = RTXDI_InitRandomSampler(
         uvec2(pixel),
         runtimeParameters.frameIndex,

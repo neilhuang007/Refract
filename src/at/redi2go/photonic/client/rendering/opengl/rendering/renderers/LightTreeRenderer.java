@@ -78,6 +78,7 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String diSpatialResamplingFragment = "lighttree/LightingPasses/DI/SpatialResampling.fsh";
    private static final String diShadeSamplesLightingFragment = "lighttree/LightingPasses/DI/ShadeSamplesLighting.fsh";
    private static final String diShadeSamplesReservoirFragment = "lighttree/LightingPasses/DI/ShadeSamplesReservoir.fsh";
+   private static final String diPromoteReconnectionFragment = "lighttree/LightingPasses/DI/PromoteReconnection.fsh";
    private static final String diScatterTemporalResamplingFragment = "lighttree/LightingPasses/DI/ScatterTemporalResolve.fsh";
    private static final int[] proposalReservoirDrawBuffers = new int[]{-1, -1, -1, -1, -1, 0, 1, 2};
    private static final int[] shadeSamplesLightingDrawBuffers = new int[]{0, 1, -1, -1, -1};
@@ -196,6 +197,7 @@ public class LightTreeRenderer extends MainRenderer {
   private final RoutingFramebuffer shadeSamplesMonolithicFramebuffer;
   private final RoutingFramebuffer shadeSamplesFramebuffer;
   private final RoutingFramebuffer shadeSamplesReservoirFramebuffer;
+  private final RoutingFramebuffer shadeSamplesReconnectionFramebuffer;
   private final RoutingFramebuffer temporalCollectFramebuffer;
   private final RoutingFramebuffer robustReuseOptimizationFramebuffer;
   private final RoutingFramebuffer temporalScatterStageFramebuffer;
@@ -246,6 +248,8 @@ public class LightTreeRenderer extends MainRenderer {
   private CompositeRenderer shadeSamplesReservoirRenderer;
   @Nullable
   private CompositeRenderer shadeSamplesRenderer;
+  @Nullable
+  private CompositeRenderer shadeSamplesReconnectionRenderer;
   @Nullable
   private CompositeRenderer temporalCollectRenderer;
   @Nullable
@@ -380,6 +384,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.shadeSamplesMonolithicFramebuffer = this.createShadeSamplesMonolithicFramebuffer();
       this.shadeSamplesFramebuffer = this.createShadeSamplesLightingFramebuffer();
       this.shadeSamplesReservoirFramebuffer = this.createShadeSamplesReservoirFramebuffer();
+      this.shadeSamplesReconnectionFramebuffer = this.createShadeSamplesReconnectionFramebuffer();
       this.temporalScatterStageFramebuffer = this.createTemporalScatterStageFramebuffer();
       this.temporalReservoirFramebuffer = this.createTemporalReservoirRoutingFramebuffer();
       this.gpuTimerQuery = this.createGpuTimerQuery();
@@ -509,6 +514,9 @@ public class LightTreeRenderer extends MainRenderer {
       );
       this.shadeSamplesRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diShadeSamplesLightingFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesFramebuffer))
+      );
+      this.shadeSamplesReconnectionRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diPromoteReconnectionFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesReconnectionFramebuffer))
       );
       this.compileRegirComputeShader();
    }
@@ -1476,6 +1484,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.recalculateRenderer(this.shadeSamplesMonolithicRenderer);
       this.recalculateRenderer(this.shadeSamplesReservoirRenderer);
       this.recalculateRenderer(this.shadeSamplesRenderer);
+      this.recalculateRenderer(this.shadeSamplesReconnectionRenderer);
    }
 
    @Override
@@ -1504,6 +1513,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.shadeSamplesMonolithicFramebuffer.destroy();
       this.shadeSamplesFramebuffer.destroy();
       this.shadeSamplesReservoirFramebuffer.destroy();
+      this.shadeSamplesReconnectionFramebuffer.destroy();
       this.destroyScatterTemporalResources();
       this.lightingBuffer.destroy();
       this.lightingStageBuffer.destroy();
@@ -1569,6 +1579,7 @@ public class LightTreeRenderer extends MainRenderer {
       this.destroyRenderer(this.shadeSamplesMonolithicRenderer);
       this.destroyRenderer(this.shadeSamplesReservoirRenderer);
       this.destroyRenderer(this.shadeSamplesRenderer);
+      this.destroyRenderer(this.shadeSamplesReconnectionRenderer);
       this.destroyGpuTimerQuery();
       if (this.regirComputeProgram != null) {
          this.regirComputeProgram.destroy();
@@ -1886,6 +1897,16 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta")
+      );
+   }
+
+   private RoutingFramebuffer createShadeSamplesReconnectionFramebuffer() {
+      return this.createDirectPackedRoutingFramebuffer(
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
@@ -2506,8 +2527,10 @@ public class LightTreeRenderer extends MainRenderer {
          this.beginGpuRegion(diShadeSamplesRegionIndex);
          if (this.isDirectShadeSamplesEnabled()) {
             this.shadeSamplesMonolithicRenderer.renderAll();
+            this.promoteShadingReconnectionHistory();
          } else {
             this.clearShadeSamplesMonolithicOutputs();
+            this.clearFrameFinalReconnectionOutputs();
          }
          this.endGpuRegion(diShadeSamplesRegionIndex);
          return;
@@ -2518,12 +2541,29 @@ public class LightTreeRenderer extends MainRenderer {
       }
       this.beginGpuRegion(diShadeSamplesRegionIndex);
       this.shadeSamplesReservoirRenderer.renderAll();
+      this.promoteShadingReconnectionHistory();
       if (this.isDirectShadeSamplesEnabled()) {
          this.shadeSamplesRenderer.renderAll();
       } else {
          this.clearShadeSamplesLightingOutputs();
       }
       this.endGpuRegion(diShadeSamplesRegionIndex);
+   }
+
+   private void promoteShadingReconnectionHistory() {
+      if (this.isDirectSpatialReuseEnabled()) {
+         return;
+      }
+      if (this.shadeSamplesReconnectionRenderer == null) {
+         return;
+      }
+
+      this.shadeSamplesReconnectionRenderer.renderAll();
+      GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+   }
+
+   private void clearFrameFinalReconnectionOutputs() {
+      this.scatterReconnectionBuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
    }
 
    private void setCurrentDiReconnectionSource(DiReconnectionSource source) {

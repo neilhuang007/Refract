@@ -84,7 +84,7 @@ bool lt_spatial_reservoir_add_sample_from_reservoir(
 
     dstReservoir.lightData = sampleReservoir.lightData;
     dstReservoir.uvData = sampleReservoir.uvData;
-    dstReservoir.targetPdf = sampleReservoir.targetPdf;
+    dstReservoir.targetPdf = ph_luminance(max(samplePHat, vec3(0.0f)));
     dstReservoir.packedVisibility = sampleReservoir.packedVisibility;
     dstReservoir.spatialDistance = sampleReservoir.spatialDistance;
     dstReservoir.age = sampleReservoir.age;
@@ -276,20 +276,21 @@ void SpatialResampling_execute(
                 * (spatialResampling.useConfidenceWeights ? lt_spatial_reservoir_confidence(neighborReservoir) : 1.0f);
             neighborSampleMIS = (m2 + neighborWeight > 0.0f) ? m2 / (neighborWeight + m2) : 0.0f;
 
-            bool neighborSelected = lt_spatial_reservoir_add_sample_from_reservoir(
-                dstReservoir,
-                dstReconnectionData,
-                sg,
-                neighborSampleMIS,
-                neighborPHat,
-                shiftedJacobian,
-                neighborReservoir,
-                neighborReconnection,
-                neighborReconnection.subPixel,
-                true
-            );
-            dstReconnectionData = neighborSelected ? neighborReconnection : dstReconnectionData;
         }
+
+        bool neighborSelected = lt_spatial_reservoir_add_sample_from_reservoir(
+            dstReservoir,
+            dstReconnectionData,
+            sg,
+            neighborSampleMIS,
+            neighborPHat,
+            shiftedJacobian,
+            neighborReservoir,
+            neighborReconnection,
+            neighborReconnection.subPixel,
+            true
+        );
+        dstReconnectionData = neighborSelected ? neighborReconnection : dstReconnectionData;
     }
 
     bool centralSelected = lt_spatial_reservoir_add_sample_from_reservoir(

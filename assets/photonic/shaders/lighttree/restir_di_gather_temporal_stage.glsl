@@ -92,7 +92,7 @@ bool lt_scatter_add_sample_from_reservoir(
     {
         dstReservoir.lightData = sampleReservoir.lightData;
         dstReservoir.uvData = sampleReservoir.uvData;
-        dstReservoir.targetPdf = sampleReservoir.targetPdf;
+        dstReservoir.targetPdf = samplePHat;
         dstReservoir.packedVisibility = sampleReservoir.packedVisibility;
         dstReservoir.age = sampleReservoir.age;
         dstReservoir.spatialDistance = sampleReservoir.spatialDistance;

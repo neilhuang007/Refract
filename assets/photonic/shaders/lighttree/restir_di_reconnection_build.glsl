@@ -52,12 +52,31 @@ vec3 pathReconnectionShift(
         return vec3(0.0f);
     }
 
-    if (reconnectionData.pathLength == 1u) {
-        return max(reconnectionData.irradiance, vec3(0.0f));
+    if (reconnectionData.pathLength != 2u) {
+        return vec3(0.0f);
     }
 
-    vec3 shiftedEarlyThroughput = lt_surface_early_throughput(shiftedSurface, shiftedLight);
-    return max(shiftedEarlyThroughput * reconnectionData.irradiance, vec3(0.0f));
+    vec3 visibility = vec3(1.0f);
+    if (ph_restir_local_light_sampling_mode != float(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM))
+    {
+        float visibilityHitDistance = 0.0f;
+        visibility = lt_trace_final_visibility_with_offset(
+            shiftedLight,
+            shiftedSurface,
+            0.0f,
+            visibilityHitDistance
+        );
+    }
+
+    vec3 shiftedIrradiance = max(
+        lt_light_sample_incident_radiance(shiftedSurface, shiftedLight) * visibility,
+        vec3(0.0f)
+    );
+    vec3 shiftedEarlyThroughput =
+        (ph_restir_local_light_sampling_mode == float(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM))
+            ? vec3(1.0f)
+            : lt_surface_early_throughput(shiftedSurface, shiftedLight);
+    return max(shiftedEarlyThroughput * shiftedIrradiance, vec3(0.0f));
 }
 
 float scatter_resolve_secondary_path_jacobian_from_reconnection(
@@ -159,13 +178,16 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
 
     d.firstHit.worldPos = surface.worldPos;
     d.firstHit.viewDepth = surface.viewDepth;
-    d.firstHit.faceId = uint(round(identityData.w));
+    uint packedIdentity = uint(round(identityData.w));
+    d.firstHit.faceId = packedIdentity & 0x7u;
+    d.firstHit.materialId = packedIdentity >> 3u;
     d.firstBSDFComponentType = scatter_resolve_first_bsdf_component_type(surface);
     d.firstWi = normalize(world_camera_position - surface.worldPos);
 
     d.secondHit.worldPos = secondPos;
-    d.secondHit.viewDepth = surface.viewDepth;
-    d.secondHit.faceId = uint(round(identityData.w));
+    d.secondHit.viewDepth = (lightSample.index >= 0) ? 0.0f : surface.viewDepth;
+    d.secondHit.faceId = 0u;
+    d.secondHit.materialId = uint(max(lightSample.index, 0));
     d.secondBSDFComponentType = scatter_resolve_second_bsdf_component_type(lightSample);
     d.secondWo = (lightSample.index >= 0 && distance(secondPos, surface.worldPos) > 1e-6f)
         ? normalize(secondPos - surface.worldPos)

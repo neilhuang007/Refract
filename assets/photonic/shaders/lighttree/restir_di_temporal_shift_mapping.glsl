@@ -43,9 +43,11 @@ ReservoirSplattingHitInfo lt_temporal_make_shifted_hit_info(
 {
     ReservoirSplattingHitInfo hitInfo = ReservoirSplattingHitInfo_empty();
     vec4 identityData = lt_temporal_load_surface_identity(pixel, previousFrame);
+    uint packedIdentity = uint(round(identityData.w));
     hitInfo.worldPos = surface.worldPos;
     hitInfo.viewDepth = surface.viewDepth;
-    hitInfo.faceId = uint(round(identityData.w));
+    hitInfo.faceId = packedIdentity & 0x7u;
+    hitInfo.materialId = packedIdentity >> 3u;
     return hitInfo;
 }
 
@@ -169,6 +171,7 @@ bool lt_temporal_trace_reconnection_visibility(
 }
 
 vec3 lt_temporal_path_reconnection_shift(
+    ReservoirSplattingReconnectionData reconnectionData,
     RTXDI_DIReservoir sourceReservoir,
     RAB_Surface shiftedSurface,
     bool targetPreviousFrame,
@@ -196,7 +199,7 @@ vec3 lt_temporal_path_reconnection_shift(
         sourceReservoir,
         shiftedLight
     );
-    return max(lt_shade_surface_light_sample(shiftedSurface, shiftedLight), vec3(0.0f));
+    return pathReconnectionShift(reconnectionData, shiftedSurface, shiftedLight);
 }
 
 ShiftedPathData gatherLensVertexCopyShift(
@@ -268,6 +271,7 @@ ShiftedPathData gatherLensVertexCopyShift(
         targetPreviousFrame
     );
     shiftedPath.radiance = lt_temporal_path_reconnection_shift(
+        reconnectionData,
         sourceReservoir,
         shiftedSurface,
         targetPreviousFrame,
@@ -416,6 +420,7 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
         targetPreviousFrame
     );
     shiftedPath.radiance = lt_temporal_path_reconnection_shift(
+        reconnectionData,
         sourceReservoir,
         shiftedSurface,
         targetPreviousFrame,

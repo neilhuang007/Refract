@@ -304,8 +304,9 @@ void main() {
     vec3 color = ResolveReSTIR(currReservoir);
 
     if (restirDI.shadingParams.enableDenoiserInputPacking != 0u) {
-        direct_diffuse_frag_out = nrd_pack_direct_signal(color, shadingHitDistance);
-        direct_specular_frag_out = nrd_pack_direct_signal(vec3(0.0f), shadingHitDistance);
+        ResolveReSTIRLobes lobes = ResolveReSTIR_splitForNRD(surface, currReservoir);
+        direct_diffuse_frag_out = nrd_pack_direct_signal(lobes.diffuseDemodulated, shadingHitDistance);
+        direct_specular_frag_out = nrd_pack_direct_signal(lobes.specularDemodulated, shadingHitDistance);
     } else {
         direct_diffuse_frag_out = vec4(color, shadingHitDistance);
         direct_specular_frag_out = vec4(0.0f, 0.0f, 0.0f, shadingHitDistance);

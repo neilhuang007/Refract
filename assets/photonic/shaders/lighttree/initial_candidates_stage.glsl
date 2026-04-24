@@ -37,6 +37,7 @@ void InitialCandidates_tracePath(
         path.coherentRng,
         path.surface,
         params.initialSamplingParams,
+        path.time,
         path.selectedLightSample,
         path.selectedIrradiance,
         path.selectedEarlyThroughput
@@ -64,15 +65,30 @@ void InitialCandidates_run(ivec2 pixel)
     }
 
     const RTXDI_Parameters params = lt_build_restir_di_parameters();
+    RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
+    if (!RAB_IsSurfaceValid(surface))
+    {
+        InitialCandidates_storeEmptyReservoir();
+        return;
+    }
+
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
     ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
 
     for (uint sampleIdx = 0u; sampleIdx < uint(kSamplesPerPixel); ++sampleIdx)
     {
         PathState path;
-        InitialCandidates_generatePath(path, pixel, sampleIdx);
+        InitialCandidates_generatePath(path, pixel, sampleIdx, surface);
         InitialCandidates_tracePath(params, currReservoir, currReconnectionData, path);
     }
+
+    InitialCandidates_finalizeSelectedReservoir(
+        params.initialSamplingParams,
+        pixel,
+        surface,
+        currReservoir,
+        currReconnectionData
+    );
 
     InitialCandidates_storeReservoir(currReservoir, currReconnectionData);
 }

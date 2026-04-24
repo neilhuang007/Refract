@@ -58,6 +58,20 @@ void scatter_unpack_reconnection_faces(uint packedFaces, inout ReconnectionData 
     reconnectionData.secondHit.faceId = (packedFaces >> 16u) & 0xFFFFu;
 }
 
+uint scatter_pack_reconnection_identity(ReconnectionData reconnectionData)
+{
+    return (reconnectionData.firstHit.materialId & 0xFFFFu)
+        | ((reconnectionData.secondHit.materialId & 0xFFFFu) << 16u);
+}
+
+void scatter_unpack_reconnection_identity(
+    uint packedIdentity,
+    inout ReconnectionData reconnectionData)
+{
+    reconnectionData.firstHit.materialId = packedIdentity & 0xFFFFu;
+    reconnectionData.secondHit.materialId = (packedIdentity >> 16u) & 0xFFFFu;
+}
+
 uint scatter_pack_reconnection_meta(ReconnectionData reconnectionData)
 {
     uint packedFlags = 0u;
@@ -122,13 +136,13 @@ void scatter_pack_reconnection_data(
     out vec4 data4)
 {
     transportAux0 = max(reconnectionData.secondHit.viewDepth, 0.0f);
-    transportAux1 = uintBitsToFloat(scatter_pack_reconnection_faces(reconnectionData));
+    transportAux1 = uintBitsToFloat(scatter_pack_reconnection_identity(reconnectionData));
 
     data0 = vec4(
         reconnectionData.firstHit.worldPos,
         scatter_pack_half2(vec2(
             clamp(reconnectionData.firstHit.viewDepth, 0.0f, 65504.0f),
-            clamp(reconnectionData.secondHit.viewDepth, 0.0f, 65504.0f)
+            clamp(float(reconnectionData.firstHit.materialId), 0.0f, 65504.0f)
         ))
     );
     data1 = vec4(
@@ -184,7 +198,8 @@ void scatter_unpack_reconnection(
     reconnectionData.firstHit.worldPos = data0.xyz;
     reconnectionData.firstHit.viewDepth = max(packedViewDepths.x, 0.0f);
     reconnectionData.secondHit.worldPos = data1.xyz;
-    reconnectionData.secondHit.viewDepth = max(packedViewDepths.y, 0.0f);
+    reconnectionData.secondHit.viewDepth = max(transportAux0, 0.0f);
+    reconnectionData.firstHit.materialId = uint(round(max(packedViewDepths.y, 0.0f)));
     reconnectionData.irradiance = data2.xyz;
     reconnectionData.earlyThroughput = data3.xyz;
     reconnectionData.subPixel = clamp(scatter_unpack_half2(data4.x), vec2(0.0f), vec2(1.0f));
@@ -196,6 +211,10 @@ void scatter_unpack_reconnection(
     reconnectionData.lensVertexJacobian = max(packedLensJacobians.x, 1e-10f);
     reconnectionData.secondaryPathJacobian = max(packedLensJacobians.y, 1e-10f);
     scatter_unpack_reconnection_meta(floatBitsToUint(data2.w), reconnectionData);
+    uint packedIdentity = floatBitsToUint(transportAux1);
+    if (packedIdentity != 0u) {
+        scatter_unpack_reconnection_identity(packedIdentity, reconnectionData);
+    }
 }
 
 void scatter_load_gather_intermediate_reconnection(ivec2 uv, out ScatterReconnectionData reconnection) {

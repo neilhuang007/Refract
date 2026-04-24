@@ -699,6 +699,7 @@ struct HitInfo {
     vec3  worldPos;    // Object/world-space hit position
     float viewDepth;   // Linear view depth (for bilateral tests)
     uint  faceId;      // Dominant signed block face identifier
+    uint  materialId;   // Quantized local material/light identity.
 };
 
 HitInfo HitInfo_empty() {
@@ -706,6 +707,7 @@ HitInfo HitInfo_empty() {
     h.worldPos = vec3(0.0f);
     h.viewDepth = 0.0f;
     h.faceId = 0u;
+    h.materialId = 0u;
     return h;
 }
 
@@ -1895,6 +1897,7 @@ bool RTXDI_InternalSimpleResample(
         reservoir.packedVisibility = candidateReservoir.packedVisibility;
         reservoir.age = candidateReservoir.age;
         reservoir.spatialDistance = candidateReservoir.spatialDistance;
+        reservoir.canonicalWeight = candidateReservoir.canonicalWeight;
         reservoir.transportAux0 = candidateReservoir.transportAux0;
         reservoir.transportAux1 = candidateReservoir.transportAux1;
         reservoir.pixelSampleUV = candidateReservoir.pixelSampleUV;
@@ -1952,6 +1955,7 @@ bool rtxdi_internal_simple_resample(
         reservoir.packedVisibility = candidateReservoir.packedVisibility;
         reservoir.age = candidateReservoir.age;
         reservoir.spatialDistance = candidateReservoir.spatialDistance;
+        reservoir.canonicalWeight = candidateReservoir.canonicalWeight;
         reservoir.transportAux0 = candidateReservoir.transportAux0;
         reservoir.transportAux1 = candidateReservoir.transportAux1;
         reservoir.pixelSampleUV = candidateReservoir.pixelSampleUV;
@@ -1967,6 +1971,7 @@ bool rtxdi_internal_simple_resample(
 // one canonical implementation surface without legacy wrapper drift.
 bool RTXDI_StreamNeighborWithPairwiseMIS(
     inout RTXDI_DIReservoir reservoir,
+    inout float canonicalMISWeightSum,
     float random,
     RTXDI_DIReservoir neighborSample,
     RAB_Surface neighborSurface,
@@ -1997,7 +2002,7 @@ bool RTXDI_StreamNeighborWithPairwiseMIS(
         rtxdi_m_factor(canonicalWeightAtNeighbor, canonicalWeightAtCanonical)
     );
 
-    reservoir.canonicalWeight += 1.0f - canonicalMisWeight;
+    canonicalMISWeightSum += 1.0f - canonicalMisWeight;
     return rtxdi_internal_simple_resample(
         reservoir,
         neighborSample,
@@ -2010,6 +2015,7 @@ bool RTXDI_StreamNeighborWithPairwiseMIS(
 
 bool RTXDI_StreamCanonicalWithPairwiseStep(
     inout RTXDI_DIReservoir reservoir,
+    float canonicalMISWeightSum,
     float random,
     RTXDI_DIReservoir centerSample,
     RAB_Surface centerSurface
@@ -2019,7 +2025,7 @@ bool RTXDI_StreamCanonicalWithPairwiseStep(
         centerSample,
         random,
         centerSample.targetPdf,
-        centerSample.weightSum * reservoir.canonicalWeight,
+        centerSample.weightSum * canonicalMISWeightSum,
         centerSample.M
     );
 }
@@ -2060,7 +2066,7 @@ RTXDI_DIReservoir RTXDI_DISpatialResamplingWithPairwiseMIS(
     inout RAB_LightSample selectedLightSample)
 {
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    state.canonicalWeight = 0.0f;
+    float canonicalMISWeightSum = 0.0f;
 
     uint numSpatialSamples = (centerSample.M < float(sparams.targetHistoryLength))
         ? max(sparams.numDisocclusionBoostSamples, sparams.numSamples)
@@ -2106,15 +2112,15 @@ RTXDI_DIReservoir RTXDI_DISpatialResamplingWithPairwiseMIS(
         if (neighborSample.M <= 0.0f)
             continue;
 
-        RTXDI_StreamNeighborWithPairwiseMIS(state, lt_next_random(rng),
+        RTXDI_StreamNeighborWithPairwiseMIS(state, canonicalMISWeightSum, lt_next_random(rng),
             neighborSample, neighborSurface,
             centerSample, centerSurface,
             float(numSpatialSamples));
     }
 
-    state.canonicalWeight = (validSpatialSamples == 0u) ? 1.0f : state.canonicalWeight;
+    canonicalMISWeightSum = (validSpatialSamples == 0u) ? 1.0f : canonicalMISWeightSum;
 
-    RTXDI_StreamCanonicalWithPairwiseStep(state, lt_next_random(rng), centerSample, centerSurface);
+    RTXDI_StreamCanonicalWithPairwiseStep(state, canonicalMISWeightSum, lt_next_random(rng), centerSample, centerSurface);
 
     RTXDI_FinalizeResampling(state, 1.0f, float(max(1u, validSpatialSamples)));
 

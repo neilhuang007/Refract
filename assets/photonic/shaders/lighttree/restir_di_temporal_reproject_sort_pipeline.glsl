@@ -17,21 +17,19 @@ float lt_multi_temporal_reproject_partition(
     hitValid = prevReconnection.firstHit.viewDepth > 0.0f
         && any(greaterThan(abs(prevReconnection.firstHit.worldPos), vec3(0.0f)));
 
-    if (hitValid) {
-        rayDirection = prevReconnection.firstHit.worldPos - world_camera_position;
-        newFractionalPixel = scatter_forward_project_to_current_frame(prevReconnection.firstHit.worldPos);
-        return newTime;
+    vec3 rayOrigin;
+    float traceDistance;
+    bool hitDistantLight;
+    if (!scatter_project_reconnection_to_current_frame(
+            prevReconnection,
+            newFractionalPixel,
+            rayOrigin,
+            rayDirection,
+            traceDistance,
+            hitDistantLight)) {
+        rayDirection = vec3(0.0f);
+        newFractionalPixel = vec2(-1.0f);
     }
-
-    if (prevReconnection.lightIsDistant) {
-        rayDirection = -prevReconnection.firstWi;
-        vec3 farPoint = world_camera_position + rayDirection * 1e5f;
-        newFractionalPixel = scatter_forward_project_to_current_frame(farPoint);
-        return newTime;
-    }
-
-    rayDirection = vec3(0.0f);
-    newFractionalPixel = vec2(-1.0f);
     return newTime;
 }
 
@@ -127,20 +125,18 @@ void ReprojectTemporalSamples_run(
 
     bool hasPrimaryHit = prevReconnection.firstHit.viewDepth > 0.0f;
     vec2 newFractionalPixel = vec2(-1.0f);
-
-    if (hasPrimaryHit) {
-        newFractionalPixel = scatter_forward_project_to_current_frame(prevReconnection.firstHit.worldPos);
-    } else {
-        if (!prevReconnection.lightIsDistant) {
-            return;
-        }
-        vec3 currentRayDirection = normalize(-prevReconnection.firstWi);
-        vec4 clipPosition = gbufferProjection * gbufferModelView * vec4(world_camera_position + currentRayDirection, 1.0f);
-        if (clipPosition.w <= 1e-5f) {
-            return;
-        }
-        vec3 ndc = clipPosition.xyz / clipPosition.w;
-        newFractionalPixel = (ndc.xy * vec2(0.5f, -0.5f) + vec2(0.5f)) * vec2(viewWidth, viewHeight);
+    vec3 rayOrigin = vec3(0.0f);
+    vec3 rayDirection = vec3(0.0f);
+    float traceDistance = 0.0f;
+    bool hitDistantLight = false;
+    if (!scatter_project_reconnection_to_current_frame(
+            prevReconnection,
+            newFractionalPixel,
+            rayOrigin,
+            rayDirection,
+            traceDistance,
+            hitDistantLight)) {
+        return;
     }
 
     if (newFractionalPixel.x < 0.0f || newFractionalPixel.y < 0.0f) {
@@ -153,9 +149,6 @@ void ReprojectTemporalSamples_run(
     }
 
     if (hasPrimaryHit) {
-        vec3 rayOrigin = world_camera_position;
-        vec3 rayDirection = normalize(prevReconnection.firstHit.worldPos - rayOrigin);
-        float traceDistance = length(prevReconnection.firstHit.worldPos - rayOrigin);
         if (traceDistance <= 1e-5f) {
             return;
         }

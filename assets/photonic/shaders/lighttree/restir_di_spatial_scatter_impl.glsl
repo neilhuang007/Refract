@@ -71,9 +71,11 @@ ReservoirSplattingHitInfo spatial_make_shifted_hit_info(ivec2 pixel, RAB_Surface
 {
     ReservoirSplattingHitInfo hitInfo = ReservoirSplattingHitInfo_empty();
     vec4 identityData = scatter_load_surface_identity(pixel, false);
+    uint packedIdentity = uint(round(identityData.w));
     hitInfo.worldPos = surface.worldPos;
     hitInfo.viewDepth = surface.viewDepth;
-    hitInfo.faceId = uint(round(identityData.w));
+    hitInfo.faceId = packedIdentity & 0x7u;
+    hitInfo.materialId = packedIdentity >> 3u;
     return hitInfo;
 }
 
@@ -219,8 +221,9 @@ bool spatial_trace_reconnection_visibility(
 // Minecraft DI stores a single NEE light per reservoir, so the
 // "secondary" reconnection collapses to:
 //   * decode the light (with per-frame remap) at the SHIFTED surface
-//   * evaluate f * cos / pdf via lt_shade_surface_light_sample
+//   * evaluate shifted radiance through pathReconnectionShift
 vec3 spatial_reconnect_and_evaluate_radiance(
+    ReservoirSplattingReconnectionData sourceReconnection,
     RTXDI_DIReservoir sourceReservoir,
     RAB_Surface shiftedSurface)
 {
@@ -238,7 +241,7 @@ vec3 spatial_reconnect_and_evaluate_radiance(
         return vec3(0.0f);
     }
 
-    return max(lt_shade_surface_light_sample(shiftedSurface, shiftedLight), vec3(0.0f));
+    return pathReconnectionShift(sourceReconnection, shiftedSurface, shiftedLight);
 }
 
 // ----------------------------------------------------------------------------
@@ -311,7 +314,11 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
     // `gPathTracer.handleReconnectionPrimaryLight(path)` for pathLength==1
     // and `pathReconnectionShift` for pathLength==2 DI. Both collapse to
     // `f * L * cos / pdf` evaluated at the shifted surface for Minecraft DI.
-    shifted.radiance = spatial_reconnect_and_evaluate_radiance(sourceReservoir, landingSurface);
+    shifted.radiance = spatial_reconnect_and_evaluate_radiance(
+        sourceReconnection,
+        sourceReservoir,
+        landingSurface
+    );
     shifted.isValid  = true;
     return shifted;
 }
@@ -407,10 +414,6 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
     if (!RAB_IsSurfaceValid(primaryHitSurface)) {
         return shifted;
     }
-    if (!scatter_reconnection_matches_surface(sourceReconnection, landingPixel, primaryHitSurface, false)) {
-        return shifted;
-    }
-
     vec3 primaryHitNormalW = primaryHitSurface.geoNormal;
 
     // Build a virtual surface at the stored primary hit with the new viewing
@@ -441,7 +444,11 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
         lt_decode_reservoir_sample_for_frame(sourceReservoir, shiftedSurface, false, false)
     );
 
-    shifted.radiance = spatial_reconnect_and_evaluate_radiance(sourceReservoir, shiftedSurface);
+    shifted.radiance = spatial_reconnect_and_evaluate_radiance(
+        sourceReconnection,
+        sourceReservoir,
+        shiftedSurface
+    );
     shifted.isValid  = true;
     return shifted;
 }

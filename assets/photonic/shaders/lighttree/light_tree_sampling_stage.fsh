@@ -31,8 +31,28 @@ float lt_encode_surface_face(vec3 geometryNormal) {
     return geometryNormal.z >= 0.0f ? 4.0f : 5.0f;
 }
 
-vec4 lt_build_surface_identity(vec3 worldPosValue, vec3 geometryNormalValue) {
-    return vec4(fract(worldPosValue), lt_encode_surface_face(geometryNormalValue));
+uint lt_quantize_identity_channel(float value) {
+    return uint(clamp(value, 0.0f, 1.0f) * 15.0f + 0.5f);
+}
+
+uint lt_encode_surface_material_hash(vec3 albedoValue, vec4 materialValue) {
+    uvec4 q = uvec4(
+        lt_quantize_identity_channel(albedoValue.r),
+        lt_quantize_identity_channel(albedoValue.g),
+        lt_quantize_identity_channel(albedoValue.b),
+        lt_quantize_identity_channel(materialValue.r)
+    );
+    uint hash = q.x | (q.y << 4u) | (q.z << 8u);
+    hash ^= (q.w << 2u);
+    // Stored in RGBA16F identity.w; keep packed face/material <= 2047 so
+    // half-float storage preserves every integer exactly.
+    return hash & 0xffu;
+}
+
+vec4 lt_build_surface_identity(vec3 worldPosValue, vec3 geometryNormalValue, vec3 albedoValue, vec4 materialValue) {
+    uint face = uint(lt_encode_surface_face(geometryNormalValue)) & 0x7u;
+    uint materialHash = lt_encode_surface_material_hash(albedoValue, materialValue);
+    return vec4(fract(worldPosValue), float(face | (materialHash << 3u)));
 }
 
 void storeEmptySurfaceOutputs() {
@@ -60,8 +80,9 @@ void main() {
     normal_frag_out = vec4(block_normal, 1.0f);
     mapped_normal_frag_out = vec4(normal, 1.0f);
     albedo_frag_out = vec4(albedo, 1.0f);
-    material_frag_out = lt_extract_stage_material();
-    identity_frag_out = lt_build_surface_identity(world_pos, block_normal);
+    vec4 stageMaterial = lt_extract_stage_material();
+    material_frag_out = stageMaterial;
+    identity_frag_out = lt_build_surface_identity(world_pos, block_normal, albedo, stageMaterial);
 
     vec2 currentPixelCenter = vec2(pixelPosition) + vec2(0.5f);
     motion_frag_out = ph_compute_temporal_motion(

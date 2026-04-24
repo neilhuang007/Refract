@@ -32,16 +32,28 @@ vec2 lt_area_sample_lens_sample(inout RTXDI_RandomSamplerState rng) {
 const uint LT_PATH_SAMPLE_MASK = 0xFFu;
 const uint LT_PATH_SAMPLE_PROPOSAL_SHIFT = 8u;
 const uint LT_PATH_SAMPLE_PROPOSAL_MASK = 0xFu;
+const uint LT_PATH_SAMPLE_TIME_SHIFT = 12u;
+const uint LT_PATH_SAMPLE_TIME_MASK = 0x1FFu;
 const uint LT_PROPOSAL_FAMILY_UNKNOWN = 0u;
 const uint LT_PROPOSAL_FAMILY_UNIFORM = 1u;
 const uint LT_PROPOSAL_FAMILY_POWER_RIS = 2u;
 const uint LT_PROPOSAL_FAMILY_REGIR_RIS = 3u;
 const uint LT_PROPOSAL_FAMILY_REGIR_FALLBACK = 4u;
 const uint LT_PROPOSAL_FAMILY_BRDF = 5u;
+const uint LT_PROPOSAL_FAMILY_FAST_RANDOM = 6u;
 
 uint lt_make_path_sample(uint basePathSample, uint proposalFamily) {
     return (basePathSample & LT_PATH_SAMPLE_MASK)
         | ((proposalFamily & LT_PATH_SAMPLE_PROPOSAL_MASK) << LT_PATH_SAMPLE_PROPOSAL_SHIFT);
+}
+
+uint lt_make_path_sample_with_time(uint basePathSample, uint proposalFamily, float time) {
+    uint packedTime = min(
+        uint(round(clamp(time, 0.0f, 1.0f) * float(LT_PATH_SAMPLE_TIME_MASK))),
+        LT_PATH_SAMPLE_TIME_MASK
+    );
+    return lt_make_path_sample(basePathSample, proposalFamily)
+        | (packedTime << LT_PATH_SAMPLE_TIME_SHIFT);
 }
 
 uint lt_path_sample_base(uint pathSample) {
@@ -50,6 +62,11 @@ uint lt_path_sample_base(uint pathSample) {
 
 uint lt_path_sample_proposal_family(uint pathSample) {
     return (pathSample >> LT_PATH_SAMPLE_PROPOSAL_SHIFT) & LT_PATH_SAMPLE_PROPOSAL_MASK;
+}
+
+float lt_path_sample_time(uint pathSample) {
+    return float((pathSample >> LT_PATH_SAMPLE_TIME_SHIFT) & LT_PATH_SAMPLE_TIME_MASK)
+        / float(LT_PATH_SAMPLE_TIME_MASK);
 }
 
 bool lt_area_has_valid_domain(RTXDI_DIReservoir reservoir) {

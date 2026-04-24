@@ -228,12 +228,14 @@ uint lt_multi_temporal_partition_count()
 
 uint lt_multi_temporal_partition_cell_capacity()
 {
-    return uint(viewWidth * viewHeight);
+    uint reservoirWidth = uint(max(int(ceil(viewWidth * ((ph_restir_active_checkerboard_field == 0) ? 1.0f : 0.5f))), 1));
+    uint reservoirHeight = uint(max(int(viewHeight), 1));
+    return reservoirWidth * reservoirHeight;
 }
 
 uint lt_multi_temporal_partition_contributor_capacity()
 {
-    return uint(viewWidth * viewHeight);
+    return lt_multi_temporal_partition_cell_capacity();
 }
 
 uint lt_multi_temporal_partition_linear_index(uint partitionIndex, uint cellIndex)

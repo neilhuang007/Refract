@@ -1,8 +1,11 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_DOF_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_DOF_GLSL
 
+#ifndef PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
+#define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
 uniform float ph_reservoir_splatting_camera_aperture_radius;
 uniform float ph_reservoir_splatting_artificial_frame_time;
+#endif
 
 vec3 lt_di_temporal_camera_relative_world_from_ndc(
     vec2 ndc,

@@ -68,7 +68,8 @@ bool scatter_reconnection_matches_surface(
     bool previousFrame)
 {
     vec4 currentIdentity = scatter_load_surface_identity(pixelPosition, previousFrame);
-    uint currentFaceId = uint(round(currentIdentity.w));
+    uint packedIdentity = uint(round(currentIdentity.w));
+    uint currentFaceId = packedIdentity & 0x7u;
     if (reconnection.firstHit.faceId != currentFaceId) {
         return false;
     }

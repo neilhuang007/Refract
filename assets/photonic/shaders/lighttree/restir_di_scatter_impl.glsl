@@ -1,5 +1,12 @@
 #ifndef PHOTONICS_RESTIR_DI_SCATTER_IMPL_GLSL
 #define PHOTONICS_RESTIR_DI_SCATTER_IMPL_GLSL
+
+#ifndef PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
+#define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
+uniform float ph_reservoir_splatting_camera_aperture_radius;
+uniform float ph_reservoir_splatting_artificial_frame_time;
+#endif
+
 // ============================================================================
 // This module contains the reusable helper functions that support the full
 // Reservoir Splatting temporal stage family implemented by the active bridge:
@@ -28,6 +35,67 @@ vec3 lt_current_camera_forward() {
 }
 vec3 lt_previous_camera_forward() {
     return normalize(mat3(gbufferPreviousModelView) * vec3(0.0f, 0.0f, -1.0f));
+}
+
+vec3 lt_scatter_camera_relative_world_from_ndc(
+    vec2 ndc,
+    mat4 projectionInverse,
+    mat4 modelViewInverse,
+    vec3 cameraPosition)
+{
+    vec4 viewPoint = projectionInverse * vec4(ndc, -1.0f, 1.0f);
+    float viewW = (abs(viewPoint.w) > 1e-6f) ? viewPoint.w : 1.0f;
+    vec3 viewPosition = viewPoint.xyz / viewW;
+    vec3 worldPosition = (modelViewInverse * vec4(viewPosition, 1.0f)).xyz;
+    return worldPosition - cameraPosition;
+}
+
+vec3 lt_scatter_camera_u_for_frame(bool previousFrame)
+{
+    mat4 projectionInverse = previousFrame ? inverse(gbufferPreviousProjection) : gbufferProjectionInverse;
+    mat4 modelViewInverse = previousFrame ? inverse(gbufferPreviousModelView) : gbufferModelViewInverse;
+    vec3 cameraPosition = previousFrame ? previous_world_camera_position : world_camera_position;
+    return lt_scatter_camera_relative_world_from_ndc(vec2(1.0f, 0.0f), projectionInverse, modelViewInverse, cameraPosition)
+        - lt_scatter_camera_relative_world_from_ndc(vec2(0.0f, 0.0f), projectionInverse, modelViewInverse, cameraPosition);
+}
+
+vec3 lt_scatter_camera_v_for_frame(bool previousFrame)
+{
+    mat4 projectionInverse = previousFrame ? inverse(gbufferPreviousProjection) : gbufferProjectionInverse;
+    mat4 modelViewInverse = previousFrame ? inverse(gbufferPreviousModelView) : gbufferModelViewInverse;
+    vec3 cameraPosition = previousFrame ? previous_world_camera_position : world_camera_position;
+    return lt_scatter_camera_relative_world_from_ndc(vec2(0.0f, 1.0f), projectionInverse, modelViewInverse, cameraPosition)
+        - lt_scatter_camera_relative_world_from_ndc(vec2(0.0f, 0.0f), projectionInverse, modelViewInverse, cameraPosition);
+}
+
+vec3 lt_scatter_camera_w_for_frame(bool previousFrame)
+{
+    mat4 projectionInverse = previousFrame ? inverse(gbufferPreviousProjection) : gbufferProjectionInverse;
+    mat4 modelViewInverse = previousFrame ? inverse(gbufferPreviousModelView) : gbufferModelViewInverse;
+    vec3 cameraPosition = previousFrame ? previous_world_camera_position : world_camera_position;
+    return lt_scatter_camera_relative_world_from_ndc(vec2(0.0f, 0.0f), projectionInverse, modelViewInverse, cameraPosition);
+}
+
+vec2 lt_scatter_project_ray_to_frame_film(
+    vec3 rayDirection,
+    vec2 lensLocal,
+    bool previousFrame)
+{
+    vec3 cameraU = lt_scatter_camera_u_for_frame(previousFrame);
+    vec3 cameraV = lt_scatter_camera_v_for_frame(previousFrame);
+    vec3 cameraW = lt_scatter_camera_w_for_frame(previousFrame);
+    vec3 camU = normalize(cameraU);
+    vec3 camV = normalize(cameraV);
+    vec3 camW = normalize(cameraW);
+    vec3 camRay = vec3(dot(camU, rayDirection), dot(camV, rayDirection), dot(camW, rayDirection));
+    if (camRay.z <= 0.001f) {
+        return vec2(-1.0f);
+    }
+
+    vec2 film = lensLocal + length(cameraW) * (camRay.xy / camRay.z);
+    vec2 ndc = film / vec2(max(length(cameraU), 1e-6f), max(length(cameraV), 1e-6f));
+    vec2 fractionalPixel = (vec2(0.5f, -0.5f) * ndc + vec2(0.5f)) * vec2(viewWidth, viewHeight);
+    return lt_is_viewport_uv_in_bounds(fractionalPixel) ? fractionalPixel : vec2(-1.0f);
 }
 
 float lt_scatter_reservoir_confidence(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
@@ -204,6 +272,16 @@ bool scatter_project_reconnection_to_frame(
     traceMaxDistance = 0.0f;
     hitDistantLight = false;
 
+    vec2 lensSample = clamp(reconnectionData.lensSample, vec2(0.0f), vec2(1.0f));
+    float apertureRadius = ph_reservoir_splatting_camera_aperture_radius;
+    vec2 lensLocal = apertureRadius * lensSample;
+    vec3 cameraU = lt_scatter_camera_u_for_frame(previousFrame);
+    vec3 cameraV = lt_scatter_camera_v_for_frame(previousFrame);
+    vec3 lensWorld = apertureRadius <= 0.0f
+        ? vec3(0.0f)
+        : lensLocal.x * normalize(cameraU) + lensLocal.y * normalize(cameraV);
+    rayOrigin += lensWorld;
+
     bool hasPrimaryHit = reconnectionData.firstHit.viewDepth > 0.0f
         && any(greaterThan(abs(reconnectionData.firstHit.worldPos), vec3(0.0f)));
 
@@ -217,9 +295,11 @@ bool scatter_project_reconnection_to_frame(
             return false;
         }
 
-        projectedPixel = previousFrame
-            ? lt_scatter_project_to_previous_frame(hitPosition)
-            : scatter_forward_project_to_current_frame(hitPosition);
+        projectedPixel = lt_scatter_project_ray_to_frame_film(
+            rayDirection,
+            lensLocal,
+            previousFrame
+        );
         return projectedPixel.x >= 0.0f && projectedPixel.y >= 0.0f;
     }
 
@@ -230,10 +310,11 @@ bool scatter_project_reconnection_to_frame(
 
     rayDirection = -normalize(reconnectionData.firstWi);
     traceMaxDistance = 1e5f;
-    vec3 farPoint = rayOrigin + rayDirection * traceMaxDistance;
-    projectedPixel = previousFrame
-        ? lt_scatter_project_to_previous_frame(farPoint)
-        : scatter_forward_project_to_current_frame(farPoint);
+    projectedPixel = lt_scatter_project_ray_to_frame_film(
+        rayDirection,
+        lensLocal,
+        previousFrame
+    );
     hitDistantLight = true;
     return projectedPixel.x >= 0.0f && projectedPixel.y >= 0.0f;
 }
@@ -300,12 +381,13 @@ bool lt_scatter_reprojection_shift(
     float subPixelJacobian = scatter_compute_subpixel_jacobian(
         reconnectionData.firstHit.worldPos,
         targetSurface.geoNormal,
-        cameraPos,
+        projectedRayOrigin,
         cameraForward
     );
 
     shifted.valid = true;
     shifted.primaryHit = reconnectionData.firstHit;
+    shifted.primaryHit.viewDepth = projectedTraceMaxDistance;
     shifted.fractionalPixel = projectedPixelF;
     shifted.lensSample = clamp(reconnectionData.lensSample, vec2(0.0f), vec2(1.0f));
     shifted.firstRayDir = projectedRayDirection;
@@ -551,8 +633,9 @@ bool lt_scatter_update_shifted_reservoir(
     shiftedReconnection.subPixelJacobian = max(shifted.subPixelJacobian, 1e-10f);
     shiftedReconnection.lensVertexJacobian = max(shifted.lensVertexJacobian, 1e-10f);
     shiftedReconnection.secondaryPathJacobian = max(secondaryPathJacobian, 1e-10f);
-    shiftedReconnection.firstHit.faceId = uint(round(scatter_load_surface_identity(targetPixel, targetPreviousFrame).w));
-    shiftedReconnection.secondHit.faceId = shiftedReconnection.firstHit.faceId;
+    uint packedIdentity = uint(round(scatter_load_surface_identity(targetPixel, targetPreviousFrame).w));
+    shiftedReconnection.firstHit.faceId = packedIdentity & 0x7u;
+    shiftedReconnection.firstHit.materialId = packedIdentity >> 3u;
     shiftedReconnection.time = sourceReconnection.time;
     return true;
 }
@@ -669,7 +752,7 @@ bool lt_scatter_add_sample_from_reservoir(
     if (selected) {
         state.lightData         = otherReservoir.lightData;
         state.uvData            = otherReservoir.uvData;
-        state.targetPdf         = otherReservoir.targetPdf;
+        state.targetPdf         = pHatLum;
         state.packedVisibility  = otherReservoir.packedVisibility;
         state.age               = otherReservoir.age;
         state.spatialDistance   = otherReservoir.spatialDistance;
@@ -755,6 +838,9 @@ struct LtScatterCurrentSample {
 
 float ScatterTemporalResampling_load_previous_reservoir_confidence(
     ivec2 neighborPixel);
+
+ivec2 ScatterTemporalResampling_previous_reservoir_pixel(
+    ivec2 previousPixel);
 
 RTXDI_DIReservoir lt_ScatterTemporalResampling_load_current_reservoir(
     ivec2 pixel);
@@ -845,12 +931,12 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
     // Reference parity: load the Stage-1 current-frame reconnection snapshot
     // that was published by the Java pipeline before Stage 2c. This mirrors the
     // structured-buffer read of currReconnectionData[reservoirIdx] exactly.
-    ivec2 reservoirPosition = ivec2(lt_temporal_scatter_decode_linear_index(reservoirIdx));
-    vec4 reconnection0 = texelFetch(current_stage_reconnection0, reservoirPosition, 0);
-    vec4 reconnection1 = texelFetch(current_stage_reconnection1, reservoirPosition, 0);
-    vec4 reconnection2 = texelFetch(current_stage_reconnection2, reservoirPosition, 0);
-    vec4 reconnection3 = texelFetch(current_stage_reconnection3, reservoirPosition, 0);
-    vec4 reconnection4 = texelFetch(current_stage_reconnection4, reservoirPosition, 0);
+    reservoirIdx = reservoirIdx;
+    vec4 reconnection0 = texelFetch(current_stage_reconnection0, pixel, 0);
+    vec4 reconnection1 = texelFetch(current_stage_reconnection1, pixel, 0);
+    vec4 reconnection2 = texelFetch(current_stage_reconnection2, pixel, 0);
+    vec4 reconnection3 = texelFetch(current_stage_reconnection3, pixel, 0);
+    vec4 reconnection4 = texelFetch(current_stage_reconnection4, pixel, 0);
     ReservoirSplattingReconnectionData storedReconnection;
     scatter_unpack_reconnection(
         reconnection0,
@@ -862,7 +948,7 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
         0.0f,
         storedReconnection
     );
-    RestirDI_restoreReconnectionRadiometry(reservoirPosition, false, currentSample.reservoir, storedReconnection);
+    RestirDI_restoreReconnectionRadiometry(pixel, false, currentSample.reservoir, storedReconnection);
     currentSample.confidence = lt_scatter_reservoir_confidence(currentSample.reservoir, storedReconnection);
     currentSample.isValid = true;
     currentSample.reconnectionData = storedReconnection;
@@ -915,9 +1001,10 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
         return 1.0f;
     }
 
+    ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
     RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
         lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(scatteredPixel)
+        uvec2(previousReservoirPixel)
     );
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
 
@@ -942,20 +1029,16 @@ bool ScatterTemporalResampling_process_contributor(
     float currReservoirConfidence,
     inout RTXDI_RandomSamplerState sg)
 {
-    RAB_Surface scatteredSurface = lt_load_surface(scatteredPixel);
-    if (!RAB_IsSurfaceValid(scatteredSurface)) {
-        return false;
-    }
-
+    ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
     RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
         lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(scatteredPixel)
+        uvec2(previousReservoirPixel)
     );
     if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
         return false;
     }
 
-    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(scatteredPixel);
+    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
     RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(targetSurface)) {
@@ -1023,6 +1106,13 @@ bool ScatterTemporalResampling_process_contributor(
 // ---------------------------------------------------------------------------
 // Loads previous-frame confidence directly from the previous reservoir buffer,
 // matching prevReservoirs[neighborIndex].confidence in the reference stage.
+ivec2 ScatterTemporalResampling_previous_reservoir_pixel(
+    ivec2 previousPixel)
+{
+    int previousCheckerboardField = lt_previous_checkerboard_field(int(ph_restir_active_checkerboard_field));
+    return lt_temporal_previous_checkerboard_pixel(previousPixel, previousCheckerboardField);
+}
+
 float ScatterTemporalResampling_load_previous_reservoir_confidence(
     ivec2 neighborPixel)
 {
@@ -1030,12 +1120,17 @@ float ScatterTemporalResampling_load_previous_reservoir_confidence(
         return 0.0f;
     }
 
+    ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(neighborPixel);
+    if (!lt_is_viewport_uv_in_bounds(previousReservoirPixel)) {
+        return 0.0f;
+    }
+
     RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
         lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(neighborPixel)
+        uvec2(previousReservoirPixel)
     );
 
-    ReservoirSplattingReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(neighborPixel);
+    ReservoirSplattingReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     return lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
 }
 

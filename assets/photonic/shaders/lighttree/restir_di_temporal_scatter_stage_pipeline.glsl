@@ -32,7 +32,7 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
         5u
     );
 
-    uint reservoirIdx = uint(pixel.y * viewWidth + pixel.x);
+    uint reservoirIdx = lt_temporal_scatter_cell_index_from_pixel(pixel);
     RTXDI_DIReservoir currReservoir = lt_ScatterTemporalResampling_load_current_reservoir(pixel);
     LtScatterCurrentSample currSample = lt_ScatterTemporalResampling_load_current_sample(
         reservoirIdx,
@@ -73,10 +73,11 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
     uint cellOffset = lt_scatter_temporal_resampling_cell_offset_value(reservoirIdx);
     for (uint i = 0u; i < numReservoirs; ++i) {
         ivec2 scatteredPixel = ivec2(lt_scatter_temporal_resampling_load_sorted_reservoir(cellOffset + i));
+        float contributorConfidence = newConfidence;
         ScatterTemporalResampling_process_contributor(
             dstReservoir,
             dstReconnectionData,
-            newConfidence,
+            contributorConfidence,
             scatteredPixel,
             pixel,
             currReservoir,

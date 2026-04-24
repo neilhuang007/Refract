@@ -76,11 +76,11 @@ void lt_multi_temporal_scatter_append_contributor(
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
 void SortReprojectedReservoirs_computeCellOffsets(ivec2 pixel)
 {
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
+    if (!lt_temporal_scatter_pixel_owns_cell(pixel)) {
         return;
     }
 
-    uint cellIndex = uint(pixel.y * viewWidth + pixel.x);
+    uint cellIndex = lt_temporal_scatter_cell_index_from_pixel(pixel);
     uint cellCounter = lt_reproject_temporal_samples_cell_counter_value(cellIndex);
     if (cellCounter == 0u) {
         return;
@@ -107,11 +107,11 @@ void SortReprojectedReservoirs_sortCellData(uint scatterIndex)
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
 void MultiSortReprojectedReservoirs_computeCellOffsets(ivec2 pixel)
 {
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
+    if (!lt_temporal_scatter_pixel_owns_cell(pixel)) {
         return;
     }
 
-    uint cellIndex = uint(pixel.y * viewWidth + pixel.x);
+    uint cellIndex = lt_temporal_scatter_cell_index_from_pixel(pixel);
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
         uint cellCounter = lt_multi_reproject_temporal_samples_cell_counter_value(partitionIndex, cellIndex);
         if (cellCounter == 0u) {
@@ -194,7 +194,7 @@ void splat_resample_temporal_pairwise_mis(
 
     PathReservoir_setConfidence(state, PathReservoir_getConfidence(state) + weightedCandidateConfidence);
     PathReservoir_setTotalWeight(state, PathReservoir_getTotalWeight(state) + sampleWeight);
-    state.canonicalWeight += m1;
+    state.targetPdf += m1;
 
     bool selectSample = (sampleWeight > 0.0 && PathReservoir_getTotalWeight(state) > 0.0)
         ? (lt_next_random(rng) * PathReservoir_getTotalWeight(state) < sampleWeight)
@@ -202,7 +202,7 @@ void splat_resample_temporal_pairwise_mis(
 
     if (selectSample) {
         PathReservoir_setIntegrand(state, PathReservoir_getIntegrand(candidateReservoir));
-        state.targetPdf = candidateReservoir.targetPdf;
+        state.targetPdf = pHatCurrent;
         state.lightData = candidateReservoir.lightData;
         state.uvData = candidateReservoir.uvData;
         state.pixelSampleUV = candidateReservoir.pixelSampleUV;
