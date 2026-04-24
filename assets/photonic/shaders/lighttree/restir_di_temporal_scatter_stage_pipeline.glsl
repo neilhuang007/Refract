@@ -17,12 +17,8 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
 {
     currReconnectionData = ReservoirSplattingReconnectionData_init();
 
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!lt_is_viewport_uv_in_bounds(pixel) || !RAB_IsSurfaceValid(surface)) {
+    if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return RTXDI_EmptyDIReservoir();
     }
 
@@ -45,9 +41,9 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
     float dstConfidence = 0.0f;
     ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
     ReservoirSplattingReconnectionData currReconnectionDataLocal = currSample.reconnectionData;
-    vec3 currIntegrand = currSample.isValid ? PathReservoir_getIntegrand(currReservoir) : vec3(0.0f);
+    vec3 currIntegrand = PathReservoir_getIntegrand(currReservoir);
     float currReservoirConfidence = currSample.confidence;
-    float currUCW = currSample.isValid ? lt_scatter_compute_ucw(currReservoir, currIntegrand) : 0.0f;
+    float currUCW = lt_scatter_compute_ucw(currReservoir, currIntegrand);
 
     float currSampleMIS = ScatterTemporalResampling_compute_curr_sample_mis(
         currSample,

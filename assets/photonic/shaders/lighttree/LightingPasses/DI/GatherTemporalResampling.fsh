@@ -35,7 +35,7 @@ void storeGatherTemporalResamplingResult(
 
     reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
 void storeEmptyGatherTemporalResamplingResult()

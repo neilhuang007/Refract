@@ -1,6 +1,13 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_BUFFER_BRIDGE_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_BUFFER_BRIDGE_GLSL
 
+#ifndef PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
+#define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
+uniform float ph_reservoir_splatting_camera_aperture_radius;
+uniform float ph_reservoir_splatting_artificial_frame_time;
+uniform float ph_reservoir_splatting_shutter_speed;
+#endif
+
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE)
 #define PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_COUNTER_BUFFERS 1
 #endif
@@ -60,7 +67,13 @@ int GatherData_getGatherOption()
 
 vec2 GatherData_getMotionVector(ivec2 pixel)
 {
-    vec2 motionVector = texelFetch(radiosity_motion, pixel, 0).xy;
+    vec4 motionSample = texelFetch(radiosity_motion, pixel, 0);
+    if (motionSample.w <= 0.0f)
+    {
+        return vec2(0.0f);
+    }
+
+    vec2 motionVector = motionSample.xy;
     if (length(motionVector) < 1e-06f)
     {
         return vec2(0.0f);
@@ -265,12 +278,12 @@ uint lt_temporal_partitioned_counter_index(uint partitionIndex, uint counterInde
 
 float lt_multi_temporal_partition_duration()
 {
-    return 1.0f / float(lt_multi_temporal_partition_count());
+    return ph_reservoir_splatting_shutter_speed / float(lt_multi_temporal_partition_count());
 }
 
 float lt_multi_temporal_partition_fraction(float time)
 {
-    return clamp(time, 0.0f, 1.0f);
+    return time / ph_reservoir_splatting_shutter_speed;
 }
 
 float lt_multi_temporal_partition_time(float fractionalTime, uint partitionIndex)

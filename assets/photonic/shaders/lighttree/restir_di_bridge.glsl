@@ -115,7 +115,7 @@ ReservoirSplattingReconnectionData ReconnectionData_update(
     return updated;
 }
 
-ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ivec2 pixel, RTXDI_DIReservoir reservoir)
+ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ivec2 pixel, RTXDI_DIReservoir inputReservoir)
 {
     ReservoirSplattingReconnectionData reconnection;
     scatter_unpack_reconnection(
@@ -128,7 +128,7 @@ ReservoirSplattingReconnectionData SpatialResampling_load_input_reconnection(ive
         0.0f,
         reconnection
     );
-    RestirDI_restoreReconnectionRadiometry(pixel, false, reservoir, reconnection);
+    RestirDI_restoreReconnectionRadiometry(pixel, false, inputReservoir, reconnection);
     return reconnection;
 }
 

@@ -5,6 +5,7 @@
 #define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
 uniform float ph_reservoir_splatting_camera_aperture_radius;
 uniform float ph_reservoir_splatting_artificial_frame_time;
+uniform float ph_reservoir_splatting_shutter_speed;
 #endif
 
 vec3 lt_di_temporal_camera_relative_world_from_ndc(
@@ -48,6 +49,11 @@ float lt_di_temporal_camera_aperture_radius()
 float lt_di_temporal_artificial_frame_time()
 {
     return ph_reservoir_splatting_artificial_frame_time;
+}
+
+float lt_di_temporal_shutter_speed()
+{
+    return ph_reservoir_splatting_shutter_speed;
 }
 
 vec3 lt_di_temporal_camera_u()

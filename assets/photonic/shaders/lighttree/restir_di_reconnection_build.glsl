@@ -52,10 +52,6 @@ vec3 pathReconnectionShift(
         return vec3(0.0f);
     }
 
-    if (reconnectionData.pathLength != 2u) {
-        return vec3(0.0f);
-    }
-
     vec3 visibility = vec3(1.0f);
     if (ph_restir_local_light_sampling_mode != float(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM))
     {
@@ -86,16 +82,11 @@ float scatter_resolve_secondary_path_jacobian_from_reconnection(
     vec3 earlyThroughput,
     vec3 irradiance)
 {
-    surface = surface;
-    secondPos = secondPos;
-    earlyThroughput = earlyThroughput;
-    irradiance = irradiance;
-
     if (lightSample.index < 0) {
         return 1.0f;
     }
 
-    return max(lightSample.solidAnglePdf, 1e-10f);
+    return lightSample.solidAnglePdf;
 }
 
 float scatter_resolve_secondary_path_jacobian(
@@ -172,7 +163,7 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     d.lensSample = lt_area_has_valid_domain(reservoir)
         ? clamp(reservoir.lensSampleUV, vec2(0.0f), vec2(1.0f))
         : lt_area_default_lens_sample();
-    d.time = clamp(time, 0.0f, 1.0f);
+    d.time = time;
 
     d.pathLength = (lightSample.index >= 0) ? 2u : 1u;
 
@@ -198,7 +189,7 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     d.lightIsDistant = (lightSample.index >= 0) && !lightIsAnalytic;
     d.lightPdf = scatter_resolve_light_pdf(reservoir, lightSample);
 
-    d.subPixelJacobian = max(subPixelJacobian, 1e-10f);
+    d.subPixelJacobian = subPixelJacobian;
     d.lensVertexJacobian = 1.0f;
     d.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian_from_reconnection(
         surface,

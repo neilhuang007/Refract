@@ -7,6 +7,8 @@
 // This keeps the stage ABI in one place while preserving the existing include
 // order expected by reuse_bridge.glsl and the temporal stage modules.
 
+#ifndef PH_LIGHTTREE_LT_SCATTER_CURRENT_SAMPLE_DECLARED
+#define PH_LIGHTTREE_LT_SCATTER_CURRENT_SAMPLE_DECLARED
 struct LtScatterCurrentSample {
     bool                                  isValid;
     bool                                  hasPositivePHat;
@@ -14,6 +16,7 @@ struct LtScatterCurrentSample {
     ReservoirSplattingReconnectionData    reconnectionData;
     float                                 confidence;
 };
+#endif
 
 float ScatterTemporalResampling_load_previous_reservoir_confidence(
     ivec2 neighborPixel);
@@ -91,9 +94,11 @@ ShiftedPathData lt_temporal_load_shifted_path(ivec2 pixel, int offsetIndex)
 
     shiftedPath.primaryHit.worldPos = shiftedPathRecord.primaryHitData.xyz;
     shiftedPath.primaryHit.viewDepth = shiftedPathRecord.primaryHitData.w;
-    shiftedPath.primaryHit.faceId = floatBitsToUint(
+    uint packedPrimaryHitIdentity = floatBitsToUint(
         shiftedPathRecord.primaryHitFaceFractionalPixelLensX.x
     );
+    shiftedPath.primaryHit.faceId = packedPrimaryHitIdentity & 0x7u;
+    shiftedPath.primaryHit.materialId = packedPrimaryHitIdentity >> 3u;
     shiftedPath.fractionalPixel = shiftedPathRecord.primaryHitFaceFractionalPixelLensX.yz;
     shiftedPath.lensSample = vec2(
         shiftedPathRecord.primaryHitFaceFractionalPixelLensX.w,
@@ -115,7 +120,7 @@ void lt_temporal_store_shifted_path(ivec2 pixel, int offsetIndex, ShiftedPathDat
         shiftedPath.primaryHit.viewDepth
     );
     shiftedPathRecord.primaryHitFaceFractionalPixelLensX = vec4(
-        uintBitsToFloat(shiftedPath.primaryHit.faceId),
+        uintBitsToFloat((shiftedPath.primaryHit.materialId << 3u) | (shiftedPath.primaryHit.faceId & 0x7u)),
         shiftedPath.fractionalPixel,
         shiftedPath.lensSample.x
     );
@@ -149,10 +154,10 @@ void scatter_store_gather_shifted_path_data(
     out vec4 shiftedPathData1)
 {
     shiftedPathData0 = vec4(
-        max(shiftedPathData.radiance, vec3(0.0f)),
-        max(shiftedPathData.secondaryPathJacobian, 1e-10f)
+        shiftedPathData.radiance,
+        shiftedPathData.secondaryPathJacobian
     );
-    shiftedPathData1 = vec4(max(shiftedPathData.lensVertexJacobian, 1e-10f), shiftedPathData.valid, 0.0f, 0.0f);
+    shiftedPathData1 = vec4(shiftedPathData.lensVertexJacobian, shiftedPathData.valid, 0.0f, 0.0f);
 }
 #endif
 
@@ -163,6 +168,7 @@ ShiftedPathData gatherLensVertexCopyShift(
     vec2 fractionalPixel,
     vec2 lensSample,
     RTXDI_DIReservoir sourceReservoir,
+    bool sourcePreviousFrame,
     bool targetPreviousFrame);
 
 ShiftedPathData gatherLensVertexCopyShift(
@@ -180,6 +186,7 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
     vec2 fractionalPixel,
     ReservoirSplattingHitInfo primaryHit,
     RTXDI_DIReservoir sourceReservoir,
+    bool sourcePreviousFrame,
     bool targetPreviousFrame);
 
 ShiftedPathData gatherPrimaryHitReconnectionShift(

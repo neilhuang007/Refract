@@ -45,15 +45,8 @@ void main()
     RTXDI_DIReservoir currReservoir;
     ResolveReSTIR_load_curr_reservoir(reservoirPosition, currReservoir);
 
-    float shadingHitDistance = max(surface.viewDepth, 0.0f);
     vec3 color = ResolveReSTIR(currReservoir);
 
-    if (lt_build_restir_di_parameters().shadingParams.enableDenoiserInputPacking != 0u) {
-        ResolveReSTIRLobes lobes = ResolveReSTIR_splitForNRD(surface, currReservoir);
-        direct_diffuse_frag_out = nrd_pack_direct_signal(lobes.diffuseDemodulated, shadingHitDistance);
-        direct_specular_frag_out = nrd_pack_direct_signal(lobes.specularDemodulated, shadingHitDistance);
-    } else {
-        direct_diffuse_frag_out = vec4(color, shadingHitDistance);
-        direct_specular_frag_out = vec4(0.0f, 0.0f, 0.0f, shadingHitDistance);
-    }
+    direct_diffuse_frag_out = vec4(color, 1.0f);
+    direct_specular_frag_out = vec4(0.0f);
 }

@@ -116,6 +116,18 @@ def shaderGameTestRestirLocalLightSamplingMode = System.getProperty("photonics.r
 def shaderGameTestRestirDebugForceTargetPdfOne = System.getProperty("photonics.restirDebugForceTargetPdfOne")
 def shaderGameTestRestirDebugForceShadingInvPdfOne = System.getProperty("photonics.restirDebugForceShadingInvPdfOne")
 def shaderGameTestRestirDebugForceSolidAnglePdfOne = System.getProperty("photonics.restirDebugForceSolidAnglePdfOne")
+def shaderGameTestRestirTemporalReuse = System.getProperty("photonics.temporalReuse")
+if (shaderGameTestRestirTemporalReuse == null || shaderGameTestRestirTemporalReuse.isBlank()) {
+    shaderGameTestRestirTemporalReuse = System.getenv("PHOTONICS_TEMPORAL_REUSE")
+}
+def shaderGameTestRestirTemporalGatherMode = System.getProperty("photonics.temporalGatherMode")
+if (shaderGameTestRestirTemporalGatherMode == null || shaderGameTestRestirTemporalGatherMode.isBlank()) {
+    shaderGameTestRestirTemporalGatherMode = System.getenv("PHOTONICS_TEMPORAL_GATHER_MODE")
+}
+def shaderGameTestRestirScatterBackupMisOption = System.getProperty("photonics.scatterBackupMisOption")
+if (shaderGameTestRestirScatterBackupMisOption == null || shaderGameTestRestirScatterBackupMisOption.isBlank()) {
+    shaderGameTestRestirScatterBackupMisOption = System.getenv("PHOTONICS_SCATTER_BACKUP_MIS_OPTION")
+}
 
 def runtimeMaxLights = System.getProperty("photonics.maxLights")
 if (runtimeMaxLights == null || runtimeMaxLights.isBlank()) {
@@ -188,6 +200,15 @@ loom {
             }
             if (shaderGameTestRestirDebugForceSolidAnglePdfOne != null && !shaderGameTestRestirDebugForceSolidAnglePdfOne.isBlank()) {
                 vmArg "-Dphotonics.restirDebugForceSolidAnglePdfOne=${shaderGameTestRestirDebugForceSolidAnglePdfOne}"
+            }
+            if (shaderGameTestRestirTemporalReuse != null && !shaderGameTestRestirTemporalReuse.isBlank()) {
+                vmArg "-Dphotonics.temporalReuse=${shaderGameTestRestirTemporalReuse}"
+            }
+            if (shaderGameTestRestirTemporalGatherMode != null && !shaderGameTestRestirTemporalGatherMode.isBlank()) {
+                vmArg "-Dphotonics.temporalGatherMode=${shaderGameTestRestirTemporalGatherMode}"
+            }
+            if (shaderGameTestRestirScatterBackupMisOption != null && !shaderGameTestRestirScatterBackupMisOption.isBlank()) {
+                vmArg "-Dphotonics.scatterBackupMisOption=${shaderGameTestRestirScatterBackupMisOption}"
             }
             vmArg "-Dphotonics.automation.worldName=backup"
             vmArg "-Dphotonics.automation.autoStartWorld=false"

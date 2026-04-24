@@ -5,6 +5,7 @@
 #define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
 uniform float ph_reservoir_splatting_camera_aperture_radius;
 uniform float ph_reservoir_splatting_artificial_frame_time;
+uniform float ph_reservoir_splatting_shutter_speed;
 #endif
 
 // ============================================================================
@@ -98,10 +99,19 @@ vec2 lt_scatter_project_ray_to_frame_film(
     return lt_is_viewport_uv_in_bounds(fractionalPixel) ? fractionalPixel : vec2(-1.0f);
 }
 
-float lt_scatter_reservoir_confidence(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
+float lt_scatter_actual_reservoir_confidence(RTXDI_DIReservoir reservoir) {
+    return PathReservoir_getConfidence(reservoir);
+}
+
+float lt_scatter_confidence_mis_weight(float confidence) {
     return lt_restir_temporal_use_confidence_weights()
-        ? PathReservoir_getConfidence(reservoir)
+        ? confidence
         : 1.0f;
+}
+
+float lt_scatter_reservoir_confidence(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
+    reconnection = reconnection;
+    return lt_scatter_actual_reservoir_confidence(reservoir);
 }
 
 float lt_scatter_radiance_phat(vec3 radiance) {
@@ -119,12 +129,27 @@ float lt_scatter_shift_jacobian_ratio(
     float baseSecondaryPathJacobian)
 {
     float baseJ = baseSubPixelJacobian * baseSecondaryPathJacobian;
-    if (baseJ <= 1e-10f) {
-        return 0.0f;
-    }
     float shiftedJ = shiftedSubPixelJacobian * shiftedSecondaryPathJacobian;
-    float ratio = shiftedJ / baseJ;
-    return (isnan(ratio) || isinf(ratio) || ratio < 0.0f) ? 0.0f : ratio;
+    return shiftedJ / baseJ;
+}
+
+float lt_scatter_compute_lens_vertex_jacobian(
+    vec3 primaryHitPosW,
+    vec3 primaryHitNormalW,
+    vec3 rayOriginW,
+    vec3 rayDir,
+    vec3 cameraForward,
+    bool targetPreviousFrame)
+{
+    vec3 toHit = primaryHitPosW - rayOriginW;
+    float dist = length(toHit);
+    float cosNormal = dot(rayDir, primaryHitNormalW);
+    float cosSensor = dot(cameraForward, rayDir);
+    float focalPlaneZ = length(lt_scatter_camera_w_for_frame(targetPreviousFrame));
+    float camZ = dot(toHit, cameraForward);
+    float d0 = focalPlaneZ / abs(camZ) * dist;
+    float d1 = dist - d0;
+    return (d0 * d0) / (d1 * d1) * abs(cosNormal) / abs(cosSensor);
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +196,7 @@ bool lt_scatter_trace_reconnection_visibility(
     ray.origin = rayOriginW;
     ray.direction = rayDirW;
     ray_min_trace_distance = 0.001f;
-    ray_max_trace_distance = max(traceMaxDistance, ray_min_trace_distance);
+    ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
     bool unoccluded = !ray.result_hit && ray_distance_limit_reached;
     ray_min_trace_distance = 0.0f;
@@ -272,7 +297,7 @@ bool scatter_project_reconnection_to_frame(
     traceMaxDistance = 0.0f;
     hitDistantLight = false;
 
-    vec2 lensSample = clamp(reconnectionData.lensSample, vec2(0.0f), vec2(1.0f));
+    vec2 lensSample = reconnectionData.lensSample;
     float apertureRadius = ph_reservoir_splatting_camera_aperture_radius;
     vec2 lensLocal = apertureRadius * lensSample;
     vec3 cameraU = lt_scatter_camera_u_for_frame(previousFrame);
@@ -384,6 +409,14 @@ bool lt_scatter_reprojection_shift(
         projectedRayOrigin,
         cameraForward
     );
+    float lensVertexJacobian = lt_scatter_compute_lens_vertex_jacobian(
+        reconnectionData.firstHit.worldPos,
+        targetSurface.geoNormal,
+        projectedRayOrigin,
+        projectedRayDirection,
+        cameraForward,
+        targetPreviousFrame
+    );
 
     shifted.valid = true;
     shifted.primaryHit = reconnectionData.firstHit;
@@ -391,10 +424,10 @@ bool lt_scatter_reprojection_shift(
     shifted.fractionalPixel = projectedPixelF;
     shifted.lensSample = clamp(reconnectionData.lensSample, vec2(0.0f), vec2(1.0f));
     shifted.firstRayDir = projectedRayDirection;
-    shifted.subPixelJacobian = max(subPixelJacobian, 1e-10f);
-    shifted.lensVertexJacobian = max(reconnectionData.lensVertexJacobian, 1e-10f);
+    shifted.subPixelJacobian = subPixelJacobian;
+    shifted.lensVertexJacobian = lensVertexJacobian;
     shifted.radiance = PathReservoir_getIntegrand(sourceReservoir);
-    shifted.secondaryPathJacobian = max(reconnectionData.secondaryPathJacobian, 1e-10f);
+    shifted.secondaryPathJacobian = reconnectionData.secondaryPathJacobian;
     return true;
 }
 
@@ -535,12 +568,6 @@ bool lt_scatter_update_shifted_reservoir(
     if (lt_scatter_radiance_phat(PathReservoir_getIntegrand(sourceReservoir)) <= 0.0f) {
         return false;
     }
-    if (sourceReconnection.subPixelJacobian <= 1e-10f
-     || sourceReconnection.secondaryPathJacobian <= 1e-10f)
-    {
-        return false;
-    }
-
     if (!lt_scatter_reprojection_shift(
         sourceReconnection,
         sourceReservoir,
@@ -558,18 +585,14 @@ bool lt_scatter_update_shifted_reservoir(
         sourcePreviousFrame,
         targetPreviousFrame
     );
-    if (!RTXDI_IsValidDIReservoir(shiftedReservoir)) {
-        return false;
-    }
-
     // The shifted reservoir now sits in the target pixel's cell with a
     // subPixel == fract(shiftedCurr.fractionalPixel) (reference parity --
     // ScatterTemporalResampling.rt.slang:139 sets it from prevReconnection
     // after update(shiftedPrev); ShiftMapping.slang writes shifted.fractionalPixel
     // into the selected reservoir's subPixel after the shift is finalized).
-    vec2 shiftedSubPixel = clamp(fract(shifted.fractionalPixel), vec2(0.0f), vec2(1.0f - 1e-5f));
+    vec2 shiftedSubPixel = fract(shifted.fractionalPixel);
     PathReservoir_setSubPixel(shiftedReservoir, targetPixel, shiftedSubPixel);
-    shiftedReservoir.lensSampleUV = clamp(sourceReconnection.lensSample, vec2(0.0f), vec2(1.0f));
+    shiftedReservoir.lensSampleUV = sourceReconnection.lensSample;
     lt_area_finalize_candidate(shiftedReservoir, targetPixel, shiftedReservoir.pathSample);
 
     RAB_Surface shiftedPrimarySurface = lt_scatter_build_shifted_primary_surface(
@@ -614,10 +637,6 @@ bool lt_scatter_update_shifted_reservoir(
         sourceReconnection.subPixelJacobian,
         sourceReconnection.secondaryPathJacobian
     );
-    if (shiftedJacobian <= 0.0f) {
-        return false;
-    }
-
     // Reference parity (ScatterTemporalResampling.rt.slang:136):
     //   prevReconnection.update(shiftedPrev)
     // which overwrites the reconnection's hit position, incident dir,
@@ -626,13 +645,13 @@ bool lt_scatter_update_shifted_reservoir(
     // into the resolved reservoir's sidecar.  We do NOT mutate age or
     // spatialDistance (the reference does neither).
     shiftedReconnection = sourceReconnection;
-    shiftedReconnection.firstHit.worldPos = sourceReconnection.firstHit.worldPos;
+    shiftedReconnection.firstHit = shifted.primaryHit;
     shiftedReconnection.firstWi = -normalize(shifted.firstRayDir);
     shiftedReconnection.subPixel = shiftedSubPixel;
     shiftedReconnection.lensSample = shifted.lensSample;
-    shiftedReconnection.subPixelJacobian = max(shifted.subPixelJacobian, 1e-10f);
-    shiftedReconnection.lensVertexJacobian = max(shifted.lensVertexJacobian, 1e-10f);
-    shiftedReconnection.secondaryPathJacobian = max(secondaryPathJacobian, 1e-10f);
+    shiftedReconnection.subPixelJacobian = shifted.subPixelJacobian;
+    shiftedReconnection.lensVertexJacobian = shifted.lensVertexJacobian;
+    shiftedReconnection.secondaryPathJacobian = secondaryPathJacobian;
     uint packedIdentity = uint(round(scatter_load_surface_identity(targetPixel, targetPreviousFrame).w));
     shiftedReconnection.firstHit.faceId = packedIdentity & 0x7u;
     shiftedReconnection.firstHit.materialId = packedIdentity >> 3u;
@@ -663,13 +682,10 @@ float lt_scatter_canonical_mis(
     bool  shiftedValid)
 {
     float m1 = currIntegrandPHat * currConfidence;
-    if (m1 <= 0.0f) {
-        return 0.0f;
-    }
     float m2 = shiftedValid
         ? (shiftedCurrRadiancePHat * shiftedJacobian * prevConfidence)
         : 0.0f;
-    if (isnan(m2) || isinf(m2) || m2 < 0.0f) {
+    if (isnan(m2)) {
         m2 = 0.0f;
     }
     float denom = m1 + m2;
@@ -697,15 +713,10 @@ float lt_scatter_compute_ucw(
     vec3              storedIntegrand)
 {
     float pHatStored = lt_scatter_radiance_phat(storedIntegrand);
-    if (pHatStored <= 0.0f) {
+    if (pHatStored == 0.0f) {
         return 0.0f;
     }
-    float totalWeight = max(reservoir.weightSum, 0.0f);
-    if (totalWeight <= 0.0f) {
-        return 0.0f;
-    }
-    float ucw = totalWeight / pHatStored;
-    return (isnan(ucw) || isinf(ucw) || ucw < 0.0f) ? 0.0f : ucw;
+    return reservoir.weightSum / pHatStored;
 }
 
 // ---------------------------------------------------------------------------
@@ -740,15 +751,10 @@ bool lt_scatter_add_sample_from_reservoir(
     inout RTXDI_RandomSamplerState rng)
 {
     float pHatLum = lt_scatter_radiance_phat(pHat);
-    float candidateWeight = max(misWeight, 0.0f) * pHatLum * max(otherUcw, 0.0f) * max(jacobian, 0.0f);
-    if (isnan(candidateWeight) || isinf(candidateWeight) || candidateWeight < 0.0f) {
-        candidateWeight = 0.0f;
-    }
+    float candidateWeight = misWeight * pHatLum * otherUcw * jacobian;
     PathReservoir_setTotalWeight(state, PathReservoir_getTotalWeight(state) + candidateWeight);
 
-    bool selected = (candidateWeight > 0.0f)
-        && RTXDI_IsValidDIReservoir(otherReservoir)
-        && (lt_next_random(rng) * PathReservoir_getTotalWeight(state) < candidateWeight);
+    bool selected = (lt_next_random(rng) * PathReservoir_getTotalWeight(state) < candidateWeight);
     if (selected) {
         state.lightData         = otherReservoir.lightData;
         state.uvData            = otherReservoir.uvData;
@@ -787,11 +793,11 @@ void lt_reproject_temporal_samples_append_record(ivec2 pixel, ivec2 newPixel) {
     }
 
     uint linearizedIndex = lt_temporal_scatter_cell_index_from_pixel(newPixel);
-    uint cellIndex = lt_reproject_temporal_samples_cell_counter_atomic_add(linearizedIndex, 1u);
     uint index = lt_reproject_temporal_samples_global_counter_atomic_add(
         LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT,
         1u
     );
+    uint cellIndex = lt_reproject_temporal_samples_cell_counter_atomic_add(linearizedIndex, 1u);
     lt_reproject_temporal_samples_store_reservoir_index(index, uvec2(linearizedIndex, cellIndex));
     lt_reproject_temporal_samples_store_scattered_reservoir(index, uvec2(pixel));
 }
@@ -828,6 +834,8 @@ void lt_reproject_temporal_samples_append_record(ivec2 pixel, ivec2 newPixel) {
 // in this pass, and doing so reintroduces pHat jitter / blur.
 // Returns valid=false when the carried integrand is zero.
 // ---------------------------------------------------------------------------
+#ifndef PH_LIGHTTREE_LT_SCATTER_CURRENT_SAMPLE_DECLARED
+#define PH_LIGHTTREE_LT_SCATTER_CURRENT_SAMPLE_DECLARED
 struct LtScatterCurrentSample {
     bool                                  isValid;
     bool                                  hasPositivePHat;
@@ -835,6 +843,7 @@ struct LtScatterCurrentSample {
     ReservoirSplattingReconnectionData    reconnectionData;
     float                                 confidence;
 };
+#endif
 
 float ScatterTemporalResampling_load_previous_reservoir_confidence(
     ivec2 neighborPixel);
@@ -874,11 +883,16 @@ float ScatterTemporalResampling_motion_vector_confidence(
 RTXDI_DIReservoir lt_ScatterTemporalResampling_load_current_reservoir(
     ivec2 pixel)
 {
-    return RTXDI_LoadDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(pixel),
-        lt_build_restir_di_parameters().bufferIndices.initialSamplingOutputBufferIndex
+    RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
+    rtxdi_unpack_reservoir_at_surface(
+        reservoir,
+        texelFetch(radiosity_proposal_reservoirs, pixel, 0),
+        texelFetch(radiosity_proposal_reservoir_samples, pixel, 0),
+        texelFetch(radiosity_proposal_reservoir_meta, pixel, 0),
+        RAB_EmptySurface(),
+        false
     );
+    return reservoir;
 }
 
 LtScatterCurrentSample lt_scatter_make_empty_current_sample() {
@@ -909,7 +923,9 @@ float ScatterTemporalResampling_motion_vector_confidence(
             float bilinearWeight =
                 ((x == 0) ? (1.0f - fractionalCoord.x) : fractionalCoord.x) *
                 ((y == 0) ? (1.0f - fractionalCoord.y) : fractionalCoord.y);
-            newConfidence += bilinearWeight * ScatterTemporalResampling_load_previous_reservoir_confidence(neighborPixel);
+            newConfidence += bilinearWeight * lt_scatter_confidence_mis_weight(
+                ScatterTemporalResampling_load_previous_reservoir_confidence(neighborPixel)
+            );
         }
     }
 
@@ -924,10 +940,6 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
 {
     LtScatterCurrentSample currentSample = lt_scatter_make_empty_current_sample();
     currentSample.reservoir = currReservoir;
-    if (!RTXDI_IsValidDIReservoir(currReservoir) || !RAB_IsSurfaceValid(surface)) {
-        return currentSample;
-    }
-
     // Reference parity: load the Stage-1 current-frame reconnection snapshot
     // that was published by the Java pipeline before Stage 2c. This mirrors the
     // structured-buffer read of currReconnectionData[reservoirIdx] exactly.
@@ -949,7 +961,7 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
         storedReconnection
     );
     RestirDI_restoreReconnectionRadiometry(pixel, false, currentSample.reservoir, storedReconnection);
-    currentSample.confidence = lt_scatter_reservoir_confidence(currentSample.reservoir, storedReconnection);
+    currentSample.confidence = lt_scatter_actual_reservoir_confidence(currentSample.reservoir);
     currentSample.isValid = true;
     currentSample.reconnectionData = storedReconnection;
     currentSample.hasPositivePHat = ph_luminance(PathReservoir_getIntegrand(currentSample.reservoir)) > 0.0f;
@@ -977,7 +989,7 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
     ivec2 pixel,
     RAB_Surface surface)
 {
-    if (!currSample.isValid || !currSample.hasPositivePHat) {
+    if (!currSample.hasPositivePHat) {
         return 1.0f;
     }
 
@@ -1001,19 +1013,14 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
         return 1.0f;
     }
 
-    ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
-    RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(previousReservoirPixel)
-    );
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
 
     return lt_scatter_canonical_mis(
         lt_scatter_radiance_phat(PathReservoir_getIntegrand(currSample.reservoir)),
-        currSample.confidence,
+        lt_scatter_confidence_mis_weight(currSample.confidence),
         lt_scatter_radiance_phat(shiftedCurr.radiance),
         shiftedJacobian,
-        RTXDI_IsValidDIReservoir(prevReservoir) ? prevReservoirConfidence : 0.0f,
+        lt_scatter_confidence_mis_weight(prevReservoirConfidence),
         true
     );
 }
@@ -1034,10 +1041,6 @@ bool ScatterTemporalResampling_process_contributor(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(previousReservoirPixel)
     );
-    if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
-        return false;
-    }
-
     ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
     RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
@@ -1067,9 +1070,9 @@ bool ScatterTemporalResampling_process_contributor(
     if (ph_luminance(PathReservoir_getIntegrand(prevReservoir)) > 0.0f) {
         float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
             * shiftedJacobian
-            * currReservoirConfidence;
+            * lt_scatter_confidence_mis_weight(currReservoirConfidence);
         float m2 = lt_scatter_radiance_phat(PathReservoir_getIntegrand(prevReservoir))
-            * prevReservoirConfidence;
+            * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
         float denominator = m1 + m2;
         prevSampleMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
     }
@@ -1130,8 +1133,7 @@ float ScatterTemporalResampling_load_previous_reservoir_confidence(
         uvec2(previousReservoirPixel)
     );
 
-    ReservoirSplattingReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
-    return lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
+    return lt_scatter_actual_reservoir_confidence(prevReservoir);
 }
 
 

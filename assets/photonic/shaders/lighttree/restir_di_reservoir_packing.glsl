@@ -75,8 +75,8 @@ vec4 rtxdi_pack_reservoir_meta_with_transport(
 {
     return vec4(
         reservoir.canonicalWeight,
-        reservoir.transportAux0,
-        reservoir.transportAux1,
+        transportAux0,
+        transportAux1,
         uintBitsToFloat(rtxdi_pack_age_distance(reservoir.age, reservoir.spatialDistance))
     );
 }

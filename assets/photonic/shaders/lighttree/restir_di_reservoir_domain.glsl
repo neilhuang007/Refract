@@ -22,7 +22,7 @@ vec2 lt_area_random_pixel_sample(inout RTXDI_RandomSamplerState rng, ivec2 pixel
 }
 
 vec2 lt_area_default_lens_sample() {
-    return vec2(0.5f);
+    return vec2(0.0f);
 }
 
 vec2 lt_area_sample_lens_sample(inout RTXDI_RandomSamplerState rng) {

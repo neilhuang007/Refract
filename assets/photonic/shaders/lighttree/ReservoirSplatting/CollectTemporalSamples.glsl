@@ -79,7 +79,7 @@ void CollectTemporalSamples_storeResult(
 
     intermediate_reservoir_frag_out = rtxdi_pack_reservoir(reservoir);
     intermediate_reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(reservoir);
-    intermediate_reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(reservoir);
+    intermediate_reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
 void CollectTemporalSamples_store_empty_result()
@@ -145,20 +145,18 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                 totalConfidence += bilinearWeight
                     * CollectTemporalSamples_confidence_weight(neighborReservoirConfidence);
 
-                vec3 sourceIntegrand = PathReservoir_getIntegrand(neighborReservoir);
                 vec2 relativeSubPixel = vec2(offset)
                     + PathReservoir_getSubPixel(neighborReservoir, neighborPixel)
                     - fractionalCoord;
                 if (
-                    !RTXDI_IsValidDIReservoir(neighborReservoir)
-                    || ph_luminance(sourceIntegrand) <= 0.0f
-                    || any(lessThan(relativeSubPixel, vec2(0.0f)))
+                    any(lessThan(relativeSubPixel, vec2(0.0f)))
                     || any(greaterThanEqual(relativeSubPixel, vec2(1.0f)))
                 )
                 {
                     continue;
                 }
 
+                vec3 sourceIntegrand = PathReservoir_getIntegrand(neighborReservoir);
                 RTXDI_DIReservoir shiftedReservoir = neighborReservoir;
                 PathReservoir_setSubPixel(shiftedReservoir, currPixel, relativeSubPixel);
                 bool selected = lt_scatter_add_sample_from_reservoir(
@@ -228,15 +226,6 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                 * CollectTemporalSamples_confidence_weight(neighborReservoirConfidence);
 
             vec3 sourceIntegrand = PathReservoir_getIntegrand(neighborReservoir);
-            if (!RTXDI_IsValidDIReservoir(neighborReservoir))
-            {
-                continue;
-            }
-            if (ph_luminance(sourceIntegrand) <= 0.0f)
-            {
-                continue;
-            }
-
             vec2 relativeSubPixel = vec2(offset)
                 + PathReservoir_getSubPixel(neighborReservoir, neighborPixel)
                 - fractionalCoord;
@@ -345,7 +334,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                 dstReservoir,
                 dstConfidence,
                 misWeight,
-                shiftedPath.radiance,
+                vec3(lt_scatter_radiance_phat(shiftedPath.radiance)),
                 shiftedJacobian,
                 lt_scatter_compute_ucw(neighborReservoir, sourceIntegrand),
                 neighborReservoirConfidence,

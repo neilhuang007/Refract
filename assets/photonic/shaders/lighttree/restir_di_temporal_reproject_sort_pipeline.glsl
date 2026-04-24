@@ -10,16 +10,16 @@ float lt_multi_temporal_reproject_partition(
     uint partitionIndex,
     out vec2 newFractionalPixel,
     out bool hitValid,
-    out vec3 rayDirection)
+    out vec3 rayOrigin,
+    out vec3 rayDirection,
+    out float traceDistance,
+    out bool hitDistantLight)
 {
     float fractionalTime = lt_multi_temporal_partition_fraction(prevReconnection.time);
     float newTime = lt_multi_temporal_partition_time(fractionalTime, partitionIndex);
     hitValid = prevReconnection.firstHit.viewDepth > 0.0f
         && any(greaterThan(abs(prevReconnection.firstHit.worldPos), vec3(0.0f)));
 
-    vec3 rayOrigin;
-    float traceDistance;
-    bool hitDistantLight;
     if (!scatter_project_reconnection_to_current_frame(
             prevReconnection,
             newFractionalPixel,
@@ -28,6 +28,9 @@ float lt_multi_temporal_reproject_partition(
             traceDistance,
             hitDistantLight)) {
         rayDirection = vec3(0.0f);
+        rayOrigin = vec3(0.0f);
+        traceDistance = 0.0f;
+        hitDistantLight = false;
         newFractionalPixel = vec2(-1.0f);
     }
     return newTime;
@@ -36,10 +39,6 @@ float lt_multi_temporal_reproject_partition(
 void MultiReprojectTemporalSamples_run(
     ivec2 pixel)
 {
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return;
-    }
-
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return;
     }
@@ -48,22 +47,27 @@ void MultiReprojectTemporalSamples_run(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(pixel)
     );
-    if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
+    if (all(equal(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)))) {
         return;
     }
 
     ScatterReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
-    RAB_Surface prevSurface = lt_load_previous_surface(pixel);
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
         vec2 newFractionalPixel;
         bool hitValid;
+        vec3 rayOrigin;
         vec3 rayDirection;
+        float traceDistance;
+        bool hitDistantLight;
         float newTime = lt_multi_temporal_reproject_partition(
             prevReconnection,
             partitionIndex,
             newFractionalPixel,
             hitValid,
-            rayDirection
+            rayOrigin,
+            rayDirection,
+            traceDistance,
+            hitDistantLight
         );
         if (newFractionalPixel.x < 0.0f || newFractionalPixel.y < 0.0f) {
             continue;
@@ -81,18 +85,15 @@ void MultiReprojectTemporalSamples_run(
             continue;
         }
 
-        RAB_Surface currentSurface = RAB_GetGBufferSurface(newPixel, false);
-        if (!RAB_IsSurfaceValid(currentSurface)) {
-            continue;
-        }
-
         ScatterReconnectionData partitionedReconnection = prevReconnection;
         partitionedReconnection.time = newTime;
-        if (hitValid) {
-            if (!lt_area_is_temporal_neighbor_valid(currentSurface, prevSurface, partitionedReconnection, newPixel)) {
-                continue;
-            }
-        } else if (!partitionedReconnection.lightIsDistant) {
+        if (!hitValid && !partitionedReconnection.lightIsDistant) {
+            continue;
+        }
+        if (!lt_scatter_trace_reconnection_visibility(
+                rayOrigin,
+                rayDirection,
+                hitDistantLight ? traceDistance : (0.999f * traceDistance))) {
             continue;
         }
 
@@ -105,10 +106,6 @@ void MultiReprojectTemporalSamples_run(
 void ReprojectTemporalSamples_run(
     ivec2 pixel)
 {
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return;
-    }
-
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return;
     }
@@ -117,7 +114,7 @@ void ReprojectTemporalSamples_run(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(pixel)
     );
-    if (!RTXDI_IsValidDIReservoir(prevReservoir)) {
+    if (all(equal(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)))) {
         return;
     }
 
@@ -148,27 +145,14 @@ void ReprojectTemporalSamples_run(
         return;
     }
 
-    if (hasPrimaryHit) {
-        if (traceDistance <= 1e-5f) {
-            return;
-        }
-
-        ray.origin = rayOrigin;
-        ray.direction = rayDirection;
-        ray_target = ivec3(floor(prevReconnection.firstHit.worldPos));
-        ray_ignore_block_id = -1;
-        ray_stop_on_target = true;
-        ray_min_trace_distance = 0.001f * traceDistance;
-        ray_max_trace_distance = max(ray_min_trace_distance, 0.999f * traceDistance);
-        trace_ray(ray, true);
-        ray_target = ivec3(-9999);
-        ray_ignore_block_id = -1;
-        ray_stop_on_target = false;
-        ray_min_trace_distance = 0.0f;
-        ray_max_trace_distance = -1.0f;
-        if (!lt_visibility_trace_is_unoccluded()) {
-            return;
-        }
+    if (!hitDistantLight && traceDistance <= 1e-5f) {
+        return;
+    }
+    if (!lt_scatter_trace_reconnection_visibility(
+            rayOrigin,
+            rayDirection,
+            hitDistantLight ? traceDistance : (0.999f * traceDistance))) {
+        return;
     }
 
     lt_temporal_scatter_append_contributor(newPixel, pixel, 1.0f);
@@ -179,10 +163,6 @@ void ReprojectTemporalSamples_run(
 void computeCellOffsetsStage(
     ivec2 pixel)
 {
-    if (ph_scatter_temporal_enabled <= 0.5f) {
-        return;
-    }
-
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
     return;
 #else
@@ -200,10 +180,6 @@ void computeCellOffsetsStage(
 void sortCellDataStage(
     uint index)
 {
-    if (ph_scatter_temporal_enabled <= 0.5f) {
-        return;
-    }
-
     SortReprojectedReservoirs_sortCellData(index);
 }
 #endif

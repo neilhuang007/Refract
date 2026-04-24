@@ -1,6 +1,13 @@
 #ifndef PHOTONICS_INITIAL_CANDIDATES_PATH_STATE_GLSL
 #define PHOTONICS_INITIAL_CANDIDATES_PATH_STATE_GLSL
 
+#ifndef PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
+#define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
+uniform float ph_reservoir_splatting_camera_aperture_radius;
+uniform float ph_reservoir_splatting_artificial_frame_time;
+uniform float ph_reservoir_splatting_shutter_speed;
+#endif
+
 const int kSamplesPerPixel = (PH_LIGHTTREE_INITIAL_SAMPLES > 0 ? PH_LIGHTTREE_INITIAL_SAMPLES : 1);
 
 struct PathState
@@ -47,7 +54,7 @@ void InitialCandidates_generatePath(out PathState path, ivec2 pixel, uint sample
         sampleIdx,
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
     );
-    path.time = lt_next_random(path.sg);
+    path.time = lt_next_random(path.sg) * ph_reservoir_splatting_shutter_speed;
     path.reservoir = RTXDI_EmptyDIReservoir();
     path.reconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();

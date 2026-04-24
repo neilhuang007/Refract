@@ -23,6 +23,10 @@ void main()
 {
     MultiSortReprojectedReservoirs_storeEmptySortCellDataResult();
 
-    uint index = uint(gl_FragCoord.y) * uint(viewWidth) + uint(gl_FragCoord.x);
+    uint reservoirWidth = lt_multi_temporal_sort_reservoir_width();
+    uint index = uint(gl_FragCoord.y) * reservoirWidth + uint(gl_FragCoord.x);
+    if (index >= reservoirWidth * uint(max(int(viewHeight), 1))) {
+        return;
+    }
     MultiSortReprojectedReservoirs_sortCellData(index);
 }

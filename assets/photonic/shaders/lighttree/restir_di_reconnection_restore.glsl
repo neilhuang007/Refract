@@ -45,15 +45,6 @@ bool RestirDI_restoreReconnectionRadiometry(
         return false;
     }
 
-    if (!(reconnection.firstHit.viewDepth > 0.0f))
-    {
-        reconnection.firstHit.viewDepth = surface.viewDepth;
-    }
-    if (!(reconnection.secondHit.viewDepth > 0.0f))
-    {
-        reconnection.secondHit.viewDepth = max(reconnection.firstHit.viewDepth, surface.viewDepth);
-    }
-
     return true;
 }
 

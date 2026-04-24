@@ -142,7 +142,7 @@ void scatter_pack_reconnection_data(
         reconnectionData.firstHit.worldPos,
         scatter_pack_half2(vec2(
             clamp(reconnectionData.firstHit.viewDepth, 0.0f, 65504.0f),
-            clamp(float(reconnectionData.firstHit.materialId), 0.0f, 65504.0f)
+            clamp(reconnectionData.secondHit.viewDepth, 0.0f, 65504.0f)
         ))
     );
     data1 = vec4(
@@ -188,18 +188,17 @@ void scatter_unpack_reconnection(
 {
     vec2 packedLightPdfSubPixelJacobian;
     vec2 packedLensJacobians;
-    vec2 packedViewDepths;
+    vec2 packedHitDepths;
 
     packedLightPdfSubPixelJacobian = scatter_unpack_half2(data1.w);
     packedLensJacobians = scatter_unpack_half2(data3.w);
-    packedViewDepths = scatter_unpack_half2(data0.w);
+    packedHitDepths = scatter_unpack_half2(data0.w);
     reconnectionData = ReconnectionData_init();
 
     reconnectionData.firstHit.worldPos = data0.xyz;
-    reconnectionData.firstHit.viewDepth = max(packedViewDepths.x, 0.0f);
+    reconnectionData.firstHit.viewDepth = max(packedHitDepths.x, 0.0f);
     reconnectionData.secondHit.worldPos = data1.xyz;
-    reconnectionData.secondHit.viewDepth = max(transportAux0, 0.0f);
-    reconnectionData.firstHit.materialId = uint(round(max(packedViewDepths.y, 0.0f)));
+    reconnectionData.secondHit.viewDepth = max(packedHitDepths.y, 0.0f);
     reconnectionData.irradiance = data2.xyz;
     reconnectionData.earlyThroughput = data3.xyz;
     reconnectionData.subPixel = clamp(scatter_unpack_half2(data4.x), vec2(0.0f), vec2(1.0f));

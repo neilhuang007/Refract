@@ -1,6 +1,21 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_BACKUP_MULTI_PIPELINE_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_BACKUP_MULTI_PIPELINE_GLSL
 
+RTXDI_DIReservoir lt_di_load_gather_intermediate_reservoir(
+    ivec2 pixel)
+{
+    RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
+    rtxdi_unpack_reservoir_at_surface(
+        reservoir,
+        texelFetch(temporal_gather_intermediate_reservoir_data, pixel, 0),
+        texelFetch(temporal_gather_intermediate_reservoir_sample, pixel, 0),
+        texelFetch(temporal_gather_intermediate_reservoir_meta, pixel, 0),
+        RAB_EmptySurface(),
+        false
+    );
+    return reservoir;
+}
+
 bool lt_ScatterBackupTemporalResampling_use_pairwise_mis()
 {
     return ph_restir_scatter_backup_mis_mode > 0.5f;
@@ -29,9 +44,10 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
 {
     float currSampleMIS = 1.0f;
     vec3 currIntegrand = PathReservoir_getIntegrand(currSample.reservoir);
-    if (currSample.isValid && currSample.hasPositivePHat)
+    if (currSample.hasPositivePHat)
     {
-        float m1 = lt_scatter_radiance_phat(currIntegrand) * currSample.confidence;
+        float m1 = lt_scatter_radiance_phat(currIntegrand)
+            * lt_scatter_confidence_mis_weight(currSample.confidence);
 
         float m2 = 0.0f;
         LtScatterShiftedPath scatteredCurr;
@@ -52,13 +68,12 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
             m2 = lt_scatter_radiance_phat(scatteredCurr.radiance)
                 * scatteredJacobian
                 * 0.5f
-                * prevReservoirConfidence;
-            m2 = (isnan(m2) || isinf(m2)) ? 0.0f : m2;
+                * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
+            m2 = isnan(m2) ? 0.0f : m2;
         }
 
         float m3 = 0.0f;
-        GatherHelper gatherHelper = GatherHelper_init(pixel);
-        vec2 floatingCoord = GatherHelper_getFloatingCoords(gatherHelper);
+        vec2 floatingCoord = GatherData_getFloatingCoords(pixel);
         if (lt_is_viewport_uv_in_bounds(floatingCoord))
         {
         ShiftedPathData shiftedCurr = gatherLensVertexCopyShift(
@@ -68,16 +83,17 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
             floatingCoord + PathReservoir_getSubPixel(currSample.reservoir, pixel),
             currSample.reconnectionData.lensSample,
             currSample.reservoir,
+            false,
             true
         );
             float shiftedJacobian = shiftedCurr.secondaryPathJacobian
-                / max(currSample.reconnectionData.secondaryPathJacobian, 1e-10f);
+                / currSample.reconnectionData.secondaryPathJacobian;
             float backupReservoirConfidence = lt_scatter_reservoir_confidence(backupReservoir, backupReconnectionData);
             m3 = lt_scatter_radiance_phat(shiftedCurr.radiance)
                 * shiftedJacobian
                 * 0.5f
-                * backupReservoirConfidence;
-            m3 = (isnan(m3) || isinf(m3)) ? 0.0f : m3;
+                * lt_scatter_confidence_mis_weight(backupReservoirConfidence);
+            m3 = isnan(m3) ? 0.0f : m3;
         }
 
         if (lt_ScatterBackupTemporalResampling_use_pairwise_mis())
@@ -99,7 +115,7 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
         currSampleMIS,
         currIntegrand,
         1.0f,
-        currSample.isValid ? lt_scatter_compute_ucw(currSample.reservoir, currIntegrand) : 0.0f,
+        lt_scatter_compute_ucw(currSample.reservoir, currIntegrand),
         currSample.confidence,
         currSample.reservoir,
         sg
@@ -125,8 +141,7 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
     vec3 backupPHat = vec3(0.0f);
     float shiftedJacobian = 1.0f;
     vec3 backupIntegrand = PathReservoir_getIntegrand(backupReservoir);
-    if (RTXDI_IsValidDIReservoir(backupReservoir)
-        && any(greaterThan(backupIntegrand, vec3(0.0f))))
+    if (any(greaterThan(backupIntegrand, vec3(0.0f))))
     {
         ShiftedPathData shiftedBackup = gatherLensVertexCopyShift(
             sg,
@@ -135,16 +150,17 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
             vec2(pixel) + PathReservoir_getSubPixel(backupReservoir, pixel),
             backupReconnectionData.lensSample,
             backupReservoir,
+            true,
             false
         );
         shiftedJacobian = shiftedBackup.secondaryPathJacobian
-            / max(backupReconnectionData.secondaryPathJacobian, 1e-10f);
+            / backupReconnectionData.secondaryPathJacobian;
 
         float m1 = lt_scatter_radiance_phat(shiftedBackup.radiance)
             * shiftedJacobian
-            * currSample.confidence;
-        bool invalidM1 = isnan(m1) || isinf(m1);
-        backupPHat = invalidM1 ? vec3(0.0f) : max(shiftedBackup.radiance, vec3(0.0f));
+            * lt_scatter_confidence_mis_weight(currSample.confidence);
+        bool invalidM1 = isnan(m1);
+        backupPHat = invalidM1 ? vec3(0.0f) : shiftedBackup.radiance;
         shiftedJacobian = invalidM1 ? 1.0f : shiftedJacobian;
         m1 = invalidM1 ? 0.0f : m1;
 
@@ -172,15 +188,15 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
                     * scatteredJacobian
                     * shiftedJacobian
                     * 0.5f
-                    * prevReservoirConfidence;
-                m2 = (isnan(m2) || isinf(m2)) ? 0.0f : m2;
+                    * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
+                m2 = isnan(m2) ? 0.0f : m2;
             }
         }
 
         float backupReservoirConfidence = lt_scatter_reservoir_confidence(backupReservoir, backupReconnectionData);
         float m3 = lt_scatter_radiance_phat(backupIntegrand)
             * 0.5f
-            * backupReservoirConfidence;
+            * lt_scatter_confidence_mis_weight(backupReservoirConfidence);
         float denominator = lt_ScatterBackupTemporalResampling_mis_scale() * m1 + m2 + m3;
         backupSampleMIS = (denominator > 0.0f)
             ? (lt_ScatterBackupTemporalResampling_mis_scale() * m3 / denominator)
@@ -221,11 +237,6 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(previousReservoirPixel)
     );
-    if (!RTXDI_IsValidDIReservoir(prevReservoir))
-    {
-        return false;
-    }
-
     ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
     RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
@@ -260,21 +271,20 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
 
         float m1 = lt_scatter_radiance_phat(scatteredPrev.radiance)
             * scatteredJacobian
-            * currSample.confidence;
-        bool invalidM1 = isnan(m1) || isinf(m1);
-        prevPHat = invalidM1 ? vec3(0.0f) : max(scatteredPrev.radiance, vec3(0.0f));
+            * lt_scatter_confidence_mis_weight(currSample.confidence);
+        bool invalidM1 = isnan(m1);
+        prevPHat = invalidM1 ? vec3(0.0f) : scatteredPrev.radiance;
         scatteredJacobian = invalidM1 ? 1.0f : scatteredJacobian;
         m1 = invalidM1 ? 0.0f : m1;
 
         float m2 = lt_scatter_radiance_phat(prevIntegrand)
             * 0.5f
-            * prevReservoirConfidence;
+            * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
 
         float m3 = 0.0f;
         if (!lt_ScatterBackupTemporalResampling_use_pairwise_mis())
         {
-            GatherHelper gatherHelper = GatherHelper_init(pixel);
-            vec2 floatingCoord = GatherHelper_getFloatingCoords(gatherHelper);
+            vec2 floatingCoord = GatherData_getFloatingCoords(pixel);
             vec2 relativeSubPixel = PathReservoir_getSubPixel(shiftedReservoir, pixel);
             if (lt_is_viewport_uv_in_bounds(floatingCoord + relativeSubPixel))
             {
@@ -285,17 +295,18 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
                     floatingCoord + relativeSubPixel,
                     shiftedReconnection.lensSample,
                     shiftedReservoir,
+                    false,
                     true
                 );
                 float shiftedJacobian = shiftedPrevBackup.secondaryPathJacobian
-                    / max(shiftedReconnection.secondaryPathJacobian, 1e-10f);
+                    / shiftedReconnection.secondaryPathJacobian;
                 float backupReservoirConfidence = lt_scatter_reservoir_confidence(backupReservoir, backupReconnectionData);
                 m3 = lt_scatter_radiance_phat(shiftedPrevBackup.radiance)
                     * shiftedJacobian
                     * scatteredJacobian
                     * 0.5f
-                    * backupReservoirConfidence;
-                m3 = (isnan(m3) || isinf(m3)) ? 0.0f : m3;
+                    * lt_scatter_confidence_mis_weight(backupReservoirConfidence);
+                m3 = isnan(m3) ? 0.0f : m3;
             }
         }
 
@@ -341,11 +352,6 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(previousReservoirPixel)
     );
-    if (!RTXDI_IsValidDIReservoir(prevReservoir))
-    {
-        return false;
-    }
-
     ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     ScatterReconnectionData partitionedReconnectionData = prevReconnectionData;
     float fractionalTime = lt_multi_temporal_partition_fraction(prevReconnectionData.time);
@@ -384,14 +390,15 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
 
         float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
             * shiftedJacobian
-            * currSample.confidence;
-        bool invalidM1 = isnan(m1) || isinf(m1);
-        prevPHat = invalidM1 ? vec3(0.0f) : max(shiftedPrev.radiance, vec3(0.0f));
+            * lt_scatter_confidence_mis_weight(currSample.confidence);
+        bool invalidM1 = isnan(m1);
+        prevPHat = invalidM1 ? vec3(0.0f) : shiftedPrev.radiance;
         shiftedJacobian = invalidM1 ? 1.0f : shiftedJacobian;
         m1 = invalidM1 ? 0.0f : m1;
 
         float prevReservoirConfidence = lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
-        float m2 = lt_scatter_radiance_phat(prevIntegrand) * prevReservoirConfidence;
+        float m2 = lt_scatter_radiance_phat(prevIntegrand)
+            * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
         float denominator = m1 + m2;
         prevSampleMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
 
@@ -419,7 +426,7 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
 float lt_MultiScatterTemporalResampling_current_sample_mis(
     LtScatterCurrentSample currSample)
 {
-    if (!currSample.isValid || !currSample.hasPositivePHat)
+    if (!currSample.hasPositivePHat)
     {
         return 1.0f;
     }
@@ -454,16 +461,14 @@ float lt_MultiScatterTemporalResampling_current_sample_mis(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(previousReservoirPixel)
     );
-    float prevReservoirConfidence = RTXDI_IsValidDIReservoir(prevReservoir)
-        ? ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel)
-        : 0.0f;
+    float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
 
     float m1 = lt_scatter_radiance_phat(PathReservoir_getIntegrand(currSample.reservoir))
-        * currSample.confidence;
+        * lt_scatter_confidence_mis_weight(currSample.confidence);
     float m2 = lt_scatter_radiance_phat(shiftedCurr.radiance)
         * shiftedJacobian
-        * prevReservoirConfidence;
-    m2 = (isnan(m2) || isinf(m2)) ? 0.0f : m2;
+        * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
+    m2 = isnan(m2) ? 0.0f : m2;
 
     float denominator = m1 + m2;
     return (denominator > 0.0f) ? (m1 / denominator) : 0.0f;
@@ -475,9 +480,7 @@ void multiComputeCellOffsetsStage(
     ivec2 pixel)
 {
 #if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-    if (ph_scatter_temporal_enabled > 0.5f) {
-        MultiSortReprojectedReservoirs_computeCellOffsets(pixel);
-    }
+    MultiSortReprojectedReservoirs_computeCellOffsets(pixel);
 #endif
 }
 
@@ -485,9 +488,7 @@ void multiSortCellDataStage(
     uint index)
 {
 #if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-    if (ph_scatter_temporal_enabled > 0.5f) {
-        MultiSortReprojectedReservoirs_sortCellData(index);
-    }
+    MultiSortReprojectedReservoirs_sortCellData(index);
 #endif
 }
 #endif
@@ -499,12 +500,8 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
 {
     currReconnectionData = ReservoirSplattingReconnectionData_init();
 
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return RTXDI_EmptyDIReservoir();
-    }
-
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!lt_is_viewport_uv_in_bounds(pixel) || !RAB_IsSurfaceValid(surface)) {
+    if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return RTXDI_EmptyDIReservoir();
     }
 
@@ -588,12 +585,9 @@ RTXDI_DIReservoir MultiScatterTemporalResampling_run(
     out ReservoirSplattingReconnectionData currReconnectionData)
 {
     currReconnectionData = ReservoirSplattingReconnectionData_init();
-    if (ph_scatter_temporal_enabled <= 0.5f || ph_debug_enable_direct_temporal_reuse < 0.5f) {
-        return RTXDI_EmptyDIReservoir();
-    }
 
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!lt_is_viewport_uv_in_bounds(pixel) || !RAB_IsSurfaceValid(surface)) {
+    if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return RTXDI_EmptyDIReservoir();
     }
 
@@ -618,7 +612,7 @@ RTXDI_DIReservoir MultiScatterTemporalResampling_run(
         currSampleMIS,
         PathReservoir_getIntegrand(currSample.reservoir),
         1.0f,
-        currSample.isValid ? lt_scatter_compute_ucw(currSample.reservoir, PathReservoir_getIntegrand(currSample.reservoir)) : 0.0f,
+        lt_scatter_compute_ucw(currSample.reservoir, PathReservoir_getIntegrand(currSample.reservoir)),
         currSample.confidence,
         currSample.reservoir,
         sg

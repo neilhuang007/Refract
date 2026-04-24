@@ -52,7 +52,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ANTI_FIREFLY = boolParam("debug_enable_direct_anti_firefly", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
-   public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "regir_ris");
+   public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "power_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
    public static final Parameter<String> RESTIR_TEMPORAL_REUSE = stringParam("restir_temporal_reuse", "gather_only");
    public static final Parameter<String> RESTIR_TEMPORAL_GATHER_MODE = stringParam("restir_temporal_gather_mode", "fast");
@@ -192,15 +192,16 @@ public final class PhotonicsStorage {
 
    public static String normalizeRestirLocalLightSamplingMode(String samplingMode) {
       if (samplingMode == null) {
-         return "regir_ris";
+         return "power_ris";
       }
 
       return switch (samplingMode.trim().toLowerCase(Locale.ROOT)) {
-         case "", "auto", "default", "-1", "2", "regir", "regir_ris", "regir-ris", "regir ris" -> "regir_ris";
+         case "", "auto", "default", "-1" -> "power_ris";
          case "0", "uniform" -> "uniform";
          case "1", "power", "power_ris", "power-ris", "power ris" -> "power_ris";
+         case "2", "regir", "regir_ris", "regir-ris", "regir ris" -> "regir_ris";
          case "3", "fast_random", "fast-random", "fast random", "basic_random", "basic-random", "basic random" -> "fast_random";
-         default -> "regir_ris";
+         default -> "power_ris";
       };
    }
 

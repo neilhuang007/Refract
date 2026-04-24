@@ -30,7 +30,7 @@ void PathReservoir_setIntegrand(inout RTXDI_DIReservoir reservoir, vec3 integran
 }
 
 float PathReservoir_getConfidence(RTXDI_DIReservoir reservoir) {
-    return clamp(max(reservoir.M, 0.0f), 0.0f, 20.0f);
+    return reservoir.M;
 }
 
 void PathReservoir_setConfidence(inout RTXDI_DIReservoir reservoir, float confidence) {
@@ -38,11 +38,11 @@ void PathReservoir_setConfidence(inout RTXDI_DIReservoir reservoir, float confid
 }
 
 float PathReservoir_getTotalWeight(RTXDI_DIReservoir reservoir) {
-    return max(reservoir.weightSum, 0.0f);
+    return reservoir.weightSum;
 }
 
 void PathReservoir_setTotalWeight(inout RTXDI_DIReservoir reservoir, float totalWeight) {
-    reservoir.weightSum = max(totalWeight, 0.0f);
+    reservoir.weightSum = totalWeight;
 }
 
 float PathReservoir_computeStoredUCW(RTXDI_DIReservoir reservoir) {
@@ -294,7 +294,7 @@ RAB_LightSample light_sample_decode_at(float value, vec2 sampleUv, RAB_Surface s
     replayReservoir.transportAux0 = 0.0;
     replayReservoir.transportAux1 = 0.0;
     replayReservoir.pixelSampleUV = vec2(0.5f);
-    replayReservoir.lensSampleUV = vec2(0.5f);
+    replayReservoir.lensSampleUV = vec2(0.0f);
     replayReservoir.pathSample = 2u;
     rtxdi_set_light_index(replayReservoir, int(round(value)));
     rtxdi_set_sample_uv(replayReservoir, sampleUv);
