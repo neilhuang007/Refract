@@ -40,15 +40,24 @@ vec3 scatter_resolve_early_throughput(
         return vec3(0.0f);
     }
 
-    LightBrdf brdf = lt_evaluate_surface_brdf_with_view(
-        surface,
-        lightSample.dir,
-        surface.viewDir
-    );
-    return max(
-        brdf.demodulatedDiffuse * surface.material.diffuseAlbedo + brdf.specular,
-        vec3(0.0f)
-    );
+    return max(lt_surface_early_throughput(surface, lightSample), vec3(0.0f));
+}
+
+vec3 pathReconnectionShift(
+    ReservoirSplattingReconnectionData reconnectionData,
+    RAB_Surface shiftedSurface,
+    RAB_LightSample shiftedLight)
+{
+    if (!RAB_IsSurfaceValid(shiftedSurface) || shiftedLight.index < 0) {
+        return vec3(0.0f);
+    }
+
+    if (reconnectionData.pathLength == 1u) {
+        return max(reconnectionData.irradiance, vec3(0.0f));
+    }
+
+    vec3 shiftedEarlyThroughput = lt_surface_early_throughput(shiftedSurface, shiftedLight);
+    return max(shiftedEarlyThroughput * reconnectionData.irradiance, vec3(0.0f));
 }
 
 float scatter_resolve_secondary_path_jacobian_from_reconnection(
@@ -129,12 +138,14 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     ivec2 pixelPosition,
     float time,
     float confidenceIgnored,
-    float subPixelJacobian)
+    float subPixelJacobian,
+    vec3 irradiance,
+    vec3 earlyThroughput)
 {
     ReservoirSplattingReconnectionData d = ReservoirSplattingReconnectionData_init();
     vec4 identityData = scatter_load_surface_identity(pixelPosition, false);
-    vec3 irradiance = scatter_resolve_irradiance(surface, reservoir, lightSample);
-    vec3 earlyThroughput = scatter_resolve_early_throughput(surface, reservoir, lightSample);
+    irradiance = max(irradiance, vec3(0.0f));
+    earlyThroughput = max(earlyThroughput, vec3(0.0f));
     vec3 secondPos = (lightSample.index >= 0) ? lightSample.position : surface.worldPos;
     bool lightIsAnalytic = (lightSample.index >= 0) && RAB_IsAnalyticLightSample(lightSample);
 
@@ -178,6 +189,28 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     d.earlyThroughput = earlyThroughput;
 
     return d;
+}
+
+ReservoirSplattingReconnectionData ReconnectionData_build(
+    RAB_Surface surface,
+    RTXDI_DIReservoir reservoir,
+    RAB_LightSample lightSample,
+    ivec2 pixelPosition,
+    float time,
+    float confidenceIgnored,
+    float subPixelJacobian)
+{
+    return ReconnectionData_build(
+        surface,
+        reservoir,
+        lightSample,
+        pixelPosition,
+        time,
+        confidenceIgnored,
+        subPixelJacobian,
+        scatter_resolve_irradiance(surface, reservoir, lightSample),
+        scatter_resolve_early_throughput(surface, reservoir, lightSample)
+    );
 }
 
 #endif

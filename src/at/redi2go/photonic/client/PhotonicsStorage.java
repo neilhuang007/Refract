@@ -199,6 +199,7 @@ public final class PhotonicsStorage {
          case "", "auto", "default", "-1", "2", "regir", "regir_ris", "regir-ris", "regir ris" -> "regir_ris";
          case "0", "uniform" -> "uniform";
          case "1", "power", "power_ris", "power-ris", "power ris" -> "power_ris";
+         case "3", "fast_random", "fast-random", "fast random", "basic_random", "basic-random", "basic random" -> "fast_random";
          default -> "regir_ris";
       };
    }

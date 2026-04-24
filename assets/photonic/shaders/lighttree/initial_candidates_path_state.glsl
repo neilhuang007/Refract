@@ -13,6 +13,8 @@ struct PathState
     RTXDI_DIReservoir reservoir;
     ReservoirSplattingReconnectionData reconnection;
     RAB_LightSample selectedLightSample;
+    vec3 selectedIrradiance;
+    vec3 selectedEarlyThroughput;
 };
 
 uint PathState_getSampleIdx(PathState path)
@@ -49,6 +51,8 @@ void InitialCandidates_generatePath(out PathState path, ivec2 pixel, uint sample
     path.reservoir = RTXDI_EmptyDIReservoir();
     path.reconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();
+    path.selectedIrradiance = vec3(0.0f);
+    path.selectedEarlyThroughput = vec3(0.0f);
 }
 
 #endif

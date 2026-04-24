@@ -6,7 +6,7 @@ void InitialCandidates_addCandidateReservoir(
     inout ReservoirSplattingReconnectionData currReconnectionData,
     PathState path)
 {
-    const bool isFirstSample = (PathState_getSampleIdx(path) == (uint(kSamplesPerPixel) - 1u));
+    const bool isFirstSample = (PathState_getSampleIdx(path) == 0u);
     RTXDI_DIReservoir existingReservoir = isFirstSample ? RTXDI_EmptyDIReservoir() : currReservoir;
     bool selected = PathReservoir_add(
         existingReservoir,
@@ -15,10 +15,23 @@ void InitialCandidates_addCandidateReservoir(
         path.reservoir
     );
 
+    ivec2 pixel = PathState_getPixel(path);
+    ReservoirSplattingReconnectionData selectedReconnection = selected && RTXDI_IsValidDIReservoir(path.reservoir)
+        ? InitialCandidates_buildSelectedReconnection(
+            path.surface,
+            path.reservoir,
+            path.selectedLightSample,
+            pixel,
+            path.time,
+            path.selectedIrradiance,
+            path.selectedEarlyThroughput
+        )
+        : path.reconnection;
+
     vec2 subPixel = selected
-        ? path.reconnection.subPixel
-        : PathReservoir_getSubPixel(existingReservoir, PathState_getPixel(path));
-    PathReservoir_setSubPixel(existingReservoir, PathState_getPixel(path), subPixel);
+        ? selectedReconnection.subPixel
+        : PathReservoir_getSubPixel(existingReservoir, pixel);
+    PathReservoir_setSubPixel(existingReservoir, pixel, subPixel);
     PathReservoir_setConfidence(existingReservoir, 1.0f);
 
     currReservoir = existingReservoir;
@@ -26,7 +39,7 @@ void InitialCandidates_addCandidateReservoir(
     ReservoirSplattingReconnectionData existingReconnection = isFirstSample
         ? ReservoirSplattingReconnectionData_init()
         : currReconnectionData;
-    currReconnectionData = selected ? path.reconnection : existingReconnection;
+    currReconnectionData = selected ? selectedReconnection : existingReconnection;
 }
 
 #endif

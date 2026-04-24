@@ -45,10 +45,6 @@ bool RestirDI_restoreReconnectionRadiometry(
         return false;
     }
 
-    uint restoredFaceId = uint(round(scatter_load_surface_identity(pixelPosition, previousFrame).w));
-    reconnection.firstHit.faceId = restoredFaceId;
-    reconnection.secondHit.faceId = restoredFaceId;
-
     if (!(reconnection.firstHit.viewDepth > 0.0f))
     {
         reconnection.firstHit.viewDepth = surface.viewDepth;

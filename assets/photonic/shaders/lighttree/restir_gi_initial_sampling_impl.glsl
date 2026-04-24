@@ -570,9 +570,12 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
             localLightRISBufferSegmentParams);
     }
 
-    // Reference parity: the initial-candidate stage has no uniform-selection
-    // fallback. Any non-RIS/non-ReGIR mode is an explicit misconfiguration and
-    // results in an INVALID selection context that emits no candidates.
+    if (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_UNIFORM
+        || localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM)
+    {
+        return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
+    }
+
     return lt_make_invalid_local_light_selection_context();
 }
 
@@ -657,9 +660,13 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLights(
     inout RTXDI_RandomSamplerState coherentRng,
     RAB_Surface surface,
     RTXDI_DIInitialSamplingParameters initialSamplingParams,
-    out RAB_LightSample o_selectedSample)
+    out RAB_LightSample o_selectedSample,
+    out vec3 o_selectedIrradiance,
+    out vec3 o_selectedEarlyThroughput)
 {
     o_selectedSample = RAB_EmptyLightSample();
+    o_selectedIrradiance = vec3(0.0f);
+    o_selectedEarlyThroughput = vec3(0.0f);
 
     RTXDI_LightBufferRegion localLightBufferRegion = RTXDI_GetLocalLightBufferRegion();
     if (localLightBufferRegion.numLights == 0u)
@@ -675,6 +682,7 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLights(
     RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
     RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams = RTXDI_GetLocalLightRISBufferSegmentParameters();
     int localLightSamplingMode = int(initialSamplingParams.localLightSamplingMode);
+    bool fastRandomMode = (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM);
     RTXDI_LocalLightSelectionContext lightSelectionContext = RTXDI_InitializeLocalLightSelectionContext(
         coherentRng,
         localLightSamplingMode,
@@ -702,7 +710,37 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLights(
         }
 
         vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
-        RAB_LightSample candidateSample = RAB_SamplePolymorphicLight(lightInfo, surface, uv);
+        vec3 sampledPosition = lt_sample_light_position_from_uv(
+            lightInfo,
+            uv,
+            lt_surface_ray_origin(lt_surface_rt_pos(surface), surface.geoNormal)
+        );
+        vec3 incidentRadiance;
+        vec3 earlyThroughput;
+        vec3 unshadowedIntegrand;
+        RAB_LightSample candidateSample;
+        if (fastRandomMode)
+        {
+            candidateSample = light_sample_new_at_position_fast_random(
+                lightInfo,
+                sampledPosition,
+                surface,
+                incidentRadiance,
+                unshadowedIntegrand
+            );
+            earlyThroughput = vec3(1.0f);
+        }
+        else
+        {
+            candidateSample = light_sample_new_at_position_with_radiometry(
+                lightInfo,
+                sampledPosition,
+                surface,
+                incidentRadiance,
+                earlyThroughput,
+                unshadowedIntegrand
+            );
+        }
         float blendedSourcePdf = RTXDI_LightBrdfMisWeight(
             surface,
             candidateSample,
@@ -715,22 +753,29 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLights(
             continue;
         }
 
-        float visibilityHitDistance = 0.0f;
-        vec3 visibility = lt_trace_final_visibility_with_offset(
-            candidateSample,
-            surface,
-            0.0f,
-            visibilityHitDistance
-        );
-        if (candidateSample.index < 0 || ph_luminance(max(visibility, vec3(0.0f))) <= 0.0f)
+        if (candidateSample.index < 0)
         {
             continue;
         }
 
-        vec3 sampleIntegrand = max(
-            lt_shade_surface_light_sample(surface, candidateSample) * visibility,
-            vec3(0.0f)
-        );
+        vec3 visibility = vec3(1.0f);
+        if (!fastRandomMode)
+        {
+            float visibilityHitDistance = 0.0f;
+            visibility = lt_trace_final_visibility_with_offset(
+                candidateSample,
+                surface,
+                0.0f,
+                visibilityHitDistance
+            );
+            if (ph_luminance(max(visibility, vec3(0.0f))) <= 0.0f)
+            {
+                continue;
+            }
+        }
+
+        vec3 sampleIrradiance = max(incidentRadiance * visibility, vec3(0.0f));
+        vec3 sampleIntegrand = max(unshadowedIntegrand * visibility, vec3(0.0f));
         if (ph_luminance(sampleIntegrand) <= 0.0f)
         {
             continue;
@@ -760,6 +805,8 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLights(
         if (selected)
         {
             o_selectedSample = candidateSample;
+            o_selectedIrradiance = sampleIrradiance;
+            o_selectedEarlyThroughput = earlyThroughput;
         }
     }
 
@@ -778,10 +825,20 @@ RTXDI_DIReservoir RTXDI_SampleEnvironmentMap(RAB_Surface surface, int numSamples
     return state;
 }
 
-RTXDI_DIReservoir InitialCandidates_SampleBrdf(inout RTXDI_RandomSamplerState rng, RAB_Surface surface, int numSamples, RTXDI_InitialSamplingMisData misData, float brdfCutoff, out RAB_LightSample o_selectedSample)
+RTXDI_DIReservoir InitialCandidates_SampleBrdf(
+    inout RTXDI_RandomSamplerState rng,
+    RAB_Surface surface,
+    int numSamples,
+    RTXDI_InitialSamplingMisData misData,
+    float brdfCutoff,
+    out RAB_LightSample o_selectedSample,
+    out vec3 o_selectedIrradiance,
+    out vec3 o_selectedEarlyThroughput)
 {
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
     o_selectedSample = lt_null_sample();
+    o_selectedIrradiance = vec3(0.0f);
+    o_selectedEarlyThroughput = vec3(0.0f);
     if (numSamples <= 0 || ph_light_count <= 0 || !lt_bridge_supports_brdf_local_light_replay())
     {
         return state;
@@ -858,8 +915,17 @@ RTXDI_DIReservoir InitialCandidates_SampleBrdf(inout RTXDI_RandomSamplerState rn
         Light hitLight = load_light(lightIndex);
         vec3 sampledPosition = hitLight.position;
         vec2 sampleUv = vec2(0.0f);
-        RAB_LightSample brdfSample = light_sample_new_at_position(hitLight, sampledPosition, surface);
-        vec3 sampleIntegrand = max(lt_shade_surface_light_sample(surface, brdfSample), vec3(0.0f));
+        vec3 incidentRadiance;
+        vec3 earlyThroughput;
+        vec3 sampleIntegrand;
+        RAB_LightSample brdfSample = light_sample_new_at_position_with_radiometry(
+            hitLight,
+            sampledPosition,
+            surface,
+            incidentRadiance,
+            earlyThroughput,
+            sampleIntegrand
+        );
         if (ph_luminance(sampleIntegrand) <= 0.0f)
         {
             continue;
@@ -917,6 +983,8 @@ RTXDI_DIReservoir InitialCandidates_SampleBrdf(inout RTXDI_RandomSamplerState rn
         if (selected)
         {
             o_selectedSample = brdfSample;
+            o_selectedIrradiance = max(incidentRadiance, vec3(0.0f));
+            o_selectedEarlyThroughput = earlyThroughput;
         }
     }
 
@@ -939,12 +1007,16 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
     RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
 
     RAB_LightSample localSample = lt_null_sample();
+    vec3 localIrradiance;
+    vec3 localEarlyThroughput;
     RTXDI_DIReservoir localReservoir = InitialCandidates_SampleLocalLights(
         rng,
         coherentRng,
         surface,
         initialSamplingParams,
-        localSample
+        localSample,
+        localIrradiance,
+        localEarlyThroughput
     );
 
     RAB_LightSample infiniteSample = lt_null_sample();
@@ -954,13 +1026,17 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
     RTXDI_DIReservoir environmentReservoir = RTXDI_SampleEnvironmentMap(surface, int(initialSamplingParams.numEnvironmentSamples));
 
     RAB_LightSample brdfSample = lt_null_sample();
+    vec3 brdfIrradiance;
+    vec3 brdfEarlyThroughput;
     RTXDI_DIReservoir brdfReservoir = InitialCandidates_SampleBrdf(
         rng,
         surface,
         int(initialSamplingParams.numBrdfSamples),
         misData,
         initialSamplingParams.brdfCutoff,
-        brdfSample);
+        brdfSample,
+        brdfIrradiance,
+        brdfEarlyThroughput);
 
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
     bool selectLocal = PathReservoir_add(state, lt_next_random(rng), 1.0f, localReservoir);
@@ -1001,7 +1077,10 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
         o_lightSample = infiniteSample;
     }
 
-    if (initialSamplingParams.enableInitialVisibility != 0u && RTXDI_IsValidDIReservoir(state) && o_lightSample.index >= 0)
+    if (initialSamplingParams.enableInitialVisibility != 0u
+        && initialSamplingParams.localLightSamplingMode != uint(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM)
+        && RTXDI_IsValidDIReservoir(state)
+        && o_lightSample.index >= 0)
     {
         // Trace the FINAL visibility (RGB transmittance through stained glass,
         // tinted voxels, etc.) once per selected candidate and store it in the
@@ -1059,68 +1138,34 @@ RTXDI_DIReservoir InitialCandidates_SampleLightsForSurface(
     inout RTXDI_RandomSamplerState coherentRng,
     RAB_Surface surface,
     RTXDI_DIInitialSamplingParameters initialSamplingParams,
-    out RAB_LightSample o_lightSample)
+    out RAB_LightSample o_lightSample,
+    out vec3 o_selectedIrradiance,
+    out vec3 o_selectedEarlyThroughput)
 {
     if (!RAB_IsSurfaceValid(surface))
     {
         o_lightSample = RAB_EmptyLightSample();
+        o_selectedIrradiance = vec3(0.0f);
+        o_selectedEarlyThroughput = vec3(0.0f);
         return RTXDI_EmptyDIReservoir();
     }
 
-    RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
-
     RAB_LightSample localSample = lt_null_sample();
+    vec3 localIrradiance;
+    vec3 localEarlyThroughput;
     RTXDI_DIReservoir localReservoir = InitialCandidates_SampleLocalLights(
         rng,
         coherentRng,
         surface,
         initialSamplingParams,
-        localSample
+        localSample,
+        localIrradiance,
+        localEarlyThroughput
     );
-
-    RAB_LightSample infiniteSample = lt_null_sample();
-    RTXDI_DIReservoir infiniteReservoir = RTXDI_SampleInfiniteLights(
-        surface,
-        int(initialSamplingParams.numInfiniteLightSamples)
-    );
-
-    RAB_LightSample environmentSample = lt_null_sample();
-    RTXDI_DIReservoir environmentReservoir = RTXDI_SampleEnvironmentMap(
-        surface,
-        int(initialSamplingParams.numEnvironmentSamples)
-    );
-
-    RAB_LightSample brdfSample = lt_null_sample();
-    RTXDI_DIReservoir brdfReservoir = InitialCandidates_SampleBrdf(
-        rng,
-        surface,
-        int(initialSamplingParams.numBrdfSamples),
-        misData,
-        initialSamplingParams.brdfCutoff,
-        brdfSample
-    );
-
-    RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    o_lightSample = lt_null_sample();
-
-    if (PathReservoir_add(state, lt_next_random(rng), 1.0f, localReservoir))
-    {
-        o_lightSample = localSample;
-    }
-    if (PathReservoir_add(state, lt_next_random(rng), 1.0f, infiniteReservoir))
-    {
-        o_lightSample = infiniteSample;
-    }
-    if (PathReservoir_add(state, lt_next_random(rng), 1.0f, environmentReservoir))
-    {
-        o_lightSample = environmentSample;
-    }
-    if (PathReservoir_add(state, lt_next_random(rng), 1.0f, brdfReservoir))
-    {
-        o_lightSample = brdfSample;
-    }
-
-    return state;
+    o_lightSample = localSample;
+    o_selectedIrradiance = localIrradiance;
+    o_selectedEarlyThroughput = localEarlyThroughput;
+    return localReservoir;
 }
 
 #endif

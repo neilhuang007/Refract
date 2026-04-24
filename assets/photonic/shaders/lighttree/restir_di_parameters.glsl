@@ -155,9 +155,11 @@ RTXDI_ReservoirBufferParameters lt_build_reservoir_buffer_parameters()
 RTXDI_DIInitialSamplingParameters lt_build_di_initial_sampling_parameters()
 {
     RTXDI_DIInitialSamplingParameters initialSamplingParams;
+    // Reservoir Splatting owns SPP in InitialCandidates_run(); the local-light
+    // count is per path and must not default to the same SPP value again.
     initialSamplingParams.numLocalLightSamples = uint((ph_restir_initial_num_local_samples > 0.0)
         ? max(int(ph_restir_initial_num_local_samples), 1)
-        : max(PH_LIGHTTREE_INITIAL_SAMPLES, 1));
+        : 1);
     initialSamplingParams.numInfiniteLightSamples = 0u;
     initialSamplingParams.numEnvironmentSamples = 0u;
     initialSamplingParams.numBrdfSamples = 0u;

@@ -135,7 +135,7 @@ public class ModSettingsScreen extends Screen {
          localLightSamplingMode.modified();
          w.setMessage(Text.of("Local Light Sampling: " + formatRestirLocalLightSamplingMode(localLightSamplingMode.value)));
          this.reloadShaders();
-      }, "Cycles the RTXDI/ReSTIR DI local-light proposal mode:\nUniform, Power RIS, and ReGIR RIS.", () -> true));
+      }, "Cycles the RTXDI/ReSTIR DI local-light proposal mode:\nUniform, Power RIS, ReGIR RIS, and Fast Random (diagnostic).", () -> true));
       PhotonicsStorage.Parameter<String> spatialMisMode = PhotonicsStorage.RESTIR_SPATIAL_MIS_MODE;
       spatialMisMode.value = PhotonicsStorage.normalizeRestirSpatialMisMode(spatialMisMode.value);
       buttons.add(new ModSettingsScreen.PButton("Spatial MIS: " + formatRestirSpatialMisMode(spatialMisMode.value), w -> {
@@ -323,6 +323,7 @@ public class ModSettingsScreen extends Screen {
       return switch (PhotonicsStorage.normalizeRestirLocalLightSamplingMode(samplingMode)) {
          case "uniform" -> "power_ris";
          case "power_ris" -> "regir_ris";
+         case "regir_ris" -> "fast_random";
          default -> "uniform";
       };
    }
@@ -331,6 +332,7 @@ public class ModSettingsScreen extends Screen {
       return switch (PhotonicsStorage.normalizeRestirLocalLightSamplingMode(samplingMode)) {
          case "uniform" -> "Uniform";
          case "power_ris" -> "Power RIS";
+         case "fast_random" -> "Fast Random";
          default -> "ReGIR RIS";
       };
    }

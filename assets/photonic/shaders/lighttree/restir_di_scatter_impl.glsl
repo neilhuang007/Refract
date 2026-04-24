@@ -513,7 +513,11 @@ bool lt_scatter_update_shifted_reservoir(
     }
     shiftedReservoir.targetPdf = targetPdf;
 
-    vec3 shiftedIntegrand = max(lt_shade_surface_light_sample(shiftedPrimarySurface, shiftedLight), vec3(0.0f));
+    vec3 shiftedIntegrand = pathReconnectionShift(
+        sourceReconnection,
+        shiftedPrimarySurface,
+        shiftedLight
+    );
     float secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
         shiftedPrimarySurface,
         shiftedReservoir,
@@ -699,7 +703,7 @@ void lt_reproject_temporal_samples_append_record(ivec2 pixel, ivec2 newPixel) {
         return;
     }
 
-    uint linearizedIndex = uint(newPixel.y * viewWidth + newPixel.x);
+    uint linearizedIndex = lt_temporal_scatter_cell_index_from_pixel(newPixel);
     uint cellIndex = lt_reproject_temporal_samples_cell_counter_atomic_add(linearizedIndex, 1u);
     uint index = lt_reproject_temporal_samples_global_counter_atomic_add(
         LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT,
@@ -841,10 +845,7 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
     // Reference parity: load the Stage-1 current-frame reconnection snapshot
     // that was published by the Java pipeline before Stage 2c. This mirrors the
     // structured-buffer read of currReconnectionData[reservoirIdx] exactly.
-    ivec2 reservoirPosition = ivec2(
-        int(reservoirIdx % uint(viewWidth)),
-        int(reservoirIdx / uint(viewWidth))
-    );
+    ivec2 reservoirPosition = ivec2(lt_temporal_scatter_decode_linear_index(reservoirIdx));
     vec4 reconnection0 = texelFetch(current_stage_reconnection0, reservoirPosition, 0);
     vec4 reconnection1 = texelFetch(current_stage_reconnection1, reservoirPosition, 0);
     vec4 reconnection2 = texelFetch(current_stage_reconnection2, reservoirPosition, 0);

@@ -39,7 +39,7 @@ void RobustReuseOptimization_run(ivec2 pixel)
         1u
     );
     vec2 prevSubPixel = PathReservoir_getSubPixel(prevReservoir, pixel);
-    bool canShift = any(PathReservoir_getIntegrand(prevReservoir) > vec3(0.0f));
+    bool canShift = any(greaterThan(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)));
 
     for (int offsetIndex = 0; offsetIndex < 8; ++offsetIndex)
     {

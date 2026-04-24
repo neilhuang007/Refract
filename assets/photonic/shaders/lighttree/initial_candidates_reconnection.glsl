@@ -44,7 +44,9 @@ ReservoirSplattingReconnectionData InitialCandidates_createReconnectionData(
     RTXDI_DIReservoir candidateReservoir,
     RAB_LightSample selectedLightSample,
     ivec2 pixel,
-    float time)
+    float time,
+    vec3 selectedIrradiance,
+    vec3 selectedEarlyThroughput)
 {
     float subPixelJacobian = InitialCandidates_computeCurrentSubPixelJacobian(surface);
     return ReconnectionData_build(
@@ -54,7 +56,9 @@ ReservoirSplattingReconnectionData InitialCandidates_createReconnectionData(
         pixel,
         time,
         1.0f,
-        subPixelJacobian
+        subPixelJacobian,
+        selectedIrradiance,
+        selectedEarlyThroughput
     );
 }
 
@@ -63,14 +67,18 @@ ReservoirSplattingReconnectionData InitialCandidates_buildSelectedReconnection(
     RTXDI_DIReservoir candidateReservoir,
     RAB_LightSample selectedLightSample,
     ivec2 pixel,
-    float time)
+    float time,
+    vec3 selectedIrradiance,
+    vec3 selectedEarlyThroughput)
 {
     return InitialCandidates_createReconnectionData(
         surface,
         candidateReservoir,
         selectedLightSample,
         pixel,
-        time
+        time,
+        selectedIrradiance,
+        selectedEarlyThroughput
     );
 }
 

@@ -15,6 +15,8 @@ void InitialCandidates_tracePrimaryMiss(
     path.reservoir = RTXDI_EmptyDIReservoir();
     path.reconnection = ReservoirSplattingReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();
+    path.selectedIrradiance = vec3(0.0f);
+    path.selectedEarlyThroughput = vec3(0.0f);
     InitialCandidates_addCandidateReservoir(currReservoir, currReconnectionData, path);
 }
 
@@ -35,18 +37,12 @@ void InitialCandidates_tracePath(
         path.coherentRng,
         path.surface,
         params.initialSamplingParams,
-        path.selectedLightSample
+        path.selectedLightSample,
+        path.selectedIrradiance,
+        path.selectedEarlyThroughput
     );
 
-    path.reconnection = RTXDI_IsValidDIReservoir(path.reservoir)
-        ? InitialCandidates_buildSelectedReconnection(
-            path.surface,
-            path.reservoir,
-            path.selectedLightSample,
-            PathState_getPixel(path),
-            path.time
-        )
-        : ReservoirSplattingReconnectionData_init();
+    path.reconnection = ReservoirSplattingReconnectionData_init();
 
     InitialCandidates_addCandidateReservoir(currReservoir, currReconnectionData, path);
 }

@@ -195,6 +195,7 @@ const int RTXDI_BIAS_CORRECTION_RAY_TRACED = 3;
 const int RTXDI_LOCAL_LIGHT_SAMPLING_UNIFORM   = 0;
 const int RTXDI_LOCAL_LIGHT_SAMPLING_POWER_RIS = 1;
 const int RTXDI_LOCAL_LIGHT_SAMPLING_REGIR_RIS = 2;
+const int RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM = 3;
 
 // Initial sampling parameters -- matches RTXDI_DIInitialSamplingParameters (ReSTIRDIParameters.h lines 69-85).
 // When 0.0 (unbound), fall back to compile-time macro values.
@@ -295,6 +296,27 @@ bool lt_is_active_reservoir_lane(ivec2 reservoirPos) {
 uint lt_temporal_scatter_linear_index(ivec2 reservoirPos) {
     ivec2 size = ivec2(max(int(ceil(viewWidth * ((ph_restir_active_checkerboard_field == 0) ? 1.0f : 0.5f))), 1), max(int(viewHeight), 1));
     return uint(clamp(reservoirPos.y, 0, size.y - 1) * size.x + clamp(reservoirPos.x, 0, size.x - 1));
+}
+
+uint lt_temporal_scatter_cell_index_from_pixel(ivec2 pixelPosition) {
+    return lt_temporal_scatter_linear_index(
+        RTXDI_PixelPosToReservoirPos(pixelPosition, ph_restir_active_checkerboard_field)
+    );
+}
+
+bool lt_temporal_scatter_pixel_owns_cell(ivec2 pixelPosition) {
+    if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
+        return false;
+    }
+    if (ph_restir_active_checkerboard_field == 0) {
+        return true;
+    }
+
+    ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixelPosition, ph_restir_active_checkerboard_field);
+    return all(equal(
+        RTXDI_ReservoirPosToPixelPos(reservoirPos, ph_restir_active_checkerboard_field),
+        pixelPosition
+    ));
 }
 
 uvec2 lt_temporal_scatter_decode_linear_index(uint linearIndex) {
@@ -823,6 +845,9 @@ const uint SCATTER_RECONNECTION_SECOND_BSDF_SHIFT = 12u;
 const uint SCATTER_RECONNECTION_TRANSMISSION_SHIFT = 14u;
 const uint SCATTER_RECONNECTION_TIME_SHIFT = 15u;
 const uint SCATTER_RECONNECTION_TIME_MASK = 0x1FFu;
+const uint SCATTER_RECONNECTION_FACE_MASK = 0x7u;
+const uint SCATTER_RECONNECTION_FIRST_FACE_SHIFT = 24u;
+const uint SCATTER_RECONNECTION_SECOND_FACE_SHIFT = 27u;
 
 float scatter_pack_half2(vec2 value) {
     return uintBitsToFloat(packHalf2x16(value));
@@ -1052,14 +1077,26 @@ LightBrdf lt_evaluate_surface_brdf(RAB_Surface surface, vec3 lightDir) {
     return lt_evaluate_surface_brdf_with_view(surface, lightDir, surface.viewDir);
 }
 
+vec3 lt_surface_early_throughput_for_dir_with_view(RAB_Surface surface, vec3 lightDir, vec3 viewDir) {
+    LightBrdf brdf = lt_evaluate_surface_brdf_with_view(surface, lightDir, viewDir);
+    return brdf.demodulatedDiffuse * surface.material.diffuseAlbedo + brdf.specular;
+}
+
+vec3 lt_surface_early_throughput_with_view(RAB_Surface surface, RAB_LightSample smple, vec3 viewDir) {
+    return lt_surface_early_throughput_for_dir_with_view(surface, smple.dir, viewDir);
+}
+
+vec3 lt_surface_early_throughput(RAB_Surface surface, RAB_LightSample smple) {
+    return lt_surface_early_throughput_with_view(surface, smple, surface.viewDir);
+}
+
 vec3 RAB_SurfaceEvaluateBrdfTimesNoL(RAB_Surface surface, vec3 L)
 {
     if (dot(L, surface.geoNormal) <= 0.0f) {
         return vec3(0.0f);
     }
 
-    LightBrdf brdf = lt_evaluate_surface_brdf(surface, L);
-    return brdf.demodulatedDiffuse * surface.material.diffuseAlbedo + brdf.specular;
+    return lt_surface_early_throughput_for_dir_with_view(surface, L, surface.viewDir);
 }
 
 vec3 lt_light_sample_radiance(Light light, vec3 toLight) {
@@ -1100,8 +1137,7 @@ vec3 lt_surface_reflected_radiance_with_view(RAB_Surface surface, RAB_LightSampl
         return vec3(0.0f);
     }
 
-    LightBrdf brdf = lt_evaluate_surface_brdf_with_view(surface, smple.dir, viewDir);
-    return incidentRadiance * (brdf.demodulatedDiffuse * surface.material.diffuseAlbedo + brdf.specular);
+    return incidentRadiance * lt_surface_early_throughput_with_view(surface, smple, viewDir);
 }
 
 vec3 lt_surface_reflected_radiance(RAB_Surface surface, RAB_LightSample smple) {
@@ -1171,7 +1207,18 @@ void light_sample_compute_weight(inout RAB_LightSample smple, RAB_Surface surfac
 
 vec3 lt_sample_light_position_from_uv(Light light, vec2 sampleUv, vec3 shadowRayOrigin);
 
-RAB_LightSample light_sample_new_at_position(Light light, vec3 lightPosition, RAB_Surface surface) {
+RAB_LightSample light_sample_new_at_position_with_radiometry(
+    Light light,
+    vec3 lightPosition,
+    RAB_Surface surface,
+    out vec3 incidentRadiance,
+    out vec3 earlyThroughput,
+    out vec3 reflectedRadiance)
+{
+    incidentRadiance = vec3(0.0f);
+    earlyThroughput = vec3(0.0f);
+    reflectedRadiance = vec3(0.0f);
+
     vec3 surfaceRtPos = lt_surface_rt_pos(surface);
     vec3 origin = lt_surface_ray_origin(surfaceRtPos, surface.geoNormal);
     vec3 toLight = lightPosition - surfaceRtPos;
@@ -1190,14 +1237,71 @@ RAB_LightSample light_sample_new_at_position(Light light, vec3 lightPosition, RA
         0.0f
     );
 
-    result.color = lt_light_sample_radiance(light, toLight);
+    incidentRadiance = lt_light_sample_radiance(light, toLight);
+    result.color = incidentRadiance;
 
-    if (ph_luminance(result.color) <= 1e-6f) {
+    if (ph_luminance(incidentRadiance) <= 1e-6f) {
         return lt_null_sample();
     }
 
-    light_sample_compute_weight(result, surface);
+    earlyThroughput = lt_surface_early_throughput(surface, result);
+    reflectedRadiance = max(incidentRadiance * earlyThroughput, vec3(0.0f));
+    earlyThroughput = max(earlyThroughput, vec3(0.0f));
+    result.weight = result.solidAnglePdf > 0.0f
+        ? ph_luminance(reflectedRadiance) / result.solidAnglePdf
+        : 0.0f;
     return result;
+}
+
+RAB_LightSample light_sample_new_at_position_fast_random(
+    Light light,
+    vec3 lightPosition,
+    RAB_Surface surface,
+    out vec3 incidentRadiance,
+    out vec3 sampleIntegrand)
+{
+    incidentRadiance = vec3(0.0f);
+    sampleIntegrand = vec3(0.0f);
+
+    vec3 surfaceRtPos = lt_surface_rt_pos(surface);
+    vec3 origin = lt_surface_ray_origin(surfaceRtPos, surface.geoNormal);
+    vec3 toLight = lightPosition - surfaceRtPos;
+    float lightDistanceSq = dot(toLight, toLight);
+    if (lightDistanceSq <= 1e-6f) {
+        return lt_null_sample();
+    }
+
+    RAB_LightSample result = RAB_LightSample(
+        light.index,
+        lightPosition,
+        origin,
+        vec3(0.0f),
+        toLight * inversesqrt(lightDistanceSq),
+        lt_light_sample_solid_angle_pdf(surface, lightPosition),
+        0.0f
+    );
+
+    incidentRadiance = lt_light_sample_radiance(light, toLight);
+    sampleIntegrand = max(incidentRadiance, vec3(0.0f));
+    result.color = incidentRadiance;
+    result.weight = result.solidAnglePdf > 0.0f
+        ? ph_luminance(sampleIntegrand) / result.solidAnglePdf
+        : 0.0f;
+    return ph_luminance(sampleIntegrand) > 1e-6f ? result : lt_null_sample();
+}
+
+RAB_LightSample light_sample_new_at_position(Light light, vec3 lightPosition, RAB_Surface surface) {
+    vec3 ignoredIncidentRadiance;
+    vec3 ignoredEarlyThroughput;
+    vec3 ignoredReflectedRadiance;
+    return light_sample_new_at_position_with_radiometry(
+        light,
+        lightPosition,
+        surface,
+        ignoredIncidentRadiance,
+        ignoredEarlyThroughput,
+        ignoredReflectedRadiance
+    );
 }
 
 RAB_LightSample light_sample_new_at(Light light, RAB_Surface surface) {

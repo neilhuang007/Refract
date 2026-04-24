@@ -798,8 +798,10 @@ public class LightTreeRenderer extends MainRenderer {
             }
          }
 
-         float override = PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value;
-         return override >= 0 ? override : (float) this.properties.getLightTreeInitialSamples();
+         // Reservoir Splatting SPP is the compile-time PH_LIGHTTREE_INITIAL_SAMPLES path count.
+         // Keep runtime local-light candidates at the shader's one-NEE-sample-per-path default
+         // unless an explicit diagnostic system property requests nested candidates.
+         return 0.0f;
       });
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
@@ -836,6 +838,7 @@ public class LightTreeRenderer extends MainRenderer {
          return switch (configuredMode) {
             case "uniform" -> 0.0f;
             case "power_ris" -> 1.0f;
+            case "fast_random" -> 3.0f;
             case "regir_ris" -> 2.0f;
             default -> 2.0f;
          };
@@ -2468,6 +2471,8 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private boolean shouldRunReservoirSplattingIndirectPipeline() {
+      // Keep the ReSTIR GI codepath intact, but do not schedule it while
+      // diagnosing Reservoir Splatting against the DI-only reference pipeline.
       return false;
    }
 

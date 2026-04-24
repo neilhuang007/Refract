@@ -197,8 +197,11 @@ public abstract class ShaderPackMixin {
       }
 
       intDefine(newEnvDefines, "PH_LIGHTING_MODE", 2);
-      intDefine(newEnvDefines, "PH_LIGHTTREE_INITIAL_SAMPLES", properties.getLightTreeInitialSamples());
-      intDefine(newEnvDefines, "PH_RESTIR_INITIAL_SAMPLES", properties.getLightTreeInitialSamples());
+      int restirInitialSamples = PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value >= 0
+         ? Math.max(1, (int)PhotonicsStorage.RESTIR_INITIAL_SAMPLES.value.floatValue())
+         : properties.getLightTreeInitialSamples();
+      intDefine(newEnvDefines, "PH_LIGHTTREE_INITIAL_SAMPLES", restirInitialSamples);
+      intDefine(newEnvDefines, "PH_RESTIR_INITIAL_SAMPLES", restirInitialSamples);
       intDefine(newEnvDefines, "PH_LIGHTTREE_SPATIAL_REUSE_SAMPLES", PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value >= 0 ? (int) PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value.floatValue() : properties.getLightTreeSpatialReuseSamples());
       intDefine(newEnvDefines, "PH_RESTIR_SPATIAL_REUSE_SAMPLES", PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value >= 0 ? (int) PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value.floatValue() : properties.getLightTreeSpatialReuseSamples());
       floatDefine(newEnvDefines, "PH_LIGHTTREE_SPATIAL_REUSE_RADIUS", PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value >= 0 ? PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value : properties.getLightTreeSpatialReuseRadius());

@@ -82,6 +82,8 @@ uint scatter_pack_reconnection_meta(ReconnectionData reconnectionData)
     packedMeta |= (reconnectionData.secondBSDFComponentType & SCATTER_RECONNECTION_SECOND_BSDF_MASK) << SCATTER_RECONNECTION_SECOND_BSDF_SHIFT;
     packedMeta |= (reconnectionData.transmissionEvent ? 1u : 0u) << SCATTER_RECONNECTION_TRANSMISSION_SHIFT;
     packedMeta |= scatter_pack_reconnection_time_bits(reconnectionData.time) << SCATTER_RECONNECTION_TIME_SHIFT;
+    packedMeta |= (reconnectionData.firstHit.faceId & SCATTER_RECONNECTION_FACE_MASK) << SCATTER_RECONNECTION_FIRST_FACE_SHIFT;
+    packedMeta |= (reconnectionData.secondHit.faceId & SCATTER_RECONNECTION_FACE_MASK) << SCATTER_RECONNECTION_SECOND_FACE_SHIFT;
     return packedMeta;
 }
 
@@ -98,6 +100,8 @@ void scatter_unpack_reconnection_meta(
     reconnectionData.secondBSDFComponentType = (packedMeta >> SCATTER_RECONNECTION_SECOND_BSDF_SHIFT) & SCATTER_RECONNECTION_SECOND_BSDF_MASK;
     reconnectionData.transmissionEvent = ((packedMeta >> SCATTER_RECONNECTION_TRANSMISSION_SHIFT) & 0x1u) != 0u;
     reconnectionData.time = scatter_unpack_reconnection_time_bits(packedMeta);
+    reconnectionData.firstHit.faceId = (packedMeta >> SCATTER_RECONNECTION_FIRST_FACE_SHIFT) & SCATTER_RECONNECTION_FACE_MASK;
+    reconnectionData.secondHit.faceId = (packedMeta >> SCATTER_RECONNECTION_SECOND_FACE_SHIFT) & SCATTER_RECONNECTION_FACE_MASK;
 
     if ((packedFlags & SCATTER_RECONNECTION_FLAG_FIRST_WI_VALID) == 0u) {
         reconnectionData.firstWi = vec3(0.0f);
@@ -120,7 +124,13 @@ void scatter_pack_reconnection_data(
     transportAux0 = max(reconnectionData.secondHit.viewDepth, 0.0f);
     transportAux1 = uintBitsToFloat(scatter_pack_reconnection_faces(reconnectionData));
 
-    data0 = vec4(reconnectionData.firstHit.worldPos, max(reconnectionData.firstHit.viewDepth, 0.0f));
+    data0 = vec4(
+        reconnectionData.firstHit.worldPos,
+        scatter_pack_half2(vec2(
+            clamp(reconnectionData.firstHit.viewDepth, 0.0f, 65504.0f),
+            clamp(reconnectionData.secondHit.viewDepth, 0.0f, 65504.0f)
+        ))
+    );
     data1 = vec4(
         reconnectionData.secondHit.worldPos,
         scatter_pack_half2(vec2(
@@ -164,22 +174,23 @@ void scatter_unpack_reconnection(
 {
     vec2 packedLightPdfSubPixelJacobian;
     vec2 packedLensJacobians;
+    vec2 packedViewDepths;
 
     packedLightPdfSubPixelJacobian = scatter_unpack_half2(data1.w);
     packedLensJacobians = scatter_unpack_half2(data3.w);
+    packedViewDepths = scatter_unpack_half2(data0.w);
     reconnectionData = ReconnectionData_init();
 
     reconnectionData.firstHit.worldPos = data0.xyz;
-    reconnectionData.firstHit.viewDepth = max(data0.w, 0.0f);
+    reconnectionData.firstHit.viewDepth = max(packedViewDepths.x, 0.0f);
     reconnectionData.secondHit.worldPos = data1.xyz;
-    reconnectionData.secondHit.viewDepth = max(transportAux0, 0.0f);
+    reconnectionData.secondHit.viewDepth = max(packedViewDepths.y, 0.0f);
     reconnectionData.irradiance = data2.xyz;
     reconnectionData.earlyThroughput = data3.xyz;
     reconnectionData.subPixel = clamp(scatter_unpack_half2(data4.x), vec2(0.0f), vec2(1.0f));
     reconnectionData.lensSample = scatter_unpack_half2(data4.y);
     reconnectionData.firstWi = scatter_unpack_unit_vector(data4.z);
     reconnectionData.secondWo = scatter_unpack_unit_vector(data4.w);
-    scatter_unpack_reconnection_faces(floatBitsToUint(transportAux1), reconnectionData);
     reconnectionData.lightPdf = scatter_unpack_reconnection_proposal_pdf(max(packedLightPdfSubPixelJacobian.x, 0.0f));
     reconnectionData.subPixelJacobian = max(packedLightPdfSubPixelJacobian.y, 1e-10f);
     reconnectionData.lensVertexJacobian = max(packedLensJacobians.x, 1e-10f);
