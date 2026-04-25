@@ -130,6 +130,9 @@ float lt_scatter_shift_jacobian_ratio(
 {
     float baseJ = baseSubPixelJacobian * baseSecondaryPathJacobian;
     float shiftedJ = shiftedSubPixelJacobian * shiftedSecondaryPathJacobian;
+    if (!(abs(baseJ) > 1e-20f) || isnan(baseJ) || isnan(shiftedJ)) {
+        return 0.0f;
+    }
     return shiftedJ / baseJ;
 }
 

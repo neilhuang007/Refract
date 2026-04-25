@@ -10,6 +10,18 @@ layout(location = 1) out vec4 direct_specular_frag_out;
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/restir_di_resolve.glsl"
+#include "/photonics/lighttree/nrd_common.glsl"
+
+const float ph_nrd_spec_fp16_safe_luma = 248.0;
+
+vec3 ph_clamp_specular_for_relax(vec3 demodulatedSpecular) {
+    demodulatedSpecular = max(demodulatedSpecular, vec3(0.0));
+    float specularLuma = nrd_luminance(demodulatedSpecular);
+    if (specularLuma > ph_nrd_spec_fp16_safe_luma) {
+        demodulatedSpecular *= ph_nrd_spec_fp16_safe_luma / max(specularLuma, 1e-6);
+    }
+    return demodulatedSpecular;
+}
 
 void storeEmptyResolveReSTIROutputs()
 {
@@ -45,8 +57,15 @@ void main()
     RTXDI_DIReservoir currReservoir;
     ResolveReSTIR_load_curr_reservoir(reservoirPosition, currReservoir);
 
-    vec3 color = ResolveReSTIR(currReservoir);
+    ResolveReSTIRShading shading;
+    if (!ResolveReSTIR_shade(currReservoir, surface, shading)) {
+        storeEmptyResolveReSTIROutputs();
+        return;
+    }
 
-    direct_diffuse_frag_out = vec4(color, 1.0f);
-    direct_specular_frag_out = vec4(0.0f);
+    vec3 demodulatedSpecular = shading.specular / max(lt_surface_f0(surface), vec3(0.01f));
+    demodulatedSpecular = ph_clamp_specular_for_relax(demodulatedSpecular);
+
+    direct_diffuse_frag_out = nrd_pack_direct_signal(shading.diffuse, shading.hitDistance);
+    direct_specular_frag_out = nrd_pack_direct_signal(demodulatedSpecular, shading.hitDistance);
 }

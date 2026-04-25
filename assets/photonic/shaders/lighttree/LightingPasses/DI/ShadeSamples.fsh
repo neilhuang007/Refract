@@ -202,10 +202,6 @@ void storeDIReservoir(RTXDI_DIReservoir reservoir) {
     reservoir_meta_frag_out = PathReservoir_packMeta(reservoir);
 }
 
-float lt_resolve_shading_hit_distance(RAB_Surface surface) {
-    return max(surface.viewDepth, 0.0f);
-}
-
 ivec2 lt_get_checkerboard_shading_pixel(ivec2 pixelPosition, int activeCheckerboardField) {
     ivec2 shadingPixel = pixelPosition;
     RTXDI_ActivateCheckerboardPixel(shadingPixel, false, activeCheckerboardField);
@@ -300,10 +296,18 @@ void main() {
         currReservoir
     );
 
-    vec3 color = ResolveReSTIR(currReservoir);
+    ResolveReSTIRShading shading;
+    if (!ResolveReSTIR_shade(currReservoir, surface, shading)) {
+        storeEmptyShadeOutputs();
+        storeDIReservoir(currReservoir);
+        return;
+    }
 
-    direct_diffuse_frag_out = vec4(color, 1.0f);
-    direct_specular_frag_out = vec4(0.0f);
+    vec3 demodulatedSpecular = shading.specular / max(lt_surface_f0(surface), vec3(0.01f));
+    demodulatedSpecular = ph_clamp_specular_for_relax(demodulatedSpecular);
+
+    direct_diffuse_frag_out = nrd_pack_direct_signal(shading.diffuse, shading.hitDistance);
+    direct_specular_frag_out = nrd_pack_direct_signal(demodulatedSpecular, shading.hitDistance);
 
     storeDIReservoir(currReservoir);
 }

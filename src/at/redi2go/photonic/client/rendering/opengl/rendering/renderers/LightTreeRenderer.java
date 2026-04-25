@@ -656,9 +656,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "radiosity_reservoirs", this::getCurrentDirectReservoirDataTexture);
       this.addTextureSampler(samplers, "radiosity_reservoir_samples", this::getCurrentDirectReservoirSampleTexture);
       this.addTextureSampler(samplers, "radiosity_reservoir_meta", this::getCurrentDirectReservoirMetaTexture);
-      this.addTextureSampler(samplers, "radiosity_spatial_reservoirs", () -> this.directSpatialReservoirBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "radiosity_spatial_reservoir_samples", () -> this.directSpatialReservoirBuffer.getWriteAttachment("sample"));
-      this.addTextureSampler(samplers, "radiosity_spatial_reservoir_meta", () -> this.directSpatialReservoirBuffer.getWriteAttachment("meta"));
+      this.addTextureSampler(samplers, "radiosity_spatial_reservoirs", this::getCurrentSpatialReservoirDataTexture);
+      this.addTextureSampler(samplers, "radiosity_spatial_reservoir_samples", this::getCurrentSpatialReservoirSampleTexture);
+      this.addTextureSampler(samplers, "radiosity_spatial_reservoir_meta", this::getCurrentSpatialReservoirMetaTexture);
       this.addTextureSampler(samplers, "direct_initial_debug_input", () -> this.directInitialDebugBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "radiosity_direct_soft", this::getCompatDirectSoftTexture);
       this.addTextureSampler(samplers, "radiosity_handheld", () -> this.lightingBuffer.getWriteAttachment("handheld"));
@@ -1019,7 +1019,7 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_enable_final_mis", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_boiling_filter_strength", () -> 0.2f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_reuse_final_visibility", () -> 1.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 0.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 1.0f);
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_debug_enable_direct_temporal_accumulation",
@@ -2762,6 +2762,27 @@ public class LightTreeRenderer extends MainRenderer {
 
    private TextureObject getCurrentDirectReservoirMetaTexture() {
       return this.directReservoirBuffer.getWriteAttachment("meta");
+   }
+
+   private TextureObject getCurrentSpatialReservoirDataTexture() {
+      if (!this.isDirectSpatialReuseEnabled()) {
+         return this.temporalReservoirBuffer.getWriteAttachment("data");
+      }
+      return this.directSpatialReservoirBuffer.getWriteAttachment("data");
+   }
+
+   private TextureObject getCurrentSpatialReservoirSampleTexture() {
+      if (!this.isDirectSpatialReuseEnabled()) {
+         return this.temporalReservoirBuffer.getWriteAttachment("sample");
+      }
+      return this.directSpatialReservoirBuffer.getWriteAttachment("sample");
+   }
+
+   private TextureObject getCurrentSpatialReservoirMetaTexture() {
+      if (!this.isDirectSpatialReuseEnabled()) {
+         return this.temporalReservoirBuffer.getWriteAttachment("meta");
+      }
+      return this.directSpatialReservoirBuffer.getWriteAttachment("meta");
    }
 
    private TextureObject getCurrentIndirectReservoirPositionTexture() {

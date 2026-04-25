@@ -334,7 +334,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                 dstReservoir,
                 dstConfidence,
                 misWeight,
-                vec3(lt_scatter_radiance_phat(shiftedPath.radiance)),
+                shiftedPath.radiance,
                 shiftedJacobian,
                 lt_scatter_compute_ucw(neighborReservoir, sourceIntegrand),
                 neighborReservoirConfidence,

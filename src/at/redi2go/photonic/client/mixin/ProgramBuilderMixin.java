@@ -38,7 +38,6 @@ public class ProgramBuilderMixin {
          Files.createDirectories(outDir);
          String fileName = shaderName.replace('/', '_').replace('\\', '_').replace(':', '_');
          Files.writeString(outDir.resolve(fileName + ".dump.glsl"), shaderSource);
-         Files.writeString(Path.of("E:/cache_redirects/Temp", fileName + ".dump.glsl"), shaderSource);
       } catch (IOException e) {
          Photonic.warn("[ShaderDump] Failed to dump shader {}: {}", shaderName, e.getMessage());
       }

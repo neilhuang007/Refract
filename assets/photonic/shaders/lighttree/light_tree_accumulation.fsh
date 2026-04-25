@@ -111,6 +111,10 @@ vec4 lt_load_stage_gbuffer_like(sampler2D textureSampler, ivec2 pixelPosition) {
     return texelFetch(textureSampler, sampleCoord, 0);
 }
 
+vec4 lt_load_current_gbuffer_like(sampler2D textureSampler, ivec2 pixelPosition) {
+    return texelFetch(textureSampler, pixelPosition, 0);
+}
+
 void main() {
     if (!is_in_world()) {
         position_frag_out = vec4(0.0f);
@@ -134,13 +138,26 @@ void main() {
         );
     }
 
-    vec4 stagePosition = lt_load_stage_gbuffer_like(stage_radiosity_position, tex_coord);
-    vec4 stageNormal = lt_load_stage_gbuffer_like(stage_radiosity_normal, tex_coord);
-    vec4 stageMappedNormal = lt_load_stage_gbuffer_like(stage_radiosity_mapped_normal, tex_coord);
-    vec4 stageAlbedo = lt_load_stage_gbuffer_like(stage_radiosity_albedo, tex_coord);
-    vec2 uv = (vec2(ownerCoord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
+    bool useDenoisedDirect = ph_restir_enable_denoiser_packing >= 0.5f;
+    ivec2 shadingCoord = useDenoisedDirect ? tex_coord : ownerCoord;
+
+    vec4 stagePosition = useDenoisedDirect
+        ? lt_load_current_gbuffer_like(stage_radiosity_position, tex_coord)
+        : lt_load_stage_gbuffer_like(stage_radiosity_position, tex_coord);
+    vec4 stageNormal = useDenoisedDirect
+        ? lt_load_current_gbuffer_like(stage_radiosity_normal, tex_coord)
+        : lt_load_stage_gbuffer_like(stage_radiosity_normal, tex_coord);
+    vec4 stageMappedNormal = useDenoisedDirect
+        ? lt_load_current_gbuffer_like(stage_radiosity_mapped_normal, tex_coord)
+        : lt_load_stage_gbuffer_like(stage_radiosity_mapped_normal, tex_coord);
+    vec4 stageAlbedo = useDenoisedDirect
+        ? lt_load_current_gbuffer_like(stage_radiosity_albedo, tex_coord)
+        : lt_load_stage_gbuffer_like(stage_radiosity_albedo, tex_coord);
+    vec2 uv = (vec2(shadingCoord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
     vec4 stageMaterial = lt_extract_accumulation_material(uv);
-    vec4 stageIdentity = lt_load_stage_gbuffer_like(stage_radiosity_identity, tex_coord);
+    vec4 stageIdentity = useDenoisedDirect
+        ? lt_load_current_gbuffer_like(stage_radiosity_identity, tex_coord)
+        : lt_load_stage_gbuffer_like(stage_radiosity_identity, tex_coord);
     vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord);
     vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);
@@ -154,9 +171,9 @@ void main() {
         prevSoft = vec4(directCombined, 0.0f);
     } else {
         prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
-        if (ph_restir_enable_denoiser_packing >= 0.5f) {
-            vec3 denoisedDiffuseDemodulated = lt_load_stage_direct_lobe(denoised_direct_diffuse, tex_coord).rgb;
-            vec3 denoisedSpecularDemodulated = lt_load_stage_direct_lobe(denoised_direct_specular, tex_coord).rgb;
+        if (useDenoisedDirect) {
+            vec3 denoisedDiffuseDemodulated = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
+            vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
             vec3 diffuseRemodulation = max(stageAlbedo.rgb, vec3(0.02f));
             vec3 specularRemodulation = nrd_compute_specular_demodulation(stageAlbedo.rgb, stageMaterial.g);
             vec3 denoisedDiffuse = nrd_safe_remodulate(denoisedDiffuseDemodulated, diffuseRemodulation);

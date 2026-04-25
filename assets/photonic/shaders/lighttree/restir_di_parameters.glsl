@@ -99,6 +99,18 @@ const uint RTXDI_DI_BUFFER_INDEX_TEMPORAL_RESAMPLING_OUTPUT = 1u;
 const uint RTXDI_DI_BUFFER_INDEX_SPATIAL_RESAMPLING_OUTPUT = 2u;
 const uint RTXDI_DI_BUFFER_INDEX_SHADING_INPUT = 3u;
 
+const uint LT_TEMPORAL_REUSE_GATHER_ONLY = 0u;
+const uint LT_TEMPORAL_REUSE_SCATTER_ONLY = 1u;
+const uint LT_TEMPORAL_REUSE_SCATTER_BACKUP = 2u;
+const uint LT_TEMPORAL_REUSE_MULTI_SCATTER = 3u;
+
+const uint LT_SCATTER_BACKUP_MIS_BALANCE = 0u;
+const uint LT_SCATTER_BACKUP_MIS_PAIRWISE = 1u;
+
+const uint LT_GATHER_MECHANISM_FAST = 0u;
+const uint LT_GATHER_MECHANISM_CLAMPED = 1u;
+const uint LT_GATHER_MECHANISM_ROBUST = 2u;
+
 RTXDI_DIBufferIndices lt_build_di_buffer_indices()
 {
     RTXDI_DIBufferIndices bufferIndices;
@@ -125,6 +137,18 @@ RTXDI_DIBufferIndices lt_build_di_buffer_indices()
 RTXDI_DIBufferIndices RTXDI_GetDIBufferIndices()
 {
     return lt_build_di_buffer_indices();
+}
+
+uint lt_restir_scatter_backup_mis_option()
+{
+    int misOption = int(round(ph_restir_scatter_backup_mis_mode));
+    return uint(clamp(misOption, int(LT_SCATTER_BACKUP_MIS_BALANCE), int(LT_SCATTER_BACKUP_MIS_PAIRWISE)));
+}
+
+uint lt_restir_temporal_gather_option()
+{
+    int gatherOption = int(round(ph_restir_temporal_gather_mode));
+    return uint(clamp(gatherOption, int(LT_GATHER_MECHANISM_FAST), int(LT_GATHER_MECHANISM_ROBUST)));
 }
 
 uint lt_get_final_shading_input_buffer_index()

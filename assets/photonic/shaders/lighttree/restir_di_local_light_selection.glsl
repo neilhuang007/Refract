@@ -133,3 +133,39 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextRIS(
         RTXDI_RandomlySelectRISTile(coherentRng, risBufferSegmentParams)
     );
 }
+
+int RTXDI_GetReservoirLightIndexForFrame(
+    RTXDI_DIReservoir reservoir,
+    bool reservoirPreviousFrame,
+    bool targetPreviousFrame)
+{
+    if (!RTXDI_IsValidDIReservoir(reservoir)) {
+        return -1;
+    }
+
+    return lt_translate_reservoir_light_index_between_frames(
+        rtxdi_get_light_index(reservoir),
+        reservoirPreviousFrame,
+        targetPreviousFrame
+    );
+}
+
+bool RTXDI_GetReservoirLightForFrame(
+    RTXDI_DIReservoir reservoir,
+    bool reservoirPreviousFrame,
+    bool targetPreviousFrame,
+    out Light light)
+{
+    int lightIndex = RTXDI_GetReservoirLightIndexForFrame(
+        reservoir,
+        reservoirPreviousFrame,
+        targetPreviousFrame
+    );
+    if (lightIndex < 0) {
+        light = lt_invalid_light();
+        return false;
+    }
+
+    light = targetPreviousFrame ? load_previous_light(lightIndex) : load_light(lightIndex);
+    return light.index >= 0;
+}

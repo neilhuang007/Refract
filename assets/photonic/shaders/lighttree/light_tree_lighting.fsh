@@ -51,8 +51,23 @@ vec2 lt_compute_moments(vec3 color) {
     return vec2(luma, luma * luma);
 }
 
-vec3 lt_unpack_direct_radiance(vec4 currentSample) {
-    return nrd_unpack_direct_signal(currentSample).radiance;
+vec3 lt_unpack_direct_radiance(
+    vec4 diffuseSample,
+    vec4 specularSample,
+    vec3 albedo,
+    vec4 material
+) {
+    vec3 diffuseDemodulated = nrd_unpack_direct_signal(diffuseSample).radiance;
+    vec3 specularDemodulated = nrd_unpack_direct_signal(specularSample).radiance;
+    vec3 diffuseRadiance = nrd_safe_remodulate(
+        diffuseDemodulated,
+        max(albedo, vec3(NRD_MATERIAL_FACTOR_MIN_SCALE))
+    );
+    vec3 specularRadiance = nrd_safe_remodulate(
+        specularDemodulated,
+        nrd_compute_specular_demodulation(albedo, material.g)
+    );
+    return diffuseRadiance + specularRadiance;
 }
 
 vec4 lt_encode_variance(vec2 moments, float history) {
@@ -88,15 +103,23 @@ vec4 lt_load_stage_gbuffer_like(sampler2D stageTexture, ivec2 pixelPosition) {
 }
 
 void lt_accumulate_direct(
-    vec4 currentSample,
+    vec4 currentDiffuseSample,
+    vec4 currentSpecularSample,
+    vec3 currentAlbedo,
+    vec4 currentMaterial,
     vec3 currentPosition,
     vec3 currentNormal,
     out vec4 accumulatedSignal,
     out vec4 accumulatedVariance
 ) {
-    vec3 currentDirect = lt_unpack_direct_radiance(currentSample);
+    vec3 currentDirect = lt_unpack_direct_radiance(
+        currentDiffuseSample,
+        currentSpecularSample,
+        currentAlbedo,
+        currentMaterial
+    );
     float currentDirectLuma = lt_luminance(currentDirect);
-    if (currentDirectLuma <= 0.0f || any(isnan(currentSample))) {
+    if (currentDirectLuma <= 0.0f || any(isnan(currentDiffuseSample)) || any(isnan(currentSpecularSample))) {
         accumulatedSignal = vec4(0.0f);
         accumulatedVariance = vec4(0.0f);
         return;
@@ -208,7 +231,10 @@ void main() {
 
     vec4 currentPosition = lt_load_stage_gbuffer_like(stage_radiosity_position, tex_coord);
     vec4 currentNormal = lt_load_stage_gbuffer_like(stage_radiosity_normal, tex_coord);
+    vec4 currentAlbedo = lt_load_stage_gbuffer_like(stage_radiosity_albedo, tex_coord);
+    vec4 currentMaterial = lt_load_stage_gbuffer_like(stage_radiosity_material, tex_coord);
     vec4 currentDirect = lt_load_stage_direct_signal(stage_radiosity_direct, tex_coord);
+    vec4 currentDirectSpecular = lt_load_stage_direct_signal(stage_radiosity_direct_specular, tex_coord);
     vec4 currentHandheld = lt_load_stage_direct_signal(stage_radiosity_handheld, tex_coord);
     vec4 currentIndirect = texelFetch(stage_radiosity_indirect, tex_coord, 0);
 
@@ -216,6 +242,9 @@ void main() {
 
     lt_accumulate_direct(
         currentDirect,
+        currentDirectSpecular,
+        currentAlbedo.rgb,
+        currentMaterial,
         currentPosition.xyz,
         currentNormal.xyz,
         direct_frag_out,

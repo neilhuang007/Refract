@@ -7,12 +7,12 @@ float scatter_resolve_light_pdf(RTXDI_DIReservoir reservoir, RAB_LightSample lig
         return 0.0f;
     }
 
-    return max(lightSample.solidAnglePdf, 0.0f);
+    return lightSample.solidAnglePdf;
 }
 
 vec3 scatter_resolve_visibility(RTXDI_DIReservoir reservoir)
 {
-    return max(rtxdi_unpack_visibility(reservoir.packedVisibility), vec3(0.0f));
+    return rtxdi_unpack_visibility(reservoir.packedVisibility);
 }
 
 vec3 scatter_resolve_irradiance(
@@ -24,11 +24,8 @@ vec3 scatter_resolve_irradiance(
         return vec3(0.0f);
     }
 
-    return max(
-        lt_light_sample_incident_radiance(surface, lightSample)
-            * scatter_resolve_visibility(reservoir),
-        vec3(0.0f)
-    );
+    return lt_light_sample_incident_radiance(surface, lightSample)
+        * scatter_resolve_visibility(reservoir);
 }
 
 vec3 scatter_resolve_early_throughput(
@@ -40,7 +37,7 @@ vec3 scatter_resolve_early_throughput(
         return vec3(0.0f);
     }
 
-    return max(lt_surface_early_throughput(surface, lightSample), vec3(0.0f));
+    return lt_surface_early_throughput(surface, lightSample);
 }
 
 vec3 pathReconnectionShift(
@@ -64,15 +61,13 @@ vec3 pathReconnectionShift(
         );
     }
 
-    vec3 shiftedIrradiance = max(
-        lt_light_sample_incident_radiance(shiftedSurface, shiftedLight) * visibility,
-        vec3(0.0f)
-    );
+    vec3 shiftedIrradiance =
+        lt_light_sample_incident_radiance(shiftedSurface, shiftedLight) * visibility;
     vec3 shiftedEarlyThroughput =
         (ph_restir_local_light_sampling_mode == float(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM))
             ? vec3(1.0f)
             : lt_surface_early_throughput(shiftedSurface, shiftedLight);
-    return max(shiftedEarlyThroughput * shiftedIrradiance, vec3(0.0f));
+    return shiftedEarlyThroughput * shiftedIrradiance;
 }
 
 float scatter_resolve_secondary_path_jacobian_from_reconnection(
@@ -154,16 +149,13 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
 {
     ReservoirSplattingReconnectionData d = ReservoirSplattingReconnectionData_init();
     vec4 identityData = scatter_load_surface_identity(pixelPosition, false);
-    irradiance = max(irradiance, vec3(0.0f));
-    earlyThroughput = max(earlyThroughput, vec3(0.0f));
     vec3 secondPos = (lightSample.index >= 0) ? lightSample.position : surface.worldPos;
     bool lightIsAnalytic = (lightSample.index >= 0) && RAB_IsAnalyticLightSample(lightSample);
+    int reservoirLightIndex = RTXDI_GetReservoirLightIndexForFrame(reservoir, false, false);
 
-    d.subPixel = PathReservoir_getSubPixel(reservoir, pixelPosition);
-    d.lensSample = lt_area_has_valid_domain(reservoir)
-        ? clamp(reservoir.lensSampleUV, vec2(0.0f), vec2(1.0f))
-        : lt_area_default_lens_sample();
-    d.time = time;
+    d.subPixel = scatter_resolve_reservoir_subpixel(reservoir, pixelPosition);
+    d.lensSample = reservoir.lensSampleUV;
+    d.time = lt_path_sample_time(reservoir.pathSample);
 
     d.pathLength = (lightSample.index >= 0) ? 2u : 1u;
 
@@ -178,7 +170,7 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     d.secondHit.worldPos = secondPos;
     d.secondHit.viewDepth = (lightSample.index >= 0) ? 0.0f : surface.viewDepth;
     d.secondHit.faceId = 0u;
-    d.secondHit.materialId = uint(max(lightSample.index, 0));
+    d.secondHit.materialId = uint(max(reservoirLightIndex, 0));
     d.secondBSDFComponentType = scatter_resolve_second_bsdf_component_type(lightSample);
     d.secondWo = (lightSample.index >= 0 && distance(secondPos, surface.worldPos) > 1e-6f)
         ? normalize(secondPos - surface.worldPos)

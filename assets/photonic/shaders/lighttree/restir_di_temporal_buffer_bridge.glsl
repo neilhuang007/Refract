@@ -1,6 +1,12 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_BUFFER_BRIDGE_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_BUFFER_BRIDGE_GLSL
 
+#ifndef PH_RESTIR_CHECKERBOARD_DECLARED
+#define PH_RESTIR_CHECKERBOARD_DECLARED
+uniform int ph_restir_active_checkerboard_field;
+uniform int ph_restir_frame_index;
+#endif
+
 #ifndef PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
 #define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
 uniform float ph_reservoir_splatting_camera_aperture_radius;
@@ -63,6 +69,11 @@ vec2 lt_load_floating_coords(ivec2 pixel)
 int GatherData_getGatherOption()
 {
     return lt_restir_temporal_gather_mode();
+}
+
+vec2 GatherData_getMotionVectors(ivec2 pixel)
+{
+    return texelFetch(radiosity_motion, pixel, 0).xy;
 }
 
 vec2 GatherData_getMotionVector(ivec2 pixel)

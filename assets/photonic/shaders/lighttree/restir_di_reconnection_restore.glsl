@@ -45,6 +45,47 @@ bool RestirDI_restoreReconnectionRadiometry(
         return false;
     }
 
+    uint packedSurfaceIdentity = uint(round(scatter_load_surface_identity(pixelPosition, previousFrame).w));
+    reconnection.firstHit.materialId = packedSurfaceIdentity >> 3u;
+    reconnection.subPixel = PathReservoir_getSubPixel(reservoir, pixelPosition);
+    reconnection.lensSample = reservoir.lensSampleUV;
+    reconnection.time = lt_path_sample_time(reservoir.pathSample);
+
+    if (reconnection.pathLength <= 1u)
+    {
+        return true;
+    }
+
+    Light selectedLight;
+    if (!RTXDI_GetReservoirLightForFrame(reservoir, previousFrame, previousFrame, selectedLight))
+    {
+        return false;
+    }
+
+    vec3 selectedPosition = lt_sample_light_position_from_uv(
+        selectedLight,
+        rtxdi_get_sample_uv(reservoir),
+        lt_surface_ray_origin(lt_surface_rt_pos(surface), surface.geoNormal)
+    );
+    RAB_LightSample selectedSample = light_sample_new_at_position(
+        selectedLight,
+        selectedPosition,
+        surface
+    );
+    vec3 toSecond = selectedPosition - reconnection.firstHit.worldPos;
+    float toSecondLengthSq = dot(toSecond, toSecond);
+
+    reconnection.secondHit.worldPos = selectedPosition;
+    reconnection.secondHit.viewDepth = 0.0f;
+    reconnection.secondHit.materialId = uint(selectedLight.index);
+    reconnection.secondBSDFComponentType = scatter_resolve_second_bsdf_component_type(selectedSample);
+    reconnection.secondWo = toSecondLengthSq > 1e-12f
+        ? toSecond * inversesqrt(toSecondLengthSq)
+        : vec3(0.0f);
+    reconnection.lightIsNEE = RAB_IsAnalyticLightSample(selectedSample);
+    reconnection.lightIsDistant = selectedSample.index >= 0 && !reconnection.lightIsNEE;
+    reconnection.lightPdf = selectedSample.solidAnglePdf;
+
     return true;
 }
 

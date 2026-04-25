@@ -15,12 +15,13 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
     ivec2 pixel,
     out ReservoirSplattingReconnectionData currReconnectionData)
 {
+    if (!lt_is_viewport_uv_in_bounds(pixel)) {
+        currReconnectionData = ReservoirSplattingReconnectionData_init();
+        return RTXDI_EmptyDIReservoir();
+    }
     currReconnectionData = ReservoirSplattingReconnectionData_init();
 
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        return RTXDI_EmptyDIReservoir();
-    }
 
     RTXDI_RandomSamplerState sg = lt_init_random_sampler(
         uvec2(pixel),
@@ -69,11 +70,10 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
     uint cellOffset = lt_scatter_temporal_resampling_cell_offset_value(reservoirIdx);
     for (uint i = 0u; i < numReservoirs; ++i) {
         ivec2 scatteredPixel = ivec2(lt_scatter_temporal_resampling_load_sorted_reservoir(cellOffset + i));
-        float contributorConfidence = newConfidence;
         ScatterTemporalResampling_process_contributor(
             dstReservoir,
             dstReconnectionData,
-            contributorConfidence,
+            newConfidence,
             scatteredPixel,
             pixel,
             currReservoir,
