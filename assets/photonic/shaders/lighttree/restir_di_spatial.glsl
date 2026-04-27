@@ -7,6 +7,6 @@ RTXDI_DIReservoir SpatialResampling_run(
     RAB_Surface centerSurface,
     RTXDI_DIReservoir centerSample,
     inout RTXDI_RandomSamplerState rng,
-    out ReservoirSplattingReconnectionData reconnection);
+    out ReconnectionData reconnection);
 
 #endif

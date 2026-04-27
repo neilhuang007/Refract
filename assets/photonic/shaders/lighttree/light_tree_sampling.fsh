@@ -24,7 +24,7 @@ void storeEmptySurfaceOutputs() {
 }
 
 void storeEmptyProposalReservoirOutputs() {
-    RTXDI_DIReservoir emptyReservoir = rtxdi_empty_reservoir();
+    RTXDI_DIReservoir emptyReservoir = RTXDI_EmptyDIReservoir();
     reservoir_frag_out = rtxdi_pack_reservoir(emptyReservoir);
     reservoir_sample_frag_out = rtxdi_pack_reservoir_sample(emptyReservoir);
     reservoir_meta_frag_out = rtxdi_pack_reservoir_meta(emptyReservoir);

@@ -24,64 +24,42 @@ void ReprojectTemporalSamples_run(
         return;
     }
 
-    ScatterReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
+    ReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
 
-    vec2 newFractionalPixel = vec2(-1.0f);
-    vec3 rayOrigin = vec3(0.0f);
-    vec3 rayDirection = vec3(0.0f);
-    float traceDistance = 0.0f;
-    bool hitDistantLight = false;
-    if (!scatter_project_reconnection_to_current_frame(
-            prevReconnection,
-            newFractionalPixel,
-            rayOrigin,
-            rayDirection,
-            traceDistance,
-            hitDistantLight)) {
+    RTXDI_RandomSamplerState sg = lt_init_random_sampler(
+        uvec2(pixel),
+        uint(frameCounter),
+        5u
+    );
+    ShiftedPathData shiftedPrev = scatterReprojectionShift(
+        sg,
+        prevReconnection,
+        prevReconnection.time,
+        prevReconnection.firstHit,
+        prevReconnection.lensSample,
+        prevReservoir,
+        true,
+        false,
+        false
+    );
+    if (any(lessThan(shiftedPrev.fractionalPixel, vec2(0.0f)))) {
         return;
     }
 
-    if (newFractionalPixel.x < 0.0f || newFractionalPixel.y < 0.0f) {
-        return;
-    }
-
-    ivec2 newPixel = ivec2(floor(newFractionalPixel));
-    if (!lt_is_viewport_uv_in_bounds(newPixel)) {
-        return;
-    }
-
-    if (!hitDistantLight && traceDistance <= 1e-5f) {
-        return;
-    }
-    if (!lt_scatter_trace_reconnection_visibility(
-            rayOrigin,
-            rayDirection,
-            hitDistantLight ? traceDistance : (0.999f * traceDistance))) {
-        return;
-    }
-
+    ivec2 newPixel = ivec2(floor(shiftedPrev.fractionalPixel));
     lt_reproject_temporal_samples_append_record(pixel, newPixel);
 }
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE)
 void computeCellOffsetsStage(
     ivec2 pixel)
 {
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-    return;
-#else
     SortReprojectedReservoirs_computeCellOffsets(pixel);
-#endif
-}
-#else
-void computeCellOffsetsStage(
-    ivec2 pixel)
-{
 }
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE)
 void sortCellDataStage(
     uint index)
 {

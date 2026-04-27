@@ -8,8 +8,6 @@ const uint LT_TEMPORAL_SCATTER_COUNTER_INDEX_PREFIX_SUM = 1u;
 const uint LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT = 0u;
 const uint LT_MULTI_TEMPORAL_COUNTER_INDEX_PREFIX_SUM = 1u;
 
-uniform int ph_restir_active_checkerboard_field;
-
 bool lt_is_viewport_uv_in_bounds(ivec2 uv) {
     return all(greaterThanEqual(uv, ivec2(0))) && all(lessThan(uv, ivec2(int(viewWidth), int(viewHeight))));
 }

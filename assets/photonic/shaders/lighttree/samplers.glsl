@@ -34,24 +34,19 @@ uniform sampler2D radiosity_indirect_initial_radiance;
 uniform sampler2D radiosity_indirect_initial_meta;
 uniform sampler2D radiosity_motion;
 
-// Shared current-stage reconnection payload read through stage-input copies.
-// Historical scatter-prefixed names are retained for ABI compatibility.
+// Reference current-frame reconnection payload (currReconnectionData).
 uniform sampler2D scatter_reconnection0;
 uniform sampler2D scatter_reconnection1;
 uniform sampler2D scatter_reconnection2;
 uniform sampler2D scatter_reconnection3;
 uniform sampler2D scatter_reconnection4;
-#define current_stage_reconnection0 scatter_reconnection0
-#define current_stage_reconnection1 scatter_reconnection1
-#define current_stage_reconnection2 scatter_reconnection2
-#define current_stage_reconnection3 scatter_reconnection3
-#define current_stage_reconnection4 scatter_reconnection4
-// Single-buffered temporal resampling staging/output consumed within the same frame
+// Reference current-frame temporal output (currReservoirs / currReconnectionData).
 uniform sampler2D temporal_reservoir_data;
 uniform sampler2D temporal_reservoir_sample;
 uniform sampler2D temporal_reservoir_meta;
 
-// Gather-side temporal intermediates for the full Reservoir Splatting reference pipeline.
+// Reference gather-side intermediate buffers
+// (intermediateReservoirs / intermediateReconnectionData).
 uniform sampler2D temporal_gather_intermediate_reservoir_data;
 uniform sampler2D temporal_gather_intermediate_reservoir_sample;
 uniform sampler2D temporal_gather_intermediate_reservoir_meta;
@@ -81,18 +76,12 @@ uniform sampler2D prev_radiosity_indirect_reservoir_meta;
 uniform sampler2D prev_radiosity_lighting;
 uniform sampler2D prev_radiosity_lighting_variance;
 uniform sampler2D prev_radiosity_motion;
-// Shared previous-frame reconnection history.
-// Historical scatter-prefixed names are retained for ABI compatibility.
+// Reference previous-frame reconnection history (prevReconnectionData).
 uniform sampler2D prev_scatter_reconnection0;
 uniform sampler2D prev_scatter_reconnection1;
 uniform sampler2D prev_scatter_reconnection2;
 uniform sampler2D prev_scatter_reconnection3;
 uniform sampler2D prev_scatter_reconnection4;
-#define previous_frame_reconnection0 prev_scatter_reconnection0
-#define previous_frame_reconnection1 prev_scatter_reconnection1
-#define previous_frame_reconnection2 prev_scatter_reconnection2
-#define previous_frame_reconnection3 prev_scatter_reconnection3
-#define previous_frame_reconnection4 prev_scatter_reconnection4
 
 uniform sampler2D prev_spec_slow_input;
 uniform sampler2D prev_spec_fast_input;
@@ -145,5 +134,12 @@ vec3 sample_photonics_indirect(vec2 tex_coord) {
     if (ph_debug_show_indirect < 0.5) return vec3(0.0);
     return texture(radiosity_indirect_resolved, tex_coord).rgb;
 }
+
+// Reservoir Splatting temporal pipeline uniforms
+uniform float ph_reservoir_splatting_camera_aperture_radius;
+uniform float ph_reservoir_splatting_artificial_frame_time;
+uniform float ph_reservoir_splatting_shutter_speed;
+uniform int ph_restir_active_checkerboard_field;
+uniform int ph_restir_frame_index;
 
 #endif

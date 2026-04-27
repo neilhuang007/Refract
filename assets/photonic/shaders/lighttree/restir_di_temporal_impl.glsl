@@ -23,7 +23,7 @@ void lt_di_collect_temporal_samples(
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE)
 RTXDI_DIReservoir lt_di_gather_temporal_resampling(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
+    out ReconnectionData currReconnectionData)
 {
     return GatherTemporalResampling_run(
         pixel,
@@ -33,9 +33,9 @@ RTXDI_DIReservoir lt_di_gather_temporal_resampling(
 #else
 RTXDI_DIReservoir lt_di_gather_temporal_resampling(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
+    out ReconnectionData currReconnectionData)
 {
-    currReconnectionData = ReservoirSplattingReconnectionData_init();
+    currReconnectionData = ReconnectionData_init();
     return RTXDI_EmptyDIReservoir();
 }
 #endif
@@ -67,7 +67,7 @@ void sortCellData(
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE)
 RTXDI_DIReservoir lt_di_scatter_temporal_resampling(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
+    out ReconnectionData currReconnectionData)
 {
     return ScatterTemporalResampling_run(
         pixel,
@@ -79,7 +79,7 @@ RTXDI_DIReservoir lt_di_scatter_temporal_resampling(
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE)
 RTXDI_DIReservoir lt_di_scatter_backup_temporal_resampling(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
+    out ReconnectionData currReconnectionData)
 {
     return ScatterBackupTemporalResampling_run(
         pixel,
@@ -115,7 +115,7 @@ void multiSortCellData(
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE)
 RTXDI_DIReservoir lt_di_multi_scatter_temporal_resampling(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
+    out ReconnectionData currReconnectionData)
 {
     return MultiScatterTemporalResampling_run(
         pixel,

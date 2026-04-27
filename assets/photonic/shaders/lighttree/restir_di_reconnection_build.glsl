@@ -41,7 +41,7 @@ vec3 scatter_resolve_early_throughput(
 }
 
 vec3 pathReconnectionShift(
-    ReservoirSplattingReconnectionData reconnectionData,
+    ReconnectionData reconnectionData,
     RAB_Surface shiftedSurface,
     RAB_LightSample shiftedLight)
 {
@@ -136,7 +136,7 @@ uint scatter_resolve_reconnection_flags(RAB_LightSample lightSample)
     return flags;
 }
 
-ReservoirSplattingReconnectionData ReconnectionData_build(
+ReconnectionData ReconnectionData_build(
     RAB_Surface surface,
     RTXDI_DIReservoir reservoir,
     RAB_LightSample lightSample,
@@ -147,14 +147,14 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     vec3 irradiance,
     vec3 earlyThroughput)
 {
-    ReservoirSplattingReconnectionData d = ReservoirSplattingReconnectionData_init();
+    ReconnectionData d = ReconnectionData_init();
     vec4 identityData = scatter_load_surface_identity(pixelPosition, false);
     vec3 secondPos = (lightSample.index >= 0) ? lightSample.position : surface.worldPos;
     bool lightIsAnalytic = (lightSample.index >= 0) && RAB_IsAnalyticLightSample(lightSample);
     int reservoirLightIndex = RTXDI_GetReservoirLightIndexForFrame(reservoir, false, false);
 
     d.subPixel = scatter_resolve_reservoir_subpixel(reservoir, pixelPosition);
-    d.lensSample = reservoir.lensSampleUV;
+    d.lensSample = PathReservoir_getLensSample(reservoir);
     d.time = lt_path_sample_time(reservoir.pathSample);
 
     d.pathLength = (lightSample.index >= 0) ? 2u : 1u;
@@ -196,7 +196,7 @@ ReservoirSplattingReconnectionData ReconnectionData_build(
     return d;
 }
 
-ReservoirSplattingReconnectionData ReconnectionData_build(
+ReconnectionData ReconnectionData_build(
     RAB_Surface surface,
     RTXDI_DIReservoir reservoir,
     RAB_LightSample lightSample,

@@ -40,7 +40,7 @@ struct SpatialShiftedPathData {
     vec3  radiance;                 // f / p after reconnection (identical to reference ShiftedPathData.radiance)
     vec2  fractionalPixel;          // subpixel-weighted pixel where the shift lands (float pixel coords)
     vec2  lensSample;               // lens-domain sample carried by the shifted path (0.5 for pinhole)
-    ReservoirSplattingHitInfo primaryHit; // reference-aligned first-hit payload carried across stages
+    HitInfo primaryHit; // reference-aligned first-hit payload carried across stages
     vec3  primaryHitNormal;         // world-space first hit geometric normal
     vec3  firstRayDir;              // normalized primary ray direction at the new film point
     vec2  subPixel;                 // fract-part of `fractionalPixel`; mirrors reference sp.subPixel
@@ -56,7 +56,7 @@ SpatialShiftedPathData spatial_empty_shifted_path()
     s.radiance              = vec3(0.0f);
     s.fractionalPixel       = vec2(-1.0f);
     s.lensSample            = vec2(0.0f);
-    s.primaryHit            = ReservoirSplattingHitInfo_empty();
+    s.primaryHit            = HitInfo_empty();
     s.primaryHitNormal      = vec3(0.0f, 1.0f, 0.0f);
     s.firstRayDir           = vec3(0.0f, 0.0f, -1.0f);
     s.subPixel              = vec2(0.0f);
@@ -67,9 +67,9 @@ SpatialShiftedPathData spatial_empty_shifted_path()
     return s;
 }
 
-ReservoirSplattingHitInfo spatial_make_shifted_hit_info(ivec2 pixel, RAB_Surface surface)
+HitInfo spatial_make_shifted_hit_info(ivec2 pixel, RAB_Surface surface)
 {
-    ReservoirSplattingHitInfo hitInfo = ReservoirSplattingHitInfo_empty();
+    HitInfo hitInfo = HitInfo_empty();
     vec4 identityData = scatter_load_surface_identity(pixel, false);
     uint packedIdentity = uint(round(identityData.w));
     hitInfo.worldPos = surface.worldPos;
@@ -223,7 +223,7 @@ bool spatial_trace_reconnection_visibility(
 //   * decode the light (with per-frame remap) at the SHIFTED surface
 //   * evaluate shifted radiance through pathReconnectionShift
 vec3 spatial_reconnect_and_evaluate_radiance(
-    ReservoirSplattingReconnectionData sourceReconnection,
+    ReconnectionData sourceReconnection,
     RTXDI_DIReservoir sourceReservoir,
     RAB_Surface shiftedSurface)
 {
@@ -258,7 +258,7 @@ vec3 spatial_reconnect_and_evaluate_radiance(
 // fails.
 SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
     inout RTXDI_RandomSamplerState           rng,
-    ReservoirSplattingReconnectionData       sourceReconnection,
+    ReconnectionData       sourceReconnection,
     float                                    time,                       // retained for parity; unused for pinhole
     vec2                                     fractionalPixel,
     vec2                                     lensSample,
@@ -334,7 +334,7 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
 // and primaryHit.
 SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
     inout RTXDI_RandomSamplerState           rng,
-    ReservoirSplattingReconnectionData       sourceReconnection,
+    ReconnectionData       sourceReconnection,
     float                                    time,                       // retained for parity; unused for pinhole
     vec2                                     fractionalPixel,
     vec3                                     primaryHitPosW,
@@ -458,7 +458,7 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
 SpatialShiftedPathData spatial_gather_shift(
     bool                                     lensVertexCopyShift,
     inout RTXDI_RandomSamplerState           rng,
-    ReservoirSplattingReconnectionData       sourceReconnection,
+    ReconnectionData       sourceReconnection,
     float                                    time,
     vec2                                     fractionalPixel,
     vec2                                     lensSample,

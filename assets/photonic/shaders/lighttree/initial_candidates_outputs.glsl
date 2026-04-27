@@ -3,7 +3,7 @@
 
 void InitialCandidates_storeReservoir(
     RTXDI_DIReservoir reservoir,
-    ReservoirSplattingReconnectionData reconnectionData)
+    ReconnectionData reconnectionData)
 {
     float reconnectionTransportAux0;
     float reconnectionTransportAux1;
@@ -27,7 +27,7 @@ void InitialCandidates_storeEmptyReservoir()
 {
     InitialCandidates_storeReservoir(
         RTXDI_EmptyDIReservoir(),
-        ReservoirSplattingReconnectionData_init()
+        ReconnectionData_init()
     );
 }
 

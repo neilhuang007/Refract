@@ -1,6 +1,5 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE 1
 
 in vec4 direction_vert_out;
@@ -19,7 +18,7 @@ layout(location = 7) out vec4 reconnection4_frag_out;
 
 void ScatterBackupTemporalResampling_storeResult(
     RTXDI_DIReservoir reservoir,
-    ReservoirSplattingReconnectionData reconnectionData)
+    ReconnectionData reconnectionData)
 {
     float reconnectionTransportAux0;
     float reconnectionTransportAux1;
@@ -40,7 +39,7 @@ void ScatterBackupTemporalResampling_storeResult(
 
 void ScatterBackupTemporalResampling_storeEmptyResult()
 {
-    ScatterBackupTemporalResampling_storeResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
+    ScatterBackupTemporalResampling_storeResult(RTXDI_EmptyDIReservoir(), ReconnectionData_init());
 }
 
 void main()
@@ -56,7 +55,7 @@ void main()
         return;
     }
 
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    ReconnectionData currReconnectionData = ReconnectionData_init();
     RTXDI_DIReservoir dstReservoir = ScatterBackupTemporalResampling_run(
         pixel,
         currReconnectionData

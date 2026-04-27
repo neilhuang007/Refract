@@ -54,15 +54,13 @@ uvec2 scatter_surface_identity_face_uv(vec3 localPos, uint faceId)
     return uvec2(clampedFaceUv * 1023.0f + 0.5f);
 }
 
-#if !defined(PH_LIGHTTREE_RECONNECTION_PACK_ONLY)
-
 vec2 scatter_load_gather_floating_coords(ivec2 uv)
 {
     return lt_load_floating_coords(uv);
 }
 
 bool scatter_reconnection_matches_surface(
-    ReservoirSplattingReconnectionData reconnection,
+    ReconnectionData reconnection,
     ivec2 pixelPosition,
     RAB_Surface currentSurface,
     bool previousFrame)
@@ -98,7 +96,7 @@ bool scatter_reconnection_matches_surface(
 }
 
 bool scatter_reconnection_matches_surface(
-    ReservoirSplattingReconnectionData reconnection,
+    ReconnectionData reconnection,
     ivec2 pixelPosition,
     RAB_Surface currentSurface)
 {
@@ -155,7 +153,7 @@ float scatter_compute_scatter_jacobian(
 }
 
 float scatter_resolve_stored_subpixel_jacobian(
-    ReservoirSplattingReconnectionData reconnection,
+    ReconnectionData reconnection,
     RAB_Surface fallbackSurface,
     vec3 fallbackCameraPos,
     vec3 fallbackCameraForward)
@@ -175,9 +173,7 @@ float scatter_resolve_stored_subpixel_jacobian(
     );
 }
 
-float scatter_resolve_stored_secondary_jacobian(ReservoirSplattingReconnectionData reconnection)
+float scatter_resolve_stored_secondary_jacobian(ReconnectionData reconnection)
 {
     return max(reconnection.secondaryPathJacobian, 1e-10f);
 }
-
-#endif

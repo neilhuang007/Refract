@@ -1,12 +1,7 @@
 #ifndef PHOTONICS_RESTIR_DI_SCATTER_IMPL_GLSL
 #define PHOTONICS_RESTIR_DI_SCATTER_IMPL_GLSL
 
-#ifndef PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
-#define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
-uniform float ph_reservoir_splatting_camera_aperture_radius;
-uniform float ph_reservoir_splatting_artificial_frame_time;
-uniform float ph_reservoir_splatting_shutter_speed;
-#endif
+#include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
 
 // ============================================================================
 // This module contains the reusable helper functions that support the full
@@ -99,19 +94,15 @@ vec2 lt_scatter_project_ray_to_frame_film(
     return lt_is_viewport_uv_in_bounds(fractionalPixel) ? fractionalPixel : vec2(-1.0f);
 }
 
-float lt_scatter_actual_reservoir_confidence(RTXDI_DIReservoir reservoir) {
-    return PathReservoir_getConfidence(reservoir);
-}
-
 float lt_scatter_confidence_mis_weight(float confidence) {
     return lt_restir_temporal_use_confidence_weights()
         ? confidence
         : 1.0f;
 }
 
-float lt_scatter_reservoir_confidence(RTXDI_DIReservoir reservoir, ScatterReconnectionData reconnection) {
+float lt_scatter_reservoir_confidence(RTXDI_DIReservoir reservoir, ReconnectionData reconnection) {
     reconnection = reconnection;
-    return lt_scatter_actual_reservoir_confidence(reservoir);
+    return PathReservoir_getConfidence(reservoir);
 }
 
 float lt_scatter_radiance_phat(vec3 radiance) {
@@ -162,25 +153,10 @@ float lt_scatter_compute_lens_vertex_jacobian(
 // only the fields the MIS / addSampleFromReservoir logic needs.
 // ---------------------------------------------------------------------------
 
-#ifndef PH_LIGHTTREE_LT_SCATTER_SHIFTED_PATH_DECLARED
-#define PH_LIGHTTREE_LT_SCATTER_SHIFTED_PATH_DECLARED
-struct LtScatterShiftedPath {
-    bool  valid;
-    ReservoirSplattingHitInfo primaryHit;
-    vec2  fractionalPixel;
-    vec2  lensSample;
-    vec3  firstRayDir;
-    vec3  radiance;
-    float subPixelJacobian;
-    float secondaryPathJacobian;
-    float lensVertexJacobian;
-};
-#endif
-
 LtScatterShiftedPath lt_scatter_empty_shifted_path() {
     LtScatterShiftedPath s;
     s.valid = false;
-    s.primaryHit = ReservoirSplattingHitInfo_empty();
+    s.primaryHit = HitInfo_empty();
     s.fractionalPixel = vec2(-1.0f);
     s.lensSample = vec2(0.0f);
     s.firstRayDir = vec3(0.0f);
@@ -194,17 +170,34 @@ LtScatterShiftedPath lt_scatter_empty_shifted_path() {
 bool lt_scatter_trace_reconnection_visibility(
     vec3 rayOriginW,
     vec3 rayDirW,
-    float traceMaxDistance)
+    float traceMaxDistance,
+    bool isReprojection)
 {
+    // Reference parity:
+    //   ShiftMapping.slang:363  -> scatter path: tMin = 0.001f (fixed, isReprojection=false)
+    //   ReprojectTemporalSamples.rt.slang:105 -> reproject geometry: tMin = 0.001f * dist
+    //   ReprojectTemporalSamples.rt.slang:115 -> reproject envmap:   tMin = 0.001f (fixed)
+    // For reprojection of a geometry hit (traceMaxDistance is 0.999f*dist so dist ~= tMax/0.999):
+    float rayMin = (isReprojection && traceMaxDistance < 1e4f)
+        ? (0.001f * (traceMaxDistance / 0.999f))
+        : 0.001f;
     ray.origin = rayOriginW;
     ray.direction = rayDirW;
-    ray_min_trace_distance = 0.001f;
+    ray_min_trace_distance = rayMin;
     ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
     bool unoccluded = !ray.result_hit && ray_distance_limit_reached;
     ray_min_trace_distance = 0.0f;
     ray_max_trace_distance = -1.0f;
     return unoccluded;
+}
+
+bool lt_scatter_trace_reconnection_visibility(
+    vec3 rayOriginW,
+    vec3 rayDirW,
+    float traceMaxDistance)
+{
+    return lt_scatter_trace_reconnection_visibility(rayOriginW, rayDirW, traceMaxDistance, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +219,7 @@ bool lt_scatter_trace_reconnection_visibility(
 // visibility ray blocked, or degenerate geometry).
 // ---------------------------------------------------------------------------
 bool scatter_project_reconnection_to_frame(
-    ScatterReconnectionData reconnection,
+    ReconnectionData reconnection,
     bool previousFrame,
     out vec2 projectedPixel,
     out vec3 rayOrigin,
@@ -248,7 +241,7 @@ vec2 lt_scatter_project_to_previous_frame(vec3 worldPos)
 }
 
 bool scatter_project_reconnection_to_previous_frame(
-    ScatterReconnectionData reconnection,
+    ReconnectionData reconnection,
     out vec2 projectedPixel,
     out vec3 rayOrigin,
     out vec3 rayDirection,
@@ -267,7 +260,7 @@ bool scatter_project_reconnection_to_previous_frame(
 }
 
 bool scatter_project_reconnection_to_current_frame(
-    ScatterReconnectionData reconnection,
+    ReconnectionData reconnection,
     out vec2 projectedPixel,
     out vec3 rayOrigin,
     out vec3 rayDirection,
@@ -286,7 +279,7 @@ bool scatter_project_reconnection_to_current_frame(
 }
 
 bool scatter_project_reconnection_to_frame(
-    ScatterReconnectionData reconnectionData,
+    ReconnectionData reconnectionData,
     bool previousFrame,
     out vec2 projectedPixel,
     out vec3 rayOrigin,
@@ -348,7 +341,7 @@ bool scatter_project_reconnection_to_frame(
 }
 
 bool lt_scatter_reprojection_shift(
-    ScatterReconnectionData reconnectionData,
+    ReconnectionData reconnectionData,
     RTXDI_DIReservoir sourceReservoir,
     bool targetPreviousFrame,
     RAB_Surface targetSurface,
@@ -400,21 +393,18 @@ bool lt_scatter_reprojection_shift(
         return false;
     }
 
-    if (!scatter_reconnection_matches_surface(reconnectionData, landingPixel, targetSurface, targetPreviousFrame)) {
-        return false;
-    }
-
     vec3 cameraPos = targetPreviousFrame ? previous_world_camera_position : world_camera_position;
     vec3 cameraForward = targetPreviousFrame ? lt_previous_camera_forward() : lt_current_camera_forward();
+    vec3 primaryHitNormal = scatter_decode_surface_face_normal(reconnectionData.firstHit.faceId);
     float subPixelJacobian = scatter_compute_subpixel_jacobian(
         reconnectionData.firstHit.worldPos,
-        targetSurface.geoNormal,
+        primaryHitNormal,
         projectedRayOrigin,
         cameraForward
     );
     float lensVertexJacobian = lt_scatter_compute_lens_vertex_jacobian(
         reconnectionData.firstHit.worldPos,
-        targetSurface.geoNormal,
+        primaryHitNormal,
         projectedRayOrigin,
         projectedRayDirection,
         cameraForward,
@@ -440,7 +430,7 @@ vec3 lt_scatter_camera_pos_for_frame(bool previousFrame) {
 }
 
 RAB_Surface lt_scatter_build_shifted_primary_surface(
-    ScatterReconnectionData sourceReconnection,
+    ReconnectionData sourceReconnection,
     RAB_Surface matchedSurface,
     vec3 firstRayDirection,
     bool targetPreviousFrame)
@@ -448,13 +438,15 @@ RAB_Surface lt_scatter_build_shifted_primary_surface(
     RAB_Surface shiftedSurface = matchedSurface;
     vec3 cameraPos = lt_scatter_camera_pos_for_frame(targetPreviousFrame);
     shiftedSurface.worldPos = sourceReconnection.firstHit.worldPos;
+    shiftedSurface.geoNormal = scatter_decode_surface_face_normal(sourceReconnection.firstHit.faceId);
+    shiftedSurface.normal = shiftedSurface.geoNormal;
     shiftedSurface.viewDir = -normalize(firstRayDirection);
     shiftedSurface.viewDepth = length(sourceReconnection.firstHit.worldPos - cameraPos);
     return shiftedSurface;
 }
 
 bool lt_scatter_update_shifted_reservoir(
-    ScatterReconnectionData sourceReconnection,
+    ReconnectionData sourceReconnection,
     RTXDI_DIReservoir sourceReservoir,
     bool sourcePreviousFrame,
     bool targetPreviousFrame,
@@ -462,7 +454,7 @@ bool lt_scatter_update_shifted_reservoir(
     ivec2 targetPixel,
     out LtScatterShiftedPath shifted,
     out RTXDI_DIReservoir shiftedReservoir,
-    out ScatterReconnectionData shiftedReconnection,
+    out ReconnectionData shiftedReconnection,
     out float shiftedJacobian);
 
 RAB_Surface lt_scatter_load_target_surface(
@@ -475,17 +467,17 @@ RAB_Surface lt_scatter_load_target_surface(
 }
 
 bool lt_scatter_update_shifted_reservoir_to_previous_frame(
-    ScatterReconnectionData sourceReconnection,
+    ReconnectionData sourceReconnection,
     RTXDI_DIReservoir sourceReservoir,
     bool sourcePreviousFrame,
     out LtScatterShiftedPath shifted,
     out RTXDI_DIReservoir shiftedReservoir,
-    out ScatterReconnectionData shiftedReconnection,
+    out ReconnectionData shiftedReconnection,
     out float shiftedJacobian)
 {
     shifted = lt_scatter_empty_shifted_path();
     shiftedReservoir = RTXDI_EmptyDIReservoir();
-    shiftedReconnection = scatter_empty_reconnection();
+    shiftedReconnection = ReconnectionData_init();
     shiftedJacobian = 0.0f;
 
     vec2 projectedPixel;
@@ -552,7 +544,7 @@ bool lt_scatter_update_shifted_reservoir_to_previous_frame(
 // the geometry-only reprojection step). The helper name is intentionally based
 // on the reference update semantics instead of a generic "translate" label.
 bool lt_scatter_update_shifted_reservoir(
-    ScatterReconnectionData sourceReconnection,
+    ReconnectionData sourceReconnection,
     RTXDI_DIReservoir       sourceReservoir,
     bool                    sourcePreviousFrame,
     bool                    targetPreviousFrame,
@@ -560,12 +552,12 @@ bool lt_scatter_update_shifted_reservoir(
     ivec2                   targetPixel,
     out LtScatterShiftedPath shifted,
     out RTXDI_DIReservoir    shiftedReservoir,
-    out ScatterReconnectionData shiftedReconnection,
+    out ReconnectionData shiftedReconnection,
     out float               shiftedJacobian)
 {
     shifted = lt_scatter_empty_shifted_path();
     shiftedReservoir = RTXDI_EmptyDIReservoir();
-    shiftedReconnection = scatter_empty_reconnection();
+    shiftedReconnection = ReconnectionData_init();
     shiftedJacobian = 0.0f;
 
     if (lt_scatter_radiance_phat(PathReservoir_getIntegrand(sourceReservoir)) <= 0.0f) {
@@ -655,9 +647,6 @@ bool lt_scatter_update_shifted_reservoir(
     shiftedReconnection.subPixelJacobian = shifted.subPixelJacobian;
     shiftedReconnection.lensVertexJacobian = shifted.lensVertexJacobian;
     shiftedReconnection.secondaryPathJacobian = secondaryPathJacobian;
-    uint packedIdentity = uint(round(scatter_load_surface_identity(targetPixel, targetPreviousFrame).w));
-    shiftedReconnection.firstHit.faceId = packedIdentity & 0x7u;
-    shiftedReconnection.firstHit.materialId = packedIdentity >> 3u;
     shiftedReconnection.time = sourceReconnection.time;
     return true;
 }
@@ -756,6 +745,7 @@ bool lt_scatter_add_sample_from_reservoir(
     float pHatLum = lt_scatter_radiance_phat(pHat);
     float candidateWeight = misWeight * pHatLum * otherUcw * jacobian;
     PathReservoir_setTotalWeight(state, PathReservoir_getTotalWeight(state) + candidateWeight);
+    state.M += max(otherReservoir.M, 0.0f);
 
     bool selected = (lt_next_random(rng) * PathReservoir_getTotalWeight(state) < candidateWeight);
     if (selected) {
@@ -772,8 +762,8 @@ bool lt_scatter_add_sample_from_reservoir(
     }
 
     // Reference addSampleFromReservoir unconditionally bumps confidence.
-    // The caller (resolve stage) later overwrites state.M with the motion-
-    // vector bilinear newConfidence, matching ScatterTemporalResampling.rt.slang:170.
+    // History length (M) is accumulated separately above and remains the
+    // reservoir sample count rather than aliasing confidence.
     stateConfidence = min(
         SCATTER_RECONNECTION_CONFIDENCE_MAX,
         stateConfidence + scatter_clamp_reconnection_confidence(otherConfidence)
@@ -837,17 +827,6 @@ void lt_reproject_temporal_samples_append_record(ivec2 pixel, ivec2 newPixel) {
 // in this pass, and doing so reintroduces pHat jitter / blur.
 // Returns valid=false when the carried integrand is zero.
 // ---------------------------------------------------------------------------
-#ifndef PH_LIGHTTREE_LT_SCATTER_CURRENT_SAMPLE_DECLARED
-#define PH_LIGHTTREE_LT_SCATTER_CURRENT_SAMPLE_DECLARED
-struct LtScatterCurrentSample {
-    bool                                  isValid;
-    bool                                  hasPositivePHat;
-    RTXDI_DIReservoir                     reservoir;
-    ReservoirSplattingReconnectionData    reconnectionData;
-    float                                 confidence;
-};
-#endif
-
 float ScatterTemporalResampling_load_previous_reservoir_confidence(
     ivec2 neighborPixel);
 
@@ -870,12 +849,12 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
 
 bool ScatterTemporalResampling_process_contributor(
     inout RTXDI_DIReservoir dstReservoir,
-    inout ScatterReconnectionData dstReconnectionData,
+    inout ReconnectionData dstReconnectionData,
     inout float newConfidence,
     ivec2 scatteredPixel,
     ivec2 pixel,
     RTXDI_DIReservoir currReservoir,
-    ScatterReconnectionData currReconnectionData,
+    ReconnectionData currReconnectionData,
     float currReservoirConfidence,
     inout RTXDI_RandomSamplerState sg);
 
@@ -903,7 +882,7 @@ LtScatterCurrentSample lt_scatter_make_empty_current_sample() {
     currentSample.isValid = false;
     currentSample.hasPositivePHat = false;
     currentSample.reservoir = RTXDI_EmptyDIReservoir();
-    currentSample.reconnectionData = ReservoirSplattingReconnectionData_init();
+    currentSample.reconnectionData = ReconnectionData_init();
     currentSample.confidence = 0.0f;
     return currentSample;
 }
@@ -947,12 +926,12 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
     // that was published by the Java pipeline before Stage 2c. This mirrors the
     // structured-buffer read of currReconnectionData[reservoirIdx] exactly.
     reservoirIdx = reservoirIdx;
-    vec4 reconnection0 = texelFetch(current_stage_reconnection0, pixel, 0);
-    vec4 reconnection1 = texelFetch(current_stage_reconnection1, pixel, 0);
-    vec4 reconnection2 = texelFetch(current_stage_reconnection2, pixel, 0);
-    vec4 reconnection3 = texelFetch(current_stage_reconnection3, pixel, 0);
-    vec4 reconnection4 = texelFetch(current_stage_reconnection4, pixel, 0);
-    ReservoirSplattingReconnectionData storedReconnection;
+    vec4 reconnection0 = texelFetch(scatter_reconnection0, pixel, 0);
+    vec4 reconnection1 = texelFetch(scatter_reconnection1, pixel, 0);
+    vec4 reconnection2 = texelFetch(scatter_reconnection2, pixel, 0);
+    vec4 reconnection3 = texelFetch(scatter_reconnection3, pixel, 0);
+    vec4 reconnection4 = texelFetch(scatter_reconnection4, pixel, 0);
+    ReconnectionData storedReconnection;
     scatter_unpack_reconnection(
         reconnection0,
         reconnection1,
@@ -964,7 +943,7 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
         storedReconnection
     );
     RestirDI_restoreReconnectionRadiometry(pixel, false, currentSample.reservoir, storedReconnection);
-    currentSample.confidence = lt_scatter_actual_reservoir_confidence(currentSample.reservoir);
+    currentSample.confidence = PathReservoir_getConfidence(currentSample.reservoir);
     currentSample.isValid = true;
     currentSample.reconnectionData = storedReconnection;
     currentSample.hasPositivePHat = ph_luminance(PathReservoir_getIntegrand(currentSample.reservoir)) > 0.0f;
@@ -998,7 +977,7 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
 
     LtScatterShiftedPath shiftedCurr;
     RTXDI_DIReservoir shiftedReservoir;
-    ScatterReconnectionData shiftedReconnection;
+    ReconnectionData shiftedReconnection;
     float shiftedJacobian;
     if (!lt_scatter_update_shifted_reservoir_to_previous_frame(
             currSample.reconnectionData,
@@ -1030,12 +1009,12 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
 
 bool ScatterTemporalResampling_process_contributor(
     inout RTXDI_DIReservoir dstReservoir,
-    inout ScatterReconnectionData dstReconnectionData,
+    inout ReconnectionData dstReconnectionData,
     inout float newConfidence,
     ivec2 scatteredPixel,
     ivec2 pixel,
     RTXDI_DIReservoir currReservoir,
-    ScatterReconnectionData currReconnectionData,
+    ReconnectionData currReconnectionData,
     float currReservoirConfidence,
     inout RTXDI_RandomSamplerState sg)
 {
@@ -1044,7 +1023,7 @@ bool ScatterTemporalResampling_process_contributor(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(previousReservoirPixel)
     );
-    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
+    ReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
     RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(targetSurface)) {
@@ -1053,7 +1032,7 @@ bool ScatterTemporalResampling_process_contributor(
 
     LtScatterShiftedPath shiftedPrev;
     RTXDI_DIReservoir shiftedReservoir;
-    ScatterReconnectionData shiftedPrevReconnectionData;
+    ReconnectionData shiftedPrevReconnectionData;
     float shiftedJacobian;
     if (!lt_scatter_update_shifted_reservoir(
             prevReconnectionData,
@@ -1136,7 +1115,7 @@ float ScatterTemporalResampling_load_previous_reservoir_confidence(
         uvec2(previousReservoirPixel)
     );
 
-    return lt_scatter_actual_reservoir_confidence(prevReservoir);
+    return PathReservoir_getConfidence(prevReservoir);
 }
 
 

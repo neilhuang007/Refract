@@ -6,7 +6,7 @@ void lt_di_collect_temporal_samples_stage(
 
 RTXDI_DIReservoir GatherTemporalResampling_run(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData);
+    out ReconnectionData currReconnectionData);
 
 void ReprojectTemporalSamples_run(
     ivec2 pixel);
@@ -19,7 +19,7 @@ void SortReprojectedReservoirs_sortCellData(
 
 RTXDI_DIReservoir ScatterTemporalResampling_run(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData);
+    out ReconnectionData currReconnectionData);
 
 void MultiReprojectTemporalSamples_run(
     ivec2 pixel);
@@ -32,18 +32,18 @@ void MultiSortReprojectedReservoirs_sortCellData(
 
 RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData);
+    out ReconnectionData currReconnectionData);
 
 RTXDI_DIReservoir MultiScatterTemporalResampling_run(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData);
+    out ReconnectionData currReconnectionData);
 
 RTXDI_DIReservoir SpatialResampling_run(
     ivec2 pixel,
     RAB_Surface centerSurface,
     RTXDI_DIReservoir centralReservoir,
     inout RTXDI_RandomSamplerState sg,
-    out ReservoirSplattingReconnectionData currReconnectionData);
+    out ReconnectionData currReconnectionData);
 
 #endif
 

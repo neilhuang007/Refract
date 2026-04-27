@@ -10,6 +10,7 @@
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
 #include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 
+// Matches RobustReuseOptimization.rt.slang kOffsets ordering exactly.
 const ivec2 kRobustReuseOptimizationOffsets[8] = ivec2[8](
     ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1),
     ivec2(-1,  0), ivec2(1,  0),
@@ -30,7 +31,7 @@ void RobustReuseOptimization_run(ivec2 pixel)
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(pixel)
     );
-    ReservoirSplattingReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
+    ReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
 
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
     RTXDI_RandomSamplerState sg = lt_init_random_sampler(
@@ -56,7 +57,7 @@ void RobustReuseOptimization_run(ivec2 pixel)
                 prevReconnection.lensSample,
                 prevReservoir,
                 true,
-                true
+                false
             )
             : lt_temporal_empty_shifted_path();
 

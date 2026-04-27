@@ -19,7 +19,7 @@ layout(location = 7) out vec4 reconnection4_frag_out;
 
 void storeSpatialResamplingResult(
     RTXDI_DIReservoir reservoir,
-    ReservoirSplattingReconnectionData reconnectionData)
+    ReconnectionData reconnectionData)
 {
     float reconnectionTransportAux0;
     float reconnectionTransportAux1;
@@ -42,7 +42,7 @@ void storeEmptySpatialResamplingResult()
 {
     storeSpatialResamplingResult(
         RTXDI_EmptyDIReservoir(),
-        ReservoirSplattingReconnectionData_init()
+        ReconnectionData_init()
     );
 }
 
@@ -71,7 +71,7 @@ void main()
     const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
     RAB_Surface centerSurface = RAB_GetGBufferSurface(pixel, false);
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    ReconnectionData currReconnectionData = ReconnectionData_init();
 
     if (RAB_IsSurfaceValid(centerSurface))
     {

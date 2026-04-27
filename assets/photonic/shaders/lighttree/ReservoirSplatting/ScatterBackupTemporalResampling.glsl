@@ -46,10 +46,10 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
     ivec2 pixel,
     inout RTXDI_DIReservoir dstReservoir,
     inout float dstConfidence,
-    inout ReservoirSplattingReconnectionData dstReconnectionData,
+    inout ReconnectionData dstReconnectionData,
     LtScatterCurrentSample currSample,
     RTXDI_DIReservoir backupReservoir,
-    ReservoirSplattingReconnectionData backupReconnectionData,
+    ReconnectionData backupReconnectionData,
     inout RTXDI_RandomSamplerState sg)
 {
     float currSampleMIS = 1.0f;
@@ -62,7 +62,7 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
         float m2 = 0.0f;
         LtScatterShiftedPath scatteredCurr;
         RTXDI_DIReservoir shiftedCurrReservoir;
-        ScatterReconnectionData shiftedCurrReconnection;
+        ReconnectionData shiftedCurrReconnection;
         float scatteredJacobian;
         if (lt_scatter_update_shifted_reservoir_to_previous_frame(
                 currSample.reconnectionData,
@@ -141,10 +141,10 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
     ivec2 pixel,
     inout RTXDI_DIReservoir dstReservoir,
     inout float dstConfidence,
-    inout ReservoirSplattingReconnectionData dstReconnectionData,
+    inout ReconnectionData dstReconnectionData,
     LtScatterCurrentSample currSample,
     RTXDI_DIReservoir backupReservoir,
-    inout ReservoirSplattingReconnectionData backupReconnectionData,
+    inout ReconnectionData backupReconnectionData,
     inout RTXDI_RandomSamplerState sg)
 {
     float backupSampleMIS = 0.0f;
@@ -181,7 +181,7 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
         {
             LtScatterShiftedPath scatteredBackup;
             RTXDI_DIReservoir shiftedBackupReservoir;
-            ScatterReconnectionData shiftedBackupReconnection;
+            ReconnectionData shiftedBackupReconnection;
             float scatteredJacobian;
             if (lt_scatter_update_shifted_reservoir_to_previous_frame(
                     backupReconnectionData,
@@ -235,11 +235,11 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
     ivec2 pixel,
     inout RTXDI_DIReservoir dstReservoir,
     inout float dstConfidence,
-    inout ReservoirSplattingReconnectionData dstReconnectionData,
+    inout ReconnectionData dstReconnectionData,
     ivec2 scatteredPixel,
     LtScatterCurrentSample currSample,
     RTXDI_DIReservoir backupReservoir,
-    ReservoirSplattingReconnectionData backupReconnectionData,
+    ReconnectionData backupReconnectionData,
     inout RTXDI_RandomSamplerState sg)
 {
     ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
@@ -247,7 +247,7 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
         lt_build_restir_di_parameters().reservoirBufferParams,
         uvec2(previousReservoirPixel)
     );
-    ScatterReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
+    ReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
     RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(targetSurface))
@@ -263,7 +263,7 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
     {
         LtScatterShiftedPath scatteredPrev;
         RTXDI_DIReservoir shiftedReservoir;
-        ScatterReconnectionData shiftedReconnection;
+        ReconnectionData shiftedReconnection;
         if (!lt_scatter_update_shifted_reservoir(
                 prevReconnectionData,
                 prevReservoir,
@@ -349,13 +349,13 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE)
 RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
     ivec2 pixel,
-    out ReservoirSplattingReconnectionData currReconnectionData)
+    out ReconnectionData currReconnectionData)
 {
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
-        currReconnectionData = ReservoirSplattingReconnectionData_init();
+        currReconnectionData = ReconnectionData_init();
         return RTXDI_EmptyDIReservoir();
     }
-    currReconnectionData = ReservoirSplattingReconnectionData_init();
+    currReconnectionData = ReconnectionData_init();
 
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
 
@@ -368,7 +368,7 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
     uint reservoirIdx = lt_temporal_scatter_cell_index_from_pixel(pixel);
     RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();
     float dstConfidence = 0.0f;
-    ReservoirSplattingReconnectionData dstReconnectionData = ReservoirSplattingReconnectionData_init();
+    ReconnectionData dstReconnectionData = ReconnectionData_init();
 
     RTXDI_DIReservoir currReservoir = lt_ScatterTemporalResampling_load_current_reservoir(pixel);
     LtScatterCurrentSample currSample = lt_ScatterTemporalResampling_load_current_sample(
@@ -379,7 +379,7 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
     );
 
     RTXDI_DIReservoir backupReservoir = lt_ScatterBackupTemporalResampling_load_backup_reservoir(pixel);
-    ReservoirSplattingReconnectionData backupReconnectionData = RestirDI_loadGatherIntermediateReconnection(pixel);
+    ReconnectionData backupReconnectionData = RestirDI_loadGatherIntermediateReconnection(pixel);
 
     lt_ScatterBackupTemporalResampling_add_current_sample(
         pixel,

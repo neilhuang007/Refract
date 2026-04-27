@@ -281,8 +281,12 @@ public final class ShaderAutomation {
    private double previousCaptureDirectMeanLuma = Double.NaN;
    private double previousCaptureResolvedStrictValidFraction = Double.NaN;
    private double previousCaptureResolvedMeanWeight = Double.NaN;
+   private double previousCaptureResolvedMeanM = Double.NaN;
    private double previousCaptureLightBlendFactor = Double.NaN;
    private int previousCaptureTracedLightCount = -1;
+   private double latestResolvedMeanM = 0.0;
+   private double latestWholeLightFlashResolvedMDrop = 0.0;
+   private double maxWholeLightFlashResolvedMDrop = 0.0;
    private double directTemporalMaxPixelDeltaSum = 0.0;
    private double directTemporalMaxPixelDeltaMax = 0.0;
    private int directTemporalMaxPixelDeltaSamples = 0;
@@ -1706,6 +1710,13 @@ public final class ShaderAutomation {
          return;
       }
 
+      String fatalShaderFailureMessage = this.readFatalShaderFailureMessage();
+      if (fatalShaderFailureMessage != null) {
+         Photonic.warn("[Automation] {}", fatalShaderFailureMessage);
+         this.finish(fatalShaderFailureMessage);
+         return;
+      }
+
       this.finish(this.buildSuccess() ? "" : "Client stopped before automation completed");
    }
 
@@ -2758,18 +2769,26 @@ public final class ShaderAutomation {
          lightCountDrop = Math.max(0.0, (this.previousCaptureTracedLightCount - this.latestTracedLightCount) / (double)this.previousCaptureTracedLightCount);
       }
 
+      double resolvedMDrop = 0.0;
+      if (Double.isFinite(this.previousCaptureResolvedMeanM) && this.previousCaptureResolvedMeanM > 1.0e-6) {
+         resolvedMDrop = Math.max(0.0, (this.previousCaptureResolvedMeanM - resolvedReservoirStats.meanM()) / this.previousCaptureResolvedMeanM);
+      }
+
       double blendFactorJump = 0.0;
       if (Double.isFinite(this.previousCaptureLightBlendFactor)) {
          blendFactorJump = Math.abs(this.latestLightBlendFactor - this.previousCaptureLightBlendFactor);
       }
 
+      this.latestResolvedMeanM = resolvedReservoirStats.meanM();
       this.latestWholeLightFlashDirectDrop = directDrop;
       this.latestWholeLightFlashResolvedValidDrop = resolvedValidDrop;
       this.latestWholeLightFlashLightCountDrop = lightCountDrop;
+      this.latestWholeLightFlashResolvedMDrop = resolvedMDrop;
       this.latestWholeLightFlashBlendFactorJump = blendFactorJump;
       this.maxWholeLightFlashDirectDrop = Math.max(this.maxWholeLightFlashDirectDrop, directDrop);
       this.maxWholeLightFlashResolvedValidDrop = Math.max(this.maxWholeLightFlashResolvedValidDrop, resolvedValidDrop);
       this.maxWholeLightFlashLightCountDrop = Math.max(this.maxWholeLightFlashLightCountDrop, lightCountDrop);
+      this.maxWholeLightFlashResolvedMDrop = Math.max(this.maxWholeLightFlashResolvedMDrop, resolvedMDrop);
       this.maxWholeLightFlashBlendFactorJump = Math.max(this.maxWholeLightFlashBlendFactorJump, blendFactorJump);
 
       boolean directDropTriggered = directDrop >= WHOLE_LIGHT_FLASH_DIRECT_DROP_THRESHOLD;
@@ -2794,10 +2813,11 @@ public final class ShaderAutomation {
          this.wholeLightFlashSuspectCaptures++;
          this.wholeLightFlashLastCapture = captureIndex;
          Photonic.warn(
-            "[Automation] whole-light-flash capture={} directDrop={} resolvedValidDrop={} resolvedWeightDelta={} lightCountDrop={} blendFactorJump={} directMean={} prevDirectMean={} resolvedStrict={} prevResolvedStrict={} resolvedMeanWeight={} prevResolvedMeanWeight={} tracedLights={}/{} prevTracedLights={} blendFactor={} prevBlendFactor={} triggers(direct={}, resolved={}, lights={}, blend={})",
+            "[Automation] whole-light-flash capture={} directDrop={} resolvedValidDrop={} resolvedMDrop={} resolvedWeightDelta={} lightCountDrop={} blendFactorJump={} directMean={} prevDirectMean={} resolvedStrict={} prevResolvedStrict={} resolvedMeanWeight={} prevResolvedMeanWeight={} resolvedMeanM={} prevResolvedMeanM={} tracedLights={}/{} prevTracedLights={} blendFactor={} prevBlendFactor={} triggers(direct={}, resolved={}, lights={}, blend={})",
             captureIndex,
             String.format(Locale.ROOT, "%.5f", directDrop),
             String.format(Locale.ROOT, "%.5f", resolvedValidDrop),
+            String.format(Locale.ROOT, "%.5f", resolvedMDrop),
             String.format(Locale.ROOT, "%.5f", Double.isFinite(this.previousCaptureResolvedMeanWeight) ? resolvedReservoirStats.meanWeight() - this.previousCaptureResolvedMeanWeight : 0.0),
             String.format(Locale.ROOT, "%.5f", lightCountDrop),
             String.format(Locale.ROOT, "%.5f", blendFactorJump),
@@ -2807,6 +2827,8 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", this.previousCaptureResolvedStrictValidFraction),
             String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.meanWeight()),
             String.format(Locale.ROOT, "%.5f", this.previousCaptureResolvedMeanWeight),
+            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.meanM()),
+            String.format(Locale.ROOT, "%.5f", this.previousCaptureResolvedMeanM),
             this.latestTracedLightCount,
             this.latestTotalLightCount,
             this.previousCaptureTracedLightCount,
@@ -2822,6 +2844,7 @@ public final class ShaderAutomation {
       this.previousCaptureDirectMeanLuma = this.latestDirectMeanLuma;
       this.previousCaptureResolvedStrictValidFraction = resolvedReservoirStats.strictValidFraction();
       this.previousCaptureResolvedMeanWeight = resolvedReservoirStats.meanWeight();
+      this.previousCaptureResolvedMeanM = resolvedReservoirStats.meanM();
       this.previousCaptureLightBlendFactor = this.latestLightBlendFactor;
       this.previousCaptureTracedLightCount = this.latestTracedLightCount;
    }
@@ -3008,24 +3031,33 @@ public final class ShaderAutomation {
          return;
       }
 
+      String failureMessage = this.readFatalShaderFailureMessage();
+      if (failureMessage != null) {
+         Photonic.warn("[Automation] {}", failureMessage);
+         this.finish(failureMessage);
+         this.scheduleFatalShutdown(client);
+      }
+   }
+
+   private String readFatalShaderFailureMessage() {
       Path latestLog = Path.of("run/logs/latest.log");
       if (!Files.exists(latestLog)) {
-         return;
+         return null;
       }
 
       try {
          String logContent = Files.readString(latestLog);
-         if (logContent.contains("Failed to create shader rendering pipeline")
-            || logContent.contains("The shaderpack failed to load! Please report the error to the shader developer.")) {
-            String compileReason = photonics$extractShaderCompileReason(logContent);
-            String failureMessage = compileReason == null
-               ? "Fatal shader compilation failure detected in latest.log"
-               : "Fatal shader compilation failure: " + compileReason;
-            Photonic.warn("[Automation] {}", failureMessage);
-            this.finish(failureMessage);
-            this.scheduleFatalShutdown(client);
+         if (!logContent.contains("Failed to create shader rendering pipeline")
+            && !logContent.contains("The shaderpack failed to load! Please report the error to the shader developer.")) {
+            return null;
          }
+
+         String compileReason = photonics$extractShaderCompileReason(logContent);
+         return compileReason == null
+            ? "Fatal shader compilation failure detected in latest.log"
+            : "Fatal shader compilation failure: " + compileReason;
       } catch (IOException ignored) {
+         return null;
       }
    }
 
@@ -3555,10 +3587,12 @@ public final class ShaderAutomation {
          props.setProperty("latestWholeLightFlashDirectDrop", Double.toString(this.latestWholeLightFlashDirectDrop));
          props.setProperty("latestWholeLightFlashResolvedValidDrop", Double.toString(this.latestWholeLightFlashResolvedValidDrop));
          props.setProperty("latestWholeLightFlashLightCountDrop", Double.toString(this.latestWholeLightFlashLightCountDrop));
+         props.setProperty("latestWholeLightFlashResolvedMDrop", Double.toString(this.latestWholeLightFlashResolvedMDrop));
          props.setProperty("latestWholeLightFlashBlendFactorJump", Double.toString(this.latestWholeLightFlashBlendFactorJump));
          props.setProperty("maxWholeLightFlashDirectDrop", Double.toString(this.maxWholeLightFlashDirectDrop));
          props.setProperty("maxWholeLightFlashResolvedValidDrop", Double.toString(this.maxWholeLightFlashResolvedValidDrop));
          props.setProperty("maxWholeLightFlashLightCountDrop", Double.toString(this.maxWholeLightFlashLightCountDrop));
+         props.setProperty("maxWholeLightFlashResolvedMDrop", Double.toString(this.maxWholeLightFlashResolvedMDrop));
          props.setProperty("maxWholeLightFlashBlendFactorJump", Double.toString(this.maxWholeLightFlashBlendFactorJump));
          props.setProperty("wholeLightFlashSuspectCaptures", Integer.toString(this.wholeLightFlashSuspectCaptures));
          props.setProperty("wholeLightFlashLastCapture", Integer.toString(this.wholeLightFlashLastCapture));
@@ -3567,7 +3601,9 @@ public final class ShaderAutomation {
          props.setProperty("wholeLightFlashLightCountDropCaptures", Integer.toString(this.wholeLightFlashLightCountDropCaptures));
          props.setProperty("wholeLightFlashBlendJumpCaptures", Integer.toString(this.wholeLightFlashBlendJumpCaptures));
          props.setProperty("previousCaptureResolvedMeanWeight", Double.toString(this.previousCaptureResolvedMeanWeight));
+         props.setProperty("previousCaptureResolvedMeanM", Double.toString(this.previousCaptureResolvedMeanM));
          props.setProperty("previousCaptureResolvedStrictValidFraction", Double.toString(this.previousCaptureResolvedStrictValidFraction));
+         props.setProperty("latestResolvedMeanM", Double.toString(this.latestResolvedMeanM));
          props.setProperty("previousCaptureDirectMeanLuma", Double.toString(this.previousCaptureDirectMeanLuma));
          props.setProperty("previousCaptureLightBlendFactor", Double.toString(this.previousCaptureLightBlendFactor));
          props.setProperty("previousCaptureTracedLightCount", Integer.toString(this.previousCaptureTracedLightCount));

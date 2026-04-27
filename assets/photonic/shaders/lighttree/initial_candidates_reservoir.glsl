@@ -3,7 +3,7 @@
 
 void InitialCandidates_addCandidateReservoir(
     inout RTXDI_DIReservoir currReservoir,
-    inout ReservoirSplattingReconnectionData currReconnectionData,
+    inout ReconnectionData currReconnectionData,
     PathState path)
 {
     const bool isFirstSample = (PathState_getSampleIdx(path) == 0u);
@@ -21,8 +21,8 @@ void InitialCandidates_addCandidateReservoir(
 
     currReservoir = existingReservoir;
 
-    ReservoirSplattingReconnectionData existingReconnection = isFirstSample
-        ? ReservoirSplattingReconnectionData_init()
+    ReconnectionData existingReconnection = isFirstSample
+        ? ReconnectionData_init()
         : currReconnectionData;
     currReconnectionData = existingReconnection;
 }

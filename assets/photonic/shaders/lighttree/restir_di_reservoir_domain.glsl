@@ -25,6 +25,12 @@ vec2 lt_area_default_lens_sample() {
     return vec2(0.0f);
 }
 
+vec2 PathReservoir_getLensSample(RTXDI_DIReservoir reservoir) {
+    return lt_area_has_valid_domain(reservoir)
+        ? clamp(reservoir.lensSampleUV, vec2(0.0f), vec2(1.0f))
+        : lt_area_default_lens_sample();
+}
+
 vec2 lt_area_sample_lens_sample(inout RTXDI_RandomSamplerState rng) {
     return lt_area_default_lens_sample();
 }
@@ -267,7 +273,7 @@ ivec2 lt_temporal_previous_checkerboard_pixel(ivec2 pixelPosition, int previousC
 }
 
 float lt_scatter_compute_history_confidence(ivec2 pixelPosition, RAB_Surface currentSurface, RTXDI_DIReservoir reservoir) {
-    float currentConfidence = lt_area_confidence_from_samples(reservoir.M);
+    float currentConfidence = PathReservoir_getConfidence(reservoir);
     if (!RAB_IsSurfaceValid(currentSurface)) {
         return currentConfidence;
     }
@@ -291,21 +297,15 @@ float lt_scatter_compute_history_confidence(ivec2 pixelPosition, RAB_Surface cur
                 continue;
             }
 
-            ScatterReconnectionData neighborReconn;
-            scatter_load_prev_reconnection(previousSamplePixel, neighborReconn);
             float weight = lt_scatter_bilinear_weight(fracOffset, dx, dy);
             if (weight <= 0.0f) {
                 continue;
             }
 
-            if (!scatter_reconnection_matches_surface(neighborReconn, pixelPosition, currentSurface)) {
-                continue;
-            }
-
-            bilinearConfidence += weight * RTXDI_LoadPreviousDIReservoir(
+            bilinearConfidence += weight * PathReservoir_getConfidence(RTXDI_LoadPreviousDIReservoir(
                 lt_build_restir_di_parameters().reservoirBufferParams,
                 uvec2(previousSamplePixel)
-            ).M;
+            ));
             totalWeight += weight;
         }
     }
@@ -332,7 +332,7 @@ bool lt_area_is_surface_neighbor_valid(RAB_Surface currentSurface, RAB_Surface p
 bool lt_area_is_temporal_neighbor_valid(
     RAB_Surface currentSurface,
     RAB_Surface prevSurface,
-    ScatterReconnectionData prevReconnection,
+    ReconnectionData prevReconnection,
     ivec2 currentPixel)
 {
     return lt_area_is_surface_neighbor_valid(currentSurface, prevSurface);

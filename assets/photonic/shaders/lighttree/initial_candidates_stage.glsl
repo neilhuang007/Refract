@@ -9,11 +9,11 @@
 
 void InitialCandidates_tracePrimaryMiss(
     inout RTXDI_DIReservoir currReservoir,
-    inout ReservoirSplattingReconnectionData currReconnectionData,
+    inout ReconnectionData currReconnectionData,
     inout PathState path)
 {
     path.reservoir = RTXDI_EmptyDIReservoir();
-    path.reconnection = ReservoirSplattingReconnectionData_init();
+    path.reconnection = ReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();
     path.selectedIrradiance = vec3(0.0f);
     path.selectedEarlyThroughput = vec3(0.0f);
@@ -23,7 +23,7 @@ void InitialCandidates_tracePrimaryMiss(
 void InitialCandidates_tracePath(
     const RTXDI_Parameters params,
     inout RTXDI_DIReservoir currReservoir,
-    inout ReservoirSplattingReconnectionData currReconnectionData,
+    inout ReconnectionData currReconnectionData,
     inout PathState path)
 {
     if (!RAB_IsSurfaceValid(path.surface))
@@ -43,7 +43,7 @@ void InitialCandidates_tracePath(
         path.selectedEarlyThroughput
     );
 
-    path.reconnection = ReservoirSplattingReconnectionData_init();
+    path.reconnection = ReconnectionData_init();
 
     InitialCandidates_addCandidateReservoir(currReservoir, currReconnectionData, path);
 }
@@ -73,7 +73,7 @@ void InitialCandidates_run(ivec2 pixel)
     }
 
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    ReconnectionData currReconnectionData = ReconnectionData_init();
 
     for (uint sampleIdx = 0u; sampleIdx < uint(kSamplesPerPixel); ++sampleIdx)
     {

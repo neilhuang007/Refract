@@ -12,37 +12,83 @@
 #include "/photonics/lighttree/restir_di_temporal_scatter_common.glsl"
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE)
-float lt_multi_temporal_reproject_partition(
-    ScatterReconnectionData prevReconnection,
+bool lt_multi_temporal_reproject_partition(
+    ReconnectionData prevReconnection,
     uint partitionIndex,
+    out float newTime,
     out vec2 newFractionalPixel,
-    out bool hitValid,
     out vec3 rayOrigin,
     out vec3 rayDirection,
     out float traceDistance,
     out bool hitDistantLight)
 {
     float fractionalTime = lt_multi_temporal_partition_fraction(prevReconnection.time);
-    float newTime = lt_multi_temporal_partition_time(fractionalTime, partitionIndex);
-    ScatterReconnectionData partitionedReconnection = prevReconnection;
-    partitionedReconnection.time = newTime;
-    hitValid = prevReconnection.firstHit.viewDepth > 0.0f
+    newTime = lt_multi_temporal_partition_time(fractionalTime, partitionIndex);
+
+    bool hitValid = prevReconnection.firstHit.viewDepth > 0.0f
         && any(greaterThan(abs(prevReconnection.firstHit.worldPos), vec3(0.0f)));
 
-    if (!scatter_project_reconnection_to_current_frame(
-            partitionedReconnection,
-            newFractionalPixel,
-            rayOrigin,
-            rayDirection,
-            traceDistance,
-            hitDistantLight)) {
+    rayOrigin = lt_temporal_camera_pos(newTime);
+    rayDirection = vec3(0.0f);
+    traceDistance = 0.0f;
+    hitDistantLight = false;
+    newFractionalPixel = vec2(-1.0f);
+
+    if (hitValid)
+    {
+        vec3 toPrimaryHit = prevReconnection.firstHit.worldPos - rayOrigin;
+        traceDistance = length(toPrimaryHit);
+        if (!(traceDistance > 1e-6f))
+        {
+            return false;
+        }
+
+        rayDirection = toPrimaryHit / traceDistance;
+    }
+    else if (prevReconnection.lightIsDistant)
+    {
+        rayDirection = -normalize(prevReconnection.firstWi);
+        traceDistance = 1e5f;
+        hitDistantLight = true;
+    }
+    else
+    {
+        return false;
+    }
+
+    vec3 cameraU = normalize(lt_temporal_camera_u(newTime));
+    vec3 cameraV = normalize(lt_temporal_camera_v(newTime));
+    vec3 cameraForward = lt_temporal_camera_forward(newTime);
+    vec3 camRay = vec3(
+        dot(cameraU, rayDirection),
+        dot(cameraV, rayDirection),
+        dot(cameraForward, rayDirection)
+    );
+    if (camRay.z <= 1e-3f)
+    {
+        return false;
+    }
+
+    float focalDistance = length(lt_temporal_camera_w(newTime));
+    vec2 film = focalDistance * (camRay.xy / camRay.z);
+    vec2 ndc = film / vec2(
+        length(lt_temporal_camera_u(newTime)),
+        length(lt_temporal_camera_v(newTime))
+    );
+    newFractionalPixel =
+        (vec2(0.5f, -0.5f) * ndc + vec2(0.5f, 0.5f)) * vec2(viewWidth, viewHeight);
+    if (any(lessThan(newFractionalPixel, vec2(0.0f)))
+        || any(greaterThanEqual(newFractionalPixel, vec2(viewWidth, viewHeight))))
+    {
         rayDirection = vec3(0.0f);
         rayOrigin = vec3(0.0f);
         traceDistance = 0.0f;
         hitDistantLight = false;
         newFractionalPixel = vec2(-1.0f);
+        return false;
     }
-    return newTime;
+
+    return true;
 }
 
 void MultiReprojectTemporalSamples_run(
@@ -60,25 +106,24 @@ void MultiReprojectTemporalSamples_run(
         return;
     }
 
-    ScatterReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
+    ReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
+        float newTime;
         vec2 newFractionalPixel;
-        bool hitValid;
         vec3 rayOrigin;
         vec3 rayDirection;
         float traceDistance;
         bool hitDistantLight;
-        float newTime = lt_multi_temporal_reproject_partition(
+        if (!lt_multi_temporal_reproject_partition(
             prevReconnection,
             partitionIndex,
+            newTime,
             newFractionalPixel,
-            hitValid,
             rayOrigin,
             rayDirection,
             traceDistance,
             hitDistantLight
-        );
-        if (newFractionalPixel.x < 0.0f || newFractionalPixel.y < 0.0f) {
+        )) {
             continue;
         }
 
@@ -88,21 +133,16 @@ void MultiReprojectTemporalSamples_run(
         }
 
         vec3 normalizedRayDirection = normalize(rayDirection);
-        vec3 cameraForward = normalize(mat3(gbufferModelView) * vec3(0.0f, 0.0f, -1.0f));
-        float cameraFacing = dot(normalizedRayDirection, cameraForward);
+        float cameraFacing = dot(normalizedRayDirection, lt_temporal_camera_forward(newTime));
         if (cameraFacing <= 0.001f) {
             continue;
         }
 
-        ScatterReconnectionData partitionedReconnection = prevReconnection;
-        partitionedReconnection.time = newTime;
-        if (!hitValid && !partitionedReconnection.lightIsDistant) {
-            continue;
-        }
         if (!lt_scatter_trace_reconnection_visibility(
                 rayOrigin,
                 rayDirection,
-                hitDistantLight ? traceDistance : (0.999f * traceDistance))) {
+                hitDistantLight ? traceDistance : (0.999f * traceDistance),
+                !hitDistantLight)) {
             continue;
         }
 

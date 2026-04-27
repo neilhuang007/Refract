@@ -3,10 +3,6 @@
 
 #include "/photonics/lighttree/restir_di_temporal_buffer_bridge.glsl"
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS)
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY
-#endif
-
 void SortReprojectedReservoirs_computeCellOffsets(ivec2 pixel);
 void SortReprojectedReservoirs_sortCellData(uint scatterIndex);
 void MultiSortReprojectedReservoirs_computeCellOffsets(ivec2 pixel);
@@ -151,14 +147,6 @@ uniform float ph_restir_visibility_max_age;        // RTXDI: finalVisibilityMaxA
 uniform float ph_restir_visibility_max_distance;   // RTXDI: finalVisibilityMaxDistance (default 16)
 uniform float ph_restir_spatial_sample_count;      // RTXDI: numSamples (default 1)
 uniform float ph_restir_spatial_radius;            // RTXDI: samplingRadius (default 32.0)
-// RTXDI: params.activeCheckerboardField (0 = off, 1/2 = alternating fields).
-// SDK default (ReSTIRDI.cpp UpdateCheckerboardField): 0 (off) for CheckerboardMode::Off.
-// Shared across spatial/shading passes and NRD helpers.
-#ifndef PH_RESTIR_CHECKERBOARD_DECLARED
-#define PH_RESTIR_CHECKERBOARD_DECLARED
-uniform int ph_restir_active_checkerboard_field;
-uniform int ph_restir_frame_index;
-#endif
 uniform float ph_restir_spatial_depth_threshold;   // RTXDI: spatial depthThreshold (default 0.1)
 uniform float ph_restir_spatial_normal_threshold;  // RTXDI: spatial normalThreshold (default 0.5)
 #ifndef PH_RESTIR_SPATIAL_PARAMS_DECLARED
@@ -681,19 +669,10 @@ RAB_Material RAB_GetMaterial(RAB_Surface surface);
 // ============================================================================
 // =====================================================================
 // Reference-parity ReconnectionData (ReconnectionData.slang:89-166).
-//
 // Field order, names, types and default values MUST match the Slang
-// reference 1:1. The Photonics GLSL port spells the struct
-// `ReservoirSplattingReconnectionData` to avoid namespace conflicts with
-// the RTXDI sidecar bookkeeping, and `ScatterReconnectionData` is kept as
-// a macro alias for legacy call sites. DO NOT add photonics-specific
-// fields here -- those belong on the per-pixel reservoir header or the
-// surface identity texture, NOT on the reconnection payload.
-//
-// Falcor's `HitInfo` packs instance/primitive/barycentric state. This GLSL
-// port keeps the same top-level type name and payload role, but carries the
-// scene-space data the Minecraft g-buffer can authoritatively reproduce for
-// reuse and surface matching.
+// reference 1:1. DO NOT add photonics-specific fields here -- those belong
+// on the per-pixel reservoir header or the surface identity texture, NOT on
+// the reconnection payload.
 // =====================================================================
 struct HitInfo {
     vec3  worldPos;    // Object/world-space hit position
@@ -711,8 +690,6 @@ HitInfo HitInfo_empty() {
     return h;
 }
 
-#define ReservoirSplattingHitInfo HitInfo
-#define ReservoirSplattingHitInfo_empty HitInfo_empty
 
 #ifndef PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
 #define PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
@@ -765,13 +742,6 @@ struct ReconnectionData {
     vec3  earlyThroughput;               // ReconnectionData.slang:123 (prefix thp)
 };
 
-#define ReservoirSplattingReconnectionData ReconnectionData
-#define ScatterReconnectionData ReconnectionData
-
-// Back-compat alias macros. The rest of the Photonics shader layer still
-// refers to this type as ``ScatterReconnectionData`` through the sidecar
-// plumbing; these macros let both spellings resolve to the reference
-// struct without any adaptation.
 ReconnectionData ReconnectionData_init() {
     ReconnectionData d;
     // ReconnectionData.slang:127-129 -- camera / film parameters.
@@ -783,12 +753,12 @@ ReconnectionData ReconnectionData_init() {
     d.pathLength = 0u;
 
     // ReconnectionData.slang:133-135 -- first vertex.
-    d.firstHit = ReservoirSplattingHitInfo_empty();
+    d.firstHit = HitInfo_empty();
     d.firstBSDFComponentType = 0u;
     d.firstWi = vec3(0.0f, 0.0f, 0.0f);         // Reference: float3(0, 0, 0).
 
     // ReconnectionData.slang:137-139 -- second vertex.
-    d.secondHit = ReservoirSplattingHitInfo_empty();
+    d.secondHit = HitInfo_empty();
     d.secondBSDFComponentType = 0u;
     d.secondWo = vec3(0.0f, 0.0f, 0.0f);
 
@@ -807,15 +777,6 @@ ReconnectionData ReconnectionData_init() {
     d.irradiance = vec3(0.0f, 0.0f, 0.0f);
     d.earlyThroughput = vec3(1.0f, 1.0f, 1.0f); // Reference: float3(1, 1, 1), NOT 0.
     return d;
-}
-
-#define ReservoirSplattingReconnectionData_init ReconnectionData_init
-
-// Legacy spelling alias -- kept because existing callers use either name.
-// The `scatter_empty_reconnection` helper pre-dates the reference-aligned
-// rename; both resolve to the same constructor body.
-ReconnectionData scatter_empty_reconnection() {
-    return ReconnectionData_init();
 }
 
 #include "/photonics/lighttree/restir_di_reconnection_surface.glsl"
@@ -1596,8 +1557,25 @@ void rtxdi_unpack_reservoir_at_surface(inout RTXDI_DIReservoir reservoir, vec4 c
 vec3 rtxdi_unpack_visibility(uint packedVisibility);
 uint rtxdi_pack_visibility(vec3 visibility);
 
+struct RTXDI_LightBufferRegion
+{
+    uint firstLightIndex;
+    uint numLights;
+    uint pad1;
+    uint pad2;
+};
+
+struct RTXDI_RISBufferSegmentParameters
+{
+    uint bufferOffset;
+    uint tileSize;
+    uint tileCount;
+    uint pad1;
+};
+
 #include "/photonics/lighttree/restir_di_parameters.glsl"
 #include "/photonics/lighttree/restir_rab_surface_light.glsl"
+#include "/photonics/lighttree/restir_di_local_light_selection.glsl"
 #include "/photonics/lighttree/restir_di_reconnection_build.glsl"
 
 bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample lightSample)
@@ -2131,12 +2109,6 @@ RTXDI_DIReservoir RTXDI_DISpatialResamplingWithPairwiseMIS(
     return state;
 }
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
-bool RAB_AreMaterialsSimilar(RAB_Material a, RAB_Material b)
-{
-    return true;
-}
-#else
 bool RAB_AreMaterialsSimilar(RAB_Material a, RAB_Material b)
 {
     float roughnessA = clamp(a.roughness, 0.0f, 1.0f);
@@ -2159,7 +2131,6 @@ bool RAB_AreMaterialsSimilar(RAB_Material a, RAB_Material b)
 
     return true;
 }
-#endif
 
 // Forward declarations for Area-ReSTIR shift mapping constants and core functions.
 // These are defined later in the file (Area-ReSTIR Core section) but referenced by
@@ -2474,24 +2445,6 @@ void rtxdi_stream_local_light_rng(
     RAB_LightSample ignoredSelectedSample;
     rtxdi_stream_local_light_rng(rng, reservoir, surface, lightIndex, sourcePdf, misData, brdfCutoff, ignoredSelectedSample);
 }
-
-struct RTXDI_LightBufferRegion
-{
-    uint firstLightIndex;
-    uint numLights;
-    uint pad1;
-    uint pad2;
-};
-
-struct RTXDI_RISBufferSegmentParameters
-{
-    uint bufferOffset;
-    uint tileSize;
-    uint tileCount;
-    uint pad1;
-};
-
-#include "/photonics/lighttree/restir_di_local_light_selection.glsl"
 
 bool lt_is_complex_surface(RAB_Surface surface) {
     float roughness = clamp(surface.material.roughness, 0.0f, 1.0f);

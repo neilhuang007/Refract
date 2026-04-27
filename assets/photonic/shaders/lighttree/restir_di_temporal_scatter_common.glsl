@@ -17,7 +17,7 @@ RTXDI_DIReservoir lt_area_temporal_spatial_passthrough(
     return currentReservoir;
 }
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE)
 void lt_temporal_scatter_append_contributor(ivec2 targetPixel, ivec2 sourceReservoirPos, float supportWeight)
 {
     if (!lt_is_viewport_uv_in_bounds(targetPixel)) {
@@ -38,7 +38,7 @@ void lt_temporal_scatter_append_contributor(ivec2 targetPixel, ivec2 sourceReser
 
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
+#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE)
 void lt_multi_temporal_scatter_append_contributor(
     uint partitionIndex,
     ivec2 targetPixel,
@@ -73,7 +73,7 @@ void lt_multi_temporal_scatter_append_contributor(
 }
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
+#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE)
 void SortReprojectedReservoirs_computeCellOffsets(ivec2 pixel)
 {
     if (!lt_temporal_scatter_pixel_owns_cell(pixel)) {
@@ -101,7 +101,7 @@ void SortReprojectedReservoirs_sortCellData(uint scatterIndex)
 
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
+#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE)
 void MultiSortReprojectedReservoirs_computeCellOffsets(ivec2 pixel)
 {
     if (!lt_temporal_scatter_pixel_owns_cell(pixel)) {

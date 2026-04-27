@@ -19,10 +19,7 @@ uniform sampler2D scatter_reconnection2;
 uniform sampler2D scatter_reconnection3;
 uniform sampler2D scatter_reconnection4;
 
-#ifndef PH_RESTIR_CHECKERBOARD_DECLARED
-#define PH_RESTIR_CHECKERBOARD_DECLARED
 uniform int ph_restir_active_checkerboard_field;
-#endif
 
 void storeEmptyReconnection()
 {

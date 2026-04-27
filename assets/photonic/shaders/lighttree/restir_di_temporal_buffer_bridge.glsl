@@ -1,19 +1,6 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_BUFFER_BRIDGE_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_BUFFER_BRIDGE_GLSL
 
-#ifndef PH_RESTIR_CHECKERBOARD_DECLARED
-#define PH_RESTIR_CHECKERBOARD_DECLARED
-uniform int ph_restir_active_checkerboard_field;
-uniform int ph_restir_frame_index;
-#endif
-
-#ifndef PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
-#define PH_LIGHTTREE_TEMPORAL_DOF_UNIFORMS_DECLARED
-uniform float ph_reservoir_splatting_camera_aperture_radius;
-uniform float ph_reservoir_splatting_artificial_frame_time;
-uniform float ph_reservoir_splatting_shutter_speed;
-#endif
-
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE)
 #define PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_COUNTER_BUFFERS 1
 #endif
@@ -89,6 +76,7 @@ vec2 GatherData_getMotionVector(ivec2 pixel)
     {
         return vec2(0.0f);
     }
+
     return motionVector / vec2(max(viewWidth, 1.0f), max(viewHeight, 1.0f));
 }
 
@@ -129,6 +117,8 @@ vec2 GatherHelper_getFloatingCoords(GatherHelper gatherHelper)
 
 #if (defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)) && !defined(PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED)
 #define PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED
+// RobustReuseOptimization writes exactly 8 shifted paths per previous-frame
+// reservoir, ordered by the 3x3 neighborhood without the center sample.
 struct ShiftedPathStorageRecord {
     vec4 primaryHitData;
     vec4 primaryHitFaceFractionalPixelLensX;
@@ -232,16 +222,6 @@ layout(std430) restrict buffer ph_multi_scatter_temporal_resampling_cell_offsets
 layout(std430) restrict buffer ph_multi_scatter_temporal_resampling_sorted_reservoirs {
     uvec2 ph_multi_scatter_temporal_resampling_sorted_reservoirs_data[];
 };
-#endif
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS) && defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY)
-void lt_temporal_scatter_append_contributor(ivec2 targetPixel, ivec2 sourceReservoirPos, float supportWeight)
-{
-}
-
-void lt_multi_temporal_scatter_append_contributor(uint partitionIndex, ivec2 targetPixel, ivec2 sourceReservoirPos)
-{
-}
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)

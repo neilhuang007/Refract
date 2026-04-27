@@ -3,11 +3,6 @@
 
 #include "/photonics/lighttree/nrd_material_id.glsl"
 
-#ifndef PH_RESTIR_CHECKERBOARD_DECLARED
-#define PH_RESTIR_CHECKERBOARD_DECLARED
-uniform int ph_restir_active_checkerboard_field;
-#endif
-
 const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;

@@ -39,7 +39,7 @@ float InitialCandidates_computeCurrentSubPixelJacobian(RAB_Surface surface)
     );
 }
 
-ReservoirSplattingReconnectionData InitialCandidates_createReconnectionData(
+ReconnectionData InitialCandidates_createReconnectionData(
     RAB_Surface surface,
     RTXDI_DIReservoir candidateReservoir,
     RAB_LightSample selectedLightSample,
@@ -62,7 +62,7 @@ ReservoirSplattingReconnectionData InitialCandidates_createReconnectionData(
     );
 }
 
-ReservoirSplattingReconnectionData InitialCandidates_buildSelectedReconnection(
+ReconnectionData InitialCandidates_buildSelectedReconnection(
     RAB_Surface surface,
     RTXDI_DIReservoir candidateReservoir,
     RAB_LightSample selectedLightSample,
@@ -133,9 +133,9 @@ bool InitialCandidates_finalizeSelectedReservoir(
     ivec2 pixel,
     RAB_Surface surface,
     inout RTXDI_DIReservoir reservoir,
-    out ReservoirSplattingReconnectionData reconnectionData)
+    out ReconnectionData reconnectionData)
 {
-    reconnectionData = ReservoirSplattingReconnectionData_init();
+    reconnectionData = ReconnectionData_init();
     if (!RAB_IsSurfaceValid(surface) || !RTXDI_IsValidDIReservoir(reservoir))
     {
         reservoir = RTXDI_EmptyDIReservoir();
@@ -181,7 +181,7 @@ bool InitialCandidates_finalizeSelectedReservoir(
     if (previousPHat <= 0.0f || visiblePHat <= 0.0f)
     {
         reservoir = RTXDI_EmptyDIReservoir();
-        reconnectionData = ReservoirSplattingReconnectionData_init();
+        reconnectionData = ReconnectionData_init();
         return false;
     }
 

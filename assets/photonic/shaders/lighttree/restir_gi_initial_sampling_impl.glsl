@@ -17,8 +17,8 @@
 // Paper-aligned reconnection payload alias.
 // The reference implementation (Reservoir-Splatting, ReconnectionData.slang)
 // names this struct ``ReconnectionData``. Photonics exposes it under
-// ``ReservoirSplattingReconnectionData`` and the underlying storage layout is
-// defined as ``ScatterReconnectionData`` in reuse_bridge.glsl. Those aliases
+// ``ReconnectionData`` and the underlying storage layout is
+// defined as ``ReconnectionData`` in reuse_bridge.glsl. Those aliases
 // are declared in reuse_bridge.glsl right after the struct definition so every
 // downstream include (this file included) picks them up transparently -- no
 // re-declaration is needed or permitted here (GLSL forbids redefining macros
@@ -157,6 +157,7 @@ bool CandidateReservoir_addVertex(
     float sampleWeight = sampleMIS * samplePHat;
     sampleWeight = isnan(sampleWeight) ? 0.0f : sampleWeight;
 
+    candidateReservoir.M += 1.0f;
     CandidateReservoir_setTotalWeight(
         candidateReservoir,
         CandidateReservoir_getTotalWeight(candidateReservoir) + sampleWeight
@@ -182,6 +183,7 @@ bool CandidateReservoir_addReservoir(
 {
     float sampleWeight = CandidateReservoir_getTotalWeight(otherReservoir);
     sampleWeight = (isnan(sampleWeight) || isinf(sampleWeight) || sampleWeight < 0.0f) ? 0.0f : sampleWeight;
+    candidateReservoir.M += max(otherReservoir.M, 0.0f);
     CandidateReservoir_setTotalWeight(
         candidateReservoir,
         CandidateReservoir_getTotalWeight(candidateReservoir) + sampleWeight
@@ -219,8 +221,9 @@ bool PathReservoir_add(
     RTXDI_DIReservoir candidateReservoir)
 {
     float weight = sampleMIS * CandidateReservoir_getTotalWeight(candidateReservoir);
+    pathReservoir.M += max(candidateReservoir.M, 0.0f);
     PathReservoir_setTotalWeight(pathReservoir, PathReservoir_getTotalWeight(pathReservoir) + weight);
-    PathReservoir_setConfidence(pathReservoir, PathReservoir_getConfidence(pathReservoir) + 1.0f);
+    float accumulatedConfidence = PathReservoir_getConfidence(pathReservoir) + 1.0f;
 
     bool selected = (random * PathReservoir_getTotalWeight(pathReservoir) < weight);
     if (selected) {
@@ -237,12 +240,8 @@ bool PathReservoir_add(
         pathReservoir.lensSampleUV = candidateReservoir.lensSampleUV;
         pathReservoir.pathSample = candidateReservoir.pathSample;
     }
+    PathReservoir_setConfidence(pathReservoir, accumulatedConfidence);
     return selected;
-}
-
-float PathReservoir_computeUCW(RTXDI_DIReservoir pathReservoir)
-{
-    return PathReservoir_computeStoredUCW(pathReservoir);
 }
 
 // RTXDI: RTXDI_ComputeInitialSamplingMisData (InitialSampling.hlsli:41-54)

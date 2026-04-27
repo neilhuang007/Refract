@@ -174,8 +174,6 @@ void scatter_pack_reconnection_data(
 #define scatter_pack_reconnection_fields(reconnectionData, transportAux0, transportAux1, data0, data1, data2, data3, data4) \
     scatter_pack_reconnection_data(reconnectionData, transportAux0, transportAux1, data0, data1, data2, data3, data4)
 
-#if !defined(PH_LIGHTTREE_RECONNECTION_PACK_ONLY)
-
 void scatter_unpack_reconnection(
     vec4 data0,
     vec4 data1,
@@ -213,7 +211,7 @@ void scatter_unpack_reconnection(
     scatter_unpack_reconnection_identity(floatBitsToUint(transportAux1), reconnectionData);
 }
 
-void scatter_load_gather_intermediate_reconnection(ivec2 uv, out ScatterReconnectionData reconnection) {
+void scatter_load_gather_intermediate_reconnection(ivec2 uv, out ReconnectionData reconnection) {
     scatter_unpack_reconnection(
         texelFetch(temporal_gather_intermediate_reconnection0, uv, 0),
         texelFetch(temporal_gather_intermediate_reconnection1, uv, 0),
@@ -226,75 +224,15 @@ void scatter_load_gather_intermediate_reconnection(ivec2 uv, out ScatterReconnec
     );
 }
 
-void scatter_load_prev_reconnection(ivec2 uv, out ScatterReconnectionData reconnection) {
+void scatter_load_prev_reconnection(ivec2 uv, out ReconnectionData reconnection) {
     scatter_unpack_reconnection(
-        texelFetch(previous_frame_reconnection0, uv, 0),
-        texelFetch(previous_frame_reconnection1, uv, 0),
-        texelFetch(previous_frame_reconnection2, uv, 0),
-        texelFetch(previous_frame_reconnection3, uv, 0),
-        texelFetch(previous_frame_reconnection4, uv, 0),
+        texelFetch(prev_scatter_reconnection0, uv, 0),
+        texelFetch(prev_scatter_reconnection1, uv, 0),
+        texelFetch(prev_scatter_reconnection2, uv, 0),
+        texelFetch(prev_scatter_reconnection3, uv, 0),
+        texelFetch(prev_scatter_reconnection4, uv, 0),
         0.0f,
         0.0f,
         reconnection
     );
 }
-
-#else
-
-void scatter_pack_reconnection_fields_legacy_signature(
-    vec3 firstHitWorldPos,
-    float firstHitViewDepth,
-    float lightPdf,
-    float time,
-    vec3 irradiance,
-    vec2 subPixel,
-    float subPixelJacobian,
-    float lensVertexJacobian,
-    float secondaryPathJacobian,
-    uint firstHitFaceId,
-    uint pathLength,
-    uint firstBSDFComponentType,
-    uint secondBSDFComponentType,
-    bool transmissionEvent,
-    bool lightIsNEE,
-    bool lightIsDistant,
-    out float transportAux0,
-    out float transportAux1,
-    out vec4 data0,
-    out vec4 data1,
-    out vec4 data2,
-    out vec4 data3,
-    out vec4 data4)
-{
-    ReconnectionData reconnectionData = ReconnectionData_init();
-    reconnectionData.firstHit.worldPos = firstHitWorldPos;
-    reconnectionData.firstHit.viewDepth = firstHitViewDepth;
-    reconnectionData.firstHit.faceId = firstHitFaceId;
-    reconnectionData.secondHit.faceId = firstHitFaceId;
-    reconnectionData.secondHit.viewDepth = firstHitViewDepth;
-    reconnectionData.lightPdf = lightPdf;
-    reconnectionData.time = time;
-    reconnectionData.irradiance = irradiance;
-    reconnectionData.subPixel = subPixel;
-    reconnectionData.subPixelJacobian = subPixelJacobian;
-    reconnectionData.lensVertexJacobian = lensVertexJacobian;
-    reconnectionData.secondaryPathJacobian = secondaryPathJacobian;
-    reconnectionData.pathLength = pathLength;
-    reconnectionData.firstBSDFComponentType = firstBSDFComponentType;
-    reconnectionData.secondBSDFComponentType = secondBSDFComponentType;
-    reconnectionData.transmissionEvent = transmissionEvent;
-    reconnectionData.lightIsNEE = lightIsNEE;
-    reconnectionData.lightIsDistant = lightIsDistant;
-    scatter_pack_reconnection_data(
-        reconnectionData,
-        transportAux0,
-        transportAux1,
-        data0,
-        data1,
-        data2,
-        data3,
-        data4
-    );
-}
-
-#endif

@@ -91,6 +91,213 @@ function Read-NewContent {
   }
 }
 
+function Read-PropertiesMap {
+  param([string]$Path)
+
+  $properties = @{}
+  if (!(Test-Path $Path)) {
+    return $properties
+  }
+
+  foreach ($rawLine in Get-Content $Path -Encoding UTF8 -ErrorAction SilentlyContinue) {
+    $line = $rawLine.Trim()
+    if ($line.Length -eq 0 -or $line.StartsWith('#')) {
+      continue
+    }
+
+    $parts = $line.Split('=', 2)
+    if ($parts.Count -eq 2) {
+      $properties[$parts[0]] = ConvertFrom-JavaPropertiesValue -Value $parts[1]
+    }
+  }
+
+  return $properties
+}
+
+function ConvertFrom-JavaPropertiesValue {
+  param([string]$Value)
+
+  if ($null -eq $Value) {
+    return ''
+  }
+
+  $builder = New-Object System.Text.StringBuilder
+  for ($i = 0; $i -lt $Value.Length; $i++) {
+    $char = $Value[$i]
+    if ($char -ne '\') {
+      [void]$builder.Append($char)
+      continue
+    }
+
+    if ($i + 1 -ge $Value.Length) {
+      [void]$builder.Append('\')
+      break
+    }
+
+    $i++
+    $escape = $Value[$i]
+    switch ($escape) {
+      't' { [void]$builder.Append("`t") }
+      'r' { [void]$builder.Append("`r") }
+      'n' { [void]$builder.Append("`n") }
+      'f' { [void]$builder.Append([char]12) }
+      'u' {
+        if ($i + 4 -lt $Value.Length) {
+          $hex = $Value.Substring($i + 1, 4)
+          if ($hex -match '^[0-9A-Fa-f]{4}$') {
+            [void]$builder.Append([char][Convert]::ToInt32($hex, 16))
+            $i += 4
+            break
+          }
+        }
+        [void]$builder.Append('u')
+      }
+      default { [void]$builder.Append($escape) }
+    }
+  }
+
+  return $builder.ToString()
+}
+
+function Get-PropertyValue {
+  param(
+    [hashtable]$Properties,
+    [string]$Key,
+    [string]$Default = ''
+  )
+
+  if ($null -ne $Properties -and $Properties.ContainsKey($Key)) {
+    return [string]$Properties[$Key]
+  }
+
+  return $Default
+}
+
+function Write-ReuseDiagnostics {
+  param(
+    [string]$ReportPath,
+    [string]$LatestLogPath
+  )
+
+  $report = Read-PropertiesMap -Path $ReportPath
+  if ($report.Count -gt 0) {
+    Write-Output '--- temporal reuse summary ---'
+    Write-Output (
+      'reuse-stage blendFactor={0} blendCompletions={1} blendRegionActivations={2} blendFullActivations={3} framesBlendActive={4} framesGlobalReloadActive={5} framesPendingWork={6}' -f
+      (Get-PropertyValue -Properties $report -Key 'latestLightBlendFactor'),
+      (Get-PropertyValue -Properties $report -Key 'latestBlendCompletions'),
+      (Get-PropertyValue -Properties $report -Key 'latestBlendRegionActivations'),
+      (Get-PropertyValue -Properties $report -Key 'latestBlendFullActivations'),
+      (Get-PropertyValue -Properties $report -Key 'latestFramesBlendActive'),
+      (Get-PropertyValue -Properties $report -Key 'latestFramesGlobalReloadActive'),
+      (Get-PropertyValue -Properties $report -Key 'latestFramesPendingWork')
+    )
+    Write-Output (
+      'reuse-reservoir previousCaptureLightBlendFactor={0} previousCaptureResolvedStrictValidFraction={1} previousCaptureResolvedMeanWeight={2} previousCaptureResolvedMeanM={3} latestResolvedMeanM={4} previousCaptureTracedLightCount={5} latestTracedLightCount={6} latestTotalLightCount={7} latestLightSelectionCapped={8}' -f
+      (Get-PropertyValue -Properties $report -Key 'previousCaptureLightBlendFactor'),
+      (Get-PropertyValue -Properties $report -Key 'previousCaptureResolvedStrictValidFraction'),
+      (Get-PropertyValue -Properties $report -Key 'previousCaptureResolvedMeanWeight'),
+      (Get-PropertyValue -Properties $report -Key 'previousCaptureResolvedMeanM'),
+      (Get-PropertyValue -Properties $report -Key 'latestResolvedMeanM'),
+      (Get-PropertyValue -Properties $report -Key 'previousCaptureTracedLightCount'),
+      (Get-PropertyValue -Properties $report -Key 'latestTracedLightCount'),
+      (Get-PropertyValue -Properties $report -Key 'latestTotalLightCount'),
+      (Get-PropertyValue -Properties $report -Key 'latestLightSelectionCapped')
+    )
+    Write-Output (
+      'reuse-stability directTemporalDeltaAvg={0} directTemporalDeltaMax={1} directTemporalMaxPixelDeltaAvg={2} motionRepeatDirectDeltaAvg={3} latestWholeLightFlashDirectDrop={4} latestWholeLightFlashResolvedValidDrop={5} latestWholeLightFlashResolvedMDrop={6} latestLightBlendRegionCount={7}' -f
+      (Get-PropertyValue -Properties $report -Key 'directTemporalDeltaAvg'),
+      (Get-PropertyValue -Properties $report -Key 'directTemporalDeltaMax'),
+      (Get-PropertyValue -Properties $report -Key 'directTemporalMaxPixelDeltaAvg'),
+      (Get-PropertyValue -Properties $report -Key 'motionRepeatDirectDeltaAvg'),
+      (Get-PropertyValue -Properties $report -Key 'latestWholeLightFlashDirectDrop'),
+      (Get-PropertyValue -Properties $report -Key 'latestWholeLightFlashResolvedValidDrop'),
+      (Get-PropertyValue -Properties $report -Key 'latestWholeLightFlashResolvedMDrop'),
+      (Get-PropertyValue -Properties $report -Key 'latestLightBlendRegionCount')
+    )
+    Write-Output (
+      'reuse-compile latestCompileFramesLightWorkNeeded={0} latestCompileFramesLightCompiled={1} latestCompileFramesTracedLightDirty={2} latestCompileFramesWorldOffsetChanged={3} latestCompileFramesChunkTopologyChanged={4} latestCompileFramesChunkContentChanged={5}' -f
+      (Get-PropertyValue -Properties $report -Key 'latestCompileFramesLightWorkNeeded'),
+      (Get-PropertyValue -Properties $report -Key 'latestCompileFramesLightCompiled'),
+      (Get-PropertyValue -Properties $report -Key 'latestCompileFramesTracedLightDirty'),
+      (Get-PropertyValue -Properties $report -Key 'latestCompileFramesWorldOffsetChanged'),
+      (Get-PropertyValue -Properties $report -Key 'latestCompileFramesChunkTopologyChanged'),
+      (Get-PropertyValue -Properties $report -Key 'latestCompileFramesChunkContentChanged')
+    )
+  }
+
+  if (!(Test-Path $LatestLogPath)) {
+    return
+  }
+
+  $interestingLogLines = @(Get-Content $LatestLogPath -Tail 220 -Encoding UTF8 -ErrorAction SilentlyContinue |
+    Where-Object { $_ -match '(?i)\b(automation|reservoir|reuse|temporal|gather|scatter|reproject|blend|previous)\b' } |
+    Select-Object -Last 24)
+
+  if ($interestingLogLines.Count -gt 0) {
+    Write-Output '--- reuse log tail ---'
+    $interestingLogLines | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ }
+  }
+}
+
+function Get-ShaderCompileFailureMessage {
+  param([string]$Content)
+
+  if ([string]::IsNullOrWhiteSpace($Content)) {
+    return $null
+  }
+
+  if ($Content -notmatch 'Failed to create shader rendering pipeline|The shaderpack failed to load!|Shader compilation log for') {
+    return $null
+  }
+
+  $lines = $Content -split "\r?\n"
+  for ($i = $lines.Length - 1; $i -ge 0; $i--) {
+    $line = $lines[$i].Trim()
+    if ($line -match 'ShaderCompileException') {
+      return "Fatal shader compilation failure: $line"
+    }
+  }
+
+  for ($i = $lines.Length - 1; $i -ge 0; $i--) {
+    $line = $lines[$i].Trim()
+    if ($line -match '(?i)error' -and $line -match '(?i)shader') {
+      return "Fatal shader compilation failure: $line"
+    }
+  }
+
+  return 'Fatal shader compilation failure detected in latest.log'
+}
+
+function Get-ExplicitFailureMessage {
+  param(
+    [string]$ReportPath,
+    [string]$LatestLogPath
+  )
+
+  $report = Read-PropertiesMap -Path $ReportPath
+  $reportFailureReason = Get-PropertyValue -Properties $report -Key 'failureReason'
+  if (-not [string]::IsNullOrWhiteSpace($reportFailureReason) -and $reportFailureReason -ne 'Automation still running') {
+    if ($reportFailureReason -notmatch '^Client stopped before automation completed$') {
+      return $reportFailureReason
+    }
+  }
+
+  if (Test-Path $LatestLogPath) {
+    $latestLogContent = Get-Content $LatestLogPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    $compileFailureMessage = Get-ShaderCompileFailureMessage -Content $latestLogContent
+    if ($null -ne $compileFailureMessage) {
+      return $compileFailureMessage
+    }
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($reportFailureReason) -and $reportFailureReason -ne 'Automation still running') {
+    return $reportFailureReason
+  }
+
+  return $null
+}
+
 function Get-FatalReason {
   param(
     [string]$Content,
@@ -117,6 +324,12 @@ function Write-FailureDiagnostics {
   )
 
   Write-Output "watchdogResult=$Reason"
+  Write-ReuseDiagnostics -ReportPath $reportFile -LatestLogPath $latestLog
+
+  $explicitFailureMessage = Get-ExplicitFailureMessage -ReportPath $reportFile -LatestLogPath $latestLog
+  if (-not [string]::IsNullOrWhiteSpace($explicitFailureMessage)) {
+    Write-Output "failureReason=$explicitFailureMessage"
+  }
 
   if (-not [string]::IsNullOrEmpty($FatalContent)) {
     Write-Output '--- fatal shader output ---'
@@ -128,7 +341,6 @@ function Write-FailureDiagnostics {
   if (Test-Path $stdout) { Write-Output '--- stdout tail ---'; Get-Content $stdout -Tail 60 -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ } }
   if (Test-Path $stderr) { Write-Output '--- stderr tail ---'; Get-Content $stderr -Tail 60 -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ } }
   if (Test-Path $latestLog) { Write-Output '--- latest.log tail ---'; Get-Content $latestLog -Tail 140 -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ } }
-  if (Test-Path $reportFile) { Write-Output '--- shader-report ---'; Get-Content $reportFile -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Convert-ToCleanUtf8Text -Text $_ } }
 }
 
 foreach ($path in @($stdout, $stderr)) {
@@ -211,5 +423,14 @@ if (-not (Test-Path $reportFile)) {
   Write-FailureDiagnostics -Reason 'missing-report'
   exit 1
 }
+
+$report = Read-PropertiesMap -Path $reportFile
+$reportSuccess = (Get-PropertyValue -Properties $report -Key 'success').ToLowerInvariant()
+if ($reportSuccess -ne 'true') {
+  Write-FailureDiagnostics -Reason 'report-failure'
+  exit 1
+}
+
+Write-ReuseDiagnostics -ReportPath $reportFile -LatestLogPath $latestLog
 
 exit 0

@@ -18,7 +18,7 @@ layout(location = 7) out vec4 reconnection4_frag_out;
 
 void storeGatherTemporalResamplingResult(
     RTXDI_DIReservoir reservoir,
-    ReservoirSplattingReconnectionData reconnectionData)
+    ReconnectionData reconnectionData)
 {
     float reconnectionTransportAux0;
     float reconnectionTransportAux1;
@@ -40,7 +40,7 @@ void storeGatherTemporalResamplingResult(
 
 void storeEmptyGatherTemporalResamplingResult()
 {
-    storeGatherTemporalResamplingResult(RTXDI_EmptyDIReservoir(), ReservoirSplattingReconnectionData_init());
+    storeGatherTemporalResamplingResult(RTXDI_EmptyDIReservoir(), ReconnectionData_init());
 }
 
 void main()
@@ -53,7 +53,7 @@ void main()
         return;
     }
 
-    ReservoirSplattingReconnectionData currReconnectionData = ReservoirSplattingReconnectionData_init();
+    ReconnectionData currReconnectionData = ReconnectionData_init();
     RTXDI_DIReservoir currReservoir = GatherTemporalResampling_run(pixel, currReconnectionData);
     storeGatherTemporalResamplingResult(currReservoir, currReconnectionData);
 }

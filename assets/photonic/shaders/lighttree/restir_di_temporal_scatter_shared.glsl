@@ -3,20 +3,18 @@
 
 #include "/photonics/lighttree/restir_di_temporal_buffer_bridge.glsl"
 
-// Shared temporal-scatter payload and prototype surface.
-// This keeps the stage ABI in one place while preserving the existing include
-// order expected by reuse_bridge.glsl and the temporal stage modules.
+// Shared temporal scatter/gather ABI surface for the Reservoir Splatting
+// reference pipeline. This header exists only to keep the GLSL port's include
+// order stable while preserving the reference-stage payload layout and
+// shifted-path buffer accessors.
 
-#ifndef PH_LIGHTTREE_LT_SCATTER_CURRENT_SAMPLE_DECLARED
-#define PH_LIGHTTREE_LT_SCATTER_CURRENT_SAMPLE_DECLARED
 struct LtScatterCurrentSample {
     bool                                  isValid;
     bool                                  hasPositivePHat;
     RTXDI_DIReservoir                     reservoir;
-    ReservoirSplattingReconnectionData    reconnectionData;
+    ReconnectionData    reconnectionData;
     float                                 confidence;
 };
-#endif
 
 float ScatterTemporalResampling_load_previous_reservoir_confidence(
     ivec2 neighborPixel);
@@ -37,12 +35,12 @@ float ScatterTemporalResampling_compute_curr_sample_mis(
 
 bool ScatterTemporalResampling_process_contributor(
     inout RTXDI_DIReservoir dstReservoir,
-    inout ScatterReconnectionData dstReconnectionData,
+    inout ReconnectionData dstReconnectionData,
     inout float newConfidence,
     ivec2 scatteredPixel,
     ivec2 pixel,
     RTXDI_DIReservoir currReservoir,
-    ScatterReconnectionData currReconnectionData,
+    ReconnectionData currReconnectionData,
     float currReservoirConfidence,
     inout RTXDI_RandomSamplerState sg);
 
@@ -50,11 +48,9 @@ float ScatterTemporalResampling_motion_vector_confidence(
     ivec2 pixel,
     float newConfidence);
 
-#ifndef PH_LIGHTTREE_LT_SCATTER_SHIFTED_PATH_DECLARED
-#define PH_LIGHTTREE_LT_SCATTER_SHIFTED_PATH_DECLARED
 struct LtScatterShiftedPath {
     bool  valid;
-    ReservoirSplattingHitInfo primaryHit;
+    HitInfo primaryHit;
     vec2  fractionalPixel;
     vec2  lensSample;
     vec3  firstRayDir;
@@ -63,7 +59,6 @@ struct LtScatterShiftedPath {
     float secondaryPathJacobian;
     float lensVertexJacobian;
 };
-#endif
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
 ShiftedPathData lt_temporal_empty_shifted_path();
@@ -163,7 +158,7 @@ void scatter_store_gather_shifted_path_data(
 
 ShiftedPathData gatherLensVertexCopyShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
     vec2 fractionalPixel,
     vec2 lensSample,
@@ -173,7 +168,7 @@ ShiftedPathData gatherLensVertexCopyShift(
 
 ShiftedPathData gatherLensVertexCopyShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
     vec2 fractionalPixel,
     vec2 lensSample,
@@ -181,29 +176,29 @@ ShiftedPathData gatherLensVertexCopyShift(
 
 ShiftedPathData gatherPrimaryHitReconnectionShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
     vec2 fractionalPixel,
-    ReservoirSplattingHitInfo primaryHit,
+    HitInfo primaryHit,
     RTXDI_DIReservoir sourceReservoir,
     bool sourcePreviousFrame,
     bool targetPreviousFrame);
 
 ShiftedPathData gatherPrimaryHitReconnectionShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
     vec2 fractionalPixel,
-    ReservoirSplattingHitInfo primaryHit,
+    HitInfo primaryHit,
     RTXDI_DIReservoir sourceReservoir);
 
-ReservoirSplattingReconnectionData ReconnectionData_update(
-    ReservoirSplattingReconnectionData reconnectionData,
+ReconnectionData ReconnectionData_update(
+    ReconnectionData reconnectionData,
     ShiftedPathData shiftedPathData);
 
 float lt_scatter_reservoir_confidence(
     RTXDI_DIReservoir reservoir,
-    ScatterReconnectionData reconnection);
+    ReconnectionData reconnection);
 
 float lt_scatter_radiance_phat(vec3 radiance);
 
@@ -224,7 +219,7 @@ bool lt_scatter_add_sample_from_reservoir(
 );
 
 bool lt_scatter_update_shifted_reservoir(
-    ScatterReconnectionData sourceReconnection,
+    ReconnectionData sourceReconnection,
     RTXDI_DIReservoir sourceReservoir,
     bool sourcePreviousFrame,
     bool targetPreviousFrame,
@@ -232,7 +227,74 @@ bool lt_scatter_update_shifted_reservoir(
     ivec2 targetPixel,
     out LtScatterShiftedPath shifted,
     out RTXDI_DIReservoir shiftedReservoir,
-    out ScatterReconnectionData shiftedReconnection,
+    out ReconnectionData shiftedReconnection,
     out float shiftedJacobian);
+
+bool lt_scatter_finalize_temporal_shifted_reservoir(
+    ShiftedPathData shiftedPath,
+    ReconnectionData sourceReconnection,
+    RTXDI_DIReservoir sourceReservoir,
+    bool sourcePreviousFrame,
+    bool targetPreviousFrame,
+    ivec2 targetPixel,
+    RAB_Surface targetSurface,
+    out RTXDI_DIReservoir shiftedReservoir,
+    out ReconnectionData shiftedReconnection,
+    out float shiftedJacobian)
+{
+    shiftedReservoir = RTXDI_EmptyDIReservoir();
+    shiftedReconnection = ReconnectionData_init();
+    shiftedJacobian = 0.0f;
+
+    if (any(lessThan(shiftedPath.fractionalPixel, vec2(0.0f)))) {
+        return false;
+    }
+
+    shiftedReservoir = lt_translate_reservoir_between_frames(
+        sourceReservoir,
+        sourcePreviousFrame,
+        targetPreviousFrame
+    );
+    if (!RTXDI_IsValidDIReservoir(shiftedReservoir)) {
+        return false;
+    }
+
+    vec2 shiftedSubPixel = fract(shiftedPath.fractionalPixel);
+    PathReservoir_setSubPixel(shiftedReservoir, targetPixel, shiftedSubPixel);
+    shiftedReservoir.lensSampleUV = sourceReconnection.lensSample;
+    lt_area_finalize_candidate(shiftedReservoir, targetPixel, shiftedReservoir.pathSample);
+
+    RAB_Surface shiftedSurface = targetSurface;
+    shiftedSurface.worldPos = shiftedPath.primaryHit.worldPos;
+    shiftedSurface.geoNormal = targetSurface.geoNormal;
+    shiftedSurface.normal = targetSurface.geoNormal;
+    shiftedSurface.viewDir = -shiftedPath.firstRayDir;
+    shiftedSurface.viewDepth = shiftedPath.primaryHit.viewDepth;
+
+    RAB_LightSample shiftedLight = lt_decode_reservoir_sample_for_frame(
+        shiftedReservoir,
+        shiftedSurface,
+        sourcePreviousFrame,
+        targetPreviousFrame
+    );
+    if (shiftedLight.index < 0 || shiftedLight.solidAnglePdf <= 0.0f) {
+        return false;
+    }
+
+    float targetPdf = lt_surface_target_pdf(shiftedSurface, shiftedLight);
+    if (targetPdf <= 0.0f) {
+        return false;
+    }
+
+    shiftedReservoir.targetPdf = targetPdf;
+    shiftedReconnection = ReconnectionData_update(sourceReconnection, shiftedPath);
+    float baseJacobian = sourceReconnection.subPixelJacobian * sourceReconnection.secondaryPathJacobian;
+    if (!(abs(baseJacobian) > 1e-20f) || isnan(baseJacobian)) {
+        return false;
+    }
+
+    shiftedJacobian = (shiftedPath.subPixelJacobian * shiftedPath.secondaryPathJacobian) / baseJacobian;
+    return !isnan(shiftedJacobian);
+}
 
 #endif

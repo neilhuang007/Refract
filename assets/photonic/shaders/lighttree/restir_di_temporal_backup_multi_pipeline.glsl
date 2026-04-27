@@ -10,17 +10,13 @@
 void multiComputeCellOffsetsStage(
     ivec2 pixel)
 {
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
     MultiSortReprojectedReservoirs_computeCellOffsets(pixel);
-#endif
 }
 
 void multiSortCellDataStage(
     uint index)
 {
-#if !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_RESOLVE_ONLY) && !defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_OWNERSHIP_ONLY)
     MultiSortReprojectedReservoirs_sortCellData(index);
-#endif
 }
 #endif
 

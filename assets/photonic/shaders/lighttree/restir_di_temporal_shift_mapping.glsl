@@ -14,7 +14,7 @@ vec3 lt_di_temporal_previous_camera_w();
 ShiftedPathData lt_temporal_empty_shifted_path()
 {
     ShiftedPathData shiftedPathData;
-    shiftedPathData.primaryHit = ReservoirSplattingHitInfo_empty();
+    shiftedPathData.primaryHit = HitInfo_empty();
     shiftedPathData.fractionalPixel = vec2(-1.0f);
     shiftedPathData.lensSample = vec2(0.0f);
     shiftedPathData.firstRayDir = vec3(0.0f);
@@ -37,12 +37,12 @@ RAB_Surface lt_temporal_load_surface(ivec2 pixel, bool previousFrame)
         : RAB_GetGBufferSurface(pixel, false);
 }
 
-ReservoirSplattingHitInfo lt_temporal_make_shifted_hit_info(
+HitInfo lt_temporal_make_shifted_hit_info(
     ivec2 pixel,
     RAB_Surface surface,
     bool previousFrame)
 {
-    ReservoirSplattingHitInfo hitInfo = ReservoirSplattingHitInfo_empty();
+    HitInfo hitInfo = HitInfo_empty();
     vec4 identityData = lt_temporal_load_surface_identity(pixel, previousFrame);
     uint packedIdentity = uint(round(identityData.w));
     hitInfo.worldPos = surface.worldPos;
@@ -54,11 +54,7 @@ ReservoirSplattingHitInfo lt_temporal_make_shifted_hit_info(
 
 vec2 lt_temporal_fractional_pixel_to_uv(vec2 fractionalPixel)
 {
-    return clamp(
-        fractionalPixel / vec2(max(viewWidth, 1.0), max(viewHeight, 1.0)),
-        vec2(0.0f),
-        vec2(1.0f)
-    );
+    return fractionalPixel / vec2(viewWidth, viewHeight);
 }
 
 vec3 lt_temporal_camera_pos(bool targetPreviousFrame)
@@ -66,9 +62,19 @@ vec3 lt_temporal_camera_pos(bool targetPreviousFrame)
     return targetPreviousFrame ? previous_world_camera_position : world_camera_position;
 }
 
+vec3 lt_temporal_camera_pos(float time)
+{
+    return lt_di_temporal_camera_pos_at_time(time);
+}
+
 vec3 lt_temporal_camera_u(bool targetPreviousFrame)
 {
     return targetPreviousFrame ? lt_di_temporal_previous_camera_u() : lt_di_temporal_camera_u();
+}
+
+vec3 lt_temporal_camera_u(float time)
+{
+    return lt_di_temporal_camera_u_at_time(time);
 }
 
 vec3 lt_temporal_camera_v(bool targetPreviousFrame)
@@ -76,9 +82,19 @@ vec3 lt_temporal_camera_v(bool targetPreviousFrame)
     return targetPreviousFrame ? lt_di_temporal_previous_camera_v() : lt_di_temporal_camera_v();
 }
 
+vec3 lt_temporal_camera_v(float time)
+{
+    return lt_di_temporal_camera_v_at_time(time);
+}
+
 vec3 lt_temporal_camera_w(bool targetPreviousFrame)
 {
     return targetPreviousFrame ? lt_di_temporal_previous_camera_w() : lt_di_temporal_camera_w();
+}
+
+vec3 lt_temporal_camera_w(float time)
+{
+    return lt_di_temporal_camera_w_at_time(time);
 }
 
 vec3 lt_temporal_camera_forward(bool targetPreviousFrame)
@@ -86,12 +102,24 @@ vec3 lt_temporal_camera_forward(bool targetPreviousFrame)
     return normalize(lt_temporal_camera_w(targetPreviousFrame));
 }
 
+vec3 lt_temporal_camera_forward(float time)
+{
+    return normalize(lt_temporal_camera_w(time));
+}
+
 vec3 lt_temporal_lens_world_offset(bool targetPreviousFrame, vec2 lensSample);
+vec3 lt_temporal_lens_world_offset(float time, vec2 lensSample);
 
 vec3 lt_temporal_camera_origin(bool targetPreviousFrame, vec2 lensSample)
 {
     return lt_temporal_camera_pos(targetPreviousFrame)
         + lt_temporal_lens_world_offset(targetPreviousFrame, lensSample);
+}
+
+vec3 lt_temporal_camera_origin(float time, vec2 lensSample)
+{
+    return lt_temporal_camera_pos(time)
+        + lt_temporal_lens_world_offset(time, lensSample);
 }
 
 vec3 lt_temporal_lens_world_offset(bool targetPreviousFrame, vec2 lensSample)
@@ -107,6 +135,19 @@ vec3 lt_temporal_lens_world_offset(bool targetPreviousFrame, vec2 lensSample)
             + lensSample.y * normalize(lt_temporal_camera_v(targetPreviousFrame)));
 }
 
+vec3 lt_temporal_lens_world_offset(float time, vec2 lensSample)
+{
+    float apertureRadius = lt_di_temporal_camera_aperture_radius();
+    if (apertureRadius <= 0.0f)
+    {
+        return vec3(0.0f);
+    }
+
+    return apertureRadius
+        * (lensSample.x * normalize(lt_temporal_camera_u(time))
+            + lensSample.y * normalize(lt_temporal_camera_v(time)));
+}
+
 vec3 lt_temporal_film_world(bool targetPreviousFrame, vec2 fractionalPixel)
 {
     vec2 pixelUv = lt_temporal_fractional_pixel_to_uv(fractionalPixel);
@@ -115,6 +156,16 @@ vec3 lt_temporal_film_world(bool targetPreviousFrame, vec2 fractionalPixel)
         + ndc.x * lt_temporal_camera_u(targetPreviousFrame)
         + ndc.y * lt_temporal_camera_v(targetPreviousFrame)
         + lt_temporal_camera_w(targetPreviousFrame);
+}
+
+vec3 lt_temporal_film_world(float time, vec2 fractionalPixel)
+{
+    vec2 pixelUv = lt_temporal_fractional_pixel_to_uv(fractionalPixel);
+    vec2 ndc = vec2(2.0f, -2.0f) * pixelUv + vec2(-1.0f, 1.0f);
+    return lt_temporal_camera_pos(time)
+        + ndc.x * lt_temporal_camera_u(time)
+        + ndc.y * lt_temporal_camera_v(time)
+        + lt_temporal_camera_w(time);
 }
 
 float lt_temporal_compute_subpixel_jacobian(
@@ -126,49 +177,64 @@ float lt_temporal_compute_subpixel_jacobian(
 {
     vec3 toHit = primaryHitPosW - rayOriginW;
     float dist = length(toHit);
-    if (dist < 1e-6f)
-    {
-        return 1.0f;
-    }
-
     float cosNormal = dot(-rayDir, primaryHitNormalW);
     float cosSensor = dot(cameraForward, rayDir);
-    return abs(cosNormal / (dist * dist)) / abs(cosSensor * cosSensor * cosSensor);
+    return abs(cosNormal / (dist * dist)) / abs(pow(cosSensor, 3.0f));
 }
 
-float lt_temporal_compute_lens_vertex_jacobian(
+float lt_temporal_compute_lens_vertex_copy_jacobian(
     vec3 primaryHitPosW,
     vec3 primaryHitNormalW,
     vec3 rayOriginW,
     vec3 rayDir,
+    vec3 cameraPosW,
     vec3 cameraForward,
-    bool targetPreviousFrame)
+    float time)
 {
-    vec3 toHit = primaryHitPosW - rayOriginW;
-    float dist = length(toHit);
-    if (dist < 1e-6f)
-    {
-        return 1.0f;
-    }
-
+    float dist = length(primaryHitPosW - rayOriginW);
     float cosNormal = dot(rayDir, primaryHitNormalW);
     float cosSensor = dot(cameraForward, rayDir);
-    float focalDistance = length(lt_temporal_camera_w(targetPreviousFrame));
-    float camZ = dot(toHit, cameraForward);
-    float d0 = focalDistance / camZ * dist;
+    float focalDistance = length(lt_temporal_camera_w(time));
+    float camZ = dot(primaryHitPosW - cameraPosW, cameraForward);
+    float d0 = focalDistance / abs(camZ) * dist;
     float d1 = dist - d0;
 
     return (d0 * d0) / (d1 * d1) * abs(cosNormal) / abs(cosSensor);
 }
 
-bool lt_temporal_trace_reconnection_visibility(
+float lt_temporal_compute_primary_hit_reconnection_jacobian(
+    vec3 primaryHitPosW,
+    vec3 primaryHitNormalW,
+    vec3 rayDir,
+    vec3 cameraPosW,
+    vec3 cameraForward,
+    float rayT,
+    float time)
+{
+    float cosNormal = dot(rayDir, primaryHitNormalW);
+    float cosSensor = dot(cameraForward, rayDir);
+    float focalDistance = length(lt_temporal_camera_w(time));
+    float camZ = dot(primaryHitPosW - cameraPosW, cameraForward);
+    float d0 = focalDistance / abs(camZ) * rayT;
+    float d1 = rayT - d0;
+    return (d0 * d0) / (d1 * d1) * abs(cosNormal) / abs(cosSensor);
+}
+
+bool lt_temporal_trace_visibility_ray(
     vec3 rayOriginW,
     vec3 rayDirW,
-    float traceMaxDistance)
+    float traceMaxDistance,
+    bool isReprojection)
 {
+    // ShiftMapping.slang:363 -> scatter path: tMin = 0.001f (fixed)
+    // ReprojectTemporalSamples.rt.slang:105 -> reproject geometry: tMin = 0.001f * dist
+    // traceMaxDistance is already 0.999f*dist for geometry, so dist = tMax/0.999
+    float rayMin = (isReprojection && traceMaxDistance < 1e4f)
+        ? (0.001f * (traceMaxDistance / 0.999f))
+        : 0.001f;
     ray.origin = rayOriginW;
     ray.direction = rayDirW;
-    ray_min_trace_distance = 0.001f;
+    ray_min_trace_distance = rayMin;
     ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
     bool unoccluded = !ray.result_hit && ray_distance_limit_reached;
@@ -177,8 +243,16 @@ bool lt_temporal_trace_reconnection_visibility(
     return unoccluded;
 }
 
+bool lt_temporal_trace_visibility_ray(
+    vec3 rayOriginW,
+    vec3 rayDirW,
+    float traceMaxDistance)
+{
+    return lt_temporal_trace_visibility_ray(rayOriginW, rayDirW, traceMaxDistance, false);
+}
+
 vec3 lt_temporal_path_reconnection_shift(
-    ReservoirSplattingReconnectionData reconnectionData,
+    ReconnectionData reconnectionData,
     RTXDI_DIReservoir sourceReservoir,
     RAB_Surface shiftedSurface,
     bool sourcePreviousFrame,
@@ -212,9 +286,9 @@ vec3 lt_temporal_path_reconnection_shift(
 
 ShiftedPathData scatterReprojectionShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
-    ReservoirSplattingHitInfo primaryHit,
+    HitInfo primaryHit,
     vec2 lensSample,
     RTXDI_DIReservoir sourceReservoir,
     bool sourcePreviousFrame,
@@ -230,10 +304,10 @@ ShiftedPathData scatterReprojectionShift(
 
     lt_next_random(rng);
 
-    vec3 cameraPosW = lt_temporal_camera_origin(targetPreviousFrame, lensSample);
-    vec3 cameraU = normalize(lt_temporal_camera_u(targetPreviousFrame));
-    vec3 cameraV = normalize(lt_temporal_camera_v(targetPreviousFrame));
-    vec3 cameraForward = lt_temporal_camera_forward(targetPreviousFrame);
+    vec3 cameraPosW = lt_temporal_camera_origin(time, lensSample);
+    vec3 cameraU = normalize(lt_temporal_camera_u(time));
+    vec3 cameraV = normalize(lt_temporal_camera_v(time));
+    vec3 cameraForward = lt_temporal_camera_forward(time);
 
     vec3 toPrimaryHit = primaryHit.worldPos - cameraPosW;
     float hitDistance = length(toPrimaryHit);
@@ -255,11 +329,11 @@ ShiftedPathData scatterReprojectionShift(
 
     float apertureRadius = lt_di_temporal_camera_aperture_radius();
     vec2 lensLocal = apertureRadius * lensSample;
-    float focalDistance = length(lt_temporal_camera_w(targetPreviousFrame));
+    float focalDistance = length(lt_temporal_camera_w(time));
     vec2 film = lensLocal + focalDistance * (camRay.xy / camRay.z);
     vec2 ndc = film / vec2(
-        length(lt_temporal_camera_u(targetPreviousFrame)),
-        length(lt_temporal_camera_v(targetPreviousFrame))
+        length(lt_temporal_camera_u(time)),
+        length(lt_temporal_camera_v(time))
     );
     vec2 newFractionalPixel =
         (vec2(0.5f, -0.5f) * ndc + vec2(0.5f, 0.5f)) * vec2(viewWidth, viewHeight);
@@ -276,53 +350,41 @@ ShiftedPathData scatterReprojectionShift(
         return shiftedPath;
     }
 
-    ReservoirSplattingReconnectionData projectedReconnection = reconnectionData;
-    projectedReconnection.firstHit = primaryHit;
-    if (!scatter_reconnection_matches_surface(
-            projectedReconnection,
-            landingPixel,
-            landingSurface,
-            targetPreviousFrame))
-    {
-        return shiftedPath;
-    }
-
     if (!skipVisibilityCheck
-        && !lt_temporal_trace_reconnection_visibility(cameraPosW, rayDir, 0.999f * hitDistance))
+        && !lt_temporal_trace_visibility_ray(cameraPosW, rayDir, 0.999f * hitDistance))
     {
         return shiftedPath;
     }
 
-    shiftedPath.primaryHit = lt_temporal_make_shifted_hit_info(
-        landingPixel,
-        landingSurface,
-        targetPreviousFrame
-    );
+    shiftedPath.primaryHit = primaryHit;
     shiftedPath.primaryHit.viewDepth = hitDistance;
     shiftedPath.fractionalPixel = newFractionalPixel;
     shiftedPath.lensSample = lensSample;
     shiftedPath.firstRayDir = rayDir;
 
+    vec3 primaryHitNormalW = scatter_decode_surface_face_normal(primaryHit.faceId);
     RAB_Surface shiftedSurface = landingSurface;
     shiftedSurface.worldPos = primaryHit.worldPos;
-    shiftedSurface.normal = landingSurface.geoNormal;
+    shiftedSurface.geoNormal = primaryHitNormalW;
+    shiftedSurface.normal = primaryHitNormalW;
     shiftedSurface.viewDir = -rayDir;
     shiftedSurface.viewDepth = hitDistance;
 
     shiftedPath.subPixelJacobian = lt_temporal_compute_subpixel_jacobian(
         primaryHit.worldPos,
-        landingSurface.geoNormal,
+        primaryHitNormalW,
         cameraPosW,
         rayDir,
         cameraForward
     );
-    shiftedPath.lensVertexJacobian = lt_temporal_compute_lens_vertex_jacobian(
+    shiftedPath.lensVertexJacobian = lt_temporal_compute_lens_vertex_copy_jacobian(
         primaryHit.worldPos,
-        landingSurface.geoNormal,
+        primaryHitNormalW,
         cameraPosW,
         rayDir,
+        lt_temporal_camera_pos(time),
         cameraForward,
-        targetPreviousFrame
+        time
     );
     shiftedPath.radiance = lt_temporal_path_reconnection_shift(
         reconnectionData,
@@ -337,9 +399,9 @@ ShiftedPathData scatterReprojectionShift(
 
 ShiftedPathData scatterReprojectionShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
-    ReservoirSplattingHitInfo primaryHit,
+    HitInfo primaryHit,
     vec2 lensSample,
     RTXDI_DIReservoir sourceReservoir,
     bool skipVisibilityCheck)
@@ -359,9 +421,9 @@ ShiftedPathData scatterReprojectionShift(
 
 ShiftedPathData scatterReprojectionShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
-    ReservoirSplattingHitInfo primaryHit,
+    HitInfo primaryHit,
     vec2 lensSample,
     RTXDI_DIReservoir sourceReservoir)
 {
@@ -380,7 +442,7 @@ ShiftedPathData scatterReprojectionShift(
 
 ShiftedPathData gatherLensVertexCopyShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
     vec2 fractionalPixel,
     vec2 lensSample,
@@ -404,13 +466,18 @@ ShiftedPathData gatherLensVertexCopyShift(
         return shiftedPath;
     }
 
-    vec3 cameraPosW = lt_temporal_camera_pos(targetPreviousFrame)
-        + lt_temporal_lens_world_offset(targetPreviousFrame, lensSample);
-    vec3 cameraForward = lt_temporal_camera_forward(targetPreviousFrame);
-    vec3 primaryHitPosW = landingSurface.worldPos;
+    HitInfo primaryHit = reconnectionData.firstHit;
+    if (dot(primaryHit.worldPos, primaryHit.worldPos) <= 0.0f)
+    {
+        return shiftedPath;
+    }
+
+    vec3 rayOriginW = lt_temporal_camera_origin(time, lensSample);
+    vec3 cameraForward = lt_temporal_camera_forward(time);
+    vec3 primaryHitPosW = primaryHit.worldPos;
     vec3 primaryHitNormalW = landingSurface.geoNormal;
 
-    vec3 toHit = primaryHitPosW - cameraPosW;
+    vec3 toHit = primaryHitPosW - rayOriginW;
     float hitDistance = length(toHit);
     if (hitDistance < 1e-6f)
     {
@@ -418,30 +485,37 @@ ShiftedPathData gatherLensVertexCopyShift(
     }
 
     vec3 rayDir = toHit / hitDistance;
+    if (!lt_temporal_trace_visibility_ray(rayOriginW, rayDir, 0.999f * hitDistance))
+    {
+        return shiftedPath;
+    }
 
     RAB_Surface shiftedSurface = landingSurface;
     shiftedSurface.viewDir = -rayDir;
     shiftedSurface.viewDepth = hitDistance;
 
-    shiftedPath.primaryHit = lt_temporal_make_shifted_hit_info(landingPixel, landingSurface, targetPreviousFrame);
+    shiftedPath.primaryHit = primaryHit;
+    shiftedPath.primaryHit.viewDepth = hitDistance;
     shiftedPath.fractionalPixel = fractionalPixel;
     shiftedPath.lensSample = lensSample;
     shiftedPath.firstRayDir = rayDir;
     shiftedPath.subPixelJacobian = lt_temporal_compute_subpixel_jacobian(
         primaryHitPosW,
         primaryHitNormalW,
-        cameraPosW,
+        rayOriginW,
         rayDir,
         cameraForward
     );
-    shiftedPath.lensVertexJacobian = lt_temporal_compute_lens_vertex_jacobian(
+    shiftedPath.lensVertexJacobian = lt_temporal_compute_lens_vertex_copy_jacobian(
         primaryHitPosW,
         primaryHitNormalW,
-        cameraPosW,
+        rayOriginW,
         rayDir,
+        lt_temporal_camera_pos(time),
         cameraForward,
-        targetPreviousFrame
+        time
     );
+    shiftedSurface.worldPos = primaryHitPosW;
     shiftedPath.radiance = lt_temporal_path_reconnection_shift(
         reconnectionData,
         sourceReservoir,
@@ -455,7 +529,7 @@ ShiftedPathData gatherLensVertexCopyShift(
 
 ShiftedPathData gatherLensVertexCopyShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
     vec2 fractionalPixel,
     vec2 lensSample,
@@ -475,10 +549,10 @@ ShiftedPathData gatherLensVertexCopyShift(
 
 ShiftedPathData gatherPrimaryHitReconnectionShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
     vec2 fractionalPixel,
-    ReservoirSplattingHitInfo primaryHit,
+    HitInfo primaryHit,
     RTXDI_DIReservoir sourceReservoir,
     bool sourcePreviousFrame,
     bool targetPreviousFrame)
@@ -497,11 +571,11 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
 
     lt_next_random(rng);
 
-    vec3 cameraPosW = lt_temporal_camera_pos(targetPreviousFrame);
-    vec3 cameraU = normalize(lt_temporal_camera_u(targetPreviousFrame));
-    vec3 cameraV = normalize(lt_temporal_camera_v(targetPreviousFrame));
-    vec3 cameraForward = lt_temporal_camera_forward(targetPreviousFrame);
-    vec3 filmWorld = lt_temporal_film_world(targetPreviousFrame, fractionalPixel);
+    vec3 cameraPosW = lt_temporal_camera_pos(time);
+    vec3 cameraU = normalize(lt_temporal_camera_u(time));
+    vec3 cameraV = normalize(lt_temporal_camera_v(time));
+    vec3 cameraForward = lt_temporal_camera_forward(time);
+    vec3 filmWorld = lt_temporal_film_world(time, fractionalPixel);
 
     vec3 toPrimaryHit = primaryHit.worldPos - filmWorld;
     float hitDistance = length(toPrimaryHit);
@@ -541,7 +615,7 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
         hitDistance = length(primaryHit.worldPos - rayOrigin);
     }
 
-    if (!lt_temporal_trace_reconnection_visibility(rayOrigin, rayDir, 0.999f * hitDistance))
+    if (!lt_temporal_trace_visibility_ray(rayOrigin, rayDir, 0.999f * hitDistance))
     {
         return shiftedPath;
     }
@@ -552,16 +626,8 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
     {
         return shiftedPath;
     }
-    if (!scatter_reconnection_matches_surface(
-            reconnectionData,
-            landingPixel,
-            primaryHitSurface,
-            targetPreviousFrame))
-    {
-        return shiftedPath;
-    }
 
-    vec3 primaryHitNormalW = primaryHitSurface.geoNormal;
+    vec3 primaryHitNormalW = scatter_decode_surface_face_normal(primaryHit.faceId);
     RAB_Surface shiftedSurface = primaryHitSurface;
     shiftedSurface.worldPos = primaryHit.worldPos;
     shiftedSurface.geoNormal = primaryHitNormalW;
@@ -581,13 +647,14 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
         rayDir,
         cameraForward
     );
-    shiftedPath.lensVertexJacobian = lt_temporal_compute_lens_vertex_jacobian(
+    shiftedPath.lensVertexJacobian = lt_temporal_compute_primary_hit_reconnection_jacobian(
         primaryHit.worldPos,
         primaryHitNormalW,
-        rayOrigin,
         rayDir,
+        cameraPosW,
         cameraForward,
-        targetPreviousFrame
+        rayT,
+        time
     );
     shiftedPath.radiance = lt_temporal_path_reconnection_shift(
         reconnectionData,
@@ -602,10 +669,10 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
 
 ShiftedPathData gatherPrimaryHitReconnectionShift(
     inout RTXDI_RandomSamplerState rng,
-    inout ReservoirSplattingReconnectionData reconnectionData,
+    inout ReconnectionData reconnectionData,
     float time,
     vec2 fractionalPixel,
-    ReservoirSplattingHitInfo primaryHit,
+    HitInfo primaryHit,
     RTXDI_DIReservoir sourceReservoir)
 {
     return gatherPrimaryHitReconnectionShift(
@@ -620,11 +687,11 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
     );
 }
 
-ReservoirSplattingReconnectionData ReconnectionData_update(
-    ReservoirSplattingReconnectionData source,
+ReconnectionData ReconnectionData_update(
+    ReconnectionData source,
     ShiftedPathData shiftedPath)
 {
-    ReservoirSplattingReconnectionData updated = source;
+    ReconnectionData updated = source;
     updated.firstHit = shiftedPath.primaryHit;
     updated.firstWi = -shiftedPath.firstRayDir;
     updated.subPixel = shiftedPath.fractionalPixel - floor(shiftedPath.fractionalPixel);
