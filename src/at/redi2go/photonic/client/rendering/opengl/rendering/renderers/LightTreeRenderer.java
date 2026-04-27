@@ -507,13 +507,11 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader("common/indirect.fsh", "common/screen.vsh", this.memoryCollection, null))
       );
-      this.shadeSamplesMonolithicRenderer = null;
-      this.shadeSamplesReservoirRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diShadeSamplesReservoirFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesReservoirFramebuffer))
+      this.shadeSamplesMonolithicRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diShadeSamplesFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesMonolithicFramebuffer))
       );
-      this.shadeSamplesRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diShadeSamplesLightingFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesFramebuffer))
-      );
+      this.shadeSamplesReservoirRenderer = null;
+      this.shadeSamplesRenderer = null;
       this.shadeSamplesReconnectionRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diPromoteReconnectionFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesReconnectionFramebuffer))
       );
@@ -1383,9 +1381,11 @@ public class LightTreeRenderer extends MainRenderer {
       long t3 = System.nanoTime();
       this.renderDISpatialResamplingProfiled();
       long t4 = System.nanoTime();
-      // Final shading now runs in two steps:
-      // 1) promote post-spatial reservoirs into direct history with final visibility
-      // 2) resolve lighting from the promoted authoritative direct reservoir
+      // Reference parity:
+      // 1) publish the final reconnection payload only when temporal/proposal is
+      //    the last reuse stage
+      // 2) resolve lighting and promote the authoritative final reservoir via the
+      //    monolithic ShadeSamples/ResolveReSTIR pass
       this.renderShadeSamplesProfiled();
       long t5 = System.nanoTime();
       this.renderProfiled(nrdPrepareInputsRegionIndex, this.directFeatureRenderer);
@@ -2605,26 +2605,22 @@ public class LightTreeRenderer extends MainRenderer {
 
    private void renderShadeSamplesProfiled() {
       this.setCurrentDiReconnectionSource(this.getShadingInputReconnectionSource());
-      if (this.shadeSamplesReservoirRenderer == null || this.shadeSamplesRenderer == null) {
+      if (this.shadeSamplesMonolithicRenderer == null) {
          return;
       }
       this.beginGpuRegion(diShadeSamplesRegionIndex);
       if (this.isDirectShadeSamplesEnabled()) {
-         if (this.getShadingInputReconnectionSource() != DiReconnectionSource.PROPOSAL) {
-            this.shadeSamplesReservoirRenderer.renderAll();
-         }
          this.promoteShadingReconnectionHistory();
-         this.shadeSamplesRenderer.renderAll();
+         this.shadeSamplesMonolithicRenderer.renderAll();
       } else {
-         this.clearShadeSamplesSplitOutputs();
+         this.clearShadeSamplesMonolithicOutputs();
          this.clearFrameFinalReconnectionOutputs();
-         this.clearShadeSamplesLightingOutputs();
       }
       this.endGpuRegion(diShadeSamplesRegionIndex);
    }
 
    private void promoteShadingReconnectionHistory() {
-      if (this.isDirectSpatialReuseEnabled()) {
+      if (this.getShadingInputReconnectionSource() == DiReconnectionSource.FINAL) {
          return;
       }
       if (this.shadeSamplesReconnectionRenderer == null) {

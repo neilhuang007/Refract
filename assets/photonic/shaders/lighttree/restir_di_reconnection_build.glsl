@@ -1,6 +1,8 @@
 #ifndef PHOTONICS_RESTIR_DI_RECONNECTION_BUILD_GLSL
 #define PHOTONICS_RESTIR_DI_RECONNECTION_BUILD_GLSL
 
+#include "/photonics/lighttree/restir_di_temporal_dof.glsl"
+
 float scatter_resolve_light_pdf(RTXDI_DIReservoir reservoir, RAB_LightSample lightSample)
 {
     if (!RTXDI_IsValidDIReservoir(reservoir) || lightSample.index < 0) {
@@ -136,6 +138,20 @@ uint scatter_resolve_reconnection_flags(RAB_LightSample lightSample)
     return flags;
 }
 
+vec3 scatter_resolve_camera_origin_at_time(float time, vec2 lensSample)
+{
+    vec3 cameraPos = lt_di_temporal_camera_pos_at_time(time);
+    float apertureRadius = lt_di_temporal_camera_aperture_radius();
+    if (apertureRadius <= 0.0f)
+    {
+        return cameraPos;
+    }
+
+    vec3 cameraU = normalize(lt_di_temporal_camera_u_at_time(time));
+    vec3 cameraV = normalize(lt_di_temporal_camera_v_at_time(time));
+    return cameraPos + apertureRadius * (lensSample.x * cameraU + lensSample.y * cameraV);
+}
+
 ReconnectionData ReconnectionData_build(
     RAB_Surface surface,
     RTXDI_DIReservoir reservoir,
@@ -155,7 +171,7 @@ ReconnectionData ReconnectionData_build(
 
     d.subPixel = scatter_resolve_reservoir_subpixel(reservoir, pixelPosition);
     d.lensSample = PathReservoir_getLensSample(reservoir);
-    d.time = lt_path_sample_time(reservoir.pathSample);
+    d.time = time;
 
     d.pathLength = (lightSample.index >= 0) ? 2u : 1u;
 
@@ -165,7 +181,12 @@ ReconnectionData ReconnectionData_build(
     d.firstHit.faceId = packedIdentity & 0x7u;
     d.firstHit.materialId = packedIdentity >> 3u;
     d.firstBSDFComponentType = scatter_resolve_first_bsdf_component_type(surface);
-    d.firstWi = normalize(world_camera_position - surface.worldPos);
+    vec3 firstRayOrigin = scatter_resolve_camera_origin_at_time(d.time, d.lensSample);
+    vec3 firstWi = firstRayOrigin - surface.worldPos;
+    float firstWiLengthSq = dot(firstWi, firstWi);
+    d.firstWi = (firstWiLengthSq > 1e-12f)
+        ? firstWi * inversesqrt(firstWiLengthSq)
+        : vec3(0.0f);
 
     d.secondHit.worldPos = secondPos;
     d.secondHit.viewDepth = (lightSample.index >= 0) ? 0.0f : surface.viewDepth;

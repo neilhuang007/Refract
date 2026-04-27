@@ -6,6 +6,7 @@
 const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;
+const float NRD_EPS = 1e-6;
 
 bool nrd_is_active_checkerboard_pixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField) {
     if (activeCheckerboardField == 0) {
@@ -248,21 +249,47 @@ float nrd_modified_roughness_from_normal_variance(float roughness, vec3 avgNorma
     return clamp(roughness + normalVariance * 0.25, 0.0, 1.0);
 }
 
-// NRD: GetXvirtual -- compute virtual world position for specular reprojection
-// Uses thin-lens equation with curvature to find virtual reflection point
-vec3 nrd_get_xvirtual(float hitDist, float curvature, vec3 X, vec3 Xprev, vec3 N, vec3 V, float roughness) {
-    float NoV = abs(dot(N, V));
-    // Dominant direction factor (GGX lobe dominant direction)
-    float dominantFactor = mix(1.0, NoV, clamp(roughness, 0.0, 1.0));
-    vec3 Xvirtual = X - V * nrd_apply_thin_lens_equation(hitDist * dominantFactor, curvature);
-    return Xvirtual;
+// NRD.hlsli:426 _NRD_GetSpecularDominantFactor
+float nrd_specular_dominant_factor(vec3 N, vec3 V, float roughness) {
+    float NoV = clamp(abs(dot(N, V)), 0.0, 1.0);
+    roughness = clamp(roughness, 0.0, 1.0);
+    float a = 0.298475 * log(max(39.4115 - 39.0029 * roughness, 1e-6));
+    float dominantFactor = pow(clamp(1.0 - NoV, 0.0, 1.0), 10.8649) * (1.0 - a) + a;
+    return clamp(dominantFactor, 0.0, 1.0);
 }
 
-// NRD: GetSpecularDominantFactor -- how much virtual motion matters based on roughness
-float nrd_specular_dominant_factor(vec3 N, vec3 V, float roughness) {
-    float NoV = abs(dot(N, V));
-    float dominantFactor = (1.0 - roughness * roughness) / (1.0 + roughness);
-    return clamp(dominantFactor, 0.0, 1.0);
+// NRD.hlsli:434 _NRD_GetSpecularDominantDirection
+vec3 nrd_specular_dominant_direction(vec3 N, vec3 V, float roughness) {
+    vec3 R = reflect(-V, N);
+    float dominantFactor = nrd_specular_dominant_factor(N, V, roughness);
+    return nrd_safe_normal(mix(N, R, dominantFactor));
+}
+
+// NRD Common.hlsli:401 GetXvirtual.
+// This preserves the important stabilizer from the reference: when the thin-lens
+// virtual point is close to the surface, anchor it to the surface-motion position
+// from the previous frame instead of inventing independent specular motion.
+vec3 nrd_get_xvirtual(float hitDist, float curvature, vec3 X, vec3 Xprev, vec3 N, vec3 V, float roughness) {
+    hitDist = max(hitDist, 0.0);
+
+    vec3 D = nrd_specular_dominant_direction(N, V, roughness);
+    float objectDepth = -max(abs(dot(D, N)) * hitDist, NRD_EPS);
+    float mag = 1.0 / (2.0 * curvature * objectDepth - 1.0);
+
+    // Reference uses camera-relative |X| here. Our positions are absolute world
+    // space, so subtract the current camera position before applying the silhouette
+    // magnification reduction.
+    float NoV = clamp(abs(dot(N, V)), 0.0, 1.0);
+    float silhouetteReduction = length(X - world_camera_position);
+    silhouetteReduction *= clamp(1.0 - NoV, 0.0, 1.0);
+    silhouetteReduction *= max(curvature, 0.0);
+    mag *= 1.0 / (1.0 + silhouetteReduction);
+
+    float imageDistance = abs(mag) * hitDist;
+    float closenessToSurface = clamp(imageDistance / (hitDist + NRD_EPS), 0.0, 1.0);
+    vec3 anchor = mix(Xprev, X, closenessToSurface);
+
+    return anchor + V * imageDistance * sign(mag);
 }
 
 // NRD Common.hlsli:554 GetEncodingAwareNormalWeight -- for VMB normal validation
@@ -280,7 +307,6 @@ float nrd_pow5(float x) {
 }
 
 const float RELAX_NORMAL_ULP = 1.5 / 255.0;
-const float NRD_EPS = 1e-6;
 const float NRD_INF = 1e30;
 const float RELAX_MAX_ACCUM_FRAME_NUM = 255.0;
 

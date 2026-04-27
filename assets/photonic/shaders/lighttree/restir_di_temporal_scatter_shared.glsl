@@ -60,6 +60,8 @@ struct LtScatterShiftedPath {
     float lensVertexJacobian;
 };
 
+vec3 scatter_decode_surface_face_normal(uint faceId);
+
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
 ShiftedPathData lt_temporal_empty_shifted_path();
 
@@ -266,8 +268,9 @@ bool lt_scatter_finalize_temporal_shifted_reservoir(
 
     RAB_Surface shiftedSurface = targetSurface;
     shiftedSurface.worldPos = shiftedPath.primaryHit.worldPos;
-    shiftedSurface.geoNormal = targetSurface.geoNormal;
-    shiftedSurface.normal = targetSurface.geoNormal;
+    vec3 shiftedPrimaryNormal = scatter_decode_surface_face_normal(shiftedPath.primaryHit.faceId);
+    shiftedSurface.geoNormal = shiftedPrimaryNormal;
+    shiftedSurface.normal = shiftedPrimaryNormal;
     shiftedSurface.viewDir = -shiftedPath.firstRayDir;
     shiftedSurface.viewDepth = shiftedPath.primaryHit.viewDepth;
 

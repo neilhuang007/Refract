@@ -459,22 +459,26 @@ ShiftedPathData gatherLensVertexCopyShift(
 
     lt_next_random(rng);
 
+    bool hitEnvMap = (reconnectionData.pathLength == 1u) && reconnectionData.lightIsDistant;
     ivec2 landingPixel = ivec2(floor(fractionalPixel));
     RAB_Surface landingSurface = lt_temporal_load_surface(landingPixel, targetPreviousFrame);
     if (!RAB_IsSurfaceValid(landingSurface))
     {
         return shiftedPath;
     }
-
-    HitInfo primaryHit = reconnectionData.firstHit;
-    if (dot(primaryHit.worldPos, primaryHit.worldPos) <= 0.0f)
+    if (hitEnvMap)
     {
         return shiftedPath;
     }
 
     vec3 rayOriginW = lt_temporal_camera_origin(time, lensSample);
     vec3 cameraForward = lt_temporal_camera_forward(time);
-    vec3 primaryHitPosW = primaryHit.worldPos;
+    HitInfo primaryHit = lt_temporal_make_shifted_hit_info(
+        landingPixel,
+        landingSurface,
+        targetPreviousFrame
+    );
+    vec3 primaryHitPosW = landingSurface.worldPos;
     vec3 primaryHitNormalW = landingSurface.geoNormal;
 
     vec3 toHit = primaryHitPosW - rayOriginW;
@@ -516,6 +520,8 @@ ShiftedPathData gatherLensVertexCopyShift(
         time
     );
     shiftedSurface.worldPos = primaryHitPosW;
+    shiftedSurface.geoNormal = primaryHitNormalW;
+    shiftedSurface.normal = landingSurface.normal;
     shiftedPath.radiance = lt_temporal_path_reconnection_shift(
         reconnectionData,
         sourceReservoir,

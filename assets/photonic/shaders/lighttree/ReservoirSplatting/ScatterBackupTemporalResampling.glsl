@@ -36,6 +36,18 @@ float lt_ScatterBackupTemporalResampling_mis_scale()
     return lt_ScatterBackupTemporalResampling_use_pairwise_mis() ? 0.5f : 1.0f;
 }
 
+float lt_ScatterBackupTemporalResampling_shifted_jacobian(
+    ShiftedPathData shiftedPath,
+    ReconnectionData baseReconnection)
+{
+    return lt_scatter_shift_jacobian_ratio(
+        shiftedPath.subPixelJacobian,
+        shiftedPath.secondaryPathJacobian,
+        baseReconnection.subPixelJacobian,
+        baseReconnection.secondaryPathJacobian
+    );
+}
+
 RTXDI_DIReservoir lt_ScatterBackupTemporalResampling_load_backup_reservoir(
     ivec2 pixel)
 {
@@ -60,20 +72,24 @@ bool lt_ScatterBackupTemporalResampling_add_current_sample(
             * lt_scatter_confidence_mis_weight(currSample.confidence);
 
         float m2 = 0.0f;
-        LtScatterShiftedPath scatteredCurr;
-        RTXDI_DIReservoir shiftedCurrReservoir;
-        ReconnectionData shiftedCurrReconnection;
-        float scatteredJacobian;
-        if (lt_scatter_update_shifted_reservoir_to_previous_frame(
-                currSample.reconnectionData,
+        ReconnectionData scatteredCurrReconnection = currSample.reconnectionData;
+        ShiftedPathData scatteredCurr = scatterReprojectionShift(
+                sg,
+                scatteredCurrReconnection,
+                currSample.reconnectionData.time + lt_di_temporal_artificial_frame_time(),
+                currSample.reconnectionData.firstHit,
+                currSample.reconnectionData.lensSample,
                 currSample.reservoir,
                 false,
-                scatteredCurr,
-                shiftedCurrReservoir,
-                shiftedCurrReconnection,
-                scatteredJacobian))
+                true,
+                false);
+        float scatteredJacobian = lt_ScatterBackupTemporalResampling_shifted_jacobian(
+            scatteredCurr,
+            currSample.reconnectionData
+        );
+        ivec2 scatteredPixel = ivec2(floor(scatteredCurr.fractionalPixel));
+        if (lt_is_viewport_uv_in_bounds(scatteredPixel))
         {
-            ivec2 scatteredPixel = ivec2(floor(scatteredCurr.fractionalPixel));
             float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
             m2 = lt_scatter_radiance_phat(scatteredCurr.radiance)
                 * scatteredJacobian
@@ -151,8 +167,11 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
     vec3 backupPHat = vec3(0.0f);
     float shiftedJacobian = 1.0f;
     vec3 backupIntegrand = PathReservoir_getIntegrand(backupReservoir);
+    RTXDI_DIReservoir shiftedBackupReservoir = backupReservoir;
+    ReconnectionData shiftedBackupReconnectionData = backupReconnectionData;
     if (any(greaterThan(backupIntegrand, vec3(0.0f))))
     {
+        ReconnectionData baseBackupReconnectionData = backupReconnectionData;
         ShiftedPathData shiftedBackup = gatherLensVertexCopyShift(
             sg,
             backupReconnectionData,
@@ -164,35 +183,54 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
             false
         );
         shiftedJacobian = shiftedBackup.secondaryPathJacobian
-            / backupReconnectionData.secondaryPathJacobian;
+            / baseBackupReconnectionData.secondaryPathJacobian;
+
+        RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
+        float unusedFullJacobian = 0.0f;
+        bool shiftedBackupFinalized = lt_scatter_finalize_temporal_shifted_reservoir(
+            shiftedBackup,
+            baseBackupReconnectionData,
+            backupReservoir,
+            true,
+            false,
+            pixel,
+            targetSurface,
+            shiftedBackupReservoir,
+            shiftedBackupReconnectionData,
+            unusedFullJacobian
+        );
 
         float m1 = lt_scatter_radiance_phat(shiftedBackup.radiance)
             * shiftedJacobian
             * lt_scatter_confidence_mis_weight(currSample.confidence);
-        bool invalidM1 = isnan(m1);
+        bool invalidM1 = isnan(m1) || !shiftedBackupFinalized;
         backupPHat = invalidM1 ? vec3(0.0f) : shiftedBackup.radiance;
         shiftedJacobian = invalidM1 ? 1.0f : shiftedJacobian;
         m1 = invalidM1 ? 0.0f : m1;
 
-        backupReconnectionData = ReconnectionData_update(backupReconnectionData, shiftedBackup);
+        backupReconnectionData = invalidM1 ? backupReconnectionData : shiftedBackupReconnectionData;
 
         float m2 = 0.0f;
-        if (!lt_ScatterBackupTemporalResampling_use_pairwise_mis())
+        if (!invalidM1 && !lt_ScatterBackupTemporalResampling_use_pairwise_mis())
         {
-            LtScatterShiftedPath scatteredBackup;
-            RTXDI_DIReservoir shiftedBackupReservoir;
-            ReconnectionData shiftedBackupReconnection;
-            float scatteredJacobian;
-            if (lt_scatter_update_shifted_reservoir_to_previous_frame(
-                    backupReconnectionData,
-                    backupReservoir,
-                    false,
-                    scatteredBackup,
+            ReconnectionData scatteredBackupReconnection = backupReconnectionData;
+            ShiftedPathData scatteredBackup = scatterReprojectionShift(
+                    sg,
+                    scatteredBackupReconnection,
+                    backupReconnectionData.time + lt_di_temporal_artificial_frame_time(),
+                    backupReconnectionData.firstHit,
+                    backupReconnectionData.lensSample,
                     shiftedBackupReservoir,
-                    shiftedBackupReconnection,
-                    scatteredJacobian))
+                    false,
+                    true,
+                    false);
+            float scatteredJacobian = lt_ScatterBackupTemporalResampling_shifted_jacobian(
+                scatteredBackup,
+                backupReconnectionData
+            );
+            ivec2 scatteredPixel = ivec2(floor(scatteredBackup.fractionalPixel));
+            if (lt_is_viewport_uv_in_bounds(scatteredPixel))
             {
-                ivec2 scatteredPixel = ivec2(floor(scatteredBackup.fractionalPixel));
                 float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
                 m2 = lt_scatter_radiance_phat(scatteredBackup.radiance)
                     * scatteredJacobian
@@ -221,7 +259,7 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
         shiftedJacobian,
         lt_scatter_compute_ucw(backupReservoir, backupIntegrand),
         lt_scatter_reservoir_confidence(backupReservoir, backupReconnectionData),
-        backupReservoir,
+        shiftedBackupReservoir,
         sg
     );
     if (backupSelected)
@@ -261,17 +299,27 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
     vec3 prevIntegrand = PathReservoir_getIntegrand(prevReservoir);
     if (any(greaterThan(prevIntegrand, vec3(0.0f))))
     {
-        LtScatterShiftedPath scatteredPrev;
+        ShiftedPathData scatteredPrev = scatterReprojectionShift(
+            sg,
+            prevReconnectionData,
+            prevReconnectionData.time,
+            prevReconnectionData.firstHit,
+            prevReconnectionData.lensSample,
+            prevReservoir,
+            true,
+            false,
+            true
+        );
         RTXDI_DIReservoir shiftedReservoir;
         ReconnectionData shiftedReconnection;
-        if (!lt_scatter_update_shifted_reservoir(
+        if (!lt_scatter_finalize_temporal_shifted_reservoir(
+                scatteredPrev,
                 prevReconnectionData,
                 prevReservoir,
                 true,
                 false,
-                targetSurface,
                 pixel,
-                scatteredPrev,
+                targetSurface,
                 shiftedReservoir,
                 shiftedReconnection,
                 scatteredJacobian))

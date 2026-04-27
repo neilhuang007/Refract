@@ -25,28 +25,33 @@ void ReprojectTemporalSamples_run(
     }
 
     ReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
-
-    RTXDI_RandomSamplerState sg = lt_init_random_sampler(
-        uvec2(pixel),
-        uint(frameCounter),
-        5u
-    );
-    ShiftedPathData shiftedPrev = scatterReprojectionShift(
-        sg,
-        prevReconnection,
-        prevReconnection.time,
-        prevReconnection.firstHit,
-        prevReconnection.lensSample,
-        prevReservoir,
-        true,
-        false,
-        false
-    );
-    if (any(lessThan(shiftedPrev.fractionalPixel, vec2(0.0f)))) {
+    vec2 newFractionalPixel;
+    vec3 rayOrigin;
+    vec3 rayDirection;
+    float traceDistance;
+    bool hitDistantLight;
+    if (!scatter_project_reconnection_to_current_frame(
+            prevReconnection,
+            newFractionalPixel,
+            rayOrigin,
+            rayDirection,
+            traceDistance,
+            hitDistantLight)) {
         return;
     }
 
-    ivec2 newPixel = ivec2(floor(shiftedPrev.fractionalPixel));
+    float visibilityTraceDistance = hitDistantLight
+        ? traceDistance
+        : (0.999f * traceDistance);
+    if (!lt_scatter_trace_reconnection_visibility(
+            rayOrigin,
+            rayDirection,
+            visibilityTraceDistance,
+            !hitDistantLight)) {
+        return;
+    }
+
+    ivec2 newPixel = ivec2(floor(newFractionalPixel));
     lt_reproject_temporal_samples_append_record(pixel, newPixel);
 }
 #endif
