@@ -330,7 +330,7 @@ bool scatter_project_reconnection_to_frame(
     }
 
     rayDirection = -normalize(reconnectionData.firstWi);
-    traceMaxDistance = 1e5f;
+    traceMaxDistance = 3.402823466e+38f;
     projectedPixel = lt_scatter_project_ray_to_frame_film(
         rayDirection,
         lensLocal,
@@ -1094,8 +1094,7 @@ bool ScatterTemporalResampling_process_contributor(
 ivec2 ScatterTemporalResampling_previous_reservoir_pixel(
     ivec2 previousPixel)
 {
-    int previousCheckerboardField = lt_previous_checkerboard_field(int(ph_restir_active_checkerboard_field));
-    return lt_temporal_previous_checkerboard_pixel(previousPixel, previousCheckerboardField);
+    return previousPixel;
 }
 
 float ScatterTemporalResampling_load_previous_reservoir_confidence(

@@ -1,6 +1,6 @@
 #version 430
 
-// Reference stage 6 -- SpatialResampling::run
+// Reference stage module -- SpatialResampling.rt.slang
 
 in vec4 direction_vert_out;
 
@@ -15,7 +15,7 @@ layout(location = 7) out vec4 reconnection4_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/restir_di_bridge.glsl"
+#include "/photonics/lighttree/restir_di_spatial.glsl"
 
 void storeSpatialResamplingResult(
     RTXDI_DIReservoir reservoir,

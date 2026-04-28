@@ -189,7 +189,7 @@ ReconnectionData ReconnectionData_build(
 {
     ReconnectionData d = ReconnectionData_init();
     vec4 identityData = scatter_load_surface_identity(pixelPosition, false);
-    vec3 secondPos = (lightSample.index >= 0) ? lightSample.position : surface.worldPos;
+    vec3 secondPos = (lightSample.index >= 0) ? lightSample.position : vec3(0.0f);
     bool lightIsAnalytic = (lightSample.index >= 0) && RAB_IsAnalyticLightSample(lightSample);
     int reservoirLightIndex = RTXDI_GetReservoirLightIndexForFrame(reservoir, false, false);
 
@@ -213,9 +213,9 @@ ReconnectionData ReconnectionData_build(
         : vec3(0.0f);
 
     d.secondHit.worldPos = secondPos;
-    d.secondHit.viewDepth = (lightSample.index >= 0) ? 0.0f : surface.viewDepth;
+    d.secondHit.viewDepth = 0.0f;
     d.secondHit.faceId = 0u;
-    d.secondHit.materialId = uint(max(reservoirLightIndex, 0));
+    d.secondHit.materialId = (lightSample.index >= 0) ? uint(max(reservoirLightIndex, 0)) : 0u;
     d.secondBSDFComponentType = scatter_resolve_second_bsdf_component_type(lightSample);
     d.secondWo = (lightSample.index >= 0 && distance(secondPos, surface.worldPos) > 1e-6f)
         ? normalize(secondPos - surface.worldPos)
@@ -226,7 +226,9 @@ ReconnectionData ReconnectionData_build(
     d.lightIsDistant = (lightSample.index >= 0) && !lightIsAnalytic;
     d.lightPdf = scatter_resolve_light_pdf(reservoir, lightSample);
 
-    d.subPixelJacobian = scatter_resolve_subpixel_jacobian(surface, d.time, d.lensSample);
+    d.subPixelJacobian = (subPixelJacobian > 0.0f)
+        ? subPixelJacobian
+        : scatter_resolve_subpixel_jacobian(surface, d.time, d.lensSample);
     d.lensVertexJacobian = 1.0f;
     d.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian_from_reconnection(
         surface,

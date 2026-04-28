@@ -11,6 +11,10 @@ vec3 lt_di_temporal_previous_camera_u();
 vec3 lt_di_temporal_previous_camera_v();
 vec3 lt_di_temporal_previous_camera_w();
 
+// Reference parity for ShiftMapping.slang `kRayTMax` without changing the
+// existing OpenGL surface-based sampler-limit workaround.
+const float LT_TEMPORAL_RAY_T_MAX = 3.402823466e+38f;
+
 ShiftedPathData lt_temporal_empty_shifted_path()
 {
     ShiftedPathData shiftedPathData;
@@ -350,7 +354,7 @@ ShiftedPathData scatterReprojectionShift(
     vec3 cameraForward = lt_temporal_camera_forward(time);
 
     vec3 rayDir = vec3(0.0f);
-    float hitDistance = 1e5f;
+    float hitDistance = LT_TEMPORAL_RAY_T_MAX;
     if (hitEnvMap)
     {
         if (dot(reconnectionData.firstWi, reconnectionData.firstWi) <= 1e-12f)
@@ -403,7 +407,7 @@ ShiftedPathData scatterReprojectionShift(
             cameraPosW,
             rayDir,
             0.001f,
-            hitEnvMap ? hitDistance : (0.999f * hitDistance)))
+            hitEnvMap ? LT_TEMPORAL_RAY_T_MAX : (0.999f * hitDistance)))
     {
         return shiftedPath;
     }
@@ -554,7 +558,7 @@ ShiftedPathData gatherLensVertexCopyShift(
         }
 
         vec3 rayDir = toFilm / filmDistance;
-        if (!lt_temporal_trace_visibility_ray(rayOriginW, rayDir, 0.001f, 1e5f))
+        if (!lt_temporal_trace_visibility_ray(rayOriginW, rayDir, 0.001f, LT_TEMPORAL_RAY_T_MAX))
         {
             return shiftedPath;
         }
@@ -771,7 +775,7 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
     }
 
     float rayMin = hitEnvMap ? 0.001f : (0.001f * hitDistance);
-    float rayMax = hitEnvMap ? 1e5f : (0.999f * hitDistance);
+    float rayMax = hitEnvMap ? LT_TEMPORAL_RAY_T_MAX : (0.999f * hitDistance);
     if (!lt_temporal_trace_visibility_ray(rayOrigin, rayDir, rayMin, rayMax))
     {
         return shiftedPath;

@@ -56,22 +56,26 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
             false,
             false
         );
-        RTXDI_DIReservoir shiftedReservoir;
-        ReconnectionData shiftedReconnection;
-        if (!lt_scatter_finalize_temporal_shifted_reservoir(
-                shiftedPrev,
-                partitionedReconnectionData,
-                prevReservoir,
-                true,
-                false,
-                pixel,
-                targetSurface,
-                shiftedReservoir,
-                shiftedReconnection,
-                shiftedJacobian))
+        RTXDI_DIReservoir shiftedReservoir = lt_translate_reservoir_between_frames(
+            prevReservoir,
+            true,
+            false
+        );
+        if (!RTXDI_IsValidDIReservoir(shiftedReservoir))
         {
             return false;
         }
+        ReconnectionData shiftedReconnection = ReconnectionData_update(
+            partitionedReconnectionData,
+            shiftedPrev
+        );
+        PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedReconnection.subPixel);
+        shiftedJacobian = lt_scatter_shift_jacobian_ratio(
+            shiftedPrev.subPixelJacobian,
+            shiftedPrev.secondaryPathJacobian,
+            partitionedReconnectionData.subPixelJacobian,
+            partitionedReconnectionData.secondaryPathJacobian
+        );
 
         float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
             * shiftedJacobian

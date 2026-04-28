@@ -299,8 +299,6 @@ bool GatherTemporalResampling_add_previous_sample(
     vec3 prevPHat = vec3(0.0f);
     float shiftedJacobian = 1.0f;
     vec3 prevIntegrand = PathReservoir_getIntegrand(prevReservoir);
-    RTXDI_DIReservoir shiftedPrevReservoir = prevReservoir;
-    ReconnectionData shiftedPrevReconnectionData = prevReconnectionData;
     if (any(greaterThan(prevIntegrand, vec3(0.0f))))
     {
         vec2 shiftedPixel = vec2(pixel) + PathReservoir_getSubPixel(prevReservoir, pixel);
@@ -331,25 +329,10 @@ bool GatherTemporalResampling_add_previous_sample(
             primaryHitReconnection
         );
 
-        RAB_Surface targetSurface = GatherTemporalResampling_load_current_surface(pixel);
-        float unusedFullJacobian = 0.0f;
-        bool shiftedPrevFinalized = lt_scatter_finalize_temporal_shifted_reservoir(
-            shiftedPrev,
-            prevReconnectionData,
-            prevReservoir,
-            true,
-            false,
-            pixel,
-            targetSurface,
-            shiftedPrevReservoir,
-            shiftedPrevReconnectionData,
-            unusedFullJacobian
-        );
-
         float m1 = GatherTemporalResampling_p_hat(shiftedPrev.radiance)
             * shiftedJacobian
             * GatherTemporalResampling_get_confidence_weight(currConfidence);
-        bool invalidM1 = isnan(m1) || !shiftedPrevFinalized;
+        bool invalidM1 = isnan(m1);
         prevPHat = invalidM1 ? vec3(0.0f) : shiftedPrev.radiance;
         shiftedJacobian = invalidM1 ? 1.0f : shiftedJacobian;
         m1 = invalidM1 ? 0.0f : m1;
@@ -359,7 +342,9 @@ bool GatherTemporalResampling_add_previous_sample(
             * shiftProbability;
         prevSampleMIS = ((m1 + m2) > 0.0f) ? (m2 / (m1 + m2)) : 0.0f;
 
-        prevReconnectionData = invalidM1 ? prevReconnectionData : shiftedPrevReconnectionData;
+        prevReconnectionData = invalidM1
+            ? prevReconnectionData
+            : ReconnectionData_update(prevReconnectionData, shiftedPrev);
     }
 
     bool prevSelected = GatherTemporalResampling_add_sample_from_reservoir(
@@ -370,7 +355,7 @@ bool GatherTemporalResampling_add_previous_sample(
         shiftedJacobian,
         GatherTemporalResampling_ucw(prevReservoir, prevIntegrand),
         prevConfidence,
-        shiftedPrevReservoir,
+        prevReservoir,
         sg
     );
     if (prevSelected)

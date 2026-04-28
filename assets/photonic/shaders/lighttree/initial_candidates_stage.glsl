@@ -66,11 +66,6 @@ void InitialCandidates_run(ivec2 pixel)
 
     const RTXDI_Parameters params = lt_build_restir_di_parameters();
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
-    if (!RAB_IsSurfaceValid(surface))
-    {
-        InitialCandidates_storeEmptyReservoir();
-        return;
-    }
 
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
     ReconnectionData currReconnectionData = ReconnectionData_init();

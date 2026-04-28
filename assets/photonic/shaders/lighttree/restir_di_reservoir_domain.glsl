@@ -258,6 +258,9 @@ vec2 lt_temporal_previous_pixel_center(ivec2 pixelPosition) {
     if (motionSample.w <= 0.0f) {
         return vec2(pixelPosition) + vec2(0.5f);
     }
+    if (length(motionSample.xy) < 1e-6f) {
+        return vec2(pixelPosition) + vec2(0.5f);
+    }
 
     // ph_compute_temporal_motion() already stores pixel-space motion as:
     //   previousPixel - currentPixelCenter

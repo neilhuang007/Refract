@@ -1,6 +1,6 @@
 #version 430
 
-// Reference stage 7 -- ResolveReSTIR::execute
+// Reference stage module -- ResolveReSTIR.cs.slang
 
 in vec4 direction_vert_out;
 
@@ -55,10 +55,8 @@ void main()
         pixel, int(runtimeParameters.activeCheckerboardField));
 
     RTXDI_DIReservoir currReservoir;
-    ResolveReSTIR_load_curr_reservoir(reservoirPosition, currReservoir);
-
     ResolveReSTIRShading shading;
-    if (!ResolveReSTIR_shade(currReservoir, surface, shading)) {
+    if (!ResolveReSTIR_execute(reservoirPosition, surface, currReservoir, shading)) {
         storeEmptyResolveReSTIROutputs();
         return;
     }

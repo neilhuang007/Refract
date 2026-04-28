@@ -115,24 +115,28 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
             prevReservoir,
             true,
             false,
+            true
+        );
+        RTXDI_DIReservoir shiftedReservoir = lt_translate_reservoir_between_frames(
+            prevReservoir,
+            true,
             false
         );
-        RTXDI_DIReservoir shiftedReservoir;
-        ReconnectionData shiftedPrevReconnectionData;
-        float shiftedJacobian;
-        if (!lt_scatter_finalize_temporal_shifted_reservoir(
-                shiftedPrev,
-                prevReconnectionData,
-                prevReservoir,
-                true,
-                false,
-                pixel,
-                surface,
-                shiftedReservoir,
-                shiftedPrevReconnectionData,
-                shiftedJacobian)) {
+        if (!RTXDI_IsValidDIReservoir(shiftedReservoir)) {
             continue;
         }
+        ReconnectionData shiftedPrevReconnectionData = ReconnectionData_update(
+            prevReconnectionData,
+            shiftedPrev
+        );
+        PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedPrevReconnectionData.subPixel);
+
+        float shiftedJacobian = lt_scatter_shift_jacobian_ratio(
+            shiftedPrev.subPixelJacobian,
+            shiftedPrev.secondaryPathJacobian,
+            prevReconnectionData.subPixelJacobian,
+            prevReconnectionData.secondaryPathJacobian
+        );
 
         float prevSampleMIS = 0.0f;
         float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)

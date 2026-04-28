@@ -282,22 +282,9 @@ void main() {
 
     ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(params.activeCheckerboardField));
 
-    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-
-    // ------------------------------------------------------------------
-    // Stage 6 (ResolveReSTIR.cs.slang) -- direct port of ResolveReSTIR.cs.slang:45-62
-    //   PathReservoir currReservoir = currReservoirs[reservoirIdx];
-    //   float3 color = currReservoir.integrand * currReservoir.computeUCW();
-    //   outputColor[pixel] = float4(color, 1);
-    // ------------------------------------------------------------------
     RTXDI_DIReservoir currReservoir;
-    ResolveReSTIR_load_curr_reservoir(
-        reservoirPosition,
-        currReservoir
-    );
-
     ResolveReSTIRShading shading;
-    if (!ResolveReSTIR_shade(currReservoir, surface, shading)) {
+    if (!ResolveReSTIR_execute(reservoirPosition, surface, currReservoir, shading)) {
         storeEmptyShadeOutputs();
         storeDIReservoir(currReservoir);
         return;

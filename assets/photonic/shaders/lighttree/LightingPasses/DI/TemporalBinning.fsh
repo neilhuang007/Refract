@@ -10,7 +10,7 @@ layout(location = 1) out vec4 reservoir_sample_frag_out;
 layout(location = 2) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/lighttree/restir_di_temporal_sort_offsets.glsl"
+#include "/photonics/lighttree/ReservoirSplatting/SortReprojectedReservoirs.glsl"
 
 void SortReprojectedReservoirs_storeEmptySortCellDataResult()
 {

@@ -1,7 +1,7 @@
 #ifndef PHOTONICS_RESTIR_DI_RESOLVE_GLSL
 #define PHOTONICS_RESTIR_DI_RESOLVE_GLSL
 
-// Reference stage 4 helper surface for ResolveReSTIR::execute.
+// Reference stage module: ResolveReSTIR.cs.slang.
 
 #include "/photonics/lighttree/restir_di_bridge.glsl"
 
@@ -102,6 +102,16 @@ bool ResolveReSTIR_shade(
         && !any(isnan(shading.specular))
         && !isnan(shading.hitDistance)
         && !isinf(shading.hitDistance);
+}
+
+bool ResolveReSTIR_execute(
+    ivec2 reservoirPosition,
+    RAB_Surface surface,
+    out RTXDI_DIReservoir currReservoir,
+    out ResolveReSTIRShading shading)
+{
+    ResolveReSTIR_load_curr_reservoir(reservoirPosition, currReservoir);
+    return ResolveReSTIR_shade(currReservoir, surface, shading);
 }
 
 #endif

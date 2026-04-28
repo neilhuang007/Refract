@@ -97,6 +97,7 @@ void CollectTemporalSamples_store_empty_result()
 void CollectTemporalSamples_execute(ivec2 currPixel)
 {
     vec2 motionVector = GatherData_getMotionVector(currPixel);
+    motionVector = (length(motionVector) < 1e-6f) ? vec2(0.0f) : motionVector;
     vec2 prevPixel = vec2(currPixel) + motionVector * vec2(viewWidth, viewHeight);
 
     RTXDI_DIReservoir dstReservoir = RTXDI_EmptyDIReservoir();

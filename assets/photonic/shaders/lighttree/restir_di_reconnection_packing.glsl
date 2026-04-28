@@ -60,16 +60,19 @@ void scatter_unpack_reconnection_faces(uint packedFaces, inout ReconnectionData 
 
 uint scatter_pack_reconnection_identity(ReconnectionData reconnectionData)
 {
-    return (reconnectionData.firstHit.materialId & 0xFFFFu)
-        | ((reconnectionData.secondHit.materialId & 0xFFFFu) << 16u);
+    // The texture-backed DI path stores only the 5 RGBA payloads below.
+    // Unlike the Falcor structured-buffer layout, there is no persisted aux
+    // lane for hit/material identity, so material IDs are reconstructed from
+    // the surface/light state when needed.
+    return 0u;
 }
 
 void scatter_unpack_reconnection_identity(
     uint packedIdentity,
     inout ReconnectionData reconnectionData)
 {
-    reconnectionData.firstHit.materialId = packedIdentity & 0xFFFFu;
-    reconnectionData.secondHit.materialId = (packedIdentity >> 16u) & 0xFFFFu;
+    reconnectionData.firstHit.materialId = 0u;
+    reconnectionData.secondHit.materialId = 0u;
 }
 
 uint scatter_pack_reconnection_meta(ReconnectionData reconnectionData)
@@ -135,8 +138,8 @@ void scatter_pack_reconnection_data(
     out vec4 data3,
     out vec4 data4)
 {
-    transportAux0 = reconnectionData.secondHit.viewDepth;
-    transportAux1 = uintBitsToFloat(scatter_pack_reconnection_identity(reconnectionData));
+    transportAux0 = 0.0f;
+    transportAux1 = 0.0f;
 
     data0 = vec4(
         reconnectionData.firstHit.worldPos,
@@ -208,7 +211,7 @@ void scatter_unpack_reconnection(
     reconnectionData.lensVertexJacobian = packedLensJacobians.x;
     reconnectionData.secondaryPathJacobian = packedLensJacobians.y;
     scatter_unpack_reconnection_meta(floatBitsToUint(data2.w), reconnectionData);
-    scatter_unpack_reconnection_identity(floatBitsToUint(transportAux1), reconnectionData);
+    scatter_unpack_reconnection_identity(0u, reconnectionData);
 }
 
 void scatter_load_gather_intermediate_reconnection(ivec2 uv, out ReconnectionData reconnection) {

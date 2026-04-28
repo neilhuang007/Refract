@@ -10,8 +10,8 @@
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
 #include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
 
-// Matches RobustReuseOptimization.rt.slang kOffsets ordering exactly.
-const ivec2 kRobustReuseOptimizationOffsets[8] = ivec2[8](
+// Matches RobustReuseOptimization.rt.slang `kOffsets` ordering exactly.
+const ivec2 kOffsets[8] = ivec2[8](
     ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1),
     ivec2(-1,  0), ivec2(1,  0),
     ivec2(-1,  1), ivec2(0,  1), ivec2(1,  1)
@@ -44,7 +44,7 @@ void RobustReuseOptimization_run(ivec2 pixel)
 
     for (int offsetIndex = 0; offsetIndex < 8; ++offsetIndex)
     {
-        ivec2 neighborOffset = kRobustReuseOptimizationOffsets[offsetIndex];
+        ivec2 neighborOffset = kOffsets[offsetIndex];
         ivec2 neighborPixel = pixel + neighborOffset;
         bool neighborIsValid = lt_is_viewport_uv_in_bounds(neighborPixel);
 
@@ -57,7 +57,7 @@ void RobustReuseOptimization_run(ivec2 pixel)
                 prevReconnection.lensSample,
                 prevReservoir,
                 true,
-                false
+                true
             )
             : lt_temporal_empty_shifted_path();
 
