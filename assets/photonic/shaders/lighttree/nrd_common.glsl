@@ -272,7 +272,8 @@ vec3 nrd_specular_dominant_direction(vec3 N, vec3 V, float roughness) {
 vec3 nrd_get_xvirtual(float hitDist, float curvature, vec3 X, vec3 Xprev, vec3 N, vec3 V, float roughness) {
     hitDist = max(hitDist, 0.0);
 
-    vec3 D = nrd_specular_dominant_direction(N, V, roughness);
+    float dominantFactor = nrd_specular_dominant_factor(N, V, roughness);
+    vec3 D = nrd_safe_normal(mix(N, reflect(-V, N), dominantFactor));
     float objectDepth = -max(abs(dot(D, N)) * hitDist, NRD_EPS);
     float mag = 1.0 / (2.0 * curvature * objectDepth - 1.0);
 
@@ -286,10 +287,11 @@ vec3 nrd_get_xvirtual(float hitDist, float curvature, vec3 X, vec3 Xprev, vec3 N
     mag *= 1.0 / (1.0 + silhouetteReduction);
 
     float imageDistance = abs(mag) * hitDist;
-    float closenessToSurface = clamp(imageDistance / (hitDist + NRD_EPS), 0.0, 1.0);
+    float virtualDistance = dominantFactor * imageDistance;
+    float closenessToSurface = clamp(virtualDistance / (hitDist + NRD_EPS), 0.0, 1.0);
     vec3 anchor = mix(Xprev, X, closenessToSurface);
 
-    return anchor + V * imageDistance * sign(mag);
+    return anchor + V * virtualDistance * sign(mag);
 }
 
 // NRD Common.hlsli:554 GetEncodingAwareNormalWeight -- for VMB normal validation

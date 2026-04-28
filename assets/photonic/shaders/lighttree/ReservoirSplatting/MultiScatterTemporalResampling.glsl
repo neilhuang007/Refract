@@ -109,7 +109,8 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
 }
 
 float lt_MultiScatterTemporalResampling_current_sample_mis(
-    LtScatterCurrentSample currSample)
+    LtScatterCurrentSample currSample,
+    inout RTXDI_RandomSamplerState sg)
 {
     if (!currSample.hasPositivePHat)
     {
@@ -149,10 +150,6 @@ float lt_MultiScatterTemporalResampling_current_sample_mis(
     }
 
     ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
-    RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(previousReservoirPixel)
-    );
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
 
     float m1 = lt_scatter_radiance_phat(PathReservoir_getIntegrand(currSample.reservoir))
@@ -192,7 +189,7 @@ RTXDI_DIReservoir MultiScatterTemporalResampling_run(
     float dstConfidence = 0.0f;
     ReconnectionData dstReconnectionData = ReconnectionData_init();
 
-    float currSampleMIS = lt_MultiScatterTemporalResampling_current_sample_mis(currSample);
+    float currSampleMIS = lt_MultiScatterTemporalResampling_current_sample_mis(currSample, sg);
     bool currSelected = lt_scatter_add_sample_from_reservoir(
         dstReservoir,
         dstConfidence,

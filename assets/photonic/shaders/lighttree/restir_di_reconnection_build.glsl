@@ -152,6 +152,30 @@ vec3 scatter_resolve_camera_origin_at_time(float time, vec2 lensSample)
     return cameraPos + apertureRadius * (lensSample.x * cameraU + lensSample.y * cameraV);
 }
 
+float scatter_resolve_subpixel_jacobian(
+    RAB_Surface surface,
+    float time,
+    vec2 lensSample)
+{
+    vec3 cameraOrigin = scatter_resolve_camera_origin_at_time(time, lensSample);
+    vec3 toPrimaryHit = surface.worldPos - cameraOrigin;
+    float hitDistance = length(toPrimaryHit);
+    if (hitDistance < 1e-6f)
+    {
+        return 1.0f;
+    }
+
+    vec3 rayDir = toPrimaryHit / hitDistance;
+    float cosNormal = abs(dot(-rayDir, surface.geoNormal));
+    float cosSensor = abs(dot(normalize(lt_di_temporal_camera_w_at_time(time)), rayDir));
+    if (cosSensor < 1e-6f)
+    {
+        return 1.0f;
+    }
+
+    return cosNormal / (hitDistance * hitDistance * cosSensor * cosSensor * cosSensor);
+}
+
 ReconnectionData ReconnectionData_build(
     RAB_Surface surface,
     RTXDI_DIReservoir reservoir,
@@ -202,7 +226,7 @@ ReconnectionData ReconnectionData_build(
     d.lightIsDistant = (lightSample.index >= 0) && !lightIsAnalytic;
     d.lightPdf = scatter_resolve_light_pdf(reservoir, lightSample);
 
-    d.subPixelJacobian = subPixelJacobian;
+    d.subPixelJacobian = scatter_resolve_subpixel_jacobian(surface, d.time, d.lensSample);
     d.lensVertexJacobian = 1.0f;
     d.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian_from_reconnection(
         surface,

@@ -5,13 +5,13 @@ vec3 lt_di_temporal_camera_relative_world_from_ndc(
     vec2 ndc,
     mat4 projectionInverse,
     mat4 modelViewInverse,
-    vec3 cameraPosition)
+    vec3 cameraWorldPosition)
 {
     vec4 viewPoint = projectionInverse * vec4(ndc, -1.0f, 1.0f);
     float viewW = (abs(viewPoint.w) > 1e-6f) ? viewPoint.w : 1.0f;
     vec3 viewPosition = viewPoint.xyz / viewW;
     vec3 worldPosition = (modelViewInverse * vec4(viewPosition, 1.0f)).xyz;
-    return worldPosition - cameraPosition;
+    return worldPosition - cameraWorldPosition;
 }
 
 vec3 lt_di_temporal_current_camera_relative_world_from_ndc(vec2 ndc)
@@ -117,11 +117,8 @@ vec3 lt_di_temporal_slerp_direction(vec3 currentDir, vec3 previousDir, float ble
 
 vec3 lt_di_temporal_camera_pos_at_time(float time)
 {
-    return mix(
-        world_camera_position,
-        previous_world_camera_position,
-        lt_di_temporal_camera_interval_blend(time)
-    );
+    float blend = lt_di_temporal_camera_interval_blend(time);
+    return world_camera_position * (1.0f - blend) + previous_world_camera_position * blend;
 }
 
 vec3 lt_di_temporal_camera_forward_at_time(float time)
@@ -140,11 +137,9 @@ vec3 lt_di_temporal_camera_u_at_time(float time)
         ? vec3(0.0f, 0.0f, 1.0f)
         : vec3(0.0f, 1.0f, 0.0f);
     vec3 right = normalize(cross(forward, up));
-    float cameraULength = mix(
-        length(lt_di_temporal_camera_u()),
-        length(lt_di_temporal_previous_camera_u()),
-        lt_di_temporal_camera_interval_blend(time)
-    );
+    float blend = lt_di_temporal_camera_interval_blend(time);
+    float cameraULength = length(lt_di_temporal_camera_u()) * (1.0f - blend)
+        + length(lt_di_temporal_previous_camera_u()) * blend;
     return right * cameraULength;
 }
 
@@ -152,21 +147,17 @@ vec3 lt_di_temporal_camera_v_at_time(float time)
 {
     vec3 forward = lt_di_temporal_camera_forward_at_time(time);
     vec3 right = normalize(lt_di_temporal_camera_u_at_time(time));
-    float cameraVLength = mix(
-        length(lt_di_temporal_camera_v()),
-        length(lt_di_temporal_previous_camera_v()),
-        lt_di_temporal_camera_interval_blend(time)
-    );
+    float blend = lt_di_temporal_camera_interval_blend(time);
+    float cameraVLength = length(lt_di_temporal_camera_v()) * (1.0f - blend)
+        + length(lt_di_temporal_previous_camera_v()) * blend;
     return normalize(cross(right, forward)) * cameraVLength;
 }
 
 vec3 lt_di_temporal_camera_w_at_time(float time)
 {
-    float focalDistance = mix(
-        length(lt_di_temporal_camera_w()),
-        length(lt_di_temporal_previous_camera_w()),
-        lt_di_temporal_camera_interval_blend(time)
-    );
+    float blend = lt_di_temporal_camera_interval_blend(time);
+    float focalDistance = length(lt_di_temporal_camera_w()) * (1.0f - blend)
+        + length(lt_di_temporal_previous_camera_w()) * blend;
     return lt_di_temporal_camera_forward_at_time(time) * focalDistance;
 }
 

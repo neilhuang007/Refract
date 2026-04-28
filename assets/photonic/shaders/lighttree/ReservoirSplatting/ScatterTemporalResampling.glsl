@@ -1,6 +1,8 @@
 #ifndef PHOTONICS_RESERVOIR_SPLATTING_SCATTER_TEMPORAL_RESAMPLING_GLSL
 #define PHOTONICS_RESERVOIR_SPLATTING_SCATTER_TEMPORAL_RESAMPLING_GLSL
 
+#include "/photonics/lighttree/light_tree.glsl"
+#include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
 #include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
 #include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"

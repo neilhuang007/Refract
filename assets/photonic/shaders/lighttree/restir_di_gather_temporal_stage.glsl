@@ -140,7 +140,6 @@ ReconnectionData GatherTemporalResampling_load_previous_temporal_reconnection(
     ivec2 pixel,
     RTXDI_DIReservoir reservoir)
 {
-    reservoir = reservoir;
     ReconnectionData reconnectionData;
     scatter_unpack_reconnection(
         texelFetch(temporal_gather_intermediate_reconnection0, pixel, 0),
@@ -152,6 +151,7 @@ ReconnectionData GatherTemporalResampling_load_previous_temporal_reconnection(
         0.0f,
         reconnectionData
     );
+    RestirDI_restoreTemporalIntermediateReconnection(pixel, reservoir, reconnectionData);
     return reconnectionData;
 }
 
@@ -299,6 +299,8 @@ bool GatherTemporalResampling_add_previous_sample(
     vec3 prevPHat = vec3(0.0f);
     float shiftedJacobian = 1.0f;
     vec3 prevIntegrand = PathReservoir_getIntegrand(prevReservoir);
+    RTXDI_DIReservoir shiftedPrevReservoir = prevReservoir;
+    ReconnectionData shiftedPrevReconnectionData = prevReconnectionData;
     if (any(greaterThan(prevIntegrand, vec3(0.0f))))
     {
         vec2 shiftedPixel = vec2(pixel) + PathReservoir_getSubPixel(prevReservoir, pixel);
@@ -329,19 +331,35 @@ bool GatherTemporalResampling_add_previous_sample(
             primaryHitReconnection
         );
 
+        RAB_Surface targetSurface = GatherTemporalResampling_load_current_surface(pixel);
+        float unusedFullJacobian = 0.0f;
+        bool shiftedPrevFinalized = lt_scatter_finalize_temporal_shifted_reservoir(
+            shiftedPrev,
+            prevReconnectionData,
+            prevReservoir,
+            true,
+            false,
+            pixel,
+            targetSurface,
+            shiftedPrevReservoir,
+            shiftedPrevReconnectionData,
+            unusedFullJacobian
+        );
+
         float m1 = GatherTemporalResampling_p_hat(shiftedPrev.radiance)
             * shiftedJacobian
             * GatherTemporalResampling_get_confidence_weight(currConfidence);
-        prevPHat = isnan(m1) ? vec3(0.0f) : shiftedPrev.radiance;
-        shiftedJacobian = isnan(m1) ? 1.0f : shiftedJacobian;
-        m1 = isnan(m1) ? 0.0f : m1;
+        bool invalidM1 = isnan(m1) || !shiftedPrevFinalized;
+        prevPHat = invalidM1 ? vec3(0.0f) : shiftedPrev.radiance;
+        shiftedJacobian = invalidM1 ? 1.0f : shiftedJacobian;
+        m1 = invalidM1 ? 0.0f : m1;
 
         float m2 = GatherTemporalResampling_p_hat(prevIntegrand)
             * GatherTemporalResampling_get_confidence_weight(prevConfidence)
             * shiftProbability;
         prevSampleMIS = ((m1 + m2) > 0.0f) ? (m2 / (m1 + m2)) : 0.0f;
 
-        prevReconnectionData = ReconnectionData_update(prevReconnectionData, shiftedPrev);
+        prevReconnectionData = invalidM1 ? prevReconnectionData : shiftedPrevReconnectionData;
     }
 
     bool prevSelected = GatherTemporalResampling_add_sample_from_reservoir(
@@ -352,7 +370,7 @@ bool GatherTemporalResampling_add_previous_sample(
         shiftedJacobian,
         GatherTemporalResampling_ucw(prevReservoir, prevIntegrand),
         prevConfidence,
-        prevReservoir,
+        shiftedPrevReservoir,
         sg
     );
     if (prevSelected)

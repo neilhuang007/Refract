@@ -12,7 +12,7 @@ vec2 PathReservoir_getSubPixel(RTXDI_DIReservoir reservoir, ivec2 pixelPosition)
     vec2 pixelSampleUV = lt_area_has_valid_domain(reservoir)
         ? lt_area_clamp_pixel_sample_uv(reservoir.pixelSampleUV)
         : lt_area_default_pixel_sample(pixelPosition);
-    vec2 samplePixel = pixelSampleUV * vec2(viewWidth, viewHeight) - vec2(0.5f);
+    vec2 samplePixel = pixelSampleUV * vec2(viewWidth, viewHeight);
     return clamp(fract(samplePixel), vec2(0.0f), vec2(1.0f));
 }
 
@@ -212,7 +212,7 @@ bool lt_area_try_shift_temporal_domain(
 }
 
 ivec2 lt_area_pixel_from_sample_uv(vec2 pixelSampleUV) {
-    vec2 scaled = lt_area_clamp_pixel_sample_uv(pixelSampleUV) * vec2(viewWidth, viewHeight) - vec2(0.5f);
+    vec2 scaled = lt_area_clamp_pixel_sample_uv(pixelSampleUV) * vec2(viewWidth, viewHeight);
     return clamp(ivec2(floor(scaled)), ivec2(0), ivec2(int(viewWidth) - 1, int(viewHeight) - 1));
 }
 

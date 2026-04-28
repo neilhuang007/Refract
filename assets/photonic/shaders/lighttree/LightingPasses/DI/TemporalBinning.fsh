@@ -10,7 +10,7 @@ layout(location = 1) out vec4 reservoir_sample_frag_out;
 layout(location = 2) out vec4 reservoir_meta_frag_out;
 
 #include "/photonics/common/header.glsl"
-#include "/photonics/lighttree/ReservoirSplatting/SortReprojectedReservoirs.glsl"
+#include "/photonics/lighttree/restir_di_temporal_sort_offsets.glsl"
 
 void SortReprojectedReservoirs_storeEmptySortCellDataResult()
 {
@@ -23,9 +23,9 @@ void main()
 {
     SortReprojectedReservoirs_storeEmptySortCellDataResult();
 
-    uint reservoirWidth = lt_temporal_sort_reservoir_width();
-    uint index = uint(gl_FragCoord.y) * reservoirWidth + uint(gl_FragCoord.x);
-    if (index >= reservoirWidth * uint(max(int(viewHeight), 1))) {
+    ivec2 reservoirSize = lt_temporal_sort_reservoir_size();
+    uint index = uint(gl_FragCoord.y) * uint(reservoirSize.x) + uint(gl_FragCoord.x);
+    if (index >= uint(reservoirSize.x) * uint(reservoirSize.y)) {
         return;
     }
     SortReprojectedReservoirs_sortCellData(index);

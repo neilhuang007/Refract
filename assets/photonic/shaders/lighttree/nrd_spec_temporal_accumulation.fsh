@@ -477,8 +477,7 @@ void main() {
         vec2  deltaUvNorm  = deltaUvPx / parallaxLen1; // normalized direction
 
         // Build a stable camera-space right/up basis for single-pixel ray offsets.
-        // rightWS and upWS are world-space tangent vectors perpendicular to V,
-        // scaled so that one unit corresponds to one pixel at the current view distance.
+        // These are camera-to-surface rays for the line-plane intersections below.
         float invViewH = 1.0 / max(float(viewHeight), 1.0);
         vec3  rightWS;
         if (abs(dot(V, vec3(0.0, 1.0, 0.0))) > 0.99) {
@@ -505,8 +504,8 @@ void main() {
                     texelFetch(stage_radiosity_mapped_normal, sampleCoord10, 0).xyz
                 );
             }
-            // Ray from camera through neighbor pixel (offset +1 pixel right in screen space)
-            vec3  ray10Dir = normalize(V + rightWS * invViewH * viewDistance);
+            // Ray from camera through neighbor pixel (offset +1 pixel right in screen space).
+            vec3  ray10Dir = normalize(viewDir + rightWS * invViewH * viewDistance);
             float t10Denom = dot(currentNormal, ray10Dir);
             float t10 = abs(t10Denom) > 1e-6 ? planeD / t10Denom : viewDistance;
             x10 = world_camera_position + ray10Dir * t10;
@@ -526,8 +525,8 @@ void main() {
                     texelFetch(stage_radiosity_mapped_normal, sampleCoord01, 0).xyz
                 );
             }
-            // Ray from camera through neighbor pixel (offset +1 pixel up in screen space)
-            vec3  ray01Dir = normalize(V + upWS * invViewH * viewDistance);
+            // Ray from camera through neighbor pixel (offset +1 pixel up in screen space).
+            vec3  ray01Dir = normalize(viewDir + upWS * invViewH * viewDistance);
             float t01Denom = dot(currentNormal, ray01Dir);
             float t01 = abs(t01Denom) > 1e-6 ? planeD / t01Denom : viewDistance;
             x01 = world_camera_position + ray01Dir * t01;

@@ -168,6 +168,22 @@ vec3 lt_temporal_film_world(float time, vec2 fractionalPixel)
         + lt_temporal_camera_w(time);
 }
 
+bool lt_temporal_has_primary_hit(HitInfo hitInfo)
+{
+    return hitInfo.viewDepth > 0.0f
+        && any(greaterThan(abs(hitInfo.worldPos), vec3(0.0f)));
+}
+
+bool lt_temporal_hit_env_map(ReconnectionData reconnectionData)
+{
+    return (reconnectionData.pathLength == 1u) && reconnectionData.lightIsDistant;
+}
+
+bool lt_temporal_hit_primary_light(ReconnectionData reconnectionData)
+{
+    return (reconnectionData.pathLength == 1u) && !reconnectionData.lightIsDistant;
+}
+
 float lt_temporal_compute_subpixel_jacobian(
     vec3 primaryHitPosW,
     vec3 primaryHitNormalW,
@@ -192,7 +208,7 @@ float lt_temporal_compute_lens_vertex_copy_jacobian(
     float time)
 {
     float dist = length(primaryHitPosW - rayOriginW);
-    float cosNormal = dot(rayDir, primaryHitNormalW);
+    float cosNormal = dot(-rayDir, primaryHitNormalW);
     float cosSensor = dot(cameraForward, rayDir);
     float focalDistance = length(lt_temporal_camera_w(time));
     float camZ = dot(primaryHitPosW - cameraPosW, cameraForward);
@@ -220,21 +236,34 @@ float lt_temporal_compute_primary_hit_reconnection_jacobian(
     return (d0 * d0) / (d1 * d1) * abs(cosNormal) / abs(cosSensor);
 }
 
+float lt_temporal_compute_env_map_subpixel_jacobian(
+    vec3 rayDir,
+    vec3 cameraForward)
+{
+    float cosSensor = dot(cameraForward, rayDir);
+    return 1.0f / abs(pow(cosSensor, 3.0f));
+}
+
+float lt_temporal_compute_env_map_lens_vertex_jacobian(
+    vec3 rayDir,
+    vec3 cameraForward,
+    float time)
+{
+    float cosSensor = dot(cameraForward, rayDir);
+    float focalDistance = length(lt_temporal_camera_w(time));
+    float d0 = focalDistance / dot(cameraForward, rayDir);
+    return (d0 * d0) / abs(cosSensor);
+}
+
 bool lt_temporal_trace_visibility_ray(
     vec3 rayOriginW,
     vec3 rayDirW,
-    float traceMaxDistance,
-    bool isReprojection)
+    float traceMinDistance,
+    float traceMaxDistance)
 {
-    // ShiftMapping.slang:363 -> scatter path: tMin = 0.001f (fixed)
-    // ReprojectTemporalSamples.rt.slang:105 -> reproject geometry: tMin = 0.001f * dist
-    // traceMaxDistance is already 0.999f*dist for geometry, so dist = tMax/0.999
-    float rayMin = (isReprojection && traceMaxDistance < 1e4f)
-        ? (0.001f * (traceMaxDistance / 0.999f))
-        : 0.001f;
     ray.origin = rayOriginW;
     ray.direction = rayDirW;
-    ray_min_trace_distance = rayMin;
+    ray_min_trace_distance = traceMinDistance;
     ray_max_trace_distance = traceMaxDistance;
     trace_ray(ray, true);
     bool unoccluded = !ray.result_hit && ray_distance_limit_reached;
@@ -248,7 +277,17 @@ bool lt_temporal_trace_visibility_ray(
     vec3 rayDirW,
     float traceMaxDistance)
 {
-    return lt_temporal_trace_visibility_ray(rayOriginW, rayDirW, traceMaxDistance, false);
+    return lt_temporal_trace_visibility_ray(rayOriginW, rayDirW, 0.001f, traceMaxDistance);
+}
+
+vec3 lt_temporal_handle_reconnection_primary_light(RTXDI_DIReservoir sourceReservoir)
+{
+    return PathReservoir_getIntegrand(sourceReservoir);
+}
+
+vec3 lt_temporal_handle_reconnection_env_map(RTXDI_DIReservoir sourceReservoir)
+{
+    return PathReservoir_getIntegrand(sourceReservoir);
 }
 
 vec3 lt_temporal_path_reconnection_shift(
@@ -297,7 +336,8 @@ ShiftedPathData scatterReprojectionShift(
 {
     ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
 
-    if (dot(primaryHit.worldPos, primaryHit.worldPos) <= 0.0f)
+    bool hitEnvMap = lt_temporal_hit_env_map(reconnectionData);
+    if (!hitEnvMap && !lt_temporal_has_primary_hit(primaryHit))
     {
         return shiftedPath;
     }
@@ -309,14 +349,29 @@ ShiftedPathData scatterReprojectionShift(
     vec3 cameraV = normalize(lt_temporal_camera_v(time));
     vec3 cameraForward = lt_temporal_camera_forward(time);
 
-    vec3 toPrimaryHit = primaryHit.worldPos - cameraPosW;
-    float hitDistance = length(toPrimaryHit);
-    if (hitDistance < 1e-6f)
+    vec3 rayDir = vec3(0.0f);
+    float hitDistance = 1e5f;
+    if (hitEnvMap)
     {
-        return shiftedPath;
+        if (dot(reconnectionData.firstWi, reconnectionData.firstWi) <= 1e-12f)
+        {
+            return shiftedPath;
+        }
+
+        rayDir = -normalize(reconnectionData.firstWi);
+    }
+    else
+    {
+        vec3 toPrimaryHit = primaryHit.worldPos - cameraPosW;
+        hitDistance = length(toPrimaryHit);
+        if (hitDistance < 1e-6f)
+        {
+            return shiftedPath;
+        }
+
+        rayDir = toPrimaryHit / hitDistance;
     }
 
-    vec3 rayDir = toPrimaryHit / hitDistance;
     vec3 camRay = vec3(
         dot(cameraU, rayDir),
         dot(cameraV, rayDir),
@@ -343,24 +398,43 @@ ShiftedPathData scatterReprojectionShift(
         return shiftedPath;
     }
 
+    if (!skipVisibilityCheck
+        && !lt_temporal_trace_visibility_ray(
+            cameraPosW,
+            rayDir,
+            0.001f,
+            hitEnvMap ? hitDistance : (0.999f * hitDistance)))
+    {
+        return shiftedPath;
+    }
+
+    shiftedPath.primaryHit = primaryHit;
+    shiftedPath.primaryHit.viewDepth = hitEnvMap ? 0.0f : hitDistance;
+    shiftedPath.fractionalPixel = newFractionalPixel;
+    shiftedPath.lensSample = lensSample;
+    shiftedPath.firstRayDir = rayDir;
+
+    if (hitEnvMap)
+    {
+        shiftedPath.subPixelJacobian = lt_temporal_compute_env_map_subpixel_jacobian(
+            rayDir,
+            cameraForward
+        );
+        shiftedPath.lensVertexJacobian = lt_temporal_compute_env_map_lens_vertex_jacobian(
+            rayDir,
+            cameraForward,
+            time
+        );
+        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(sourceReservoir);
+        return shiftedPath;
+    }
+
     ivec2 landingPixel = ivec2(floor(newFractionalPixel));
     RAB_Surface landingSurface = lt_temporal_load_surface(landingPixel, targetPreviousFrame);
     if (!RAB_IsSurfaceValid(landingSurface))
     {
         return shiftedPath;
     }
-
-    if (!skipVisibilityCheck
-        && !lt_temporal_trace_visibility_ray(cameraPosW, rayDir, 0.999f * hitDistance))
-    {
-        return shiftedPath;
-    }
-
-    shiftedPath.primaryHit = primaryHit;
-    shiftedPath.primaryHit.viewDepth = hitDistance;
-    shiftedPath.fractionalPixel = newFractionalPixel;
-    shiftedPath.lensSample = lensSample;
-    shiftedPath.firstRayDir = rayDir;
 
     vec3 primaryHitNormalW = scatter_decode_surface_face_normal(primaryHit.faceId);
     RAB_Surface shiftedSurface = landingSurface;
@@ -386,6 +460,13 @@ ShiftedPathData scatterReprojectionShift(
         cameraForward,
         time
     );
+
+    if (lt_temporal_hit_primary_light(reconnectionData))
+    {
+        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(sourceReservoir);
+        return shiftedPath;
+    }
+
     shiftedPath.radiance = lt_temporal_path_reconnection_shift(
         reconnectionData,
         sourceReservoir,
@@ -459,20 +540,48 @@ ShiftedPathData gatherLensVertexCopyShift(
 
     lt_next_random(rng);
 
-    bool hitEnvMap = (reconnectionData.pathLength == 1u) && reconnectionData.lightIsDistant;
+    bool hitEnvMap = lt_temporal_hit_env_map(reconnectionData);
+    vec3 rayOriginW = lt_temporal_camera_origin(time, lensSample);
+    vec3 cameraForward = lt_temporal_camera_forward(time);
+    if (hitEnvMap)
+    {
+        vec3 filmWorld = lt_temporal_film_world(time, fractionalPixel);
+        vec3 toFilm = filmWorld - rayOriginW;
+        float filmDistance = length(toFilm);
+        if (filmDistance < 1e-6f)
+        {
+            return shiftedPath;
+        }
+
+        vec3 rayDir = toFilm / filmDistance;
+        if (!lt_temporal_trace_visibility_ray(rayOriginW, rayDir, 0.001f, 1e5f))
+        {
+            return shiftedPath;
+        }
+
+        shiftedPath.fractionalPixel = fractionalPixel;
+        shiftedPath.lensSample = lensSample;
+        shiftedPath.firstRayDir = rayDir;
+        shiftedPath.subPixelJacobian = lt_temporal_compute_env_map_subpixel_jacobian(
+            rayDir,
+            cameraForward
+        );
+        shiftedPath.lensVertexJacobian = lt_temporal_compute_env_map_lens_vertex_jacobian(
+            rayDir,
+            cameraForward,
+            time
+        );
+        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(sourceReservoir);
+        return shiftedPath;
+    }
+
     ivec2 landingPixel = ivec2(floor(fractionalPixel));
     RAB_Surface landingSurface = lt_temporal_load_surface(landingPixel, targetPreviousFrame);
     if (!RAB_IsSurfaceValid(landingSurface))
     {
         return shiftedPath;
     }
-    if (hitEnvMap)
-    {
-        return shiftedPath;
-    }
 
-    vec3 rayOriginW = lt_temporal_camera_origin(time, lensSample);
-    vec3 cameraForward = lt_temporal_camera_forward(time);
     HitInfo primaryHit = lt_temporal_make_shifted_hit_info(
         landingPixel,
         landingSurface,
@@ -489,7 +598,11 @@ ShiftedPathData gatherLensVertexCopyShift(
     }
 
     vec3 rayDir = toHit / hitDistance;
-    if (!lt_temporal_trace_visibility_ray(rayOriginW, rayDir, 0.999f * hitDistance))
+    if (!lt_temporal_trace_visibility_ray(
+            rayOriginW,
+            rayDir,
+            0.001f,
+            0.999f * hitDistance))
     {
         return shiftedPath;
     }
@@ -519,6 +632,13 @@ ShiftedPathData gatherLensVertexCopyShift(
         cameraForward,
         time
     );
+
+    if (lt_temporal_hit_primary_light(reconnectionData))
+    {
+        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(sourceReservoir);
+        return shiftedPath;
+    }
+
     shiftedSurface.worldPos = primaryHitPosW;
     shiftedSurface.geoNormal = primaryHitNormalW;
     shiftedSurface.normal = landingSurface.normal;
@@ -564,13 +684,14 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
     bool targetPreviousFrame)
 {
     ShiftedPathData shiftedPath = lt_temporal_empty_shifted_path();
+    bool hitEnvMap = lt_temporal_hit_env_map(reconnectionData);
 
     if (!lt_is_viewport_uv_in_bounds(fractionalPixel))
     {
         return shiftedPath;
     }
 
-    if (dot(primaryHit.worldPos, primaryHit.worldPos) <= 0.0f)
+    if (!hitEnvMap && !lt_temporal_has_primary_hit(primaryHit))
     {
         return shiftedPath;
     }
@@ -583,23 +704,43 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
     vec3 cameraForward = lt_temporal_camera_forward(time);
     vec3 filmWorld = lt_temporal_film_world(time, fractionalPixel);
 
-    vec3 toPrimaryHit = primaryHit.worldPos - filmWorld;
-    float hitDistance = length(toPrimaryHit);
-    if (hitDistance < 1e-6f)
+    vec3 primaryHitPosW = vec3(0.0f);
+    vec3 primaryHitNormalW = vec3(0.0f);
+    vec3 rayDir = vec3(0.0f);
+    if (hitEnvMap)
     {
-        return shiftedPath;
+        if (dot(reconnectionData.firstWi, reconnectionData.firstWi) <= 1e-12f)
+        {
+            return shiftedPath;
+        }
+
+        rayDir = -normalize(reconnectionData.firstWi);
+        primaryHitPosW = filmWorld + rayDir;
+    }
+    else
+    {
+        primaryHitPosW = primaryHit.worldPos;
+        primaryHitNormalW = scatter_decode_surface_face_normal(primaryHit.faceId);
+
+        vec3 toPrimaryHit = primaryHitPosW - filmWorld;
+        float filmDistance = length(toPrimaryHit);
+        if (filmDistance < 1e-6f)
+        {
+            return shiftedPath;
+        }
+
+        rayDir = toPrimaryHit / filmDistance;
     }
 
-    vec3 rayDir = toPrimaryHit / hitDistance;
     float cosSensor = dot(cameraForward, rayDir);
     if (cosSensor <= 1e-4f)
     {
         return shiftedPath;
     }
 
-    float camZ = dot(primaryHit.worldPos - cameraPosW, cameraForward);
+    float camZ = dot(primaryHitPosW - cameraPosW, cameraForward);
     float rayT = camZ / cosSensor;
-    vec3 rayOrigin = primaryHit.worldPos - rayT * rayDir;
+    vec3 rayOrigin = primaryHitPosW - rayT * rayDir;
     float apertureRadius = lt_di_temporal_camera_aperture_radius();
     vec2 lensLocalNormalized = vec2(0.0f);
     if (apertureRadius > 0.0f)
@@ -617,12 +758,43 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
     else
     {
         rayOrigin = cameraPosW;
-        rayDir = normalize(primaryHit.worldPos - rayOrigin);
-        hitDistance = length(primaryHit.worldPos - rayOrigin);
+        if (!hitEnvMap)
+        {
+            rayDir = normalize(primaryHitPosW - rayOrigin);
+        }
     }
 
-    if (!lt_temporal_trace_visibility_ray(rayOrigin, rayDir, 0.999f * hitDistance))
+    float hitDistance = length(primaryHitPosW - rayOrigin);
+    if (hitDistance < 1e-6f)
     {
+        return shiftedPath;
+    }
+
+    float rayMin = hitEnvMap ? 0.001f : (0.001f * hitDistance);
+    float rayMax = hitEnvMap ? 1e5f : (0.999f * hitDistance);
+    if (!lt_temporal_trace_visibility_ray(rayOrigin, rayDir, rayMin, rayMax))
+    {
+        return shiftedPath;
+    }
+
+    shiftedPath.primaryHit = primaryHit;
+    shiftedPath.primaryHit.viewDepth = hitEnvMap ? 0.0f : hitDistance;
+    shiftedPath.fractionalPixel = fractionalPixel;
+    shiftedPath.lensSample = lensLocalNormalized;
+    shiftedPath.firstRayDir = rayDir;
+
+    if (hitEnvMap)
+    {
+        shiftedPath.subPixelJacobian = lt_temporal_compute_env_map_subpixel_jacobian(
+            rayDir,
+            cameraForward
+        );
+        shiftedPath.lensVertexJacobian = lt_temporal_compute_env_map_lens_vertex_jacobian(
+            rayDir,
+            cameraForward,
+            time
+        );
+        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(sourceReservoir);
         return shiftedPath;
     }
 
@@ -633,28 +805,22 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
         return shiftedPath;
     }
 
-    vec3 primaryHitNormalW = scatter_decode_surface_face_normal(primaryHit.faceId);
     RAB_Surface shiftedSurface = primaryHitSurface;
-    shiftedSurface.worldPos = primaryHit.worldPos;
+    shiftedSurface.worldPos = primaryHitPosW;
     shiftedSurface.geoNormal = primaryHitNormalW;
     shiftedSurface.normal = primaryHitNormalW;
     shiftedSurface.viewDir = -rayDir;
     shiftedSurface.viewDepth = hitDistance;
 
-    shiftedPath.primaryHit = primaryHit;
-    shiftedPath.primaryHit.viewDepth = hitDistance;
-    shiftedPath.fractionalPixel = fractionalPixel;
-    shiftedPath.lensSample = lensLocalNormalized;
-    shiftedPath.firstRayDir = rayDir;
     shiftedPath.subPixelJacobian = lt_temporal_compute_subpixel_jacobian(
-        primaryHit.worldPos,
+        primaryHitPosW,
         primaryHitNormalW,
         rayOrigin,
         rayDir,
         cameraForward
     );
     shiftedPath.lensVertexJacobian = lt_temporal_compute_primary_hit_reconnection_jacobian(
-        primaryHit.worldPos,
+        primaryHitPosW,
         primaryHitNormalW,
         rayDir,
         cameraPosW,
@@ -662,6 +828,13 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
         rayT,
         time
     );
+
+    if (lt_temporal_hit_primary_light(reconnectionData))
+    {
+        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(sourceReservoir);
+        return shiftedPath;
+    }
+
     shiftedPath.radiance = lt_temporal_path_reconnection_shift(
         reconnectionData,
         sourceReservoir,
