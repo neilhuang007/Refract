@@ -1,0 +1,6 @@
+#ifndef PHOTONICS_RESERVOIR_SPLATTING_SORT_REPROJECTED_RESERVOIRS_GLSL
+#define PHOTONICS_RESERVOIR_SPLATTING_SORT_REPROJECTED_RESERVOIRS_GLSL
+
+#include "/photonics/lighttree/restir_di_temporal_sort_offsets.glsl"
+
+#endif
