@@ -107,15 +107,13 @@ bool InitialCandidates_finalizeSelectedReservoir(
         return false;
     }
 
-    bool fastRandomMode = initialSamplingParams.localLightSamplingMode
-        == uint(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM);
     vec3 incidentRadiance;
     vec3 earlyThroughput;
     vec3 unshadowedIntegrand;
     RAB_LightSample selectedLightSample = InitialCandidates_decodeSelectedLocalLight(
         reservoir,
         surface,
-        fastRandomMode,
+        false,
         incidentRadiance,
         earlyThroughput,
         unshadowedIntegrand
@@ -126,35 +124,41 @@ bool InitialCandidates_finalizeSelectedReservoir(
         return false;
     }
 
-    vec3 visibility = vec3(1.0f);
-    if (initialSamplingParams.enableInitialVisibility != 0u && !fastRandomMode)
+    if (initialSamplingParams.enableInitialVisibility != 0u)
     {
+        // RTXDI final-visibility contract: capture RGB transmittance so colored-glass
+        // tinting survives all the way to ResolveReSTIR. Pass a copy because
+        // lt_trace_final_visibility_with_offset rewrites the light sample's dir/color/weight.
+        RAB_LightSample lightSampleCopy = selectedLightSample;
         float visibilityHitDistance = 0.0f;
-        visibility = lt_trace_final_visibility_with_offset(
-            selectedLightSample,
+        vec3 transmittance = lt_trace_final_visibility_with_offset(
+            lightSampleCopy,
             surface,
-            0.0f,
+            0.001f,
             visibilityHitDistance
         );
+        if (ph_luminance(transmittance) <= 0.0f)
+        {
+            RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0.0f), true);
+            reconnectionData = ReconnectionData_init();
+            return false;
+        }
+        RTXDI_StoreVisibilityInDIReservoir(reservoir, transmittance, true);
     }
 
-    vec3 selectedIrradiance = max(incidentRadiance * visibility, vec3(0.0f));
+    vec3 selectedIrradiance = max(incidentRadiance, vec3(0.0f));
     vec3 selectedEarlyThroughput = max(earlyThroughput, vec3(0.0f));
-    vec3 visibleIntegrand = max(selectedIrradiance * selectedEarlyThroughput, vec3(0.0f));
-    float previousPHat = ph_luminance(max(PathReservoir_getIntegrand(reservoir), vec3(0.0f)));
-    float visiblePHat = ph_luminance(visibleIntegrand);
-    if (previousPHat <= 0.0f || visiblePHat <= 0.0f)
+    vec3 selectedIntegrand = max(selectedIrradiance * selectedEarlyThroughput, vec3(0.0f));
+    float selectedPHat = ph_luminance(selectedIntegrand);
+    if (selectedPHat <= 0.0f)
     {
         reservoir = RTXDI_EmptyDIReservoir();
         reconnectionData = ReconnectionData_init();
         return false;
     }
 
-    float targetRatio = visiblePHat / previousPHat;
-    PathReservoir_setIntegrand(reservoir, visibleIntegrand);
-    PathReservoir_setTotalWeight(reservoir, PathReservoir_getTotalWeight(reservoir) * targetRatio);
-    reservoir.targetPdf = visiblePHat;
-    RTXDI_StoreVisibilityInDIReservoir(reservoir, visibility, false);
+    PathReservoir_setIntegrand(reservoir, selectedIntegrand);
+    reservoir.targetPdf = selectedPHat;
 
     reconnectionData = InitialCandidates_buildSelectedReconnection(
         surface,

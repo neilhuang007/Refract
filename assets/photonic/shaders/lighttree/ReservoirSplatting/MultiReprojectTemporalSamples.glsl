@@ -14,6 +14,7 @@
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE)
 bool lt_multi_temporal_reproject_partition(
     ReconnectionData prevReconnection,
+    ivec2 sourcePixel,
     uint partitionIndex,
     out float newTime,
     out vec2 newFractionalPixel,
@@ -25,20 +26,23 @@ bool lt_multi_temporal_reproject_partition(
     float fractionalTime = lt_multi_temporal_partition_fraction(prevReconnection.time);
     newTime = lt_multi_temporal_partition_time(fractionalTime, partitionIndex);
 
-    bool hitValid = prevReconnection.firstHit.viewDepth > 0.0f
-        && any(greaterThan(abs(prevReconnection.firstHit.worldPos), vec3(0.0f)));
+    HitInfo resolvedFirstHit = lt_scatter_resolve_reconnection_first_hit(
+        prevReconnection,
+        sourcePixel,
+        true
+    );
+    bool hitValid = resolvedFirstHit.viewDepth > 0.0f
+        && any(greaterThan(abs(resolvedFirstHit.worldPos), vec3(0.0f)));
 
-    rayOrigin = lt_temporal_camera_origin(newTime, prevReconnection.lensSample);
+    rayOrigin = lt_temporal_camera_pos(newTime);
     rayDirection = vec3(0.0f);
     traceDistance = 0.0f;
     hitDistantLight = false;
     newFractionalPixel = vec2(-1.0f);
-    float apertureRadius = lt_di_temporal_camera_aperture_radius();
-    vec2 lensLocal = apertureRadius * prevReconnection.lensSample;
 
     if (hitValid)
     {
-        vec3 toPrimaryHit = prevReconnection.firstHit.worldPos - rayOrigin;
+        vec3 toPrimaryHit = resolvedFirstHit.worldPos - rayOrigin;
         traceDistance = length(toPrimaryHit);
         if (!(traceDistance > 1e-6f))
         {
@@ -50,7 +54,7 @@ bool lt_multi_temporal_reproject_partition(
     else if (prevReconnection.lightIsDistant)
     {
         rayDirection = -normalize(prevReconnection.firstWi);
-        traceDistance = 1e5f;
+        traceDistance = 3.402823466e+38f;
         hitDistantLight = true;
     }
     else
@@ -58,27 +62,19 @@ bool lt_multi_temporal_reproject_partition(
         return false;
     }
 
-    vec3 cameraU = normalize(lt_temporal_camera_u(newTime));
-    vec3 cameraV = normalize(lt_temporal_camera_v(newTime));
-    vec3 cameraForward = lt_temporal_camera_forward(newTime);
-    vec3 camRay = vec3(
-        dot(cameraU, rayDirection),
-        dot(cameraV, rayDirection),
-        dot(cameraForward, rayDirection)
-    );
-    if (camRay.z <= 1e-3f)
+    vec3 cameraForward = normalize(lt_temporal_camera_w(newTime));
+    float d = dot(rayDirection, cameraForward);
+    if (d <= 1e-3f)
     {
         return false;
     }
 
-    float focalDistance = length(lt_temporal_camera_w(newTime));
-    vec2 film = lensLocal + focalDistance * (camRay.xy / camRay.z);
-    vec2 ndc = film / vec2(
-        length(lt_temporal_camera_u(newTime)),
-        length(lt_temporal_camera_v(newTime))
-    );
-    newFractionalPixel =
-        (vec2(0.5f, -0.5f) * ndc + vec2(0.5f, 0.5f)) * vec2(viewWidth, viewHeight);
+    d *= lt_di_temporal_camera_tan_fov_y();
+    vec3 cameraU = normalize(lt_temporal_camera_u(newTime));
+    vec3 cameraV = normalize(lt_temporal_camera_v(newTime));
+    vec2 offset = vec2(dot(rayDirection, cameraU), -dot(rayDirection, cameraV));
+    vec2 ndc = vec2(0.5f, 0.5f) + offset / vec2(d * lt_di_temporal_camera_aspect_ratio(), d);
+    newFractionalPixel = ndc * vec2(viewWidth, viewHeight);
     if (any(lessThan(newFractionalPixel, vec2(0.0f)))
         || any(greaterThanEqual(newFractionalPixel, vec2(viewWidth, viewHeight))))
     {
@@ -118,6 +114,7 @@ void MultiReprojectTemporalSamples_run(
         bool hitDistantLight;
         if (!lt_multi_temporal_reproject_partition(
             prevReconnection,
+            pixel,
             partitionIndex,
             newTime,
             newFractionalPixel,

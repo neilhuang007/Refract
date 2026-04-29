@@ -66,11 +66,6 @@ vec2 GatherData_getMotionVectors(ivec2 pixel)
 vec2 GatherData_getMotionVector(ivec2 pixel)
 {
     vec4 motionSample = texelFetch(radiosity_motion, pixel, 0);
-    if (motionSample.w <= 0.0f)
-    {
-        return vec2(0.0f);
-    }
-
     vec2 motionVector = motionSample.xy;
     if (length(motionVector) < 1e-06f)
     {

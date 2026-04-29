@@ -54,6 +54,7 @@ uniform int   ph_regir_lights_per_cell;
 uniform float ph_regir_cell_size;
 uniform float ph_regir_sampling_jitter;
 uniform int   ph_regir_ris_buffer_offset;  // RTXDI: offset into unified RIS buffer where ReGIR data starts
+uniform int   ph_regir_local_light_sampling_fallback_mode;
 
 const uint RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED = 1u;
 const uint RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED = 2u;
@@ -133,13 +134,9 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0f;
 }
 
-// Grid origin: snapped to cell boundaries for frame-to-frame stability.
-// When the camera moves less than one cell, the grid doesn't shift, which helps
-// temporal reuse maintain stable reservoirs. The snap is applied identically
-// in the GPU build shader so build and query always agree.
+// RTXDI_ReGIR_WorldPosToCellIndex / RTXDI_ReGIR_CellIndexToWorldPos.
 vec3 regir_grid_origin() {
-    vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
-    return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
+    return ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
 }
 
 // RTXDI: RTXDI_ReGIR_WorldPosToCellIndex -- maps world position to grid cell
@@ -175,16 +172,6 @@ bool regir_unpack_slot(int flatCellIndex, int cellSlot,
     lightIndex         = int(slotData.x & RTXDI_LIGHT_INDEX_MASK);
     invSourcePdf       = uintBitsToFloat(slotData.y);
 
-    // RTXDI writes invalid ReGIR entries as uint2(0, 0), not INDEX_MASK sentinel values.
-    // Because light 0 is a legal light, validity must be derived from the stored weight/PDF,
-    // not from the decoded light index alone.
-    bool isInvalidEntry = (slotData.x == 0u && slotData.y == 0u) || invSourcePdf <= 0.0;
-    if (isInvalidEntry) {
-        lightIndex    = -1;
-        invSourcePdf  = 0.0;
-        outHasCompact = false;
-        return false;
-    }
     return true;
 }
 
@@ -200,7 +187,7 @@ bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng
         RTXDI_GetNextRandom(rng)
     ) - 0.5f;
 
-    float jitterScale = max(ph_regir_sampling_jitter, 0.0f) * ph_regir_cell_size;
+    float jitterScale = ph_regir_sampling_jitter * ph_regir_cell_size;
     vec3 samplingPos = shadingWorldPos + cellJitter * jitterScale;
 
     ivec3 cellCoord;
@@ -234,24 +221,11 @@ bool regir_pick_light(
 
     // RTXDI: RTXDI_RandomlySelectLightDataFromRISTile(rnd, tileInfo, tileData, risBufferPtr)
     // Pick uniformly from [0, lightsPerCell) using the caller-supplied stratified random.
-    int cellSlot = clamp(int(floor(rnd * float(ph_regir_lights_per_cell))), 0, ph_regir_lights_per_cell - 1);
+    int cellSlot = min(int(floor(rnd * float(ph_regir_lights_per_cell))), ph_regir_lights_per_cell - 1);
 
     float slotInvSourcePdf;
-    if (!regir_unpack_slot(flatCellIndex, cellSlot, lightIndex, slotInvSourcePdf, hasCompact, risBufferPtr)) {
-        lightIndex = -1;
-        lightPdf   = 0.0f;
-        hasCompact = false;
-        risBufferPtr = 0u;
-        return false;
-    }
+    regir_unpack_slot(flatCellIndex, cellSlot, lightIndex, slotInvSourcePdf, hasCompact, risBufferPtr);
 
-    if (lightIndex < 0 || lightIndex >= ph_light_count) {
-        lightIndex = -1;
-        lightPdf   = 0.0f;
-        return false;
-    }
-
-    // RTXDI carries invSourcePdf as-is without clamping; the reciprocal is taken later.
     lightPdf = 1.0f / slotInvSourcePdf;
     return true;
 }

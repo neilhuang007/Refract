@@ -35,6 +35,7 @@ public class RegirComputeProgram {
     private int locSamplingJitter = -1;
     private int locRegirRisBufferOffset = -1;
     private int locRisTileBufferOffset = -1;
+    private int locLocalLightPresamplingMode = -1;
 
     // -----------------------------------------------------------------------
     // Presample tiles program (regir_presample_tiles.glsl)
@@ -128,6 +129,7 @@ public class RegirComputeProgram {
         this.locSamplingJitter        = GL20.glGetUniformLocation(this.programId, "ph_regir_sampling_jitter");
         this.locRisTileBufferOffset   = GL20.glGetUniformLocation(this.programId, "ph_ris_tile_buffer_offset");
         this.locRegirRisBufferOffset  = GL20.glGetUniformLocation(this.programId, "ph_regir_ris_buffer_offset");
+        this.locLocalLightPresamplingMode = GL20.glGetUniformLocation(this.programId, "ph_regir_local_light_presampling_mode");
     }
 
     // -----------------------------------------------------------------------
@@ -416,6 +418,7 @@ public class RegirComputeProgram {
         GL20.glUniform1f(this.locSamplingJitter,          samplingJitter);
         GL30.glUniform1ui(this.locRisTileBufferOffset,    risTileBufferOffset);
         GL30.glUniform1ui(this.locRegirRisBufferOffset,   regirRisBufferOffset);
+        GL30.glUniform1ui(this.locLocalLightPresamplingMode, 1);
     }
 
     private void bindBuildSsbos(
@@ -501,6 +504,7 @@ public class RegirComputeProgram {
         this.locSamplingJitter         = -1;
         this.locRisTileBufferOffset    = -1;
         this.locRegirRisBufferOffset   = -1;
+        this.locLocalLightPresamplingMode = -1;
 
         this.presampleLocLightCount     = -1;
         this.presampleLocTileSize       = -1;

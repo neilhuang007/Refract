@@ -189,6 +189,21 @@ void SpatialResampling_execute(
         ));
         if (!lt_is_viewport_uv_in_bounds(neighborPixel)) continue;
 
+        RAB_Surface neighborSurface = RAB_GetGBufferSurface(neighborPixel, false);
+        if (!RAB_IsSurfaceValid(neighborSurface)) continue;
+
+        if (!RTXDI_IsValidNeighbor(
+            RAB_GetSurfaceNormal(centerSurface),
+            RAB_GetSurfaceNormal(neighborSurface),
+            RAB_GetSurfaceLinearDepth(centerSurface),
+            RAB_GetSurfaceLinearDepth(neighborSurface),
+            spatialResampling.params.normalThreshold,
+            spatialResampling.params.depthThreshold
+        )) continue;
+
+        if (spatialResampling.params.enableMaterialSimilarityTest != 0u
+            && !RAB_AreMaterialsSimilar(RAB_GetMaterial(centerSurface), RAB_GetMaterial(neighborSurface))) continue;
+
         validNeighbors += 1;
 
         ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(

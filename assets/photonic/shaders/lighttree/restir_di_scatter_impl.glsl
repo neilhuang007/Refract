@@ -227,6 +227,58 @@ bool scatter_project_reconnection_to_frame(
     out float traceMaxDistance,
     out bool hitDistantLight);
 
+bool scatter_project_reconnection_to_frame(
+    ReconnectionData reconnection,
+    ivec2 sourcePixel,
+    bool sourcePreviousFrame,
+    bool previousFrame,
+    out vec2 projectedPixel,
+    out vec3 rayOrigin,
+    out vec3 rayDirection,
+    out float traceMaxDistance,
+    out bool hitDistantLight);
+
+bool lt_scatter_hit_matches_surface_identity(
+    HitInfo hitInfo,
+    ivec2 pixel,
+    bool previousFrame)
+{
+    if (!lt_is_viewport_uv_in_bounds(pixel)) {
+        return false;
+    }
+
+    vec4 identityData = scatter_load_surface_identity(pixel, previousFrame);
+    uint packedIdentity = uint(round(identityData.w));
+    return hitInfo.faceId == (packedIdentity & 0x7u)
+        && hitInfo.materialId == (packedIdentity >> 3u);
+}
+
+HitInfo lt_scatter_resolve_reconnection_first_hit(
+    ReconnectionData reconnectionData,
+    ivec2 sourcePixel,
+    bool sourcePreviousFrame)
+{
+    HitInfo resolvedHit = reconnectionData.firstHit;
+    if (!(resolvedHit.viewDepth > 0.0f)) {
+        return resolvedHit;
+    }
+
+    if (!lt_scatter_hit_matches_surface_identity(resolvedHit, sourcePixel, sourcePreviousFrame)) {
+        return resolvedHit;
+    }
+
+    RAB_Surface sourceSurface = sourcePreviousFrame
+        ? lt_load_previous_surface(sourcePixel)
+        : RAB_GetGBufferSurface(sourcePixel, false);
+    if (!RAB_IsSurfaceValid(sourceSurface)) {
+        return resolvedHit;
+    }
+
+    resolvedHit.worldPos = sourceSurface.worldPos;
+    resolvedHit.viewDepth = sourceSurface.viewDepth;
+    return resolvedHit;
+}
+
 vec2 lt_scatter_project_to_previous_frame(vec3 worldPos)
 {
     vec4 clip = gbufferPreviousProjection * (gbufferPreviousModelView * vec4(worldPos, 1.0f));
@@ -261,6 +313,29 @@ bool scatter_project_reconnection_to_previous_frame(
 
 bool scatter_project_reconnection_to_current_frame(
     ReconnectionData reconnection,
+    ivec2 sourcePixel,
+    bool sourcePreviousFrame,
+    out vec2 projectedPixel,
+    out vec3 rayOrigin,
+    out vec3 rayDirection,
+    out float traceMaxDistance,
+    out bool hitDistantLight)
+{
+    return scatter_project_reconnection_to_frame(
+        reconnection,
+        sourcePixel,
+        sourcePreviousFrame,
+        false,
+        projectedPixel,
+        rayOrigin,
+        rayDirection,
+        traceMaxDistance,
+        hitDistantLight
+    );
+}
+
+bool scatter_project_reconnection_to_current_frame(
+    ReconnectionData reconnection,
     out vec2 projectedPixel,
     out vec3 rayOrigin,
     out vec3 rayDirection,
@@ -280,6 +355,8 @@ bool scatter_project_reconnection_to_current_frame(
 
 bool scatter_project_reconnection_to_frame(
     ReconnectionData reconnectionData,
+    ivec2 sourcePixel,
+    bool sourcePreviousFrame,
     bool previousFrame,
     out vec2 projectedPixel,
     out vec3 rayOrigin,
@@ -303,12 +380,17 @@ bool scatter_project_reconnection_to_frame(
         : lensLocal.x * normalize(cameraU) + lensLocal.y * normalize(cameraV);
     rayOrigin += lensWorld;
 
-    bool hasPrimaryHit = reconnectionData.firstHit.viewDepth > 0.0f
-        && any(greaterThan(abs(reconnectionData.firstHit.worldPos), vec3(0.0f)));
+    HitInfo resolvedFirstHit = lt_scatter_resolve_reconnection_first_hit(
+        reconnectionData,
+        sourcePixel,
+        sourcePreviousFrame
+    );
+    bool hasPrimaryHit = resolvedFirstHit.viewDepth > 0.0f
+        && any(greaterThan(abs(resolvedFirstHit.worldPos), vec3(0.0f)));
 
     if (hasPrimaryHit)
     {
-        vec3 hitPosition = reconnectionData.firstHit.worldPos;
+        vec3 hitPosition = resolvedFirstHit.worldPos;
         rayDirection = normalize(hitPosition - rayOrigin);
         traceMaxDistance = length(hitPosition - rayOrigin);
         if (!(traceMaxDistance > 1e-5f))
@@ -338,6 +420,28 @@ bool scatter_project_reconnection_to_frame(
     );
     hitDistantLight = true;
     return projectedPixel.x >= 0.0f && projectedPixel.y >= 0.0f;
+}
+
+bool scatter_project_reconnection_to_frame(
+    ReconnectionData reconnectionData,
+    bool previousFrame,
+    out vec2 projectedPixel,
+    out vec3 rayOrigin,
+    out vec3 rayDirection,
+    out float traceMaxDistance,
+    out bool hitDistantLight)
+{
+    return scatter_project_reconnection_to_frame(
+        reconnectionData,
+        ivec2(-1),
+        false,
+        previousFrame,
+        projectedPixel,
+        rayOrigin,
+        rayDirection,
+        traceMaxDistance,
+        hitDistantLight
+    );
 }
 
 bool lt_scatter_reprojection_shift(
@@ -523,9 +627,8 @@ bool lt_scatter_update_shifted_reservoir_to_previous_frame(
 // Shifted-reservoir update + evaluation.
 //
 // For a reservoir + reconnection pair captured in the source frame, produces:
-//   * `shiftedReservoir`      -- the reservoir with its light index translated
-//                                 to the target frame and its domain samples
-//                                 repointed at the shifted pixel
+//   * `shiftedReservoir`      -- the source reservoir carried intact with its
+//                                 domain samples repointed at the shifted pixel
 //   * `shiftedReconnection`   -- reconnection with its primary-hit position,
 //                                 firstWi, subPixel, jacobians, and integrand
 //                                 re-evaluated against the target surface
@@ -572,14 +675,7 @@ bool lt_scatter_update_shifted_reservoir(
         return false;
     }
 
-    // Translate the source reservoir's light index into the target frame's
-    // light list.  For the Minecraft port this also supplies the remapped
-    // light used to shade the integrand.
-    shiftedReservoir = lt_translate_reservoir_between_frames(
-        sourceReservoir,
-        sourcePreviousFrame,
-        targetPreviousFrame
-    );
+    shiftedReservoir = sourceReservoir;
     // The shifted reservoir now sits in the target pixel's cell with a
     // subPixel == fract(shiftedCurr.fractionalPixel) (reference parity --
     // ScatterTemporalResampling.rt.slang:139 sets it from prevReconnection
@@ -613,15 +709,12 @@ bool lt_scatter_update_shifted_reservoir(
     }
     shiftedReservoir.targetPdf = targetPdf;
 
+    float secondaryPathJacobian = 1.0f;
     vec3 shiftedIntegrand = pathReconnectionShift(
         sourceReconnection,
         shiftedPrimarySurface,
-        shiftedLight
-    );
-    float secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
-        shiftedPrimarySurface,
-        shiftedReservoir,
-        shiftedLight
+        shiftedLight,
+        secondaryPathJacobian
     );
     shifted.radiance = shiftedIntegrand;
     shifted.secondaryPathJacobian = secondaryPathJacobian;

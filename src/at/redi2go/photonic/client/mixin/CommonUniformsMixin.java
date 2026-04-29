@@ -120,9 +120,10 @@ public class CommonUniformsMixin {
          // ph_ris_tile_buffer_offset = 0 (tiles always at the start of ph_ris_buffer).
          // ph_regir_ris_buffer_offset = tileCount * tileSize (ReGIR region follows tiles).
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_ris_tile_buffer_offset", () -> 0);
-         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_ris_buffer_offset",
-            () -> RegirComputeProgram.tileCount * RegirComputeProgram.tileSize);
-         uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "light_blend_region_count", () -> worldRegistry.get().getLightBlendRegionCount());
+          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_ris_buffer_offset",
+             () -> RegirComputeProgram.tileCount * RegirComputeProgram.tileSize);
+          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_local_light_sampling_fallback_mode", () -> 1);
+          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "light_blend_region_count", () -> worldRegistry.get().getLightBlendRegionCount());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "light_blend_factor", () -> worldRegistry.get().fetchLightBlendFactor());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_min", () -> worldRegistry.get().getLightBlendMin());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_max", () -> worldRegistry.get().getLightBlendMax());

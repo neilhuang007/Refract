@@ -2363,20 +2363,14 @@ public class LightTreeRenderer extends MainRenderer {
    private void renderDIScatterTemporalProfiled() {
       this.beginGpuRegion(diTemporalResamplingRegionIndex);
       this.setCurrentDiReconnectionSource(DiReconnectionSource.PROPOSAL);
-      String temporalScatterIsolationMode = PhotonicsStorage.normalizeRestirTemporalReuse(
-         PhotonicsStorage.RESTIR_TEMPORAL_REUSE.value
-      );
-      boolean scatterBackupTemporalBranch = "scatter_backup".equals(temporalScatterIsolationMode);
-      boolean multiScatterTemporalBranch = "multi_scatter".equals(temporalScatterIsolationMode);
+      boolean scatterBackupTemporalBranch = false;
+      boolean multiScatterTemporalBranch = false;
       boolean robustTemporalGather = "robust".equals(
          PhotonicsStorage.normalizeRestirTemporalGatherMode(PhotonicsStorage.RESTIR_TEMPORAL_GATHER_MODE.value)
       );
-      boolean scatterOnlyTemporalBranch = !"gather_only".equals(temporalScatterIsolationMode)
-         && !scatterBackupTemporalBranch
-         && !multiScatterTemporalBranch;
-      boolean gatherTemporalBranch = "gather_only".equals(temporalScatterIsolationMode)
-         || scatterBackupTemporalBranch;
-      boolean gatherTemporalResolveBranch = "gather_only".equals(temporalScatterIsolationMode);
+      boolean scatterOnlyTemporalBranch = false;
+      boolean gatherTemporalBranch = true;
+      boolean gatherTemporalResolveBranch = true;
       boolean wroteTemporalOutput = false;
       if (gatherTemporalBranch && robustTemporalGather) {
          this.clearTemporalGatherBuffers();

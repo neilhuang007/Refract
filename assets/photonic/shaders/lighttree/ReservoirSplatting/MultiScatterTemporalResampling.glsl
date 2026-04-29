@@ -56,19 +56,11 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
             false,
             false
         );
-        RTXDI_DIReservoir shiftedReservoir = lt_translate_reservoir_between_frames(
-            prevReservoir,
-            true,
-            false
-        );
-        if (!RTXDI_IsValidDIReservoir(shiftedReservoir))
-        {
-            return false;
-        }
         ReconnectionData shiftedReconnection = ReconnectionData_update(
             partitionedReconnectionData,
             shiftedPrev
         );
+        RTXDI_DIReservoir shiftedReservoir = prevReservoir;
         PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedReconnection.subPixel);
         shiftedJacobian = lt_scatter_shift_jacobian_ratio(
             shiftedPrev.subPixelJacobian,

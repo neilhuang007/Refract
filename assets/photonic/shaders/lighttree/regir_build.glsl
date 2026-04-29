@@ -55,45 +55,81 @@ const uint ph_compact_light_stride = 4u;
 const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
 const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
 
-// ---------------------------------------------------------------------------
-// RAB_StoreCompactLightInfo -- stores the compact-light payload for
-// light[lightIndex] into ph_compact_light_data at risBufferPtr*ph_compact_light_stride.
-// Stores the full 4xvec4 light record so compact reload is self-contained.
-// Returns true so the caller sets RTXDI_LIGHT_COMPACT_BIT on the stored index.
-// ---------------------------------------------------------------------------
-bool RAB_StoreCompactLightInfo(uint risBufferPtr, int lightIndex) {
-    if (lightIndex < 0 || lightIndex * light_size + 3 >= ph_lights_array.length()) return false;
+struct RAB_LightInfo {
+    int index;
+    uint blockIdBits;
+    vec3 position;
+    vec3 color;
+    float intensity;
+    vec2 attenuation;
+    float falloff;
+    float blockRadius;
+    vec3 emissionAxis;
+    float orientationSpread;
+};
+
+RAB_LightInfo RAB_EmptyLightInfo() {
+    return RAB_LightInfo(
+        0,
+        0u,
+        vec3(0.0),
+        vec3(0.0),
+        0.0,
+        vec2(0.0),
+        0.0,
+        0.0,
+        vec3(0.0, 1.0, 0.0),
+        0.0
+    );
+}
+
+RAB_LightInfo RAB_LoadLightInfo(int lightIndex, bool previousFrame) {
     int base = lightIndex * light_size;
+    vec4 ld0 = ph_lights_array[base + 0];
+    vec4 ld1 = ph_lights_array[base + 1];
+    vec4 ld2 = ph_lights_array[base + 2];
+    vec4 ld3 = ph_lights_array[base + 3];
+    return RAB_LightInfo(
+        lightIndex,
+        floatBitsToUint(ld0.w),
+        ld0.xyz,
+        ld1.xyz,
+        ld1.w,
+        ld2.xy,
+        ld2.z,
+        ld2.w,
+        normalize(ld3.xyz + vec3(1e-6)),
+        ld3.w
+    );
+}
+
+bool RAB_StoreCompactLightInfo(uint risBufferPtr, RAB_LightInfo lightInfo) {
     uint dst = risBufferPtr * ph_compact_light_stride;
-    ph_compact_light_data[dst + 0u] = floatBitsToUint(ph_lights_array[base + 0]);
-    ph_compact_light_data[dst + 1u] = floatBitsToUint(ph_lights_array[base + 1]);
-    ph_compact_light_data[dst + 2u] = floatBitsToUint(ph_lights_array[base + 2]);
-    ph_compact_light_data[dst + 3u] = floatBitsToUint(ph_lights_array[base + 3]);
+    ph_compact_light_data[dst + 0u] = floatBitsToUint(vec4(lightInfo.position, uintBitsToFloat(lightInfo.blockIdBits)));
+    ph_compact_light_data[dst + 1u] = floatBitsToUint(vec4(lightInfo.color, lightInfo.intensity));
+    ph_compact_light_data[dst + 2u] = floatBitsToUint(vec4(lightInfo.attenuation, lightInfo.falloff, lightInfo.blockRadius));
+    ph_compact_light_data[dst + 3u] = floatBitsToUint(vec4(lightInfo.emissionAxis, lightInfo.orientationSpread));
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// RAB_LoadCompactLightData -- loads the compact-light payload into in-register
-// light state needed by ReGIR importance evaluation.
-// ---------------------------------------------------------------------------
-void RAB_LoadCompactLightData(uint risBufferPtr,
-    out vec3 lightPos, out uint blockIdBits,
-    out vec3 lightColor, out float intensity,
-    out vec2 attenuation, out float falloff,
-    out vec3 emissionAxis, out float orientationSpread) {
+RAB_LightInfo RAB_LoadCompactLightInfo(uint risBufferPtr, int lightIndex) {
     uint src = risBufferPtr * ph_compact_light_stride;
     vec4 ld0 = uintBitsToFloat(ph_compact_light_data[src + 0u]);
     vec4 ld1 = uintBitsToFloat(ph_compact_light_data[src + 1u]);
     vec4 ld2 = uintBitsToFloat(ph_compact_light_data[src + 2u]);
     vec4 ld3 = uintBitsToFloat(ph_compact_light_data[src + 3u]);
-    lightPos = ld0.xyz;
-    blockIdBits = floatBitsToUint(ld0.w);
-    lightColor = ld1.xyz;
-    intensity = ld1.w;
-    attenuation = ld2.xy;
-    falloff = ld2.z;
-    emissionAxis = normalize(ld3.xyz + vec3(1e-6));
-    orientationSpread = ld3.w;
+    return RAB_LightInfo(
+        lightIndex,
+        floatBitsToUint(ld0.w),
+        ld0.xyz,
+        ld1.xyz,
+        ld1.w,
+        ld2.xy,
+        ld2.z,
+        ld2.w,
+        normalize(ld3.xyz + vec3(1e-6)),
+        ld3.w
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +149,10 @@ uniform uint  ph_regir_build_samples;          // RTXDI: ReGIR.h:141 default = 8
 uniform float ph_regir_sampling_jitter;        // RTXDI ReGIR jitter in grid-cell units; 1.0 = +/- one cell
 uniform uint  ph_ris_tile_buffer_offset;       // RTXDI: risBufferSegmentParams.bufferOffset (typically 0)
 uniform uint  ph_regir_ris_buffer_offset;      // RTXDI: offset into unified RIS buffer where ReGIR data starts
+uniform uint  ph_regir_local_light_presampling_mode; // RTXDI: REGIR_LOCAL_LIGHT_PRESAMPLING_MODE_*
+
+const uint REGIR_LOCAL_LIGHT_PRESAMPLING_MODE_UNIFORM = 0u;
+const uint REGIR_LOCAL_LIGHT_PRESAMPLING_MODE_POWER_RIS = 1u;
 
 // ---------------------------------------------------------------------------
 // RTXDI RNG -- exact port of RandomSamplerState.hlsli + Math.hlsli
@@ -183,10 +223,9 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0;
 }
 
-// Grid origin: snapped to cell boundaries -- must match light_tree.glsl::regir_grid_origin().
+// RTXDI_ReGIR_CellIndexToWorldPos.
 vec3 regir_grid_origin() {
-    vec3 continuousOrigin = ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
-    return floor(continuousOrigin / ph_regir_cell_size) * ph_regir_cell_size;
+    return ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
 }
 
 // ---------------------------------------------------------------------------
@@ -232,28 +271,53 @@ RISTileInfo RTXDI_RandomlySelectRISTile(inout RTXDI_RandomSamplerState coherentR
 void RTXDI_RandomlySelectLightDataFromRISTile(
     float rnd,
     RISTileInfo tileInfo,
-    out int rndLight,
-    out float invSourcePdf,
-    out bool hasCompact,
+    out uvec2 tileData,
     out uint outRisBufferPtr
 ) {
     uint risSample = min(uint(floor(rnd * float(tileInfo.risTileSize))), tileInfo.risTileSize - 1u);
     outRisBufferPtr = risSample + tileInfo.risTileOffset;
-    uvec2 tileData = ph_ris_data[outRisBufferPtr];
-    // RTXDI: check COMPACT_BIT -- if set, compact data is available in ph_compact_light_data.
-    hasCompact   = (tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u;
-    rndLight     = int(tileData.x & RTXDI_LIGHT_INDEX_MASK);
+    tileData = ph_ris_data[outRisBufferPtr];
+}
+
+void RTXDI_UnpackLocalLightFromRISLightData(
+    uvec2 tileData,
+    uint risBufferPtr,
+    out RAB_LightInfo lightInfo,
+    out uint lightIndex,
+    out float invSourcePdf)
+{
+    lightIndex = tileData.x & RTXDI_LIGHT_INDEX_MASK;
     invSourcePdf = uintBitsToFloat(tileData.y);
 
-    // Empty RIS entries are stored as uint2(0, 0). In Photonics, the ReGIR build path
-    // evaluates target PDFs from the decoded light index directly, so aliasing an empty
-    // entry to light 0 would manufacture bogus positive weights and poison whole cells.
-    bool invalidEntry = (tileData.x == 0u && tileData.y == 0u) || invSourcePdf <= 0.0;
-    if (invalidEntry) {
-        rndLight = -1;
-        invSourcePdf = 0.0;
-        hasCompact = false;
+    if ((tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u) {
+        lightInfo = RAB_LoadCompactLightInfo(risBufferPtr, int(lightIndex));
+    } else {
+        lightInfo = RAB_LoadLightInfo(int(lightIndex), false);
     }
+}
+
+void RTXDI_SelectNextLocalLight(
+    RISTileInfo risTileInfo,
+    float rnd,
+    out RAB_LightInfo lightInfo,
+    out uint lightIndex,
+    out float invSourcePdf)
+{
+    uvec2 risTileData;
+    uint risBufferPtr;
+    RTXDI_RandomlySelectLightDataFromRISTile(rnd, risTileInfo, risTileData, risBufferPtr);
+    RTXDI_UnpackLocalLightFromRISLightData(risTileData, risBufferPtr, lightInfo, lightIndex, invSourcePdf);
+}
+
+void RTXDI_RandomlySelectLightUniformly(
+    float rnd,
+    out RAB_LightInfo lightInfo,
+    out uint lightIndex,
+    out float invSourcePdf)
+{
+    invSourcePdf = float(ph_light_count);
+    lightIndex = min(uint(floor(rnd * float(ph_light_count))), uint(ph_light_count - 1));
+    lightInfo = RAB_LoadLightInfo(int(lightIndex), false);
 }
 
 // ---------------------------------------------------------------------------
@@ -261,46 +325,10 @@ void RTXDI_RandomlySelectLightDataFromRISTile(
 // Mirrors ph_compute_attenuation (attenuation.glsl):
 //   result_color = color * intensity / dot(vec2(1, dist_sq * falloff), attenuation)
 // Plus directional emission-cone shaping.
-// hasCompact / risBufferPtr: when the tile entry had COMPACT_BIT set, load the
-// 4 vec4s from the companion buffer instead of the main light array.
+// RTXDI receives RAB_LightInfo from RTXDI_SelectNextLocalLight before target-PDF evaluation.
 // ---------------------------------------------------------------------------
-float RAB_GetLightTargetPdfForVolume(int lightIndex, bool hasCompact, uint risBufferPtr, vec3 cellCenter, float cellRadius) {
-    vec3  lightPos;
-    vec3  lightColor;
-    float intensity;
-    vec2  attenuation;
-    float falloff;
-    vec3  emissionAxis;
-    float orientationSpread;
-    if (hasCompact) {
-        uint blockIdBits;
-        RAB_LoadCompactLightData(
-            risBufferPtr,
-            lightPos,
-            blockIdBits,
-            lightColor,
-            intensity,
-            attenuation,
-            falloff,
-            emissionAxis,
-            orientationSpread
-        );
-    } else {
-        int base = lightIndex * light_size;
-        vec4 ld0 = ph_lights_array[base + 0];
-        vec4 ld1 = ph_lights_array[base + 1];
-        vec4 ld2 = ph_lights_array[base + 2];
-        vec4 ld3 = ph_lights_array[base + 3];
-        lightPos          = ld0.xyz;
-        lightColor        = ld1.xyz;
-        intensity         = ld1.w;
-        attenuation       = ld2.xy;
-        falloff           = ld2.z;
-        emissionAxis      = normalize(ld3.xyz + vec3(1e-6));
-        orientationSpread = ld3.w;
-    }
-
-    vec3  delta = cellCenter - lightPos;
+float RAB_GetLightTargetPdfForVolume(RAB_LightInfo lightInfo, vec3 cellCenter, float cellRadius) {
+    vec3  delta = cellCenter - lightInfo.position;
     float dist  = length(delta);
 
     // regirAverageDistanceToVolume -- nonlinear approximation
@@ -311,18 +339,18 @@ float RAB_GetLightTargetPdfForVolume(int lightIndex, bool hasCompact, uint risBu
     float averageDistSq   = averageDistance * averageDistance;
 
     // Full attenuation model (attenuation.glsl)
-    float attenuationDenom = dot(vec2(1.0, averageDistSq * falloff), attenuation);
+    float attenuationDenom = dot(vec2(1.0, averageDistSq * lightInfo.falloff), lightInfo.attenuation);
     attenuationDenom = max(attenuationDenom, 1e-4);
-    vec3  attenuatedColor = lightColor * intensity / attenuationDenom;
+    vec3  attenuatedColor = lightInfo.color * lightInfo.intensity / attenuationDenom;
     float luminance = max(dot(attenuatedColor, vec3(0.2126, 0.7152, 0.0722)), 0.0);
 
     // Directional emission shaping (attenuation.glsl)
     float shaping = 1.0;
-    if (orientationSpread < 3.14159265) {
+    if (lightInfo.orientationSpread < 3.14159265) {
         vec3  dir       = (dist > 1e-4) ? (delta / dist) : vec3(0.0, 0.0, 1.0);
-        float axisDot   = clamp(dot(emissionAxis, -dir), -1.0, 1.0);
+        float axisDot   = clamp(dot(lightInfo.emissionAxis, -dir), -1.0, 1.0);
         float axisAngle = acos(axisDot);
-        shaping = max(cos(max(axisAngle - orientationSpread, 0.0)), 0.0);
+        shaping = max(cos(max(axisAngle - lightInfo.orientationSpread, 0.0)), 0.0);
     }
     if (shaping <= 0.0) return 0.0;
 
@@ -370,8 +398,8 @@ void main() {
 
     vec3  cellCenter = gridOrigin
                      + (vec3(float(cx), float(cy), float(cz)) + 0.5) * ph_regir_cell_size;
-    float cellRadius = 0.5f * ph_regir_cell_size * sqrt(3.0);
-    cellRadius *= (max(ph_regir_sampling_jitter, 0.0) + 1.0);
+    float cellRadius = ph_regir_cell_size * sqrt(3.0);
+    cellRadius *= (ph_regir_sampling_jitter + 1.0);
 
     // RTXDI: rng = RTXDI_InitRandomSampler(uint2(GlobalIndex & 0xfff, GlobalIndex >> 12), frameIndex, 1)
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
@@ -387,8 +415,11 @@ void main() {
         1u
     );
 
-    // RTXDI: ctx = RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, risBufferSegmentParams)
-    RISTileInfo risTileInfo = RTXDI_RandomlySelectRISTile(coherentRng);
+    bool usePowerRisPresampling = ph_regir_local_light_presampling_mode == REGIR_LOCAL_LIGHT_PRESAMPLING_MODE_POWER_RIS;
+    RISTileInfo risTileInfo;
+    if (usePowerRisPresampling) {
+        risTileInfo = RTXDI_RandomlySelectRISTile(coherentRng);
+    }
 
     // RTXDI: float invNumSamples = 1.0 / float(numRegirBuildSamples)
     // numRegirBuildSamples comes from ph_regir_build_samples uniform (default 8 -- RTXDI default)
@@ -396,9 +427,10 @@ void main() {
     float invNumSamples = 1.0 / float(numBuildSamples);
 
     // RTXDI: selectedLight, selectedTargetPdf, weightSum
-    int   selectedLight     = -1;
+    RAB_LightInfo selectedLightInfo = RAB_EmptyLightInfo();
+    uint selectedLight = 0u;
     float selectedTargetPdf = 0.0;
-    float weightSum         = 0.0;
+    float weightSum = 0.0;
 
     // RTXDI: for (uint i = 0; i < numRegirBuildSamples; i++)
     for (uint i = 0u; i < numBuildSamples; i++) {
@@ -407,23 +439,20 @@ void main() {
         // The rand value is used as the within-tile selection random number.
         float rand = RTXDI_GetNextRandom(rng);
 
-        int   rndLight;
+        uint  rndLight;
+        RAB_LightInfo lightInfo = RAB_EmptyLightInfo();
         float invSourcePdf;
-        bool  tileHasCompact;
-        uint  tileRisBufferPtr;
-        RTXDI_RandomlySelectLightDataFromRISTile(rand, risTileInfo, rndLight, invSourcePdf, tileHasCompact, tileRisBufferPtr);
-
-        if (rndLight < 0 || invSourcePdf <= 0.0) {
-            continue;
+        if (usePowerRisPresampling) {
+            RTXDI_SelectNextLocalLight(risTileInfo, rand, lightInfo, rndLight, invSourcePdf);
+        } else {
+            RTXDI_RandomlySelectLightUniformly(rand, lightInfo, rndLight, invSourcePdf);
         }
 
-        // RTXDI: no early rejection -- invalid entries produce zero risWeight naturally.
         // invSourcePdf *= invNumSamples
         invSourcePdf *= invNumSamples;
 
         // RTXDI: targetPdf = RAB_GetLightTargetPdfForVolume(lightInfo, cellCenter, cellRadius)
-        // When the tile entry carries compact data, use it to avoid a random-access into ph_lights_array.
-        float targetPdf = RAB_GetLightTargetPdfForVolume(rndLight, tileHasCompact, tileRisBufferPtr, cellCenter, cellRadius);
+        float targetPdf = RAB_GetLightTargetPdfForVolume(lightInfo, cellCenter, cellRadius);
 
         // RTXDI: risRnd = RTXDI_GetNextRandom(rng)
         float risRnd = RTXDI_GetNextRandom(rng);
@@ -434,6 +463,7 @@ void main() {
 
         // RTXDI: if (risRnd * weightSum < risWeight) -> accept
         if (risRnd * weightSum < risWeight) {
+            selectedLightInfo = lightInfo;
             selectedLight     = rndLight;
             selectedTargetPdf = targetPdf;
         }
@@ -448,12 +478,10 @@ void main() {
     // If storage succeeds, set COMPACT_BIT on the stored index.
     // When no candidate had positive weight, store the exact RTXDI invalid entry: uint2(0, 0).
     // risBufferPtr was pre-computed at the top of main() as ph_regir_ris_buffer_offset + cellIndex * lightsPerCell + lightInCell.
-    uint packedIndex = 0u;
-    if (weight > 0.0 && selectedLight >= 0) {
-        packedIndex = uint(selectedLight) & RTXDI_LIGHT_INDEX_MASK;
-        if (RAB_StoreCompactLightInfo(risBufferPtr, selectedLight)) {
-            packedIndex |= RTXDI_LIGHT_COMPACT_BIT;
+    if (weight > 0.0) {
+        if (RAB_StoreCompactLightInfo(risBufferPtr, selectedLightInfo)) {
+            selectedLight |= RTXDI_LIGHT_COMPACT_BIT;
         }
     }
-    ph_ris_data[risBufferPtr] = uvec2(packedIndex, floatBitsToUint(weight));
+    ph_ris_data[risBufferPtr] = uvec2(selectedLight, floatBitsToUint(weight));
 }

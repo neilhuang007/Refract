@@ -255,9 +255,6 @@ float lt_scatter_bilinear_weight(vec2 fracOffset, int dx, int dy) {
 
 vec2 lt_temporal_previous_pixel_center(ivec2 pixelPosition) {
     vec4 motionSample = texelFetch(radiosity_motion, pixelPosition, 0);
-    if (motionSample.w <= 0.0f) {
-        return vec2(pixelPosition) + vec2(0.5f);
-    }
     if (length(motionSample.xy) < 1e-6f) {
         return vec2(pixelPosition) + vec2(0.5f);
     }

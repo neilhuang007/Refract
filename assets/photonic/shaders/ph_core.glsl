@@ -106,6 +106,11 @@ ivec3 ph_read(vec3 world_pos, vec3 normal, mat4 mvp, vec3 world_camera_pos) {
 }
 #endif
 
+vec2 ph_reprojectf(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jitter);
+float ph_linear_view_depth(mat4 mvp_matrix, vec3 world_position);
+int ph_cantor(int a, int b);
+int ph_hash(int seed);
+
 ivec2 ph_reproject(mat4 mvp_matrix, vec3 world_position, vec2 viewSize, vec2 jitter) {
     return ivec2(floor(ph_reprojectf(mvp_matrix, world_position, viewSize, jitter)));
 }

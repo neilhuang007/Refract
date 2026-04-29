@@ -284,14 +284,22 @@ bool lt_temporal_trace_visibility_ray(
     return lt_temporal_trace_visibility_ray(rayOriginW, rayDirW, 0.001f, traceMaxDistance);
 }
 
-vec3 lt_temporal_handle_reconnection_primary_light(RTXDI_DIReservoir sourceReservoir)
+vec3 lt_temporal_handle_reconnection_primary_light(RAB_Surface shiftedSurface)
 {
-    return PathReservoir_getIntegrand(sourceReservoir);
+    return max(RAB_GetEmissiveColor(shiftedSurface.material), vec3(0.0f));
 }
 
-vec3 lt_temporal_handle_reconnection_env_map(RTXDI_DIReservoir sourceReservoir)
+vec3 lt_temporal_handle_reconnection_env_map(
+    vec3 rayOriginW,
+    vec3 rayDirW,
+    vec2 fractionalPixel)
 {
-    return PathReservoir_getIntegrand(sourceReservoir);
+    ivec2 pixel = ivec2(clamp(
+        floor(fractionalPixel),
+        vec2(0.0f),
+        vec2(viewWidth - 1.0f, viewHeight - 1.0f)
+    ));
+    return max(get_sky_color(pixel, rayOriginW, rayDirW), vec3(0.0f));
 }
 
 vec3 lt_temporal_path_reconnection_shift(
@@ -319,12 +327,12 @@ vec3 lt_temporal_path_reconnection_shift(
         return vec3(0.0f);
     }
 
-    secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
+    return pathReconnectionShift(
+        reconnectionData,
         shiftedSurface,
-        sourceReservoir,
-        shiftedLight
+        shiftedLight,
+        secondaryPathJacobian
     );
-    return pathReconnectionShift(reconnectionData, shiftedSurface, shiftedLight);
 }
 
 ShiftedPathData scatterReprojectionShift(
@@ -429,7 +437,11 @@ ShiftedPathData scatterReprojectionShift(
             cameraForward,
             time
         );
-        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(sourceReservoir);
+        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(
+            cameraPosW,
+            rayDir,
+            newFractionalPixel
+        );
         return shiftedPath;
     }
 
@@ -467,7 +479,7 @@ ShiftedPathData scatterReprojectionShift(
 
     if (lt_temporal_hit_primary_light(reconnectionData))
     {
-        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(sourceReservoir);
+        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(shiftedSurface);
         return shiftedPath;
     }
 
@@ -575,7 +587,11 @@ ShiftedPathData gatherLensVertexCopyShift(
             cameraForward,
             time
         );
-        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(sourceReservoir);
+        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(
+            rayOriginW,
+            rayDir,
+            fractionalPixel
+        );
         return shiftedPath;
     }
 
@@ -639,7 +655,7 @@ ShiftedPathData gatherLensVertexCopyShift(
 
     if (lt_temporal_hit_primary_light(reconnectionData))
     {
-        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(sourceReservoir);
+        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(shiftedSurface);
         return shiftedPath;
     }
 
@@ -798,7 +814,11 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
             cameraForward,
             time
         );
-        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(sourceReservoir);
+        shiftedPath.radiance = lt_temporal_handle_reconnection_env_map(
+            rayOrigin,
+            rayDir,
+            fractionalPixel
+        );
         return shiftedPath;
     }
 
@@ -835,7 +855,7 @@ ShiftedPathData gatherPrimaryHitReconnectionShift(
 
     if (lt_temporal_hit_primary_light(reconnectionData))
     {
-        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(sourceReservoir);
+        shiftedPath.radiance = lt_temporal_handle_reconnection_primary_light(shiftedSurface);
         return shiftedPath;
     }
 

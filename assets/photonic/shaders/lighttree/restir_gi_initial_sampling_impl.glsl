@@ -105,6 +105,8 @@ float RTXDI_LightBrdfMisWeight(
 // and the ``ctx.mode == RTXDI_LocalLightContextSamplingMode_INVALID`` branch in
 // ``RTXDI_SelectNextLocalLight`` (see reuse_bridge.glsl).
 const uint LT_PROPOSAL_FAMILY_INVALID = 0xFFFFFFFFu;
+const int REGIR_LOCAL_LIGHT_FALLBACK_MODE_UNIFORM = 0;
+const int REGIR_LOCAL_LIGHT_FALLBACK_MODE_POWER_RIS = 1;
 
 // ---------------------------------------------------------------------------
 // RTXDI_StreamSampleWithDomain
@@ -220,7 +222,9 @@ bool PathReservoir_add(
     float sampleMIS,
     RTXDI_DIReservoir candidateReservoir)
 {
-    float weight = sampleMIS * CandidateReservoir_getTotalWeight(candidateReservoir);
+    float candidateTotalWeight =
+        CandidateReservoir_getTotalWeight(candidateReservoir) * candidateReservoir.targetPdf;
+    float weight = sampleMIS * candidateTotalWeight;
     pathReservoir.M += max(candidateReservoir.M, 0.0f);
     PathReservoir_setTotalWeight(pathReservoir, PathReservoir_getTotalWeight(pathReservoir) + weight);
     float accumulatedConfidence = PathReservoir_getConfidence(pathReservoir) + 1.0f;
@@ -315,11 +319,6 @@ void RTXDI_RandomlySelectLightDataFromRISTile(
     tileData = uvec2(0u);
     risBufferPtr = 0u;
 
-    if (bufferInfo.risTileSize == 0u)
-    {
-        return;
-    }
-
     uint risSample = min(uint(floor(rnd * float(bufferInfo.risTileSize))), bufferInfo.risTileSize - 1u);
     risBufferPtr = risSample + bufferInfo.risTileOffset;
     tileData = ph_ris_data[risBufferPtr];
@@ -333,14 +332,8 @@ RTXDI_RISTileInfo RTXDI_RandomlySelectRISTile(
     risTileInfo.risTileOffset = params.bufferOffset;
     risTileInfo.risTileSize = params.tileSize;
 
-    if (params.tileCount == 0u || params.tileSize == 0u)
-    {
-        risTileInfo.risTileSize = 0u;
-        return risTileInfo;
-    }
-
     float tileRnd = RTXDI_GetNextRandom(coherentRng);
-    uint tileIndex = min(uint(tileRnd * float(params.tileCount)), params.tileCount - 1u);
+    uint tileIndex = uint(tileRnd * float(params.tileCount));
     risTileInfo.risTileOffset = tileIndex * params.tileSize + params.bufferOffset;
     return risTileInfo;
 }
@@ -349,7 +342,7 @@ RTXDI_RISTileInfo RTXDI_SelectLocalLightReGIRRISTile(int cellIndex)
 {
     RTXDI_RISTileInfo tileInfo;
     tileInfo.risTileOffset = uint(cellIndex) * uint(ph_regir_lights_per_cell) + uint(ph_regir_ris_buffer_offset);
-    tileInfo.risTileSize = uint(max(ph_regir_lights_per_cell, 0));
+    tileInfo.risTileSize = uint(ph_regir_lights_per_cell);
     return tileInfo;
 }
 
@@ -509,7 +502,7 @@ vec3 lt_sample_ggx_vndf_rtxdi(vec3 viewDir, vec3 normal, float roughness, vec2 r
 
 bool RAB_SurfaceImportanceSampleBrdf(RAB_Surface surface, inout RTXDI_RandomSamplerState rng, out vec3 dir)
 {
-    vec3 rand = vec3(lt_next_random(rng), lt_next_random(rng), lt_next_random(rng));
+    vec3 rand = vec3(RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng));
     float diffuseProbability = lt_surface_diffuse_probability(surface);
     if (rand.x < diffuseProbability)
     {
@@ -550,15 +543,23 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIR
     RAB_Surface surface)
 {
     int cellIndex = -1;
-    bool useReGIR = regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0;
-    if (!useReGIR) {
-        return lt_make_invalid_local_light_selection_context();
+    if (regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0) {
+        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
+            RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
+        ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
+        return ctx;
     }
 
-    RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
-        RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
-    ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
-    return ctx;
+    if (ph_regir_local_light_sampling_fallback_mode == REGIR_LOCAL_LIGHT_FALLBACK_MODE_POWER_RIS)
+    {
+        RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
+            coherentRng,
+            localLightRISBufferSegmentParams);
+        ctx.proposalFamily = LT_PROPOSAL_FAMILY_POWER_RIS;
+        return ctx;
+    }
+
+    return RTXDI_InitializeLocalLightSelectionContextUniform(localLightBufferRegion);
 }
 
 RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextFallback(
@@ -566,11 +567,6 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextFallb
     RTXDI_LightBufferRegion localLightBufferRegion,
     RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams)
 {
-    if (localLightRISBufferSegmentParams.tileCount == 0u || localLightRISBufferSegmentParams.tileSize == 0u)
-    {
-        return lt_make_invalid_local_light_selection_context();
-    }
-
     RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(coherentRng, localLightRISBufferSegmentParams);
     ctx.proposalFamily = LT_PROPOSAL_FAMILY_POWER_RIS;
     return ctx;
@@ -627,14 +623,6 @@ void RTXDI_UnpackLocalLightFromRISLightData(
     lightIndex = tileData.x & RTXDI_LIGHT_INDEX_MASK;
     invSourcePdf = uintBitsToFloat(tileData.y);
 
-    bool invalidEntry = (tileData.x == 0u && tileData.y == 0u) || invSourcePdf <= 0.0f;
-    if (invalidEntry)
-    {
-        lightIndex = 0u;
-        invSourcePdf = 0.0f;
-        return;
-    }
-
     if ((tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u)
     {
         lightInfo = RAB_LoadCompactLightInfo(risBufferPtr, int(lightIndex));
@@ -687,8 +675,8 @@ void RTXDI_SelectNextLocalLight(
 vec2 RTXDI_RandomlySelectLocalLightUV(inout RTXDI_RandomSamplerState rng)
 {
     vec2 uv;
-    uv.x = lt_next_random(rng);
-    uv.y = lt_next_random(rng);
+    uv.x = RTXDI_GetNextRandom(rng);
+    uv.y = RTXDI_GetNextRandom(rng);
     return uv;
 }
 
@@ -736,16 +724,10 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLightsAtTime(
         RAB_LightInfo lightInfo = RAB_EmptyLightInfo();
         float invSourcePdf = 0.0f;
 
-        // Reference parity: candidates must be IID (InitialCandidates.cs.slang:59
-        // "All samples are IID, so m_i = 1 / M."). No per-iteration stratified
-        // remapping of the random draw.
-        float rnd = lt_next_random(rng);
+        float rnd = RTXDI_GetNextRandom(rng);
+        rnd = (rnd + float(i)) / float(initialSamplingParams.numLocalLightSamples);
 
         RTXDI_SelectNextLocalLight(lightSelectionContext, rnd, lightInfo, lightIndex, invSourcePdf);
-        if (lightInfo.index < 0 || invSourcePdf <= 0.0f)
-        {
-            continue;
-        }
 
         vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
         vec3 sampledPosition = lt_sample_light_position_from_uv(
@@ -791,19 +773,10 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLightsAtTime(
             continue;
         }
 
-        if (candidateSample.index < 0)
-        {
-            continue;
-        }
-
         vec3 sampleIrradiance = max(incidentRadiance, vec3(0.0f));
         vec3 sampleIntegrand = max(unshadowedIntegrand, vec3(0.0f));
-        if (ph_luminance(sampleIntegrand) <= 0.0f)
-        {
-            continue;
-        }
 
-        float risRnd = lt_next_random(rng);
+        float risRnd = RTXDI_GetNextRandom(rng);
 
         // Reference parity (PathTracer.slang:208): each candidate draws its own
         // subpixel and lens sample from the path RNG so the selected reservoir
@@ -832,6 +805,8 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLightsAtTime(
         }
     }
 
+    RTXDI_FinalizeResampling(state, 1.0f, float(misData.numMisSamples));
+    state.M = 1.0f;
     return state;
 }
 
@@ -1015,7 +990,7 @@ RTXDI_DIReservoir InitialCandidates_SampleBrdf(
 
         bool selected = CandidateReservoir_addVertex(
             state,
-            lt_next_random(rng),
+            RTXDI_GetNextRandom(rng),
             brdfSample.index,
             sampleUv,
             1.0f / blendedSourcePdf,
@@ -1084,10 +1059,13 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
         brdfEarlyThroughput);
 
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
-    bool selectLocal = CandidateReservoir_addReservoir(state, lt_next_random(rng), localReservoir);
-    bool selectInfinite = CandidateReservoir_addReservoir(state, lt_next_random(rng), infiniteReservoir);
-    bool selectEnvironment = CandidateReservoir_addReservoir(state, lt_next_random(rng), environmentReservoir);
-    bool selectBrdf = CandidateReservoir_addReservoir(state, lt_next_random(rng), brdfReservoir);
+    bool selectLocal = RTXDI_CombineDIReservoirs(state, localReservoir, 0.5f, localReservoir.targetPdf);
+    bool selectInfinite = RTXDI_CombineDIReservoirs(state, infiniteReservoir, RTXDI_GetNextRandom(rng), infiniteReservoir.targetPdf);
+    bool selectEnvironment = RTXDI_CombineDIReservoirs(state, environmentReservoir, RTXDI_GetNextRandom(rng), environmentReservoir.targetPdf);
+    bool selectBrdf = RTXDI_CombineDIReservoirs(state, brdfReservoir, RTXDI_GetNextRandom(rng), brdfReservoir.targetPdf);
+
+    RTXDI_FinalizeResampling(state, 1.0f, 1.0f);
+    state.M = 1.0f;
 
     o_lightSample = localSample;
     if (selectBrdf)
@@ -1104,55 +1082,27 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
     }
 
     if (initialSamplingParams.enableInitialVisibility != 0u
-        && initialSamplingParams.localLightSamplingMode != uint(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM)
         && RTXDI_IsValidDIReservoir(state)
         && o_lightSample.index >= 0)
     {
-        // Trace the FINAL visibility (RGB transmittance through stained glass,
-        // tinted voxels, etc.) once per selected candidate and store it in the
-        // reservoir's packedVisibility channel. Bug T1.2 fix: bake V into the
-        // RIS arithmetic (targetPdf + weightSum) so the reference invariant
-        //     pHat_at_finalize == luminance(integrand)
-        // holds once the reconnection's integrand is built with V in
-        // `scatter_compute_reconnection_integrand`. Downstream stages then use
-        // pure `integrand * UCW` at resolve (ResolveReSTIR.cs.slang:57),
-        // eliminating the per-frame visibility re-trace that caused bug T1.1.
+        // RTXDI final-visibility contract: capture RGB transmittance so colored-glass
+        // tinting reaches ResolveReSTIR. Pass a copy because the trace rewrites the
+        // sample's dir/color/weight.
+        RAB_LightSample lightSampleCopy = o_lightSample;
         float visibilityHitDistance = 0.0f;
-        vec3 visibilityRgb = lt_trace_final_visibility_with_offset(
-            o_lightSample, surface, 0.0f, visibilityHitDistance
+        vec3 transmittance = lt_trace_final_visibility_with_offset(
+            lightSampleCopy,
+            surface,
+            0.001f,
+            visibilityHitDistance
         );
-        float lumV = ph_luminance(max(visibilityRgb, vec3(0.0f)));
-        if (!(lumV > 0.0f))
+        if (ph_luminance(transmittance) <= 0.0f)
         {
             RTXDI_StoreVisibilityInDIReservoir(state, vec3(0.0f), true);
         }
         else
         {
-            RTXDI_StoreVisibilityInDIReservoir(state, visibilityRgb, false);
-            // Bug T1.2 fix: bake V into the reservoir's stored pHat so the
-            // reference invariant pHat == luminance(integrand_with_V) holds
-            // after the reconnection's integrand absorbs V in
-            // `scatter_compute_reconnection_integrand`.
-            //
-            // Port storage convention: after this inner-RIS finalize,
-            //   state.weightSum = UCW (post-RTXDI_FinalizeResampling)
-            //   state.targetPdf = pHat (without V).
-            // The OUTER IID merge in `lt_accumulate_iid_candidate` accumulates
-            //   outer.weightSum += mis * candidate.weightSum * candidate.targetPdf
-            //                    = mis * UCW * pHat                  (reference totalWeight)
-            // and the resolve path recovers ref UCW via
-            //   UCW_resolve = outer.weightSum / luminance(integrand_with_V).
-            //
-            // To bake V into the reference `totalWeight` at the outer level we
-            // need exactly ONE factor of luminance(V) in `UCW * pHat`. Scaling
-            // BOTH would over-multiply by lumV^2 and amplify per-pixel pHat
-            // jitter across frames (catastrophic on shadow edges). Scaling
-            // ONLY `targetPdf` yields:
-            //   outer.weightSum += mis * UCW * (pHat * lumV) = mis * totalWeight_ref_with_V
-            //   UCW_resolve      = (totalWeight * lumV) / (pHat * lumV) = UCW_ref
-            //   color            = integrand_with_V * UCW_ref
-            // exactly matching ResolveReSTIR.cs.slang:57.
-            state.targetPdf *= lumV;
+            RTXDI_StoreVisibilityInDIReservoir(state, transmittance, true);
         }
     }
 
@@ -1220,10 +1170,13 @@ RTXDI_DIReservoir InitialCandidates_SampleLightsForSurface(
     );
 
     RTXDI_DIReservoir selectedReservoir = RTXDI_EmptyDIReservoir();
-    bool selectLocal = CandidateReservoir_addReservoir(selectedReservoir, lt_next_random(rng), localReservoir);
-    bool selectInfinite = CandidateReservoir_addReservoir(selectedReservoir, lt_next_random(rng), infiniteReservoir);
-    bool selectEnvironment = CandidateReservoir_addReservoir(selectedReservoir, lt_next_random(rng), environmentReservoir);
-    bool selectBrdf = CandidateReservoir_addReservoir(selectedReservoir, lt_next_random(rng), brdfReservoir);
+    bool selectLocal = RTXDI_CombineDIReservoirs(selectedReservoir, localReservoir, 0.5f, localReservoir.targetPdf);
+    bool selectInfinite = RTXDI_CombineDIReservoirs(selectedReservoir, infiniteReservoir, RTXDI_GetNextRandom(rng), infiniteReservoir.targetPdf);
+    bool selectEnvironment = RTXDI_CombineDIReservoirs(selectedReservoir, environmentReservoir, RTXDI_GetNextRandom(rng), environmentReservoir.targetPdf);
+    bool selectBrdf = RTXDI_CombineDIReservoirs(selectedReservoir, brdfReservoir, RTXDI_GetNextRandom(rng), brdfReservoir.targetPdf);
+
+    RTXDI_FinalizeResampling(selectedReservoir, 1.0f, 1.0f);
+    selectedReservoir.M = 1.0f;
 
     o_lightSample = RAB_EmptyLightSample();
     o_selectedIrradiance = vec3(0.0f);

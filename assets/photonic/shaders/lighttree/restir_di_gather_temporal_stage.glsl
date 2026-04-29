@@ -342,9 +342,7 @@ bool GatherTemporalResampling_add_previous_sample(
             * shiftProbability;
         prevSampleMIS = ((m1 + m2) > 0.0f) ? (m2 / (m1 + m2)) : 0.0f;
 
-        prevReconnectionData = invalidM1
-            ? prevReconnectionData
-            : ReconnectionData_update(prevReconnectionData, shiftedPrev);
+        prevReconnectionData = ReconnectionData_update(prevReconnectionData, shiftedPrev);
     }
 
     bool prevSelected = GatherTemporalResampling_add_sample_from_reservoir(

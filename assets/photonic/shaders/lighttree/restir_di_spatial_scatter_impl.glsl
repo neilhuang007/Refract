@@ -225,8 +225,10 @@ bool spatial_trace_reconnection_visibility(
 vec3 spatial_reconnect_and_evaluate_radiance(
     ReconnectionData sourceReconnection,
     RTXDI_DIReservoir sourceReservoir,
-    RAB_Surface shiftedSurface)
+    RAB_Surface shiftedSurface,
+    out float secondaryPathJacobian)
 {
+    secondaryPathJacobian = 1.0f;
     if (!RTXDI_IsValidDIReservoir(sourceReservoir)) {
         return vec3(0.0f);
     }
@@ -241,7 +243,12 @@ vec3 spatial_reconnect_and_evaluate_radiance(
         return vec3(0.0f);
     }
 
-    return pathReconnectionShift(sourceReconnection, shiftedSurface, shiftedLight);
+    return pathReconnectionShift(
+        sourceReconnection,
+        shiftedSurface,
+        shiftedLight,
+        secondaryPathJacobian
+    );
 }
 
 // ----------------------------------------------------------------------------
@@ -304,20 +311,11 @@ SpatialShiftedPathData spatial_gather_lens_vertex_copy_shift(
         hitPosW, hitNormalW, cameraPosW, rayDir, camForward);
     shifted.lensVertexJacobian    = spatial_compute_lens_vertex_jacobian(
         hitPosW, hitNormalW, cameraPosW, rayDir, time, camForward);
-    shifted.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
-        landingSurface,
-        sourceReservoir,
-        lt_decode_reservoir_sample_for_frame(sourceReservoir, landingSurface, false, false)
-    );
-
-    // Radiance recomputation at the new first hit -- this matches the reference's
-    // `gPathTracer.handleReconnectionPrimaryLight(path)` for pathLength==1
-    // and `pathReconnectionShift` for pathLength==2 DI. Both collapse to
-    // `f * L * cos / pdf` evaluated at the shifted surface for Minecraft DI.
     shifted.radiance = spatial_reconnect_and_evaluate_radiance(
         sourceReconnection,
         sourceReservoir,
-        landingSurface
+        landingSurface,
+        shifted.secondaryPathJacobian
     );
     shifted.isValid  = true;
     return shifted;
@@ -438,16 +436,11 @@ SpatialShiftedPathData spatial_gather_primary_hit_reconnection_shift(
         primaryHitPosW, primaryHitNormalW, rayOrigin, rayDir, camForward);
     shifted.lensVertexJacobian    = spatial_compute_lens_vertex_jacobian(
         primaryHitPosW, primaryHitNormalW, rayOrigin, rayDir, time, camForward);
-    shifted.secondaryPathJacobian = scatter_resolve_secondary_path_jacobian(
-        shiftedSurface,
-        sourceReservoir,
-        lt_decode_reservoir_sample_for_frame(sourceReservoir, shiftedSurface, false, false)
-    );
-
     shifted.radiance = spatial_reconnect_and_evaluate_radiance(
         sourceReconnection,
         sourceReservoir,
-        shiftedSurface
+        shiftedSurface,
+        shifted.secondaryPathJacobian
     );
     shifted.isValid  = true;
     return shifted;

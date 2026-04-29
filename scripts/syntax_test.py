@@ -57,6 +57,11 @@ uniform vec3 cameraPosition;
 uniform vec3 previousCameraPosition;
 uniform vec3 eyePosition;
 uniform vec3 relativeEyePosition;
+#define Light RAB_LightInfo
+#define modelview_projection ph_current_modelview_projection()
+#define previous_modelview_projection ph_previous_modelview_projection()
+#define world_camera_position cameraPosition
+#define previous_world_camera_position previousCameraPosition
 """
 
 def preprocess(entry_rel):
@@ -66,14 +71,20 @@ def preprocess(entry_rel):
     return '\n'.join(lines)
 
 import re as _re
-_FLOAT_F_RE = _re.compile(r'(?<![A-Za-z_0-9.])(\d+)f\b')
+_FLOAT_F_RE = _re.compile(r'(?<![A-Za-z_0-9.+-])((?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)f\b')
 
 def canonicalize_float_literals(text):
     """Iris/Sodium's parser accepts Java-style `0f`, `1f`, `1.0f` as float literals,
     but standard GLSL does not. Translate `<digits>f` -> `<digits>.0` so standalone
     syntax validation with glslangValidator succeeds. Real shaders are unchanged.
     """
-    return _FLOAT_F_RE.sub(r'\1.0', text)
+    def replace(match):
+        literal = match.group(1)
+        if '.' in literal or 'e' in literal.lower():
+            return literal
+        return literal + '.0'
+
+    return _FLOAT_F_RE.sub(replace, text)
 
 def write_preprocessed(entry_rel, out_name):
     text = preprocess(entry_rel)

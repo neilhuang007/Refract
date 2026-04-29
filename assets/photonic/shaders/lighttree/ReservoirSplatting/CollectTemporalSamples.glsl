@@ -328,19 +328,19 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
             }
         }
 
-        if (isnan(PathReservoir_getTotalWeight(dstReservoir)))
-        {
-            PathReservoir_setIntegrand(dstReservoir, vec3(0.0f));
-            PathReservoir_setTotalWeight(dstReservoir, 0.0f);
-            dstReconnectionData.subPixelJacobian = 1.0f;
-            dstReconnectionData.lensVertexJacobian = 1.0f;
-            dstReconnectionData.secondaryPathJacobian = 1.0f;
-            dstReconnectionData.pathLength = 0u;
-        }
-
         PathReservoir_setConfidence(dstReservoir, totalConfidence);
         break;
     }
+    }
+
+    if (isnan(PathReservoir_getTotalWeight(dstReservoir)))
+    {
+        PathReservoir_setIntegrand(dstReservoir, vec3(0.0f));
+        PathReservoir_setTotalWeight(dstReservoir, 0.0f);
+        dstReconnectionData.subPixelJacobian = 1.0f;
+        dstReconnectionData.lensVertexJacobian = 1.0f;
+        dstReconnectionData.secondaryPathJacobian = 1.0f;
+        dstReconnectionData.pathLength = 0u;
     }
 
     CollectTemporalSamples_storeResult(

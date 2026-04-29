@@ -44,10 +44,10 @@ void InitialCandidates_generatePath(out PathState path, ivec2 pixel, uint sample
     );
     path.coherentRng = RTXDI_InitRandomSampler(
         uvec2(pixel / RTXDI_TILE_SIZE_IN_PIXELS),
-        sampleIdx,
+        runtimeParameters.frameIndex,
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
     );
-    path.time = lt_next_random(path.sg) * ph_reservoir_splatting_shutter_speed;
+    path.time = RTXDI_GetNextRandom(path.sg) * ph_reservoir_splatting_shutter_speed;
     path.reservoir = RTXDI_EmptyDIReservoir();
     path.reconnection = ReconnectionData_init();
     path.selectedLightSample = RAB_EmptyLightSample();

@@ -61,7 +61,7 @@ void main() {
     albedo_frag_out = vec4(surfaceAlbedo, 1.0f);
 
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(uvec2(pixelPosition), uint(frameCounter), RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
-    RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(uvec2(pixelPosition / RTXDI_TILE_SIZE_IN_PIXELS), 0u, RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+    RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(uvec2(pixelPosition / RTXDI_TILE_SIZE_IN_PIXELS), uint(frameCounter), RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
     const RTXDI_DIInitialSamplingParameters initialSamplingParams = lt_build_di_initial_sampling_parameters();
     RAB_LightSample lightSample = RAB_EmptyLightSample();
     RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, currentSurface, initialSamplingParams, lightSample);

@@ -6,5 +6,6 @@
 // structure instead of collapsing stage bodies into the bridge itself.
 
 #include "/photonics/lighttree/restir_di_spatial.glsl"
+#include "/photonics/lighttree/restir_gi_initial_sampling_impl.glsl"
 
 #endif

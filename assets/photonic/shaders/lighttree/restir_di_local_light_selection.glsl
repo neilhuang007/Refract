@@ -65,10 +65,6 @@ void RTXDI_RandomlySelectLightDataFromRISTile(
     tileData = uvec2(0u);
     risBufferPtr = 0u;
 
-    if (bufferInfo.risTileSize == 0u) {
-        return;
-    }
-
     uint risSample = min(uint(floor(rnd * float(bufferInfo.risTileSize))), bufferInfo.risTileSize - 1u);
     risBufferPtr = risSample + bufferInfo.risTileOffset;
     tileData = ph_ris_data[risBufferPtr];
@@ -82,13 +78,8 @@ RTXDI_RISTileInfo RTXDI_RandomlySelectRISTile(
     risTileInfo.risTileOffset = params.bufferOffset;
     risTileInfo.risTileSize = params.tileSize;
 
-    if (params.tileCount == 0u || params.tileSize == 0u) {
-        risTileInfo.risTileSize = 0u;
-        return risTileInfo;
-    }
-
     float tileRnd = RTXDI_GetNextRandom(coherentRng);
-    uint tileIndex = min(uint(tileRnd * float(params.tileCount)), params.tileCount - 1u);
+    uint tileIndex = uint(tileRnd * float(params.tileCount));
     risTileInfo.risTileOffset = tileIndex * params.tileSize + params.bufferOffset;
     return risTileInfo;
 }
@@ -97,7 +88,7 @@ RTXDI_RISTileInfo RTXDI_SelectLocalLightReGIRRISTile(int cellIndex)
 {
     RTXDI_RISTileInfo tileInfo;
     tileInfo.risTileOffset = uint(cellIndex) * uint(ph_regir_lights_per_cell) + uint(ph_regir_ris_buffer_offset);
-    tileInfo.risTileSize = uint(max(ph_regir_lights_per_cell, 0));
+    tileInfo.risTileSize = uint(ph_regir_lights_per_cell);
     return tileInfo;
 }
 

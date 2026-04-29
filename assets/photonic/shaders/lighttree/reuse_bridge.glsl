@@ -282,37 +282,23 @@ bool lt_is_active_reservoir_lane(ivec2 reservoirPos) {
 }
 
 ivec2 lt_temporal_scatter_reservoir_size() {
-    float widthScale = (ph_restir_active_checkerboard_field == 0) ? 1.0f : 0.5f;
     return ivec2(
-        max(int(ceil(viewWidth * widthScale)), 1),
+        max(int(viewWidth), 1),
         max(int(viewHeight), 1)
     );
 }
 
-uint lt_temporal_scatter_linear_index(ivec2 reservoirPos) {
+uint lt_temporal_scatter_linear_index(ivec2 pixelPosition) {
     ivec2 size = lt_temporal_scatter_reservoir_size();
-    return uint(clamp(reservoirPos.y, 0, size.y - 1) * size.x + clamp(reservoirPos.x, 0, size.x - 1));
+    return uint(clamp(pixelPosition.y, 0, size.y - 1) * size.x + clamp(pixelPosition.x, 0, size.x - 1));
 }
 
 uint lt_temporal_scatter_cell_index_from_pixel(ivec2 pixelPosition) {
-    return lt_temporal_scatter_linear_index(
-        RTXDI_PixelPosToReservoirPos(pixelPosition, ph_restir_active_checkerboard_field)
-    );
+    return lt_temporal_scatter_linear_index(pixelPosition);
 }
 
 bool lt_temporal_scatter_pixel_owns_cell(ivec2 pixelPosition) {
-    if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
-        return false;
-    }
-    if (ph_restir_active_checkerboard_field == 0) {
-        return true;
-    }
-
-    ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixelPosition, ph_restir_active_checkerboard_field);
-    return all(equal(
-        RTXDI_ReservoirPosToPixelPos(reservoirPos, ph_restir_active_checkerboard_field),
-        pixelPosition
-    ));
+    return lt_is_viewport_uv_in_bounds(pixelPosition);
 }
 
 uvec2 lt_temporal_scatter_decode_linear_index(uint linearIndex) {

@@ -57,7 +57,7 @@ void RobustReuseOptimization_run(ivec2 pixel)
                 prevReconnection.lensSample,
                 prevReservoir,
                 true,
-                true
+                false
             )
             : lt_temporal_empty_shifted_path();
 

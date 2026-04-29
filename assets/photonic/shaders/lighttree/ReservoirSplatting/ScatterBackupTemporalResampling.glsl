@@ -194,21 +194,6 @@ bool lt_ScatterBackupTemporalResampling_add_backup_sample(
 
         if (!invalidM1)
         {
-            shiftedBackupReservoir = lt_translate_reservoir_between_frames(
-                backupReservoir,
-                true,
-                false
-            );
-        }
-        if (!invalidM1 && !RTXDI_IsValidDIReservoir(shiftedBackupReservoir))
-        {
-            invalidM1 = true;
-            backupPHat = vec3(0.0f);
-            shiftedJacobian = 1.0f;
-            m1 = 0.0f;
-        }
-        if (!invalidM1)
-        {
             backupReconnectionData = ReconnectionData_update(
                 baseBackupReconnectionData,
                 shiftedBackup
@@ -322,19 +307,11 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
             false,
             true
         );
-        RTXDI_DIReservoir shiftedReservoir = lt_translate_reservoir_between_frames(
-            prevReservoir,
-            true,
-            false
-        );
-        if (!RTXDI_IsValidDIReservoir(shiftedReservoir))
-        {
-            return false;
-        }
         ReconnectionData shiftedReconnection = ReconnectionData_update(
             prevReconnectionData,
             scatteredPrev
         );
+        RTXDI_DIReservoir shiftedReservoir = prevReservoir;
         PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedReconnection.subPixel);
         scatteredJacobian = lt_ScatterBackupTemporalResampling_shifted_jacobian(
             scatteredPrev,

@@ -26,8 +26,7 @@ vec3 scatter_resolve_irradiance(
         return vec3(0.0f);
     }
 
-    return lt_light_sample_incident_radiance(surface, lightSample)
-        * scatter_resolve_visibility(reservoir);
+    return lt_light_sample_incident_radiance(surface, lightSample);
 }
 
 vec3 scatter_resolve_early_throughput(
@@ -42,34 +41,231 @@ vec3 scatter_resolve_early_throughput(
     return lt_surface_early_throughput(surface, lightSample);
 }
 
+const float SCATTER_RECONNECTION_RAY_T_MAX = 3.402823466e+38f;
+
+float PathTracer_evalMIS(float n0, float p0, float n1, float p1)
+{
+    float q0 = n0 * p0;
+    float q1 = n1 * p1;
+    float denom = q0 + q1;
+    return denom > 0.0f ? (q0 / denom) : 0.0f;
+}
+
+float PathTracer_evalDiffusePdf(RAB_Surface sd, vec3 wo)
+{
+    float nDotWo = max(dot(sd.normal, normalize(wo)), 0.0f);
+    return nDotWo / lt_pi;
+}
+
+float PathTracer_evalSpecularPdf(RAB_Surface sd, vec3 wo)
+{
+    vec3 lightDir = normalize(wo);
+    vec3 viewDir = normalize(sd.viewDir);
+    float nDotL = dot(sd.normal, lightDir);
+    float nDotV = dot(sd.normal, viewDir);
+    if (nDotL <= 0.0f || nDotV <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    vec3 halfVector = normalize(viewDir + lightDir);
+    float nDotH = max(dot(sd.normal, halfVector), 0.0f);
+    float roughness = clamp(sd.material.roughness, lt_min_roughness, 1.0f);
+    float distribution = lt_distribution_ggx(nDotH, roughness);
+    float alpha = max(roughness * roughness, 0.02f);
+    float k = alpha * 0.5f;
+    float geometry1 = nDotV / max(nDotV * (1.0f - k) + k, 1e-6f);
+    return distribution * geometry1 / max(4.0f * nDotV, 1e-6f);
+}
+
+LightBrdf PathTracer_evalSurfaceBSDF(RAB_Surface sd, vec3 wo)
+{
+    return lt_evaluate_surface_brdf_with_view(sd, wo, sd.viewDir);
+}
+
+vec3 PathTracer_evalLobeSpecificBSDF(
+    RAB_Surface sd,
+    vec3 wo,
+    uint bsdfComponentType)
+{
+    LightBrdf bsdf = PathTracer_evalSurfaceBSDF(sd, wo);
+    if (bsdfComponentType == SCATTER_BSDF_COMPONENT_DIFFUSE)
+    {
+        return bsdf.demodulatedDiffuse * sd.material.diffuseAlbedo;
+    }
+    if (bsdfComponentType == SCATTER_BSDF_COMPONENT_SPECULAR)
+    {
+        return bsdf.specular;
+    }
+
+    return vec3(0.0f);
+}
+
+float PathTracer_evalLobeSpecificPdf(
+    RAB_Surface sd,
+    vec3 wo,
+    uint bsdfComponentType)
+{
+    if (bsdfComponentType == SCATTER_BSDF_COMPONENT_DIFFUSE)
+    {
+        return PathTracer_evalDiffusePdf(sd, wo);
+    }
+    if (bsdfComponentType == SCATTER_BSDF_COMPONENT_SPECULAR)
+    {
+        return PathTracer_evalSpecularPdf(sd, wo);
+    }
+
+    return 0.0f;
+}
+
+vec3 PathTracer_evalTotalBSDF(RAB_Surface sd, vec3 wo)
+{
+    LightBrdf bsdf = PathTracer_evalSurfaceBSDF(sd, wo);
+    return bsdf.demodulatedDiffuse * sd.material.diffuseAlbedo + bsdf.specular;
+}
+
+float PathTracer_evalTotalPdf(RAB_Surface sd, vec3 wo)
+{
+    float diffusePdf = PathTracer_evalDiffusePdf(sd, wo);
+    float specularPdf = PathTracer_evalSpecularPdf(sd, wo);
+    float diffuseProbability = lt_surface_diffuse_probability_with_view(sd, sd.viewDir);
+    return mix(specularPdf, diffusePdf, diffuseProbability);
+}
+
+struct PathTracerReconnectionHit
+{
+    bool isActive;
+    vec3 thp;
+    float dstJacobian;
+};
+
+PathTracerReconnectionHit PathTracer_handleReconnectionHit(
+    ReconnectionData reconnectionData,
+    RAB_Surface sd,
+    RAB_LightSample shiftedLight)
+{
+    PathTracerReconnectionHit path;
+    path.isActive = false;
+    path.thp = vec3(1.0f);
+    path.dstJacobian = 1.0f;
+
+    if (!RAB_IsSurfaceValid(sd) || shiftedLight.index < 0)
+    {
+        return path;
+    }
+
+    bool secondHitIsDistant = (reconnectionData.pathLength == 2u)
+        && reconnectionData.lightIsDistant;
+    vec3 nextDir = secondHitIsDistant
+        ? normalize(reconnectionData.secondWo)
+        : normalize(shiftedLight.position - sd.worldPos);
+    float rayLength = secondHitIsDistant
+        ? SCATTER_RECONNECTION_RAY_T_MAX
+        : (0.999f * distance(shiftedLight.position, sd.worldPos));
+    if (dot(nextDir, nextDir) <= 1e-12f)
+    {
+        return path;
+    }
+
+    float visibilityHitDistance = 0.0f;
+    vec3 visibility = lt_trace_final_visibility_with_offset(
+        shiftedLight,
+        sd,
+        0.0f,
+        visibilityHitDistance
+    );
+    if (!any(greaterThan(visibility, vec3(0.0f))))
+    {
+        return path;
+    }
+
+    vec3 lobeSpecificBsdf = PathTracer_evalLobeSpecificBSDF(
+        sd,
+        nextDir,
+        reconnectionData.firstBSDFComponentType
+    );
+    float lobeSpecificPdf = PathTracer_evalLobeSpecificPdf(
+        sd,
+        nextDir,
+        reconnectionData.firstBSDFComponentType
+    );
+    vec3 totalBsdf = PathTracer_evalTotalBSDF(sd, nextDir);
+    float totalPdf = PathTracer_evalTotalPdf(sd, nextDir);
+
+    if (reconnectionData.pathLength == 2u)
+    {
+        float lightPdf = reconnectionData.lightPdf / path.dstJacobian;
+        if (reconnectionData.lightIsNEE)
+        {
+            if (!any(greaterThan(totalBsdf, vec3(0.0f))) || totalPdf == 0.0f || lightPdf <= 0.0f)
+            {
+                return path;
+            }
+
+            path.dstJacobian *= lightPdf;
+            float misWeight = PathTracer_evalMIS(1.0f, lightPdf, 1.0f, totalPdf);
+            path.thp *= (totalBsdf / lightPdf) * misWeight;
+        }
+        else
+        {
+            if (!any(greaterThan(lobeSpecificBsdf, vec3(0.0f))) || lobeSpecificPdf == 0.0f || lightPdf <= 0.0f)
+            {
+                return path;
+            }
+
+            path.dstJacobian *= lobeSpecificPdf;
+            float misWeight = PathTracer_evalMIS(1.0f, totalPdf, 1.0f, lightPdf);
+            path.thp *= (lobeSpecificBsdf / lobeSpecificPdf) * misWeight;
+        }
+    }
+    else
+    {
+        if (!any(greaterThan(lobeSpecificBsdf, vec3(0.0f))) || lobeSpecificPdf == 0.0f)
+        {
+            return path;
+        }
+
+        path.dstJacobian *= lobeSpecificPdf;
+        path.thp *= lobeSpecificBsdf / lobeSpecificPdf;
+    }
+
+    path.isActive = any(greaterThan(path.thp, vec3(0.0f))) && rayLength > 0.0f;
+    return path;
+}
+
+vec3 pathReconnectionShift(
+    ReconnectionData reconnectionData,
+    RAB_Surface shiftedSurface,
+    RAB_LightSample shiftedLight,
+    out float dstJacobian)
+{
+    dstJacobian = 1.0f;
+    PathTracerReconnectionHit path = PathTracer_handleReconnectionHit(
+        reconnectionData,
+        shiftedSurface,
+        shiftedLight
+    );
+    dstJacobian = path.dstJacobian;
+    if (!path.isActive)
+    {
+        return vec3(0.0f);
+    }
+
+    return path.thp * reconnectionData.irradiance;
+}
+
 vec3 pathReconnectionShift(
     ReconnectionData reconnectionData,
     RAB_Surface shiftedSurface,
     RAB_LightSample shiftedLight)
 {
-    if (!RAB_IsSurfaceValid(shiftedSurface) || shiftedLight.index < 0) {
-        return vec3(0.0f);
-    }
-
-    vec3 visibility = vec3(1.0f);
-    if (ph_restir_local_light_sampling_mode != float(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM))
-    {
-        float visibilityHitDistance = 0.0f;
-        visibility = lt_trace_final_visibility_with_offset(
-            shiftedLight,
-            shiftedSurface,
-            0.0f,
-            visibilityHitDistance
-        );
-    }
-
-    vec3 shiftedIrradiance =
-        lt_light_sample_incident_radiance(shiftedSurface, shiftedLight) * visibility;
-    vec3 shiftedEarlyThroughput =
-        (ph_restir_local_light_sampling_mode == float(RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM))
-            ? vec3(1.0f)
-            : lt_surface_early_throughput(shiftedSurface, shiftedLight);
-    return shiftedEarlyThroughput * shiftedIrradiance;
+    float dstJacobian = 1.0f;
+    return pathReconnectionShift(
+        reconnectionData,
+        shiftedSurface,
+        shiftedLight,
+        dstJacobian
+    );
 }
 
 float scatter_resolve_secondary_path_jacobian_from_reconnection(

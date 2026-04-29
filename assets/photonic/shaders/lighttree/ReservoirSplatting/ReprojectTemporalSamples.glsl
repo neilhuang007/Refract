@@ -34,6 +34,8 @@ void ReprojectTemporalSamples_run(
     bool hitDistantLight;
     if (!scatter_project_reconnection_to_current_frame(
             prevReconnection,
+            pixel,
+            true,
             newFractionalPixel,
             rayOrigin,
             rayDirection,

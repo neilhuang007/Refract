@@ -391,7 +391,17 @@ public class LightRegistry implements Destructable {
    private Vector3f resolveRegirGridCenter() {
       Vector3f cameraPosition = getCurrentCameraPosition();
       if (!this.isRegirGridCenterFrozenForDebug()) {
-         return cameraPosition;
+         // Snap grid center to a fixed cellSize lattice so sub-cell camera motion does
+         // not shift the entire grid every frame. Without this, every frame the cell
+         // boundaries cross stationary surfaces by a fractional amount, the build is
+         // re-run against new positions, and the cell contents drift -> visible
+         // tile-shaped flicker. The grid only shifts when the camera crosses a real
+         // cell boundary, which is a discrete event the temporal pipeline can absorb.
+         float cellSize = (float) GRID_CELL_SIZE;
+         float snappedX = cellSize * (float) Math.floor(cameraPosition.x / cellSize) + cellSize * 0.5F;
+         float snappedY = cellSize * (float) Math.floor(cameraPosition.y / cellSize) + cellSize * 0.5F;
+         float snappedZ = cellSize * (float) Math.floor(cameraPosition.z / cellSize) + cellSize * 0.5F;
+         return new Vector3f(snappedX, snappedY, snappedZ);
       }
 
       if (!this.frozenRegirGridCenterInitialized) {

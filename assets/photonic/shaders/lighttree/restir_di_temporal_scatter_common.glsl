@@ -24,12 +24,7 @@ void lt_temporal_scatter_append_contributor(ivec2 targetPixel, ivec2 sourceReser
         return;
     }
 
-    ivec2 targetReservoirPos = RTXDI_PixelPosToReservoirPos(targetPixel, ph_restir_active_checkerboard_field);
-    if (!lt_is_active_reservoir_lane(targetReservoirPos)) {
-        return;
-    }
-
-    uint cellLinearIndex = lt_temporal_scatter_linear_index(targetReservoirPos);
+    uint cellLinearIndex = lt_temporal_scatter_cell_index_from_pixel(targetPixel);
     uint appendIndex     = lt_reproject_temporal_samples_global_counter_atomic_add(LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT, 1u);
     uint localCellIndex  = lt_reproject_temporal_samples_cell_counter_atomic_add(cellLinearIndex, 1u);
     lt_reproject_temporal_samples_store_reservoir_index(appendIndex, uvec2(cellLinearIndex, localCellIndex));
@@ -48,12 +43,7 @@ void lt_multi_temporal_scatter_append_contributor(
         return;
     }
 
-    ivec2 targetReservoirPos = RTXDI_PixelPosToReservoirPos(targetPixel, ph_restir_active_checkerboard_field);
-    if (!lt_is_active_reservoir_lane(targetReservoirPos)) {
-        return;
-    }
-
-    uint cellLinearIndex = lt_temporal_scatter_linear_index(targetReservoirPos);
+    uint cellLinearIndex = lt_temporal_scatter_cell_index_from_pixel(targetPixel);
     uint appendIndex = lt_multi_reproject_temporal_samples_global_counter_atomic_add(
         partitionIndex,
         LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT,

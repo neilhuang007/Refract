@@ -117,18 +117,11 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
             false,
             true
         );
-        RTXDI_DIReservoir shiftedReservoir = lt_translate_reservoir_between_frames(
-            prevReservoir,
-            true,
-            false
-        );
-        if (!RTXDI_IsValidDIReservoir(shiftedReservoir)) {
-            continue;
-        }
         ReconnectionData shiftedPrevReconnectionData = ReconnectionData_update(
             prevReconnectionData,
             shiftedPrev
         );
+        RTXDI_DIReservoir shiftedReservoir = prevReservoir;
         PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedPrevReconnectionData.subPixel);
 
         float shiftedJacobian = lt_scatter_shift_jacobian_ratio(
