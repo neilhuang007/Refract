@@ -124,14 +124,17 @@ bool InitialCandidates_finalizeSelectedReservoir(
         return false;
     }
 
+    // Reference Reservoir.slang/PathReservoir stores `integrand` as the full
+    // shaded radiance (f / p in PSS, including visibility) so that resolve is a
+    // single `integrand * UCW`. We must therefore bake the traced visibility
+    // into the candidate integrand here instead of carrying it as a separate
+    // packedVisibility multiplier at resolve time.
+    vec3 transmittance = vec3(1.0f);
     if (initialSamplingParams.enableInitialVisibility != 0u)
     {
-        // RTXDI final-visibility contract: capture RGB transmittance so colored-glass
-        // tinting survives all the way to ResolveReSTIR. Pass a copy because
-        // lt_trace_final_visibility_with_offset rewrites the light sample's dir/color/weight.
         RAB_LightSample lightSampleCopy = selectedLightSample;
         float visibilityHitDistance = 0.0f;
-        vec3 transmittance = lt_trace_final_visibility_with_offset(
+        transmittance = lt_trace_final_visibility_with_offset(
             lightSampleCopy,
             surface,
             0.001f,
@@ -145,10 +148,16 @@ bool InitialCandidates_finalizeSelectedReservoir(
         }
         RTXDI_StoreVisibilityInDIReservoir(reservoir, transmittance, true);
     }
+    else
+    {
+        // No initial-visibility trace: keep the integrand unshadowed and let any
+        // future final-visibility test apply transmittance separately.
+        RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(1.0f), true);
+    }
 
     vec3 selectedIrradiance = max(incidentRadiance, vec3(0.0f));
     vec3 selectedEarlyThroughput = max(earlyThroughput, vec3(0.0f));
-    vec3 selectedIntegrand = max(selectedIrradiance * selectedEarlyThroughput, vec3(0.0f));
+    vec3 selectedIntegrand = max(selectedIrradiance * selectedEarlyThroughput * transmittance, vec3(0.0f));
     float selectedPHat = ph_luminance(selectedIntegrand);
     if (selectedPHat <= 0.0f)
     {

@@ -123,6 +123,16 @@ public class CommonUniformsMixin {
           uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_ris_buffer_offset",
              () -> RegirComputeProgram.tileCount * RegirComputeProgram.tileSize);
           uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_local_light_sampling_fallback_mode", () -> 1);
+          // Hash-grid ReGIR uniforms (paper variant). The grid is world-fixed; cells
+          // are addressed by hash(quantized_position, normal_bucket).
+          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_hash_table_size",
+             () -> worldRegistry.get().getLightRegistry().getRegirHashTableSize());
+          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_hash_cell_size",
+             () -> worldRegistry.get().getLightRegistry().getRegirHashCellSizeBlocks());
+          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_hash_normal_buckets",
+             () -> worldRegistry.get().getLightRegistry().getRegirHashNormalBuckets());
+          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_build_region_cells",
+             () -> worldRegistry.get().getLightRegistry().getRegirBuildRegionCells());
           uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "light_blend_region_count", () -> worldRegistry.get().getLightBlendRegionCount());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "light_blend_factor", () -> worldRegistry.get().fetchLightBlendFactor());
          uniforms.uniform3d(UniformUpdateFrequency.PER_FRAME, "light_blend_min", () -> worldRegistry.get().getLightBlendMin());

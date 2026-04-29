@@ -65,6 +65,30 @@ public class LightRegistry implements Destructable {
    private static final int REGIR_MAX_LIGHTS_PER_CELL_FALLBACK = 16;
    // RTXDI default from ReGIR.h:141 = 8 build samples per cell slot
    private static final int REGIR_BUILD_SAMPLES = 8;
+   // ---------------------------------------------------------------------
+   // Hash-grid ReGIR (per Tom Clabault's REGIR blog post):
+   //   - Cells are world-fixed, addressed by (quantized_position, quantized_normal).
+   //   - Lookup uses two hash functions: PCG for the table slot, xxhash32 as a
+   //     checksum for collision verification along a 32-step linear probe.
+   //   - Each frame the table is cleared and rebuilt for cells inside a region
+   //     around the camera. Cells outside the region miss and the lookup falls
+   //     back to POWER_RIS, as before.
+   // ---------------------------------------------------------------------
+   // Quantization step for world position. 4 blocks = a balance between
+   // cell specificity and how many cells the build region produces.
+   private static final float REGIR_HASH_CELL_SIZE_BLOCKS = 4.0F;
+   // 6 axis-aligned normal buckets (+X,-X,+Y,-Y,+Z,-Z). Paper recommends
+   // including the surface normal in the hash so opposing faces don't share
+   // the same reservoirs.
+   private static final int REGIR_HASH_NORMAL_BUCKETS = 6;
+   // Hash table capacity. Must be a power of two for cheap modulo if we
+   // ever switch, but plain modulo is fine. Sized to keep load <50% with
+   // the build region below.
+   private static final int REGIR_HASH_TABLE_SIZE = 65536;
+   // Cells per side of the camera-centered admission cube. The GPU build now
+   // dispatches one thread per stage G-buffer pixel; surface-hit pixels outside
+   // this cube are skipped before they can claim a hash slot.
+   private static final int REGIR_BUILD_REGION_CELLS = 16;
    private static final int INCREMENTAL_PARALLEL_THRESHOLD = 32;
    private static final float POSITION_MATCH_EPSILON = 1.0e-4F;
    private static final Comparator<LightInstance> STABLE_LIGHT_ORDER = (a, b) -> {
@@ -234,6 +258,11 @@ public class LightRegistry implements Destructable {
   private final MemoryOwner regirLightPdfMemory;
   private final GlMemoryManager regirCompactLightDataMemoryManager;
   private final MemoryOwner regirCompactLightDataMemory;
+  // Hash-grid ReGIR auxiliary buffers (cleared and rebuilt every frame).
+  private final GlMemoryManager regirHashChecksumMemoryManager;
+  private final MemoryOwner regirHashChecksumMemory;
+  private final GlMemoryManager regirHashKeyMemoryManager;
+  private final MemoryOwner regirHashKeyMemory;
   private static final int NEIGHBOR_OFFSET_COUNT = 8192;
   private final GlMemoryManager neighborOffsetMemoryManager;
   private final SimpleMemoryOwner neighborOffsetMemory;
@@ -304,18 +333,21 @@ public class LightRegistry implements Destructable {
       this.regirCellCountMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_regir_cell_counts", this.regirCellCount * Integer.BYTES, false);
       this.regirCellCountMemory = new SimpleMemoryOwner(this.regirCellCountMemoryManager, this.regirCellCountMemoryManager.getCapacity());
       // Unified RIS buffer (RTXDI_RIS_BUFFER): presample tiles + ReGIR output in one SSBO.
-      // Layout: [0, tileCount*tileSize) = presample tiles; [tileCount*tileSize, ...) = ReGIR output.
-      // Fragment shaders bind this as ph_ris_buffer and read the ReGIR region via ph_regir_ris_buffer_offset.
+      // Layout: [0, tileCount*tileSize) = presample tiles; [tileCount*tileSize, ...) = ReGIR hash slots.
+      // For the hash-grid ReGIR variant the ReGIR region is sized for REGIR_HASH_TABLE_SIZE
+      // hash slots (not gridCells^3) and slots are indexed by hash, not by linear position.
       int risBufferTileEntries = RegirComputeProgram.tileCount * RegirComputeProgram.tileSize;
+      int regirHashSlotEntries = REGIR_HASH_TABLE_SIZE * this.regirLightsPerCell;
       this.regirLightIndexMemoryManager = new GlMemoryManager(
          GlTarget.SSBO,
          "ph_ris_buffer",
-         (risBufferTileEntries + this.regirCellCount * this.regirLightsPerCell) * 8, // 8 bytes per uvec2
+         (risBufferTileEntries + regirHashSlotEntries) * 8, // 8 bytes per uvec2
          false
       );
       this.regirLightIndexMemory = new SimpleMemoryOwner(this.regirLightIndexMemoryManager, this.regirLightIndexMemoryManager.getCapacity());
       // PDF buffer is retained for the CPU-side (non-GPU) build path only.
-      // When GPU build is active it is unused; kept to avoid breaking existing CPU code paths.
+      // The hash-grid GPU build does not touch it; kept for legacy CPU paths and
+      // sized identically so existing iteration code does not OOB.
       this.regirLightPdfMemoryManager = new GlMemoryManager(
          GlTarget.SSBO,
          "ph_regir_light_pdfs",
@@ -324,7 +356,8 @@ public class LightRegistry implements Destructable {
       );
       this.regirLightPdfMemory = new SimpleMemoryOwner(this.regirLightPdfMemoryManager, this.regirLightPdfMemoryManager.getCapacity());
       // Compact light data buffer uses the full 4*uvec4 companion layout per RIS slot.
-      int compactTotalEntries = risBufferTileEntries + this.regirCellCount * this.regirLightsPerCell;
+      // Sized for the new hash-grid layout: one entry per ReGIR hash slot's RIS slot.
+      int compactTotalEntries = risBufferTileEntries + regirHashSlotEntries;
       this.regirCompactLightDataMemoryManager = new GlMemoryManager(
          GlTarget.SSBO,
          "ph_ris_compact_light_data",
@@ -332,6 +365,23 @@ public class LightRegistry implements Destructable {
          false
       );
       this.regirCompactLightDataMemory = new SimpleMemoryOwner(this.regirCompactLightDataMemoryManager, this.regirCompactLightDataMemoryManager.getCapacity());
+      // Hash-grid auxiliary buffers: per-slot checksum (atomic word) and per-slot
+      // cell key (cellX,cellY,cellZ,bucket) for verification on lookup. Cleared
+      // every frame before the build pass.
+      this.regirHashChecksumMemoryManager = new GlMemoryManager(
+         GlTarget.SSBO,
+         "ph_regir_cell_checksums",
+         REGIR_HASH_TABLE_SIZE * Integer.BYTES,
+         false
+      );
+      this.regirHashChecksumMemory = new SimpleMemoryOwner(this.regirHashChecksumMemoryManager, this.regirHashChecksumMemoryManager.getCapacity());
+      this.regirHashKeyMemoryManager = new GlMemoryManager(
+         GlTarget.SSBO,
+         "ph_regir_cell_keys",
+         REGIR_HASH_TABLE_SIZE * 4 * Integer.BYTES, // ivec4 per slot
+         false
+      );
+      this.regirHashKeyMemory = new SimpleMemoryOwner(this.regirHashKeyMemoryManager, this.regirHashKeyMemoryManager.getCapacity());
       this.neighborOffsetMemoryManager = new GlMemoryManager(GlTarget.SSBO, "ph_neighbor_offsets", NEIGHBOR_OFFSET_COUNT * 2, false);
       this.neighborOffsetMemory = new SimpleMemoryOwner(this.neighborOffsetMemoryManager, this.neighborOffsetMemoryManager.getCapacity());
       this.fillNeighborOffsets();
@@ -391,17 +441,7 @@ public class LightRegistry implements Destructable {
    private Vector3f resolveRegirGridCenter() {
       Vector3f cameraPosition = getCurrentCameraPosition();
       if (!this.isRegirGridCenterFrozenForDebug()) {
-         // Snap grid center to a fixed cellSize lattice so sub-cell camera motion does
-         // not shift the entire grid every frame. Without this, every frame the cell
-         // boundaries cross stationary surfaces by a fractional amount, the build is
-         // re-run against new positions, and the cell contents drift -> visible
-         // tile-shaped flicker. The grid only shifts when the camera crosses a real
-         // cell boundary, which is a discrete event the temporal pipeline can absorb.
-         float cellSize = (float) GRID_CELL_SIZE;
-         float snappedX = cellSize * (float) Math.floor(cameraPosition.x / cellSize) + cellSize * 0.5F;
-         float snappedY = cellSize * (float) Math.floor(cameraPosition.y / cellSize) + cellSize * 0.5F;
-         float snappedZ = cellSize * (float) Math.floor(cameraPosition.z / cellSize) + cellSize * 0.5F;
-         return new Vector3f(snappedX, snappedY, snappedZ);
+         return cameraPosition;
       }
 
       if (!this.frozenRegirGridCenterInitialized) {
@@ -1311,6 +1351,30 @@ public class LightRegistry implements Destructable {
       return this.regirCompactLightDataMemoryManager;
    }
 
+   public GlMemoryManager getRegirHashChecksumMemoryManager() {
+      return this.regirHashChecksumMemoryManager;
+   }
+
+   public GlMemoryManager getRegirHashKeyMemoryManager() {
+      return this.regirHashKeyMemoryManager;
+   }
+
+   public int getRegirHashTableSize() {
+      return REGIR_HASH_TABLE_SIZE;
+   }
+
+   public int getRegirHashNormalBuckets() {
+      return REGIR_HASH_NORMAL_BUCKETS;
+   }
+
+   public float getRegirHashCellSizeBlocks() {
+      return REGIR_HASH_CELL_SIZE_BLOCKS;
+   }
+
+   public int getRegirBuildRegionCells() {
+      return REGIR_BUILD_REGION_CELLS;
+   }
+
    /** Returns the world-space center of the ReGIR grid (RTXDI: gridCenter = camera position). */
    public Vector3f getRegirGridCenter() {
       Vector3f center = this.resolveRegirGridCenter();
@@ -1437,6 +1501,8 @@ public class LightRegistry implements Destructable {
       this.regirLightIndexMemoryManager.free();
       this.regirLightPdfMemoryManager.free();
       this.regirCompactLightDataMemoryManager.free();
+      this.regirHashChecksumMemoryManager.free();
+      this.regirHashKeyMemoryManager.free();
       this.neighborOffsetMemoryManager.free();
       this.lightListObserver.unregister();
       if (this.lightsProvider != null) {

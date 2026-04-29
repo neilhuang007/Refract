@@ -404,6 +404,8 @@ public class LightTreeRenderer extends MainRenderer {
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirLightIndexMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirLightPdfMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirCompactLightDataMemoryManager());
+      memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirHashChecksumMemoryManager());
+      memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getRegirHashKeyMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getLightReverseMappingMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getPreviousLightsMemoryManager());
       memoryCollection.add(() -> this.worldRegistry.getLightRegistry().getNeighborOffsetMemoryManager());
@@ -2284,16 +2286,17 @@ public class LightTreeRenderer extends MainRenderer {
          }
       }
 
-      // RTXDI defaults: numBuildSamples = 8 (ReGIR.h:141). The FullSample uploads
-      // samplingJitter as 2.0 after doubling the user-facing default of 1.0.
-      // getRegirLightIndexMemoryManager() is the unified uvec2 ReGIR output buffer,
-      // allocated at 8 bytes/slot (cellCount * lightsPerCell * 8) to hold uvec2 entries.
+      // Hash-grid ReGIR (paper variant): cells are world-fixed and addressed by
+      // hash(quantized_position, normal_bucket). The legacy gridCells/cellSize uniforms
+      // are still passed for diagnostic shaders that have not been migrated.
       int gridRes = lightRegistry.getRegirGridResolution();
       this.regirComputeProgram.dispatch(
          lightRegistry.getLightsMemoryManager(),
          lightRegistry.getRegirLightPdfMemoryManager(),
          lightRegistry.getRegirLightIndexMemoryManager(),
          lightRegistry.getRegirCompactLightDataMemoryManager(),
+         lightRegistry.getRegirHashChecksumMemoryManager(),
+         lightRegistry.getRegirHashKeyMemoryManager(),
          lightRegistry.getRegirGridCenter(),
          new Vector3i(gridRes, gridRes, gridRes),
          lightRegistry.getRegirLightsPerCell(),
@@ -2302,7 +2305,16 @@ public class LightTreeRenderer extends MainRenderer {
          this.resolveRegirPresampleFrameSeed(),
          this.resolveRegirBuildFrameSeed(),
          8,    // numBuildSamples — RTXDI default from ReGIR.h:141
-         lightRegistry.getRegirSamplingJitter()
+         lightRegistry.getRegirSamplingJitter(),
+         lightRegistry.getRegirHashTableSize(),
+         lightRegistry.getRegirHashCellSizeBlocks(),
+         lightRegistry.getRegirHashNormalBuckets(),
+         lightRegistry.getRegirBuildRegionCells(),
+         this.lightingStageBuffer.getWriteAttachment("position"),
+         this.lightingStageBuffer.getWriteAttachment("normal"),
+         this.lightingStageBuffer.getWriteAttachment("mapped_normal"),
+         this.lightingStageBuffer.getWriteAttachment("albedo"),
+         this.lightingStageBuffer.getWriteAttachment("material")
       );
    }
 
@@ -2334,10 +2346,11 @@ public class LightTreeRenderer extends MainRenderer {
 
    private void renderLightTreeSamplingStageProfiled() {
       this.beginGpuRegion(lightTreeSamplingStageRegionIndex);
-      this.dispatchRegirCompute();
       if (this.proposalStageRenderer != null) {
          this.proposalStageRenderer.renderAll();
       }
+      GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+      this.dispatchRegirCompute();
       this.endGpuRegion(lightTreeSamplingStageRegionIndex);
    }
 

@@ -50,14 +50,12 @@ vec3 ResolveReSTIR_split_fraction(vec3 numerator, vec3 denominator)
 vec3 ResolveReSTIR(
     RTXDI_DIReservoir currReservoir)
 {
-    // RTXDI final-visibility contract: integrand is unshadowed (Le * BRDF only),
-    // packedVisibility carries the RGB transmittance from the visibility ray
-    // (or vec3(1.0) when initial visibility was disabled). Multiply here so that
-    // colored-glass tint, smoke transmittance, etc. reach the final color.
-    vec3 visibility = rtxdi_get_visibility(currReservoir);
+    // Reference parity (ResolveReSTIR.cs.slang:57): integrand is the full
+    // shaded radiance (Le * BRDF * V) baked at initial-candidate generation
+    // time and then preserved through every shift, so the final colour is just
+    // `integrand * UCW`. No separate visibility multiply.
     return PathReservoir_getIntegrand(currReservoir)
-        * ResolveReSTIR_computeUCW(currReservoir)
-        * visibility;
+        * ResolveReSTIR_computeUCW(currReservoir);
 }
 
 bool ResolveReSTIR_shade(

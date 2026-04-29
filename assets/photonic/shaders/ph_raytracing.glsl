@@ -34,6 +34,14 @@ bool ray_stop_on_target = false;
 vec3 lightEmittance = vec3(0.0f);
 
 int ph_lookup_chunk_entry(int chunk_base, ivec3 block_position);
+float ph_signed_nudge(float value);
+vec3 ph_signed_nudge(vec3 value);
+float ph_intersects_world(vec3 direction_inv, vec3 origin);
+bool ph_is_inside(vec3 position);
+int ph_get_index(ivec3 position);
+int ph_get_world_index(ivec3 position);
+int ph_to_fake_air_entry(ivec3 pos);
+
 int ph_to_air_entry_bounds(ivec3 min_pos, ivec3 max_pos) {
     return (min_pos.x << 0)
         | (min_pos.y << 5)
@@ -84,7 +92,7 @@ void trace_ray(inout RayJob job, bool transparency) {
 
     ph_result_sky_brightness = 0;
 
-    vec3 previous_tint = vec3(-1f);
+    vec3 previous_tint = vec3(-1.0f);
     ray_distance_limit_reached = false;
     #ifdef PH_FULL_TRANSPARENCY
     bool usePerVoxelTransparency = true;

@@ -46,15 +46,30 @@ Light load_compact_light(uint risBufferPtr, int lightIndex) {
     );
 }
 
-// ph_regir_grid_center: world-space center of the ReGIR grid (= camera position).
-// gridOrigin derived as: origin = center - vec3(ph_regir_grid_cells) * cellSize * 0.5
+// ph_regir_grid_center: world-space center of the ReGIR build region (= camera position).
+// In the hash-grid variant the grid is world-fixed; the center only decides which
+// cells the build *fills* this frame. Lookups still hash the actual surface position.
 uniform vec3  ph_regir_grid_center;
-uniform ivec3 ph_regir_grid_cells;
+uniform ivec3 ph_regir_grid_cells;             // legacy uniform retained for diagnostic shaders
 uniform int   ph_regir_lights_per_cell;
-uniform float ph_regir_cell_size;
+uniform float ph_regir_cell_size;              // legacy 32-block cell size (used by some debug paths)
 uniform float ph_regir_sampling_jitter;
-uniform int   ph_regir_ris_buffer_offset;  // RTXDI: offset into unified RIS buffer where ReGIR data starts
+uniform int   ph_regir_ris_buffer_offset;      // offset into unified RIS buffer where the ReGIR region starts
 uniform int   ph_regir_local_light_sampling_fallback_mode;
+// Hash-grid uniforms (paper variant).
+uniform int   ph_regir_hash_table_size;        // number of slots in the hash table
+uniform float ph_regir_hash_cell_size;         // world units per hash cell side
+uniform int   ph_regir_hash_normal_buckets;    // currently 6 (axis-aligned)
+uniform int   ph_regir_build_region_cells;     // build cube side (cells)
+
+// Hash-grid auxiliary buffers (read-only at lookup time; written by regir_build.glsl).
+layout(std430, binding = 7) restrict readonly buffer ph_regir_cell_checksums {
+    uint ph_regir_cell_checksum[];
+};
+
+layout(std430, binding = 8) restrict readonly buffer ph_regir_cell_keys {
+    ivec4 ph_regir_cell_key[];
+};
 
 const uint RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED = 1u;
 const uint RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED = 2u;
@@ -134,80 +149,196 @@ float RTXDI_GetNextRandom(inout RTXDI_RandomSamplerState rng) {
     return uintBitsToFloat((mask & v) | one) - 1.0f;
 }
 
-// RTXDI_ReGIR_WorldPosToCellIndex / RTXDI_ReGIR_CellIndexToWorldPos.
+// Legacy origin helper kept for diagnostic shaders that still expect a "grid origin"
+// (e.g. coverage debug views). Not used by the hash-grid lookup path.
 vec3 regir_grid_origin() {
     return ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
 }
 
-// RTXDI: RTXDI_ReGIR_WorldPosToCellIndex -- maps world position to grid cell
-// coords. Returns false when outside the grid.
-bool regir_cell_in_bounds(ivec3 cellCoord);
-bool regir_world_to_cell(vec3 shadingWorldPos, out ivec3 cellCoord) {
-    vec3 gridOrigin = regir_grid_origin();
-    vec3 relative   = shadingWorldPos - gridOrigin;
-    cellCoord       = ivec3(floor(relative / ph_regir_cell_size));
-    return regir_cell_in_bounds(cellCoord);
+// ---------------------------------------------------------------------------
+// Hash-grid helpers (paper variant). Mirrored from regir_build.glsl so both
+// build and lookup walk the exact same hash + probe sequence for a given
+// (cellCoord, bucket). KEEP IN SYNC.
+// ---------------------------------------------------------------------------
+
+uint regir_pcg_step(uint h) {
+    h = h * 747796405u + 2891336453u;
+    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+    return (h >> 22u) ^ h;
 }
 
-int regir_flatten_cell(ivec3 cellCoord) {
-    return cellCoord.x + ph_regir_grid_cells.x * (cellCoord.y + ph_regir_grid_cells.y * cellCoord.z);
+uint regir_xxhash_step(uint h) {
+    const uint PRIME32_2 = 2246822519u;
+    const uint PRIME32_3 = 3266489917u;
+    const uint PRIME32_4 = 668265263u;
+    const uint PRIME32_5 = 374761393u;
+
+    uint h32 = h + PRIME32_5;
+    h32 = PRIME32_4 * ((h32 << 17u) | (h32 >> 15u));
+    h32 = PRIME32_2 * (h32 ^ (h32 >> 15u));
+    h32 = PRIME32_3 * (h32 ^ (h32 >> 13u));
+    return h32 ^ (h32 >> 16u);
 }
 
-bool regir_cell_in_bounds(ivec3 cellCoord) {
-    return all(greaterThanEqual(cellCoord, ivec3(0)))
-        && all(lessThan(cellCoord, ph_regir_grid_cells));
+uint regir_hash_pcg_key(ivec3 cellCoord, int bucket) {
+    return regir_pcg_step(uint(bucket) + regir_pcg_step(uint(cellCoord.z)
+        + regir_pcg_step(uint(cellCoord.y) + regir_pcg_step(uint(cellCoord.x)))));
 }
 
-// Unpack a ReGIR output slot -- same format as a RIS tile entry.
-// Returns false if the slot is invalid (RTXDI invalid entry uint2(0,0) or a zero invSourcePdf payload).
-// outHasCompact: true when RTXDI_LIGHT_COMPACT_BIT is set -- compact companion data is available
-//   in ph_compact_light_data at outRisBufferPtr*ph_compact_light_stride + [0..3].
-bool regir_unpack_slot(int flatCellIndex, int cellSlot,
+const uint REGIR_HASH_CLAIMED = 0xffffffffu;
+
+uint regir_hash_xxhash_checksum(ivec3 cellCoord, int bucket) {
+    uint h = regir_xxhash_step(uint(bucket) + regir_xxhash_step(uint(cellCoord.z)
+        + regir_xxhash_step(uint(cellCoord.y) + regir_xxhash_step(uint(cellCoord.x)))));
+    // Reserve 0 for empty and 0xffffffff for an in-progress claim.
+    if (h == 0u) return 1u;
+    if (h == REGIR_HASH_CLAIMED) return 0xfffffffeu;
+    return h;
+}
+
+// Quantize surface normal to one of 6 axis-aligned buckets (+X,-X,+Y,-Y,+Z,-Z).
+int regir_normal_to_bucket(vec3 n) {
+    vec3 a = abs(n);
+    if (a.x >= a.y && a.x >= a.z) return n.x >= 0.0 ? 0 : 1;
+    if (a.y >= a.z)               return n.y >= 0.0 ? 2 : 3;
+    return                                 n.z >= 0.0 ? 4 : 5;
+}
+
+int regir_clamp_normal_bucket(int bucket) {
+    return clamp(bucket, 0, max(ph_regir_hash_normal_buckets - 1, 0));
+}
+
+// Hash lookup with 32-step linear probing. Returns the slot containing the
+// matching (cellCoord, bucket) key, or -1 if the cell wasn't built this frame.
+int regir_hash_lookup(ivec3 cellCoord, int bucket) {
+    if (ph_regir_hash_table_size <= 0 || ph_regir_hash_cell_size <= 0.0) {
+        return -1;
+    }
+
+    bucket = regir_clamp_normal_bucket(bucket);
+    uint checksum = regir_hash_xxhash_checksum(cellCoord, bucket);
+    uint slot = regir_hash_pcg_key(cellCoord, bucket) % uint(ph_regir_hash_table_size);
+
+    for (int probe = 0; probe < 32; probe++) {
+        uint stored = ph_regir_cell_checksum[slot];
+        if (stored == 0u) return -1;        // empty -> cell missed; lookup fails fast
+        if (stored == REGIR_HASH_CLAIMED) return -1;
+        if (stored == checksum) {
+            ivec4 key = ph_regir_cell_key[slot];
+            if (key.x == cellCoord.x && key.y == cellCoord.y && key.z == cellCoord.z && key.w == bucket) {
+                return int(slot);
+            }
+        }
+        slot = (slot + 1u) % uint(ph_regir_hash_table_size);
+    }
+    return -1;
+}
+
+// Tangent-plane jitter (paper §"Lookup & Jittering"): jitter only in the plane
+// perpendicular to the surface normal so the jittered position never leaves
+// the surface. radius defaults to cellSize * 0.5.
+vec3 regir_jitter_tangent_plane(vec3 worldPos, vec3 normal, float radius, inout RTXDI_RandomSamplerState rng) {
+    // Build a tangent basis from the normal.
+    vec3 t1 = (abs(normal.x) > 0.5)
+        ? normalize(cross(normal, vec3(0.0, 1.0, 0.0)))
+        : normalize(cross(normal, vec3(1.0, 0.0, 0.0)));
+    vec3 t2 = cross(normal, t1);
+
+    // Uniform sample on a disk.
+    float r = sqrt(RTXDI_GetNextRandom(rng)) * radius;
+    float theta = RTXDI_GetNextRandom(rng) * 6.283185307179586;
+    return worldPos + t1 * (r * cos(theta)) + t2 * (r * sin(theta));
+}
+
+// Unpack a ReGIR output slot. Slot is a hash-table slot index (NOT a linear cell
+// index). The buffer offset within ph_ris_data is `regirRisOffset + slot*lightsPerCell + cellSlot`.
+bool regir_unpack_slot(int hashSlot, int cellSlot,
     out int lightIndex, out float invSourcePdf,
     out bool outHasCompact, out uint outRisBufferPtr) {
-    int  bufferIndex   = flatCellIndex * ph_regir_lights_per_cell + cellSlot;
+    lightIndex = -1;
+    invSourcePdf = 0.0f;
+    outHasCompact = false;
+    outRisBufferPtr = 0u;
+
+    if (hashSlot < 0 || cellSlot < 0 || cellSlot >= ph_regir_lights_per_cell) {
+        return false;
+    }
+
+    int  bufferIndex   = hashSlot * ph_regir_lights_per_cell + cellSlot;
     outRisBufferPtr    = uint(ph_regir_ris_buffer_offset) + uint(bufferIndex);
     uvec2 slotData     = ph_ris_data[outRisBufferPtr];
+    if (slotData.y == 0u) {
+        return false;
+    }
+
     outHasCompact      = (slotData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u;
     lightIndex         = int(slotData.x & RTXDI_LIGHT_INDEX_MASK);
     invSourcePdf       = uintBitsToFloat(slotData.y);
 
-    return true;
-}
-
-// RTXDI: RTXDI_CalculateReGIRCellIndex -- determines which cell this pixel falls in.
-// Returns true if inside the grid, with flatCellIndex set.
-// Match RTXDI by using the same sampling jitter parameter that the build path uses.
-bool regir_resolve_cell(vec3 shadingWorldPos, inout RTXDI_RandomSamplerState rng, out int flatCellIndex) {
-    flatCellIndex = -1;
-
-    vec3 cellJitter = vec3(
-        RTXDI_GetNextRandom(rng),
-        RTXDI_GetNextRandom(rng),
-        RTXDI_GetNextRandom(rng)
-    ) - 0.5f;
-
-    float jitterScale = ph_regir_sampling_jitter * ph_regir_cell_size;
-    vec3 samplingPos = shadingWorldPos + cellJitter * jitterScale;
-
-    ivec3 cellCoord;
-    if (!regir_world_to_cell(samplingPos, cellCoord)) {
+    if (lightIndex < 0 || lightIndex >= ph_light_count
+        || !(invSourcePdf > 0.0f)
+        || isinf(invSourcePdf)
+        || isnan(invSourcePdf)) {
+        lightIndex = -1;
+        invSourcePdf = 0.0f;
+        outHasCompact = false;
+        outRisBufferPtr = 0u;
         return false;
     }
 
-    flatCellIndex = regir_flatten_cell(cellCoord);
     return true;
 }
 
+// Resolve the hash slot to query for (worldPos, normal). Returns true if the
+// cell was built this frame and the caller can RIS over its lightsPerCell slots.
+// On miss, the caller must fall back to POWER_RIS or uniform sampling.
+//
+// `flatCellIndex` (out) is the hash-table slot, kept as `int` for source-compat
+// with existing call sites that called the old volumetric variant.
+bool regir_resolve_cell(vec3 shadingWorldPos, vec3 shadingNormal, inout RTXDI_RandomSamplerState rng, out int flatCellIndex) {
+    flatCellIndex = -1;
 
-// RTXDI: RTXDI_SelectLocalLightReGIRRISTile -- creates a RISTileInfo from the cell and
-// uses RTXDI_RandomlySelectLightDataFromRISTile, exactly matching the tile path.
-// The ReGIR output buffer uses the same uvec2 format as the tile buffer so the
-// unpack logic is identical.  Per-pixel code treats the cell's slots as a mini-tile.
-// rnd: stratified random in [0,1) for slot selection (InitialSampling.hlsli:280 RTXDI_STRATIFY_LOCAL_SAMPLING).
-// Caller computes: rnd = (rand_next_float() + float(i)) / float(numLocalSamples)
+    float normalLengthSq = dot(shadingNormal, shadingNormal);
+    if (!(normalLengthSq > 1.0e-8) || any(isnan(shadingNormal)) || any(isinf(shadingNormal))) {
+        return false;
+    }
+    vec3 queryNormal = normalize(shadingNormal);
+
+    // Tangent-plane jitter (paper). The jitter radius is cellSize*0.5 by default;
+    // ph_regir_sampling_jitter scales it for tuning.
+    float jitterRadius = max(ph_regir_hash_cell_size * 0.5 * ph_regir_sampling_jitter, 0.0);
+    vec3 jitteredPos = (jitterRadius > 0.0)
+        ? regir_jitter_tangent_plane(shadingWorldPos, queryNormal, jitterRadius, rng)
+        : shadingWorldPos;
+
+    ivec3 cellCoord = ivec3(floor(jitteredPos / ph_regir_hash_cell_size));
+    int   bucket    = regir_normal_to_bucket(queryNormal);
+
+    int slot = regir_hash_lookup(cellCoord, bucket);
+    if (slot < 0) {
+        // Paper recommends a small number of retries with re-jitter when a cell
+        // miss is found. One retry is cheap and noticeably reduces lookup misses
+        // at cell boundaries.
+        if (jitterRadius > 0.0) {
+            jitteredPos = regir_jitter_tangent_plane(shadingWorldPos, queryNormal, jitterRadius, rng);
+            cellCoord   = ivec3(floor(jitteredPos / ph_regir_hash_cell_size));
+            slot        = regir_hash_lookup(cellCoord, bucket);
+        }
+        if (slot < 0) {
+            // Fall back to the un-jittered position.
+            cellCoord = ivec3(floor(shadingWorldPos / ph_regir_hash_cell_size));
+            slot      = regir_hash_lookup(cellCoord, bucket);
+        }
+    }
+
+    if (slot < 0) return false;
+    flatCellIndex = slot;
+    return true;
+}
+
+// Stratified slot pick within a hash cell. Same shape as the volumetric variant.
 bool regir_pick_light(
-    int flatCellIndex,
+    int hashSlot,
     float rnd,
     out int lightIndex,
     out float lightPdf,
@@ -219,12 +350,12 @@ bool regir_pick_light(
     hasCompact = false;
     risBufferPtr = 0u;
 
-    // RTXDI: RTXDI_RandomlySelectLightDataFromRISTile(rnd, tileInfo, tileData, risBufferPtr)
-    // Pick uniformly from [0, lightsPerCell) using the caller-supplied stratified random.
     int cellSlot = min(int(floor(rnd * float(ph_regir_lights_per_cell))), ph_regir_lights_per_cell - 1);
 
     float slotInvSourcePdf;
-    regir_unpack_slot(flatCellIndex, cellSlot, lightIndex, slotInvSourcePdf, hasCompact, risBufferPtr);
+    if (!regir_unpack_slot(hashSlot, cellSlot, lightIndex, slotInvSourcePdf, hasCompact, risBufferPtr)) {
+        return false;
+    }
 
     lightPdf = 1.0f / slotInvSourcePdf;
     return true;

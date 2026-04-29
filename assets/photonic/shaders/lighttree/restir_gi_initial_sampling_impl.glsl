@@ -543,7 +543,9 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIR
     RAB_Surface surface)
 {
     int cellIndex = -1;
-    if (regir_resolve_cell(surface.worldPos, coherentRng, cellIndex) && cellIndex >= 0) {
+    // Hash-grid ReGIR (paper variant): lookup needs the surface normal so it
+    // can pick the correct normal bucket and apply tangent-plane jitter.
+    if (regir_resolve_cell(surface.worldPos, RAB_GetSurfaceNormal(surface), coherentRng, cellIndex) && cellIndex >= 0) {
         RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
             RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
         ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
@@ -622,6 +624,17 @@ void RTXDI_UnpackLocalLightFromRISLightData(
     lightInfo = RAB_EmptyLightInfo();
     lightIndex = tileData.x & RTXDI_LIGHT_INDEX_MASK;
     invSourcePdf = uintBitsToFloat(tileData.y);
+
+    if (tileData.y == 0u
+        || lightIndex >= uint(ph_light_count)
+        || !(invSourcePdf > 0.0f)
+        || isinf(invSourcePdf)
+        || isnan(invSourcePdf))
+    {
+        lightIndex = 0u;
+        invSourcePdf = 0.0f;
+        return;
+    }
 
     if ((tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u)
     {
@@ -728,6 +741,10 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLightsAtTime(
         rnd = (rnd + float(i)) / float(initialSamplingParams.numLocalLightSamples);
 
         RTXDI_SelectNextLocalLight(lightSelectionContext, rnd, lightInfo, lightIndex, invSourcePdf);
+        if (invSourcePdf <= 0.0f || lightIndex >= uint(ph_light_count))
+        {
+            continue;
+        }
 
         vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
         vec3 sampledPosition = lt_sample_light_position_from_uv(

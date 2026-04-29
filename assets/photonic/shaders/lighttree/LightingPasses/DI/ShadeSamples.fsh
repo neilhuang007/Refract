@@ -235,13 +235,23 @@ void main() {
             float t = clamp(dist / 256.0f, 0.0f, 1.0f);
             debugColor = lt_debug_heat_ramp(t);
         } else if (debugMode == 2) {
-            ivec3 cellCoord;
-            bool inside = regir_world_to_cell(surface.worldPos, cellCoord);
-            debugColor = inside ? vec3(0.0f, 1.0f, 0.0f) : vec3(1.0f, 0.0f, 0.0f);
+            // Hash-grid: hit/miss visualization. Green = cell built this frame, red = miss.
+            int bucket = regir_normal_to_bucket(RAB_GetSurfaceNormal(surface));
+            ivec3 cellCoord = ivec3(floor(surface.worldPos / ph_regir_hash_cell_size));
+            int slot = regir_hash_lookup(cellCoord, bucket);
+            debugColor = (slot >= 0) ? vec3(0.0f, 1.0f, 0.0f) : vec3(1.0f, 0.0f, 0.0f);
         } else if (debugMode == 3) {
-            ivec3 cellCoord;
-            bool inside = regir_world_to_cell(surface.worldPos, cellCoord);
-            debugColor = inside ? vec3(cellCoord) / vec3(ph_regir_grid_cells) : vec3(0.0f);
+            // Hash-grid: per-cell colour from the slot index, gives a stable
+            // per-cell hue that lets you see cell boundaries on surfaces.
+            int bucket = regir_normal_to_bucket(RAB_GetSurfaceNormal(surface));
+            ivec3 cellCoord = ivec3(floor(surface.worldPos / ph_regir_hash_cell_size));
+            int slot = regir_hash_lookup(cellCoord, bucket);
+            if (slot < 0) {
+                debugColor = vec3(0.0f);
+            } else {
+                float h = float(slot) / float(max(ph_regir_hash_table_size, 1));
+                debugColor = vec3(fract(h * 13.0), fract(h * 47.0), fract(h * 91.0));
+            }
         } else if (debugMode == 4) {
             debugColor = lt_debug_color_regir_coverage(surface);
         } else if (debugMode == 6) {

@@ -187,23 +187,13 @@ void SpatialResampling_execute(
         ivec2 neighborPixel = ivec2(round(
             vec2(pixel) + spatialResampling.gatherRadius * lt_load_neighbor_offset(int(neighborOffsetIdx))
         ));
+        // Reference parity (SpatialResampling.rt.slang:117-119): only an
+        // in-bounds check, then `validNeighbors += 1`. The shift itself
+        // produces zero radiance for incompatible surfaces (sky / invalid
+        // gbuffer / wrong-facing normal via BSDF), so we rely on it to
+        // contribute zero weight rather than filtering neighbors out and
+        // skewing the final `/= (validNeighbors + 1)` normalization.
         if (!lt_is_viewport_uv_in_bounds(neighborPixel)) continue;
-
-        RAB_Surface neighborSurface = RAB_GetGBufferSurface(neighborPixel, false);
-        if (!RAB_IsSurfaceValid(neighborSurface)) continue;
-
-        if (!RTXDI_IsValidNeighbor(
-            RAB_GetSurfaceNormal(centerSurface),
-            RAB_GetSurfaceNormal(neighborSurface),
-            RAB_GetSurfaceLinearDepth(centerSurface),
-            RAB_GetSurfaceLinearDepth(neighborSurface),
-            spatialResampling.params.normalThreshold,
-            spatialResampling.params.depthThreshold
-        )) continue;
-
-        if (spatialResampling.params.enableMaterialSimilarityTest != 0u
-            && !RAB_AreMaterialsSimilar(RAB_GetMaterial(centerSurface), RAB_GetMaterial(neighborSurface))) continue;
-
         validNeighbors += 1;
 
         ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(
