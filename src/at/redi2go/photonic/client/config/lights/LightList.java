@@ -51,6 +51,16 @@ public class LightList {
       return this.get(block.getDefaultState());
    }
 
+   @Nullable
+   public BlockLightInfo getAnyTraced(Block block) {
+      for (BlockLightInfo light : this.lights.get(block)) {
+         if (light.isTraced()) {
+            return light;
+         }
+      }
+      return null;
+   }
+
    public boolean isTraced(Block block) {
       for (BlockLightInfo light : this.lights.get(block)) {
          if (light.requestedTrace()) {

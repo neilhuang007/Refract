@@ -523,6 +523,21 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
+   void regirGridCenterDoesNotChurnOnSingleHashCellMotion() {
+      Vector3f currentCenter = new Vector3f(0.0F, 0.0F, 0.0F);
+
+      assertFalse(LightRegistry.shouldRecenterRegirGridCenter(
+         currentCenter,
+         new Vector3f(12.0F, 0.0F, 0.0F)
+      ));
+      assertTrue(LightRegistry.shouldRecenterRegirGridCenter(
+         currentCenter,
+         new Vector3f(16.0F, 0.0F, 0.0F)
+      ));
+      assertEquals(new Vector3f(16.0F, 0.0F, 0.0F), LightRegistry.snapRegirGridCenter(new Vector3f(17.5F, 0.0F, 0.0F)));
+   }
+
+   @Test
    void buildSpatialGridSkipsInactivePlaceholderLights() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
       BlockLightInfo info = createTestLightInfo(100.0F);

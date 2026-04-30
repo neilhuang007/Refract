@@ -12,9 +12,8 @@
 // coherent.  A separate per-thread RNG picks the within-tile entry each
 // iteration, giving independent samples.
 
-// One thread per stage pixel. Surface-hit pixels atomically claim one hash slot
-// for their (cellCoord, normalBucket) pair; only the winning representative
-// fills that cell's ReGIR reservoirs.
+// One thread per world-space hash-grid key in the active build region. Each
+// thread owns one (cellCoord, normalBucket) pair and fills its ReGIR reservoirs.
 layout(local_size_x = 64) in;
 
 // ---------------------------------------------------------------------------
@@ -173,13 +172,6 @@ uniform int   ph_regir_hash_table_size;        // Number of slots in the hash ta
 uniform float ph_regir_hash_cell_size;         // World units per cell side.
 uniform int   ph_regir_hash_normal_buckets;    // Quantization buckets for surface normal.
 uniform int   ph_regir_build_region_cells;     // Cells per side in the build cube around the camera.
-uniform ivec2 ph_regir_stage_size;              // Stage G-buffer dimensions.
-
-uniform sampler2D stage_radiosity_position;
-uniform sampler2D stage_radiosity_normal;
-uniform sampler2D stage_radiosity_mapped_normal;
-uniform sampler2D stage_radiosity_albedo;
-uniform sampler2D stage_radiosity_material;
 
 const uint REGIR_LOCAL_LIGHT_PRESAMPLING_MODE_UNIFORM = 0u;
 const uint REGIR_LOCAL_LIGHT_PRESAMPLING_MODE_POWER_RIS = 1u;
@@ -285,6 +277,7 @@ uint regir_hash_pcg_key(ivec3 cellCoord, int bucket) {
 }
 
 const uint REGIR_HASH_CLAIMED = 0xffffffffu;
+const int REGIR_HASH_MAX_PROBES = 128;
 
 uint regir_hash_xxhash_checksum(ivec3 cellCoord, int bucket) {
     uint h = regir_xxhash_step(uint(bucket) + regir_xxhash_step(uint(cellCoord.z)
@@ -354,7 +347,7 @@ RegirHashInsertResult regir_hash_insert(ivec3 cellCoord, int bucket) {
     uint slot = regir_hash_pcg_key(cellCoord, bucket) % uint(ph_regir_hash_table_size);
     ivec4 insertKey = ivec4(cellCoord, bucket);
 
-    for (int probe = 0; probe < 32; probe++) {
+    for (int probe = 0; probe < REGIR_HASH_MAX_PROBES; probe++) {
         uint existing = atomicCompSwap(ph_regir_cell_checksum[slot], 0u, REGIR_HASH_CLAIMED);
         if (existing == 0u) {
             ph_regir_cell_key[slot] = insertKey;
@@ -521,89 +514,67 @@ float RAB_GetLightTargetPdfForCell(RAB_LightInfo lightInfo, vec3 cellCenter, vec
 }
 
 // Backward-compat shim: legacy callers asked for a volumetric (no-normal) target.
-// We keep it but degrade gracefully — equivalent to using the +Y bucket, i.e.
+// We keep it but degrade gracefully: equivalent to using the +Y bucket, i.e.
 // a "neutral" upward-facing surface.
 float RAB_GetLightTargetPdfForVolume(RAB_LightInfo lightInfo, vec3 cellCenter, float cellRadius) {
     return RAB_GetLightTargetPdfForCell(lightInfo, cellCenter, vec3(0.0, 1.0, 0.0), cellRadius);
 }
 
-bool regir_load_surface(uint threadId, out vec3 surfacePos, out vec3 surfaceNormal) {
-    surfacePos = vec3(0.0);
-    surfaceNormal = vec3(0.0, 1.0, 0.0);
-
-    if (ph_regir_stage_size.x <= 0 || ph_regir_stage_size.y <= 0) {
-        return false;
-    }
-
-    uint width = uint(ph_regir_stage_size.x);
-    ivec2 pixel = ivec2(int(threadId % width), int(threadId / width));
-
-    vec4 packedPosition = texelFetch(stage_radiosity_position, pixel, 0);
-    if (!(packedPosition.w > 0.0) || any(isnan(packedPosition.xyz)) || any(isinf(packedPosition.xyz))) {
-        return false;
-    }
-
-    vec3 geometryNormal = texelFetch(stage_radiosity_normal, pixel, 0).xyz;
-    vec3 mappedNormal = texelFetch(stage_radiosity_mapped_normal, pixel, 0).xyz;
-    vec3 resolvedNormal = dot(mappedNormal, mappedNormal) > 1.0e-6
-        ? mappedNormal
-        : geometryNormal;
-
-    float normalLengthSq = dot(resolvedNormal, resolvedNormal);
-    if (!(normalLengthSq > 1.0e-6) || any(isnan(resolvedNormal)) || any(isinf(resolvedNormal))) {
-        return false;
-    }
-
-    surfacePos = packedPosition.xyz;
-    surfaceNormal = normalize(resolvedNormal);
-    return true;
+ivec3 regir_build_region_min_cell() {
+    int buildRegionCells = max(ph_regir_build_region_cells, 1);
+    int halfRegionCells = buildRegionCells / 2;
+    ivec3 centerCell = ivec3(floor(ph_regir_grid_center / ph_regir_hash_cell_size));
+    return centerCell - ivec3(halfRegionCells);
 }
 
 bool regir_cell_in_build_region(ivec3 cellCoord) {
     int buildRegionCells = max(ph_regir_build_region_cells, 1);
-    int halfRegionCells = buildRegionCells / 2;
-    ivec3 centerCell = ivec3(floor(ph_regir_grid_center / ph_regir_hash_cell_size));
-    ivec3 minCell = centerCell - ivec3(halfRegionCells);
+    ivec3 minCell = regir_build_region_min_cell();
     ivec3 maxCell = minCell + ivec3(buildRegionCells);
     return all(greaterThanEqual(cellCoord, minCell)) && all(lessThan(cellCoord, maxCell));
 }
 
 // ---------------------------------------------------------------------------
 // Hash-grid ReGIR build (paper variant).
-// One thread per visible stage surface:
-//   1. quantizes the surface-hit position and normal bucket
-//   2. hash-inserts (cellCoord, bucket), with one pixel winning the representative
-//   3. the winning representative P_c/N_c runs RIS for every lightsPerCell slot
+// One thread per world-space cell and normal bucket:
+//   1. enumerates a cell in the camera-centered build region
+//   2. hash-inserts (cellCoord, bucket)
+//   3. uses the world-space cell center P_c and bucket normal N_c for RIS
 //      and writes the winning light + RIS weight back into ph_ris_data.
-// Empty space is never inserted, so the hash grid is sparse in actual surface hits.
+// This intentionally does not derive cells from current screen pixels; the grid
+// is anchored to world-space cell coordinates, and screen-space only decides
+// which shaded points query it later.
 // ---------------------------------------------------------------------------
 void main() {
     if (ph_regir_hash_table_size <= 0
         || ph_regir_lights_per_cell <= 0
-        || ph_regir_hash_cell_size <= 0.0) {
+        || ph_light_count <= 0
+        || ph_regir_hash_cell_size <= 0.0
+        || ph_regir_build_region_cells <= 0
+        || ph_regir_hash_normal_buckets <= 0) {
         return;
     }
 
-    uint totalThreads = uint(max(ph_regir_stage_size.x, 0)) * uint(max(ph_regir_stage_size.y, 0));
-
+    int buildRegionCells = max(ph_regir_build_region_cells, 1);
+    int bucketCount = max(ph_regir_hash_normal_buckets, 1);
+    uint cellsPerSide = uint(buildRegionCells);
+    uint worldCellCount = cellsPerSide * cellsPerSide * cellsPerSide;
+    uint totalThreads = worldCellCount * uint(bucketCount);
     uint threadId = gl_GlobalInvocationID.x;
     if (threadId >= totalThreads) return;
 
     int lightsPerCell = ph_regir_lights_per_cell;
 
-    vec3 representativePos;
-    vec3 representativeNormal;
-    if (!regir_load_surface(threadId, representativePos, representativeNormal)) {
-        return;
-    }
-
-    ivec3 cellCoord = ivec3(floor(representativePos / ph_regir_hash_cell_size));
-    if (!regir_cell_in_build_region(cellCoord)) {
-        return;
-    }
-
-    int bucket = regir_normal_to_bucket(representativeNormal);
-    bucket = regir_clamp_normal_bucket(bucket);
+    uint cellLinearIndex = threadId / uint(bucketCount);
+    int bucket = regir_clamp_normal_bucket(int(threadId - cellLinearIndex * uint(bucketCount)));
+    ivec3 localCell = ivec3(
+        int(cellLinearIndex % cellsPerSide),
+        int((cellLinearIndex / cellsPerSide) % cellsPerSide),
+        int(cellLinearIndex / (cellsPerSide * cellsPerSide))
+    );
+    ivec3 cellCoord = regir_build_region_min_cell() + localCell;
+    vec3 representativePos = (vec3(cellCoord) + vec3(0.5)) * ph_regir_hash_cell_size;
+    vec3 representativeNormal = regir_bucket_to_normal(bucket);
 
     RegirHashInsertResult insert = regir_hash_insert(cellCoord, bucket);
     if (insert.slot < 0 || !insert.inserted) return;
@@ -618,11 +589,10 @@ void main() {
         return;
     }
 
-    // Cell radius for the volumetric average-distance approximation. Hash cells
-    // have a fixed extent (cellSize), but the target itself is evaluated at the
-    // representative surface hit P_c, not at the cell center.
-    float cellRadius = ph_regir_hash_cell_size * sqrt(3.0) * 0.5
-        * (ph_regir_sampling_jitter + 1.0);
+    // Cell radius for the average-distance approximation. This matches the
+    // world-space hash cell extent; lookup jitter chooses neighboring cells
+    // stochastically instead of inflating the cell during construction.
+    float cellRadius = ph_regir_hash_cell_size * sqrt(3.0) * 0.5;
 
     bool usePowerRisPresampling = ph_regir_local_light_presampling_mode == REGIR_LOCAL_LIGHT_PRESAMPLING_MODE_POWER_RIS;
 
@@ -670,8 +640,21 @@ void main() {
             float invSourcePdf;
             if (usePowerRisPresampling) {
                 RTXDI_SelectNextLocalLight(risTileInfo, rand, lightInfo, rndLight, invSourcePdf);
+                if (rndLight >= uint(max(ph_light_count, 0))
+                    || !(invSourcePdf > 0.0)
+                    || isinf(invSourcePdf)
+                    || isnan(invSourcePdf)) {
+                    RTXDI_RandomlySelectLightUniformly(rand, lightInfo, rndLight, invSourcePdf);
+                }
             } else {
                 RTXDI_RandomlySelectLightUniformly(rand, lightInfo, rndLight, invSourcePdf);
+            }
+
+            if (rndLight >= uint(max(ph_light_count, 0))
+                || !(invSourcePdf > 0.0)
+                || isinf(invSourcePdf)
+                || isnan(invSourcePdf)) {
+                continue;
             }
 
             invSourcePdf *= invNumSamples;

@@ -186,6 +186,7 @@ uint regir_hash_pcg_key(ivec3 cellCoord, int bucket) {
 }
 
 const uint REGIR_HASH_CLAIMED = 0xffffffffu;
+const int REGIR_HASH_MAX_PROBES = 128;
 
 uint regir_hash_xxhash_checksum(ivec3 cellCoord, int bucket) {
     uint h = regir_xxhash_step(uint(bucket) + regir_xxhash_step(uint(cellCoord.z)
@@ -208,7 +209,7 @@ int regir_clamp_normal_bucket(int bucket) {
     return clamp(bucket, 0, max(ph_regir_hash_normal_buckets - 1, 0));
 }
 
-// Hash lookup with 32-step linear probing. Returns the slot containing the
+// Hash lookup with bounded linear probing. Returns the slot containing the
 // matching (cellCoord, bucket) key, or -1 if the cell wasn't built this frame.
 int regir_hash_lookup(ivec3 cellCoord, int bucket) {
     if (ph_regir_hash_table_size <= 0 || ph_regir_hash_cell_size <= 0.0) {
@@ -219,7 +220,7 @@ int regir_hash_lookup(ivec3 cellCoord, int bucket) {
     uint checksum = regir_hash_xxhash_checksum(cellCoord, bucket);
     uint slot = regir_hash_pcg_key(cellCoord, bucket) % uint(ph_regir_hash_table_size);
 
-    for (int probe = 0; probe < 32; probe++) {
+    for (int probe = 0; probe < REGIR_HASH_MAX_PROBES; probe++) {
         uint stored = ph_regir_cell_checksum[slot];
         if (stored == 0u) return -1;        // empty -> cell missed; lookup fails fast
         if (stored == REGIR_HASH_CLAIMED) return -1;

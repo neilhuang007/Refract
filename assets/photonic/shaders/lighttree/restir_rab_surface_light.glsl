@@ -123,11 +123,11 @@ RAB_LightInfo RAB_LoadLightInfo(int lightIndex, bool previousFrame)
 
 RAB_LightInfo RAB_LoadCompactLightInfo(uint risBufferPtr, int lightIndex)
 {
-    if (lightIndex < 0) {
+    if (lightIndex < 0 || lightIndex >= ph_light_count) {
         return RAB_EmptyLightInfo();
     }
 
-    return load_compact_light(risBufferPtr, lightIndex);
+    return load_light(lightIndex);
 }
 
 RAB_LightSample RAB_SamplePolymorphicLight(Light light, RAB_Surface surface, vec2 sampleUv)

@@ -49,6 +49,7 @@ import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.state.property.Property;
 import net.minecraft.util.math.BlockPos;
 import org.apache.commons.lang3.tuple.Pair;
 import org.joml.Vector2f;
@@ -81,16 +82,23 @@ public class LightRegistry implements Destructable {
    // including the surface normal in the hash so opposing faces don't share
    // the same reservoirs.
    private static final int REGIR_HASH_NORMAL_BUCKETS = 6;
-   // Hash table capacity. Must be a power of two for cheap modulo if we
-   // ever switch, but plain modulo is fine. Sized to keep load <50% with
-   // the build region below.
-   private static final int REGIR_HASH_TABLE_SIZE = 65536;
-   // Cells per side of the camera-centered admission cube. The GPU build now
-   // dispatches one thread per stage G-buffer pixel; surface-hit pixels outside
-   // this cube are skipped before they can claim a hash slot.
-   private static final int REGIR_BUILD_REGION_CELLS = 16;
+   // Hash table capacity. The active build set is REGIR_BUILD_REGION_CELLS^3
+   // * REGIR_HASH_NORMAL_BUCKETS keys; keep the table comfortably below 50%
+   // load so linear-probe clusters do not make world cells vanish as the
+   // camera-centered build window moves.
+   private static final int REGIR_HASH_TABLE_SIZE = 131072;
+   // Cells per side of the camera-centered world-space build cube. The GPU
+   // build enumerates these hash cells directly, once per normal bucket, so
+   // ReGIR cell existence is not tied to the current screen's visible pixels.
+   // Keep a one-cell border around the old 16^3 working set so lookup jitter
+   // can cross cell boundaries without immediately falling off the built cube.
+   private static final int REGIR_BUILD_REGION_CELLS = 18;
+   private static final int REGIR_GRID_RECENTER_HYSTERESIS_CELLS = Math.max(1, (REGIR_BUILD_REGION_CELLS - 2) / 4);
+   private static final int RESIDENT_LIGHT_REMOVAL_CONFIRMATION_SCANS = 64;
    private static final int INCREMENTAL_PARALLEL_THRESHOLD = 32;
    private static final float POSITION_MATCH_EPSILON = 1.0e-4F;
+   private static final long CHUNK_LIGHT_HASH_OFFSET = 1469598103934665603L;
+   private static final long CHUNK_LIGHT_HASH_PRIME = 1099511628211L;
    private static final Comparator<LightInstance> STABLE_LIGHT_ORDER = (a, b) -> {
       Vector3f pa = a.position();
       Vector3f pb = b.position();
@@ -144,6 +152,10 @@ public class LightRegistry implements Destructable {
 
    private static int mixSemanticHash(int hash, float value) {
       return mixSemanticHash(hash, Float.floatToIntBits(value));
+   }
+
+   private static long mixChunkLightHash(long hash, long value) {
+      return (hash ^ value) * CHUNK_LIGHT_HASH_PRIME;
    }
 
    static long semanticLightDescriptorHash(BlockLightInfo lightInfo) {
@@ -278,6 +290,8 @@ public class LightRegistry implements Destructable {
   private LightInstance[] tracedLights = new LightInstance[0];
   private final Map<Vector3f, TracedLightPosition> tracedLightPositions = new ConcurrentHashMap<>();
   private final Set<Long> loadedLightChunks = ConcurrentHashMap.newKeySet();
+  private final Map<Long, Long> chunkLightHashes = new ConcurrentHashMap<>();
+  private final Map<Vector3f, Integer> residentMissingLightScans = new ConcurrentHashMap<>();
   private final PhotonicsConfig.Observer<LightList> lightListObserver;
   private LightList lightList = new LightList();
   private final ReadWriteLock lock;
@@ -285,6 +299,7 @@ public class LightRegistry implements Destructable {
   private int compileCount = 0;
   private LightsProvider lightsProvider = null;
   private volatile boolean tracedLightSetDirty = true;
+  private volatile boolean lightActivityDirty = false;
    private HashMap<Long, List<Integer>> lightGrid;
   private int lightGridAssignments = 0;
   private final LightChurnStats churnStats = new LightChurnStats();
@@ -306,7 +321,8 @@ public class LightRegistry implements Destructable {
   private volatile boolean gpuRegirBuildEnabled = false;
   private float[] lightPowers = new float[0];
   private float[] regirLightPowers = new float[0];
-  private int mutationDebugLogsRemaining = 48;
+   private int mutationDebugLogsRemaining = 96;
+   private int activityDebugLogsRemaining = 48;
 
   public LightRegistry(int maxLights, int maxLightsPerNode, float minTracedLightSelectionLuma, int nodeSize, int worldSize) {
      if (16 % nodeSize != 0) {
@@ -441,7 +457,8 @@ public class LightRegistry implements Destructable {
    private Vector3f resolveRegirGridCenter() {
       Vector3f cameraPosition = getCurrentCameraPosition();
       if (!this.isRegirGridCenterFrozenForDebug()) {
-         return cameraPosition;
+         this.updateStableRegirGridCenter(cameraPosition);
+         return new Vector3f(this.regirGridCenter);
       }
 
       if (!this.frozenRegirGridCenterInitialized) {
@@ -450,6 +467,38 @@ public class LightRegistry implements Destructable {
       }
 
       return new Vector3f(this.frozenRegirGridCenter);
+   }
+
+   private void updateStableRegirGridCenter(Vector3f cameraPosition) {
+      if (!this.regirGridCenterInitialized || shouldRecenterRegirGridCenter(this.regirGridCenter, cameraPosition)) {
+         this.regirGridCenter.set(snapRegirGridCenter(cameraPosition));
+         this.regirGridCenterInitialized = true;
+      }
+   }
+
+   static boolean shouldRecenterRegirGridCenter(Vector3f currentCenter, Vector3f cameraPosition) {
+      int currentCellX = regirHashCellCoord(currentCenter.x);
+      int currentCellY = regirHashCellCoord(currentCenter.y);
+      int currentCellZ = regirHashCellCoord(currentCenter.z);
+      int cameraCellX = regirHashCellCoord(cameraPosition.x);
+      int cameraCellY = regirHashCellCoord(cameraPosition.y);
+      int cameraCellZ = regirHashCellCoord(cameraPosition.z);
+      int threshold = REGIR_GRID_RECENTER_HYSTERESIS_CELLS;
+      return Math.abs(cameraCellX - currentCellX) >= threshold
+         || Math.abs(cameraCellY - currentCellY) >= threshold
+         || Math.abs(cameraCellZ - currentCellZ) >= threshold;
+   }
+
+   static Vector3f snapRegirGridCenter(Vector3f cameraPosition) {
+      return new Vector3f(
+         regirHashCellCoord(cameraPosition.x) * REGIR_HASH_CELL_SIZE_BLOCKS,
+         regirHashCellCoord(cameraPosition.y) * REGIR_HASH_CELL_SIZE_BLOCKS,
+         regirHashCellCoord(cameraPosition.z) * REGIR_HASH_CELL_SIZE_BLOCKS
+      );
+   }
+
+   static int regirHashCellCoord(float coordinate) {
+      return (int) Math.floor(coordinate / REGIR_HASH_CELL_SIZE_BLOCKS);
    }
 
    public Lock readLock() {
@@ -527,7 +576,9 @@ public class LightRegistry implements Destructable {
          if (profiling) {
             tDiff = System.nanoTime();
          }
-         boolean rebuildSpatialGrid = lightsChanged || this.lightGrid == null;
+         boolean bufferOnlyChanged = this.churnStats.lastFrameBufferOnly();
+         boolean topologyChanged = lightsChanged && !bufferOnlyChanged;
+         boolean rebuildSpatialGrid = topologyChanged || this.lightGrid == null;
          if (rebuildSpatialGrid) {
             this.buildSpatialGrid(this.tracedLights);
          }
@@ -535,7 +586,7 @@ public class LightRegistry implements Destructable {
             tGrid = System.nanoTime();
          }
 
-         boolean regirDirty = rebuildSpatialGrid || offsetChanged;
+         boolean regirDirty = rebuildSpatialGrid || (!this.gpuRegirBuildEnabled && offsetChanged);
          if (regirDirty && !this.gpuRegirBuildEnabled) {
             this.buildRegirGrid();
          } else if (regirDirty) {
@@ -549,8 +600,12 @@ public class LightRegistry implements Destructable {
          if (lightsChanged) {
             this.copyCurrentLightsToPrevious();
             this.storeLights();
-            this.storeLightMappings();
-            this.storeLightReverseMappings();
+            if (topologyChanged) {
+               this.storeLightMappings();
+               this.storeLightReverseMappings();
+            } else {
+               this.storeIdentityLightMappings();
+            }
             this.storeGlobalLightCdf(selectionCamera);
             this.markGlobalLightCdfCamera(selectionCamera);
             this.lightsMemoryManager.queueUpload(this.lightsMemory);
@@ -558,7 +613,17 @@ public class LightRegistry implements Destructable {
             this.lightMappingMemoryManager.queueUpload(this.lightMappingMemory);
             this.lightReverseMappingMemoryManager.queueUpload(this.lightReverseMappingMemory);
             this.globalLightCdfMemoryManager.queueUpload(this.globalLightCdfMemory);
-            this.identityLightMappingPending = true;
+            this.identityLightMappingPending = topologyChanged;
+            this.lightActivityDirty = false;
+         } else if (bufferOnlyChanged) {
+            this.copyCurrentLightsToPrevious();
+            this.storeLights();
+            this.storeGlobalLightCdf(selectionCamera);
+            this.markGlobalLightCdfCamera(selectionCamera);
+            this.lightsMemoryManager.queueUpload(this.lightsMemory);
+            this.previousLightsMemoryManager.queueUpload(this.previousLightsMemory);
+            this.globalLightCdfMemoryManager.queueUpload(this.globalLightCdfMemory);
+            this.lightActivityDirty = false;
          } else {
             if (refreshGlobalLightCdf) {
                this.storeGlobalLightCdf(selectionCamera);
@@ -578,8 +643,10 @@ public class LightRegistry implements Destructable {
             String rebuildReason;
             if (offsetChanged) {
                rebuildReason = "offset";
-            } else if (lightsChanged) {
+            } else if (topologyChanged) {
                rebuildReason = "lights";
+            } else if (lightsChanged || bufferOnlyChanged) {
+               rebuildReason = "activity";
             } else {
                rebuildReason = "unknown";
             }
@@ -599,8 +666,8 @@ public class LightRegistry implements Destructable {
                this.lightGrid == null ? 0 : this.lightGrid.size(),
                this.lightGridAssignments,
                this.describeRecentChurn(),
-               lightsChanged,
-               lightsChanged,
+               lightsChanged || bufferOnlyChanged,
+               topologyChanged,
                regirDirty,
                identityQueued,
                gatherMs,
@@ -609,7 +676,7 @@ public class LightRegistry implements Destructable {
                storeMs,
                totalMs
             );
-            if (lightsChanged) {
+            if (topologyChanged) {
                Photonic.info(
                   "[Profiler] regirBuild: lights={} activeCells={} lightSlots={} gridResolution={}x{}x{} cellSize={} compileCount={} churn={}",
                   this.tracedLights.length,
@@ -1045,14 +1112,14 @@ public class LightRegistry implements Destructable {
    private boolean createTracedLights(LightInstance[] gatheredLights) {
       LightInstance[] sortedLights = Arrays.copyOf(gatheredLights, gatheredLights.length);
       Arrays.sort(sortedLights, STABLE_LIGHT_ORDER);
-      this.ensureLightCapacity(Math.max(sortedLights.length, this.tracedLights.length));
+      this.ensureLightCapacity(Math.max(sortedLights.length, this.tracedLights.length) + Math.min(sortedLights.length, this.tracedLights.length));
       Arrays.fill(this.newLightIndices, (short) -1);
       LightInstance[] prevLights = this.tracedLights;
       LightChurnStats.Frame frameStats = this.churnStats.beginFrame(prevLights.length, sortedLights.length);
       boolean[] matchedCurrent = new boolean[sortedLights.length];
       LightInstance[] nextLights = new LightInstance[sortedLights.length];
       int nextSize = 0;
-      boolean anyDirty = prevLights.length != sortedLights.length;
+      boolean anyDirty = false;
 
       for (int previousIndex = 0; previousIndex < prevLights.length; previousIndex++) {
          LightInstance previous = prevLights[previousIndex];
@@ -1061,6 +1128,7 @@ public class LightRegistry implements Destructable {
             LightInstance current = sortedLights[semanticMatchIndex];
             matchedCurrent[semanticMatchIndex] = true;
             current.setIndex(nextSize);
+            nextLights = ensureNextLightCapacity(nextLights, nextSize + 1);
             nextLights[nextSize] = current;
             this.newLightIndices[previousIndex] = (short) nextSize;
             if (previousIndex == nextSize && previous.active() == current.active()) {
@@ -1069,6 +1137,7 @@ public class LightRegistry implements Destructable {
                anyDirty = true;
                if (previous.active() != current.active()) {
                   frameStats.activityChanges++;
+                  this.logActivityTransition("semantic", previous, current);
                }
             }
             nextSize++;
@@ -1080,6 +1149,7 @@ public class LightRegistry implements Destructable {
             LightInstance current = sortedLights[positionMatchIndex];
             matchedCurrent[positionMatchIndex] = true;
             current.setIndex(nextSize);
+            nextLights = ensureNextLightCapacity(nextLights, nextSize + 1);
             nextLights[nextSize] = current;
             this.newLightIndices[previousIndex] = (short) nextSize;
             anyDirty = true;
@@ -1087,8 +1157,26 @@ public class LightRegistry implements Destructable {
                frameStats.blockIdChanges++;
             } else if (previous.active() != current.active()) {
                frameStats.activityChanges++;
+               this.logActivityTransition("position", previous, current);
             } else {
                frameStats.lightInfoChanges++;
+            }
+            nextSize++;
+            continue;
+         }
+
+         if (this.shouldRetainInactivePlaceholder(previous)) {
+            LightInstance inactive = previous.active() ? inactivePlaceholder(previous) : previous;
+            inactive.setIndex(nextSize);
+            nextLights = ensureNextLightCapacity(nextLights, nextSize + 1);
+            nextLights[nextSize] = inactive;
+            this.newLightIndices[previousIndex] = (short) nextSize;
+            if (previous.active()) {
+               frameStats.activityChanges++;
+               this.logActivityTransition("placeholder", previous, inactive);
+               anyDirty = true;
+            } else if (previousIndex == nextSize) {
+               frameStats.stableMappings++;
             }
             nextSize++;
             continue;
@@ -1104,6 +1192,7 @@ public class LightRegistry implements Destructable {
          }
          LightInstance current = sortedLights[i];
          current.setIndex(nextSize);
+         nextLights = ensureNextLightCapacity(nextLights, nextSize + 1);
          nextLights[nextSize] = current;
          nextSize++;
          frameStats.additions++;
@@ -1121,6 +1210,40 @@ public class LightRegistry implements Destructable {
          : 0;
       this.pendingTracedLightMutations = Math.max(this.pendingTracedLightMutations, remappedMutationCount);
       return anyDirty;
+   }
+
+   private boolean shouldRetainInactivePlaceholder(LightInstance light) {
+      Vector3f pos = light.position();
+      BlockPos blockPos = new BlockPos((int) pos.x, (int) pos.y, (int) pos.z);
+      return this.isTrackedChunkLoaded(blockPos);
+   }
+
+   private static LightInstance[] ensureNextLightCapacity(LightInstance[] lights, int requiredSize) {
+      if (requiredSize <= lights.length) {
+         return lights;
+      }
+      return Arrays.copyOf(lights, Math.max(requiredSize, lights.length + Math.max(1, lights.length / 2)));
+   }
+
+   private void logActivityTransition(String matchType, LightInstance previous, LightInstance current) {
+      if (!PhotonicsStorage.PROFILER_ENABLED.value || !Photonic.automationEnabled() || this.activityDebugLogsRemaining <= 0) {
+         return;
+      }
+
+      this.activityDebugLogsRemaining--;
+      Vector3f pos = current.position();
+      Photonic.info(
+         "[Profiler] lightActivity: match={} pos=({},{},{}) blockId={}->{} active={}->{} descriptorSame={}",
+         matchType,
+         (int) pos.x,
+         (int) pos.y,
+         (int) pos.z,
+         previous.blockId(),
+         current.blockId(),
+         previous.active(),
+         current.active(),
+         sameSemanticLight(previous, current)
+      );
    }
 
    /**
@@ -1205,6 +1328,59 @@ public class LightRegistry implements Destructable {
       return this.hasPossibleLight(blockState.getBlock());
    }
 
+   public boolean hasPossibleTracedLight(BlockState blockState) {
+      return blockState != null && this.lightList.getAnyTraced(blockState.getBlock()) != null;
+   }
+
+   public BlockState canonicalizeTracedLightBlockState(BlockState blockState) {
+      if (!this.hasPossibleTracedLight(blockState)) {
+         return blockState;
+      }
+
+      BlockState canonicalState = blockState;
+      for (Property<?> property : blockState.getEntries().keySet()) {
+         if (isLightActivityProperty(property)) {
+            canonicalState = withBooleanProperty(canonicalState, property, true);
+         }
+      }
+      return canonicalState;
+   }
+
+   private int stableTracedLightBlockId(BlockState blockState) {
+      return IrisUtil.getBlockId(this.canonicalizeTracedLightBlockState(blockState));
+   }
+
+   private static boolean isLightActivityProperty(Property<?> property) {
+      String name = property.getName();
+      return "lit".equals(name) || "powered".equals(name) || "enabled".equals(name);
+   }
+
+   @SuppressWarnings({"unchecked", "rawtypes"})
+   private static BlockState withBooleanProperty(BlockState blockState, Property<?> property, boolean value) {
+      Comparable<?> currentValue = blockState.getEntries().get(property);
+      if (!(currentValue instanceof Boolean)) {
+         return blockState;
+      }
+      return blockState.with((Property) property, Boolean.valueOf(value));
+   }
+
+   private BlockLightInfo fallbackTrackedLightInfo(BlockState blockState) {
+      if (blockState == null) {
+         return null;
+      }
+
+      BlockLightInfo lightInfo = this.lightList.getAnyTraced(blockState.getBlock());
+      return lightInfo != null && lightInfo.requestedTrace() ? lightInfo : null;
+   }
+
+   public boolean hasTrackedLight(BlockPos blockPos) {
+      if (blockPos == null) {
+         return false;
+      }
+      Vector3f lightPos = new Vector3f(blockPos.getX() + 0.5F, blockPos.getY() + 0.5F, blockPos.getZ() + 0.5F);
+      return this.tracedLightPositions.containsKey(lightPos);
+   }
+
    public void onBlockLoad(Vector3f position) {
       if (ShaderAutomation.suppressWorldMutationIngress()) {
          return;
@@ -1216,7 +1392,8 @@ public class LightRegistry implements Destructable {
             return;
          }
          BlockPos blockPos = new BlockPos((int) position.x, (int) position.y, (int) position.z);
-         this.syncTracedLight(level, blockPos, level.getBlockState(blockPos));
+         this.chunkLightHashes.remove(chunkKey(blockPos));
+         this.syncTracedLight(level, blockPos, level.getBlockState(blockPos), true, SyncSource.BLOCK_LOAD);
       } finally {
          this.lock.writeLock().unlock();
       }
@@ -1239,7 +1416,11 @@ public class LightRegistry implements Destructable {
          if (level == null) {
             return;
          }
-         this.syncTracedLight(level, blockPos, level.getBlockState(blockPos));
+         this.chunkLightHashes.remove(chunkKey(blockPos));
+         // A client block update carries the new block state now. Do not apply
+         // the resident-chunk missing-light grace window here, or removed light
+         // blocks keep contributing until a later full chunk scan happens.
+         this.syncTracedLight(level, blockPos, level.getBlockState(blockPos), false, SyncSource.BLOCK_UPDATE_LIVE);
       } finally {
          this.lock.writeLock().unlock();
       }
@@ -1251,23 +1432,69 @@ public class LightRegistry implements Destructable {
       }
       this.lock.writeLock().lock();
       try {
-         this.syncTracedLight(blockPos, blockState, lightInfo);
+         this.chunkLightHashes.remove(chunkKey(blockPos));
+         // Same as the live lookup overload: this snapshot is an authoritative
+         // block update, not a speculative resident chunk rescan.
+         this.syncTracedLight(blockPos, blockState, lightInfo, false, SyncSource.BLOCK_UPDATE_SNAPSHOT);
       } finally {
          this.lock.writeLock().unlock();
       }
    }
 
+   private long computeChunkLightHash(ClientWorld level, PChunkPos chunkPos) {
+      long hash = CHUNK_LIGHT_HASH_OFFSET;
+      PBlockPos chunkMin = chunkPos.toBlockPos();
+      BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
+
+      for (int x = 0; x < 16; x++) {
+         for (int y = 0; y < 16; y++) {
+            for (int z = 0; z < 16; z++) {
+               mutableBlockPos.set(chunkMin.x + x, chunkMin.y + y, chunkMin.z + z);
+               if (level == null || !level.isChunkLoaded(mutableBlockPos)) {
+                  hash = mixChunkLightHash(hash, 0x6d697373L);
+                  continue;
+               }
+
+               BlockState blockState;
+               try {
+                  blockState = level.getBlockState(mutableBlockPos);
+               } catch (Exception ignored) {
+                  blockState = Blocks.AIR.getDefaultState();
+               }
+
+               BlockLightInfo lightInfo = this.resolveLightInfo(mutableBlockPos, blockState, level);
+               hash = mixChunkLightHash(hash, Integer.toUnsignedLong(blockState.hashCode()));
+               hash = mixChunkLightHash(hash, lightInfo == null ? 0L : 1L);
+               if (lightInfo != null) {
+                  hash = mixChunkLightHash(hash, Integer.toUnsignedLong(IrisUtil.getBlockId(blockState)));
+                  hash = mixChunkLightHash(hash, semanticLightDescriptorHash(lightInfo));
+               }
+            }
+         }
+      }
+
+      return hash;
+   }
+
    public void synchronizeChunkLights(ClientWorld level, PChunkPos chunkPos) {
       this.lock.writeLock().lock();
       try {
-         this.loadedLightChunks.add(chunkKey(chunkPos));
+         long key = chunkKey(chunkPos);
+         long chunkLightHash = this.computeChunkLightHash(level, chunkPos);
+         Long previousHash = this.chunkLightHashes.get(key);
+         this.loadedLightChunks.add(key);
+         if (previousHash != null && previousHash == chunkLightHash) {
+            this.churnStats.noteNoopSync();
+            return;
+         }
+         this.chunkLightHashes.put(key, chunkLightHash);
          PBlockPos chunkMin = chunkPos.toBlockPos();
          BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
          for (int x = 0; x < 16; x++) {
             for (int y = 0; y < 16; y++) {
                for (int z = 0; z < 16; z++) {
                   mutableBlockPos.set(chunkMin.x + x, chunkMin.y + y, chunkMin.z + z);
-                  this.syncTracedLight(level, mutableBlockPos, level.getBlockState(mutableBlockPos));
+                  this.syncTracedLight(level, mutableBlockPos, level.getBlockState(mutableBlockPos), true, SyncSource.CHUNK_SYNC);
                }
             }
          }
@@ -1279,7 +1506,9 @@ public class LightRegistry implements Destructable {
    public void clearChunkLights(PChunkPos chunkPos) {
       this.lock.writeLock().lock();
       try {
-         this.loadedLightChunks.remove(chunkKey(chunkPos));
+         long key = chunkKey(chunkPos);
+         this.loadedLightChunks.remove(key);
+         this.chunkLightHashes.remove(key);
          PBlockPos chunkMin = chunkPos.toBlockPos();
          int maxX = chunkMin.x + 16;
          int maxY = chunkMin.y + 16;
@@ -1291,6 +1520,7 @@ public class LightRegistry implements Destructable {
             Vector3f pos = entry.getKey();
             if (pos.x >= chunkMin.x && pos.x < maxX && pos.y >= chunkMin.y && pos.y < maxY && pos.z >= chunkMin.z && pos.z < maxZ) {
                itr.remove();
+               this.residentMissingLightScans.remove(pos);
                removed = true;
             }
          }
@@ -1306,6 +1536,12 @@ public class LightRegistry implements Destructable {
    public boolean consumeTracedLightSetDirty() {
       boolean dirty = this.tracedLightSetDirty;
       this.tracedLightSetDirty = false;
+      return dirty;
+   }
+
+   public boolean consumeLightActivityDirty() {
+      boolean dirty = this.lightActivityDirty;
+      this.lightActivityDirty = false;
       return dirty;
    }
 
@@ -1446,8 +1682,10 @@ public class LightRegistry implements Destructable {
 
    public long getSemanticLayoutHash() {
       long hash = 1469598103934665603L;
-      hash = hash * 1099511628211L + this.regirActiveCellCount;
-      hash = hash * 1099511628211L + this.regirActiveLightSlotCount;
+      if (!this.gpuRegirBuildEnabled) {
+         hash = hash * 1099511628211L + this.regirActiveCellCount;
+         hash = hash * 1099511628211L + this.regirActiveLightSlotCount;
+      }
       for (LightInstance light : this.tracedLights) {
          hash = hash * 1099511628211L + Integer.toUnsignedLong(light.blockId());
          hash = hash * 1099511628211L + Float.floatToIntBits(light.position().x);
@@ -1461,7 +1699,7 @@ public class LightRegistry implements Destructable {
    private LightInstance[] toLightInstanceArray() {
       List<LightInstance> lights = new ArrayList<>(this.tracedLightPositions.size());
       for (Entry<Vector3f, TracedLightPosition> e : this.tracedLightPositions.entrySet()) {
-         lights.add(new LightInstance(e.getValue().blockId(), e.getKey(), e.getValue().lightInfo()));
+         lights.add(new LightInstance(e.getValue().blockId(), e.getKey(), e.getValue().lightInfo(), e.getValue().active()));
       }
       lights.sort(STABLE_LIGHT_ORDER);
       return lights.toArray(LightInstance[]::new);
@@ -1483,7 +1721,7 @@ public class LightRegistry implements Destructable {
             this.tracedLightSetDirty = true;
             this.pendingTracedLightMutations++;
          } else {
-            lights.add(new LightInstance(tracedPos.blockId(), pos, tracedPos.lightInfo()));
+            lights.add(new LightInstance(tracedPos.blockId(), pos, tracedPos.lightInfo(), tracedPos.active()));
          }
       }
       lights.sort(STABLE_LIGHT_ORDER);
@@ -1586,25 +1824,56 @@ public class LightRegistry implements Destructable {
       dstBuffer.limit(dstBuffer.capacity());
    }
 
-   private void syncTracedLight(ClientWorld level, BlockPos blockPos, BlockState blockState) {
+   private void syncTracedLight(ClientWorld level, BlockPos blockPos, BlockState blockState, boolean deferMissingResidentLight, SyncSource source) {
       if (!level.isChunkLoaded(blockPos)) {
          return;
       }
 
       BlockLightInfo lightInfo = this.resolveLightInfo(blockPos, blockState, level);
-      this.syncTracedLight(blockPos, blockState, lightInfo);
+      this.syncTracedLight(blockPos, blockState, lightInfo, deferMissingResidentLight, source);
    }
 
-   private void syncTracedLight(BlockPos blockPos, BlockState blockState, BlockLightInfo lightInfo) {
+   private void syncTracedLight(BlockPos blockPos, BlockState blockState, BlockLightInfo lightInfo, boolean deferMissingResidentLight, SyncSource source) {
       Vector3f lightPos = new Vector3f(blockPos.getX() + 0.5F, blockPos.getY() + 0.5F, blockPos.getZ() + 0.5F);
       TracedLightPosition previous = this.tracedLightPositions.get(lightPos);
       if (lightInfo == null) {
+         BlockLightInfo fallbackLightInfo = this.fallbackTrackedLightInfo(blockState);
+         if (previous != null && fallbackLightInfo != null) {
+            int blockId = previous.blockId() >= 0 ? previous.blockId() : this.stableTracedLightBlockId(blockState);
+            TracedLightPosition inactive = new TracedLightPosition(blockId, previous.lightInfo(), false);
+            if (!sameLightDescriptor(previous, blockId, previous.lightInfo())) {
+               inactive = new TracedLightPosition(blockId, fallbackLightInfo, false);
+            }
+            this.updateTracedLightActivity(source, blockPos, blockState, previous, inactive);
+            return;
+         }
+         if (previous == null && fallbackLightInfo != null && fallbackLightInfo.isTraced()) {
+            int blockId = this.stableTracedLightBlockId(blockState);
+            TracedLightPosition inactive = new TracedLightPosition(blockId, fallbackLightInfo, false);
+            TracedLightPosition raced = this.tracedLightPositions.putIfAbsent(lightPos, inactive);
+            if (raced == null) {
+               this.logLightMutation(source, DirtyReason.ADDED, blockPos, blockState, null, inactive);
+               this.noteTracedLightMutation(source, DirtyReason.ADDED, blockPos, null, inactive);
+               return;
+            }
+            this.updateTracedLightActivity(source, blockPos, blockState, raced, inactive);
+            return;
+         }
+         if (previous != null && deferMissingResidentLight && this.isTrackedChunkLoaded(blockPos)) {
+            int missingScans = this.residentMissingLightScans.merge(lightPos, 1, Integer::sum);
+            if (missingScans < RESIDENT_LIGHT_REMOVAL_CONFIRMATION_SCANS) {
+               this.churnStats.noteNoopSync();
+               return;
+            }
+         }
          if (previous != null && this.isTrackedChunkLoaded(blockPos) && this.tracedLightPositions.remove(lightPos, previous)) {
-            this.logLightMutation(DirtyReason.REMOVED_NO_LIGHT, blockPos, blockState, previous, null);
-            this.noteTracedLightMutation(DirtyReason.REMOVED_NO_LIGHT, blockPos, previous, null);
+            this.residentMissingLightScans.remove(lightPos);
+            this.logLightMutation(source, DirtyReason.REMOVED_NO_LIGHT, blockPos, blockState, previous, null);
+            this.noteTracedLightMutation(source, DirtyReason.REMOVED_NO_LIGHT, blockPos, previous, null);
          }
          return;
       }
+      this.residentMissingLightScans.remove(lightPos);
 
       // Keep traced-light activity stable. RTXDI and the original local implementation do
       // not toggle emitters active/inactive based on enclosure culling, and doing so here
@@ -1612,45 +1881,77 @@ public class LightRegistry implements Destructable {
       boolean tracedVisible = lightInfo.isTraced();
       if (!tracedVisible) {
          if (previous != null && this.tracedLightPositions.remove(lightPos, previous)) {
+            this.residentMissingLightScans.remove(lightPos);
             DirtyReason reason = lightInfo.isTraced() ? DirtyReason.CULLED : DirtyReason.REMOVED_NO_LIGHT;
-            this.logLightMutation(reason, blockPos, blockState, previous, null);
-            this.noteTracedLightMutation(reason, blockPos, previous, null);
+            this.logLightMutation(source, reason, blockPos, blockState, previous, null);
+            this.noteTracedLightMutation(source, reason, blockPos, previous, null);
          }
          return;
       }
 
-      int blockId = IrisUtil.getBlockId(blockState);
-      TracedLightPosition updated = new TracedLightPosition(blockId, lightInfo);
+      int blockId = this.stableTracedLightBlockId(blockState);
+      TracedLightPosition updated = new TracedLightPosition(blockId, lightInfo, true);
       if (previous == null) {
          TracedLightPosition raced = this.tracedLightPositions.putIfAbsent(lightPos, updated);
          if (raced == null) {
-            this.logLightMutation(DirtyReason.ADDED, blockPos, blockState, null, updated);
-            this.noteTracedLightMutation(DirtyReason.ADDED, blockPos, null, updated);
+            this.logLightMutation(source, DirtyReason.ADDED, blockPos, blockState, null, updated);
+            this.noteTracedLightMutation(source, DirtyReason.ADDED, blockPos, null, updated);
             return;
          }
          previous = raced;
       }
 
       if (sameLightDescriptor(previous, blockId, lightInfo)) {
-         this.churnStats.noteNoopSync();
+         if (previous.active() != updated.active()) {
+            this.updateTracedLightActivity(source, blockPos, blockState, previous, updated);
+         } else {
+            this.churnStats.noteNoopSync();
+         }
          return;
       }
 
       if (this.tracedLightPositions.replace(lightPos, previous, updated)) {
          DirtyReason reason = previous.blockId() != blockId ? DirtyReason.BLOCK_ID_CHANGED : DirtyReason.LIGHT_INFO_CHANGED;
-         this.logLightMutation(reason, blockPos, blockState, previous, updated);
-         this.noteTracedLightMutation(reason, blockPos, previous, updated);
+         this.logLightMutation(source, reason, blockPos, blockState, previous, updated);
+         if (reason == DirtyReason.BLOCK_ID_CHANGED && sameLightDescriptor(previous.lightInfo(), updated.lightInfo())) {
+            this.noteTracedLightBufferMutation(source, reason, blockPos, previous, updated);
+         } else {
+            this.noteTracedLightMutation(source, reason, blockPos, previous, updated);
+         }
       }
    }
 
-   private void logLightMutation(DirtyReason reason, BlockPos blockPos, BlockState blockState, TracedLightPosition previous, TracedLightPosition updated) {
+   private void updateTracedLightActivity(
+      SyncSource source,
+      BlockPos blockPos,
+      BlockState blockState,
+      TracedLightPosition previous,
+      TracedLightPosition updated
+   ) {
+      if (previous == null || updated == null) {
+         return;
+      }
+      if (previous.active() == updated.active() && sameLightDescriptor(previous, updated.blockId(), updated.lightInfo())) {
+         this.churnStats.noteNoopSync();
+         return;
+      }
+
+      Vector3f lightPos = new Vector3f(blockPos.getX() + 0.5F, blockPos.getY() + 0.5F, blockPos.getZ() + 0.5F);
+      if (this.tracedLightPositions.replace(lightPos, previous, updated)) {
+         this.logLightActivityMutation(source, blockPos, blockState, previous, updated);
+         this.noteTracedLightActivityMutation(source, blockPos, previous, updated);
+      }
+   }
+
+   private void logLightMutation(SyncSource source, DirtyReason reason, BlockPos blockPos, BlockState blockState, TracedLightPosition previous, TracedLightPosition updated) {
       if (!PhotonicsStorage.PROFILER_ENABLED.value || !Photonic.automationEnabled() || this.mutationDebugLogsRemaining <= 0) {
          return;
       }
 
       this.mutationDebugLogsRemaining--;
       Photonic.info(
-         "[Profiler] lightMutation: reason={} pos=({}, {}, {}) state={} prev={} next={}",
+         "[Profiler] lightMutation: source={} reason={} pos=({}, {}, {}) state={} prev={} next={}",
+         source,
          reason,
          blockPos.getX(),
          blockPos.getY(),
@@ -1661,14 +1962,43 @@ public class LightRegistry implements Destructable {
       );
    }
 
+   private void logLightActivityMutation(SyncSource source, BlockPos blockPos, BlockState blockState, TracedLightPosition previous, TracedLightPosition updated) {
+      if (!PhotonicsStorage.PROFILER_ENABLED.value || !Photonic.automationEnabled() || this.mutationDebugLogsRemaining <= 0) {
+         return;
+      }
+
+      this.mutationDebugLogsRemaining--;
+      Photonic.info(
+         "[Profiler] lightMutation: source={} reason={} pos=({}, {}, {}) state={} prev={} next={}",
+         source,
+         DirtyReason.ACTIVITY_CHANGED,
+         blockPos.getX(),
+         blockPos.getY(),
+         blockPos.getZ(),
+         blockState,
+         previous.blockId() + "/" + System.identityHashCode(previous.lightInfo()) + "/" + previous.active(),
+         updated.blockId() + "/" + System.identityHashCode(updated.lightInfo()) + "/" + updated.active()
+      );
+   }
+
    private static long gridKey(int gx, int gy, int gz) {
       return ((long) gx & 0xFFFFF) | (((long) gy & 0xFFFFF) << 20) | (((long) gz & 0xFFFFF) << 40);
    }
 
-   private void noteTracedLightMutation(DirtyReason reason, BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
+   private void noteTracedLightMutation(SyncSource source, DirtyReason reason, BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
       this.tracedLightSetDirty = true;
       this.pendingTracedLightMutations++;
-      this.churnStats.noteMutation(reason, blockPos, previous, updated);
+      this.churnStats.noteMutation(source, reason, blockPos, previous, updated);
+   }
+
+   private void noteTracedLightActivityMutation(SyncSource source, BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
+      this.lightActivityDirty = true;
+      this.churnStats.noteMutation(source, DirtyReason.ACTIVITY_CHANGED, blockPos, previous, updated);
+   }
+
+   private void noteTracedLightBufferMutation(SyncSource source, DirtyReason reason, BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
+      this.lightActivityDirty = true;
+      this.churnStats.noteMutation(source, reason, blockPos, previous, updated);
    }
 
    private static long chunkKey(int chunkX, int chunkY, int chunkZ) {
@@ -1738,12 +2068,21 @@ public class LightRegistry implements Destructable {
       REMOVED_NO_LIGHT,
       CULLED,
       BLOCK_ID_CHANGED,
-      LIGHT_INFO_CHANGED
+      LIGHT_INFO_CHANGED,
+      ACTIVITY_CHANGED
+   }
+
+   private enum SyncSource {
+      BLOCK_LOAD,
+      BLOCK_UPDATE_LIVE,
+      BLOCK_UPDATE_SNAPSHOT,
+      CHUNK_SYNC
    }
 
    private static final class LightChurnStats {
       private static final int MAX_SAMPLES = 4;
       private final EnumMap<DirtyReason, LongAdder> mutationCounts = new EnumMap<>(DirtyReason.class);
+      private final EnumMap<SyncSource, LongAdder> sourceCounts = new EnumMap<>(SyncSource.class);
       private final Map<DirtyReason, String> samples = new LinkedHashMap<>();
       private boolean samplesTruncated = false;
       private final LongAdder noopSyncs = new LongAdder();
@@ -1753,6 +2092,9 @@ public class LightRegistry implements Destructable {
          for (DirtyReason reason : DirtyReason.values()) {
             this.mutationCounts.put(reason, new LongAdder());
          }
+         for (SyncSource source : SyncSource.values()) {
+            this.sourceCounts.put(source, new LongAdder());
+         }
       }
 
       private Frame beginFrame(int previousCount, int gatheredCount) {
@@ -1761,8 +2103,9 @@ public class LightRegistry implements Destructable {
          return frame;
       }
 
-      private void noteMutation(DirtyReason reason, BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
+      private void noteMutation(SyncSource source, DirtyReason reason, BlockPos blockPos, TracedLightPosition previous, TracedLightPosition updated) {
          this.mutationCounts.get(reason).increment();
+         this.sourceCounts.get(source).increment();
          if (!this.samples.containsKey(reason)) {
             if (this.samples.size() < MAX_SAMPLES) {
                this.samples.put(reason, formatSample(blockPos, previous, updated));
@@ -1776,10 +2119,18 @@ public class LightRegistry implements Destructable {
          this.noopSyncs.increment();
       }
 
+      private boolean lastFrameBufferOnly() {
+         Frame frame = this.lastFrame;
+         return (frame.activityChanges > 0 || frame.blockIdChanges > 0)
+            && frame.additions == 0
+            && frame.removals == 0
+            && frame.lightInfoChanges == 0;
+      }
+
       private String describe() {
          Frame frame = this.lastFrame;
          return String.format(
-            "frame(prev=%d,gathered=%d,stable=%d,added=%d,removed=%d,blockId=%d,lightInfo=%d,activity=%d) mutations(add=%d,remove=%d,cull=%d,blockId=%d,lightInfo=%d,noop=%d)%s",
+            "frame(prev=%d,gathered=%d,stable=%d,added=%d,removed=%d,blockId=%d,lightInfo=%d,activity=%d) mutations(add=%d,remove=%d,cull=%d,blockId=%d,lightInfo=%d,noop=%d) sources(load=%d,live=%d,snapshot=%d,chunk=%d)%s",
             frame.previousCount,
             frame.gatheredCount,
             frame.stableMappings,
@@ -1794,6 +2145,10 @@ public class LightRegistry implements Destructable {
             this.mutationCounts.get(DirtyReason.BLOCK_ID_CHANGED).sum(),
             this.mutationCounts.get(DirtyReason.LIGHT_INFO_CHANGED).sum(),
             this.noopSyncs.sum(),
+            this.sourceCounts.get(SyncSource.BLOCK_LOAD).sum(),
+            this.sourceCounts.get(SyncSource.BLOCK_UPDATE_LIVE).sum(),
+            this.sourceCounts.get(SyncSource.BLOCK_UPDATE_SNAPSHOT).sum(),
+            this.sourceCounts.get(SyncSource.CHUNK_SYNC).sum(),
             this.samples.isEmpty() ? "" : " samples=" + this.samples + (this.samplesTruncated ? "..." : "")
          );
       }

@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.state.property.Property;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.world.LightType;
@@ -52,7 +53,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private static final int RT_VISIBILITY_KEEP_ALIVE_FRAMES = 96;
    private static final float RT_ALWAYS_KEEP_DISTANCE_BLOCKS = 48.0F;
    private static final float RT_MAX_RESIDENT_DISTANCE_BLOCKS = 96.0F;
+   private static final float RT_RESIDENT_UNLOAD_HYSTERESIS_BLOCKS = 16.0F;
    private static final int RT_MAX_RESIDENT_CHUNKS = 192;
+   private static final long CHUNK_CONTENT_HASH_OFFSET = 1469598103934665603L;
+   private static final long CHUNK_CONTENT_HASH_PRIME = 1099511628211L;
    private final IRenderDispatcher renderDispatcher;
    private final WorldCompilerThread worldCompilerThread;
    private final LightRegistry lightRegistry;
@@ -106,10 +110,12 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private volatile boolean chunkSyncNeeded = true;
    private long lastRebuildRateLogNanos = 0;
    private int rebuildsSinceLastLog = 0;
+   private int chunkMutationDebugLogsRemaining = 96;
    private final PriorityQueue<PChunkPos> pendingChunkLoads = new PriorityQueue<>(
       Comparator.comparingDouble(this::chunkDistanceToCamera)
    );
    private final Set<PChunkPos> pendingChunkSet = new HashSet<>();
+   private final Map<PChunkPos, Long> chunkContentHashes = new HashMap<>();
    private final Set<BlockPos> pendingBlockUpdates = ConcurrentHashMap.newKeySet();
    private final Map<BlockPos, BlockUpdateSnapshot> pendingBlockSnapshots = new ConcurrentHashMap<>();
    private final Set<BlockPos> pendingLightBlockUpdates = ConcurrentHashMap.newKeySet();
@@ -303,8 +309,9 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          boolean chunkContentChanged = semanticChunkMutations > 0;
          this.update(this.rootMemoryManager, rootUploadNeeded, fullRootRebuild);
         boolean tracedLightSetDirty = this.blockLightEnabled && this.lightRegistry.consumeTracedLightSetDirty();
+        boolean lightActivityDirty = this.blockLightEnabled && this.lightRegistry.consumeLightActivityDirty();
         int pendingTracedLightMutations = this.blockLightEnabled ? this.lightRegistry.consumePendingTracedLightMutations() : 0;
-        boolean lightWorkNeeded = this.blockLightEnabled && (chunkTopologyChanged || tracedLightSetDirty);
+        boolean lightWorkNeeded = this.blockLightEnabled && (chunkTopologyChanged || tracedLightSetDirty || lightActivityDirty);
         String pendingResetReason = null;
         if (shouldForceTemporalResetForLightMutation(chunkTopologyChanged, pendingTracedLightMutations)) {
             pendingResetReason = "light_set";
@@ -339,7 +346,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
             tracedLightSetDirty,
             lightWorkNeeded,
             lightCompiled,
-            lightWorkNeeded
+            chunkTopologyChanged || tracedLightSetDirty
         );
          if (lightCompiled && profiling) {
             this.rebuildsSinceLastLog++;
@@ -480,6 +487,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
                continue;
             }
 
+            if (this.shouldRetainLoadedRtChunk(chunkPosxx)) {
+               continue;
+            }
+
             Integer lastVisibleFrame = this.recentlyVisibleRtChunks.get(chunkPosxx);
             if (lastVisibleFrame != null && frame - lastVisibleFrame <= RT_VISIBILITY_KEEP_ALIVE_FRAMES) {
                continue;
@@ -530,6 +541,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       // camera sweeps, which destabilizes both ReGIR cell contents and ReSTIR
       // temporal history even when the camera returns to the same pose.
       return true;
+   }
+
+   private boolean shouldRetainLoadedRtChunk(PChunkPos chunkPos) {
+      float retainDistance = RT_MAX_RESIDENT_DISTANCE_BLOCKS + RT_RESIDENT_UNLOAD_HYSTERESIS_BLOCKS;
+      return this.chunkDistanceToCamera(chunkPos) <= retainDistance * retainDistance;
    }
 
    private int trimResidentChunksToCameraBudget(Set<PChunkPos> inboundNonEmptyChunks) {
@@ -595,6 +611,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
    public void loadChunk(PChunkPos chunkPos) {
       this.ensureWorldThread();
+      ClientWorld level = MinecraftAccessor.getLevel();
+      if (!this.isClientChunkReadable(level, chunkPos)) {
+         return;
+      }
+
       boolean[] chunkCreated = new boolean[1];
       WorldChunk chunk = this.chunks.computeIfAbsent(chunkPos, k -> {
          WorldChunk newChunk = this.createChunk();
@@ -603,8 +624,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return newChunk;
       });
       if (!chunkCreated[0]) {
-         this.refreshResidentChunk(chunkPos, chunk);
-         this.applyDeferredChunkLightUpdates(chunkPos, chunk);
+         this.refreshResidentChunk(level, chunkPos, chunk);
          return;
       }
 
@@ -612,23 +632,28 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       this.onChunkLoad(chunkPos);
       this.markRootEntryDirty(chunkPos);
       this.markLightBlendChunk(chunkPos);
-      this.populateChunkContents(chunkPos, chunk);
+      this.chunkContentHashes.put(chunkPos, this.populateChunkContents(level, chunkPos, chunk));
       if (this.blockLightEnabled) {
-         ClientWorld level = MinecraftAccessor.getLevel();
-         if (level != null) {
-            this.lightRegistry.synchronizeChunkLights(level, chunkPos);
-         }
+         this.lightRegistry.synchronizeChunkLights(level, chunkPos);
       }
       this.applyDeferredChunkLightUpdates(chunkPos, chunk);
    }
 
-   private void refreshResidentChunk(PChunkPos chunkPos, WorldChunk chunk) {
-      this.populateChunkContents(chunkPos, chunk);
+   private void refreshResidentChunk(ClientWorld level, PChunkPos chunkPos, WorldChunk chunk) {
+      if (!this.isClientChunkReadable(level, chunkPos)) {
+         return;
+      }
+
+      long currentContentHash = this.computeChunkContentHash(level, chunkPos);
+      Long previousContentHash = this.chunkContentHashes.get(chunkPos);
+      if (previousContentHash != null && previousContentHash == currentContentHash) {
+         this.applyDeferredChunkLightUpdates(chunkPos, chunk);
+         return;
+      }
+
+      this.chunkContentHashes.put(chunkPos, this.populateChunkContents(level, chunkPos, chunk));
       if (this.blockLightEnabled) {
-         ClientWorld level = MinecraftAccessor.getLevel();
-         if (level != null) {
-            this.lightRegistry.synchronizeChunkLights(level, chunkPos);
-         }
+         this.lightRegistry.synchronizeChunkLights(level, chunkPos);
       }
       this.applyDeferredChunkLightUpdates(chunkPos, chunk);
    }
@@ -658,6 +683,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       for (BlockUpdateSnapshot snapshot : deferredSnapshots) {
          BlockPos blockPos = snapshot.blockPos();
          if (this.refreshChunkBlock(level, chunkPos, chunk, blockPos, snapshot.blockState())) {
+            this.chunkContentHashes.remove(chunkPos);
             this.pendingSemanticChunkMutations++;
             this.markLightBlendBlock(blockPos);
          }
@@ -667,21 +693,24 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       }
    }
 
-   private void populateChunkContents(PChunkPos chunkPos, WorldChunk chunk) {
+   private long populateChunkContents(ClientWorld level, PChunkPos chunkPos, WorldChunk chunk) {
       chunk.freeBlocks();
-      ClientWorld level = MinecraftAccessor.getLevel();
       ChunkLightingView skyLightView = level != null ? level.getLightingProvider().get(LightType.SKY) : null;
-      PBlockPos rtBlockPos = new PBlockPos(0, 0, 0);
+      PBlockPos chunkMin = chunkPos.toBlockPos();
       BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
+      long hash = CHUNK_CONTENT_HASH_OFFSET;
 
       for (int x = 0; x < 16; x++) {
          for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
-               rtBlockPos.x = 16 * chunkPos.x + x;
-               rtBlockPos.y = 16 * chunkPos.y + y;
-               rtBlockPos.z = 16 * chunkPos.z + z;
-               mutableBlockPos.set(rtBlockPos.x, rtBlockPos.y, rtBlockPos.z);
-               PBlock block = this.blockRegistry.getBlock(rtBlockPos);
+               mutableBlockPos.set(chunkMin.x + x, chunkMin.y + y, chunkMin.z + z);
+               BlockState blockState = this.captureBlockStateSnapshot(level, mutableBlockPos);
+               BlockState rtBlockState = this.toRtContentBlockState(blockState);
+               int skyBrightness = this.computeSkyBrightness(skyLightView, mutableBlockPos);
+               hash = mixChunkContentHash(hash, rtBlockState.hashCode());
+               hash = mixChunkContentHash(hash, skyBrightness);
+
+               PBlock block = this.blockRegistry.getBlock(rtBlockState);
                if (block != null) {
                   if (!block.isUsed() || !block.isAllocated()) {
                      synchronized (block) {
@@ -695,18 +724,57 @@ public class WorldRegistry implements MemoryOwner, Destructable {
                if (block == null) {
                   chunk.set(x, y, z, null, -1);
                } else {
-                  int skyBrightness = this.computeSkyBrightness(skyLightView, mutableBlockPos);
                   chunk.set(x, y, z, block, skyBrightness);
                }
             }
          }
       }
+      return hash;
+   }
+
+   private long computeChunkContentHash(ClientWorld level, PChunkPos chunkPos) {
+      ChunkLightingView skyLightView = level.getLightingProvider().get(LightType.SKY);
+      PBlockPos chunkMin = chunkPos.toBlockPos();
+      BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
+      long hash = CHUNK_CONTENT_HASH_OFFSET;
+
+      for (int x = 0; x < 16; x++) {
+         for (int y = 0; y < 16; y++) {
+            for (int z = 0; z < 16; z++) {
+               mutableBlockPos.set(chunkMin.x + x, chunkMin.y + y, chunkMin.z + z);
+               BlockState blockState = this.captureBlockStateSnapshot(level, mutableBlockPos);
+               BlockState rtBlockState = this.toRtContentBlockState(blockState);
+               hash = mixChunkContentHash(hash, rtBlockState.hashCode());
+               hash = mixChunkContentHash(hash, this.computeSkyBrightness(skyLightView, mutableBlockPos));
+            }
+         }
+      }
+
+      return hash;
+   }
+
+   private boolean isClientChunkReadable(ClientWorld level, PChunkPos chunkPos) {
+      if (level == null) {
+         return false;
+      }
+
+      PBlockPos chunkMin = chunkPos.toBlockPos();
+      return level.isChunkLoaded(new BlockPos(chunkMin.x, chunkMin.y, chunkMin.z));
+   }
+
+   private boolean isClientBlockReadable(ClientWorld level, BlockPos blockPos) {
+      return level != null && level.isChunkLoaded(blockPos);
+   }
+
+   private static long mixChunkContentHash(long hash, int value) {
+      return (hash ^ Integer.toUnsignedLong(value)) * CHUNK_CONTENT_HASH_PRIME;
    }
 
    public void unloadChunk(PChunkPos chunkPos) {
       this.ensureWorldThread();
       this.pendingSemanticChunkMutations++;
       this.markLightBlendChunk(chunkPos);
+      this.chunkContentHashes.remove(chunkPos);
       if (this.blockLightEnabled) {
          this.lightRegistry.clearChunkLights(chunkPos);
       }
@@ -1028,18 +1096,33 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
    public void queueBlockUpdate(BlockPos blockPos) {
       ClientWorld level = MinecraftAccessor.getLevel();
+      if (!this.isClientBlockReadable(level, blockPos)) {
+         return;
+      }
       this.queueBlockUpdate(blockPos, this.captureBlockStateSnapshot(level, blockPos));
    }
 
    public void queueBlockUpdate(BlockPos blockPos, BlockState blockState) {
       ClientWorld level = MinecraftAccessor.getLevel();
-      this.queueSingleBlockUpdate(this.captureBlockUpdateSnapshot(level, blockPos, blockState, true), true);
+      if (!this.isClientBlockReadable(level, blockPos)) {
+         return;
+      }
+      boolean refreshBlockLight = this.shouldRefreshLightForBlockUpdate(blockPos, blockState);
+      this.queueSingleBlockUpdate(this.captureBlockUpdateSnapshot(level, blockPos, blockState, refreshBlockLight), refreshBlockLight);
       for (Direction face : FACES) {
          BlockPos neighborPos = blockPos.offset(face);
+         if (!this.isClientBlockReadable(level, neighborPos)) {
+            continue;
+         }
          BlockState neighborState = this.captureBlockStateSnapshot(level, neighborPos);
-         boolean refreshNeighborLight = this.blockLightEnabled && this.lightRegistry.hasPossibleLight(neighborState);
+         boolean refreshNeighborLight = this.shouldRefreshLightForBlockUpdate(neighborPos, neighborState);
          this.queueSingleBlockUpdate(this.captureBlockUpdateSnapshot(level, neighborPos, neighborState, refreshNeighborLight), refreshNeighborLight);
       }
+   }
+
+   private boolean shouldRefreshLightForBlockUpdate(BlockPos blockPos, BlockState blockState) {
+      return this.blockLightEnabled
+         && (this.lightRegistry.hasPossibleLight(blockState) || this.lightRegistry.hasTrackedLight(blockPos));
    }
 
    private void queueSingleBlockUpdate(BlockUpdateSnapshot snapshot, boolean refreshLight) {
@@ -1137,12 +1220,13 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       this.deferredLightBlockSnapshots.remove(blockPos);
       boolean chunkMutated = this.refreshChunkBlock(level, chunkPos, chunk, blockPos, snapshot.blockState());
       if (chunkMutated) {
+         this.chunkContentHashes.remove(chunkPos);
          this.pendingSemanticChunkMutations++;
       }
       if (refreshLight && this.blockLightEnabled) {
-         this.markLightBlendBlock(blockPos);
          this.lightRegistry.onBlockUpdate(blockPos, snapshot.blockState(), snapshot.lightInfo());
-      } else if (chunkMutated) {
+      }
+      if (chunkMutated) {
          this.markLightBlendBlock(blockPos);
       }
    }
@@ -1151,7 +1235,9 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       int localX = Math.floorMod(blockPos.getX(), 16);
       int localY = Math.floorMod(blockPos.getY(), 16);
       int localZ = Math.floorMod(blockPos.getZ(), 16);
-      PBlock block = this.blockRegistry.getBlock(blockState);
+      BlockState rtBlockState = this.toRtContentBlockState(blockState);
+      boolean canonicalized = rtBlockState != blockState;
+      PBlock block = this.blockRegistry.getBlock(rtBlockState);
       if (block != null && (!block.isUsed() || !block.isAllocated())) {
          synchronized (block) {
             this.blockRegistry.ensureAllocated(block);
@@ -1163,7 +1249,91 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
       ChunkLightingView skyLightView = level.getLightingProvider().get(LightType.SKY);
       int skyBrightness = block == null ? -1 : this.computeSkyBrightness(skyLightView, blockPos);
-      return chunk.set(localX, localY, localZ, block, skyBrightness);
+      boolean changed = chunk.set(localX, localY, localZ, block, skyBrightness);
+      if (changed) {
+         this.logChunkBlockMutation(blockPos, blockState, rtBlockState, canonicalized, block, skyBrightness);
+      }
+      return changed;
+   }
+
+   private void logChunkBlockMutation(BlockPos blockPos, BlockState blockState, BlockState rtBlockState, boolean canonicalized, PBlock block, int skyBrightness) {
+      if (!PhotonicsStorage.PROFILER_ENABLED.value || !Photonic.automationEnabled() || this.chunkMutationDebugLogsRemaining <= 0) {
+         return;
+      }
+
+      this.chunkMutationDebugLogsRemaining--;
+      Photonic.info(
+         "[Profiler] chunkBlockMutation: pos=({}, {}, {}) canonicalized={} raw={} rt={} pblock={} sky={}",
+         blockPos.getX(),
+         blockPos.getY(),
+         blockPos.getZ(),
+         canonicalized,
+         blockState,
+         rtBlockState,
+         block == null ? "air" : block.blockId,
+         skyBrightness
+      );
+   }
+
+   private BlockState toRtContentBlockState(BlockState blockState) {
+      if (!this.blockLightEnabled) {
+         return this.canonicalizeRtNonLightDynamicState(blockState);
+      }
+
+      if (this.lightRegistry.hasPossibleTracedLight(blockState)) {
+         return this.lightRegistry.canonicalizeTracedLightBlockState(blockState);
+      }
+      if (this.lightRegistry.hasPossibleLight(blockState)) {
+         return blockState;
+      }
+      return this.canonicalizeRtNonLightDynamicState(blockState);
+   }
+
+   private BlockState canonicalizeRtNonLightDynamicState(BlockState blockState) {
+      BlockState canonicalState = blockState;
+      for (Property<?> property : blockState.getEntries().keySet()) {
+         String propertyName = property.getName();
+         if (isRtNonLightDynamicBooleanProperty(propertyName)) {
+            canonicalState = withBooleanProperty(canonicalState, property, false);
+         } else if ("power".equals(propertyName)) {
+            canonicalState = withIntegerProperty(canonicalState, property, false);
+         }
+      }
+      return canonicalState;
+   }
+
+   private static boolean isRtNonLightDynamicBooleanProperty(String propertyName) {
+      return "lit".equals(propertyName)
+         || "powered".equals(propertyName)
+         || "enabled".equals(propertyName)
+         || "triggered".equals(propertyName);
+   }
+
+   @SuppressWarnings({"unchecked", "rawtypes"})
+   private static BlockState withBooleanProperty(BlockState blockState, Property<?> property, boolean value) {
+      Comparable<?> currentValue = blockState.getEntries().get(property);
+      if (!(currentValue instanceof Boolean)) {
+         return blockState;
+      }
+      return blockState.with((Property) property, Boolean.valueOf(value));
+   }
+
+   @SuppressWarnings({"unchecked", "rawtypes"})
+   private static BlockState withIntegerProperty(BlockState blockState, Property<?> property, boolean maxValue) {
+      Comparable<?> currentValue = blockState.getEntries().get(property);
+      if (!(currentValue instanceof Integer)) {
+         return blockState;
+      }
+
+      Integer selected = null;
+      for (Comparable<?> value : property.getValues()) {
+         if (value instanceof Integer intValue) {
+            if (selected == null || (maxValue ? intValue > selected : intValue < selected)) {
+               selected = intValue;
+            }
+         }
+      }
+      return selected == null ? blockState : blockState.with((Property) property, selected);
    }
 
    private BlockUpdateSnapshot captureBlockUpdateSnapshot(ClientWorld level, BlockPos blockPos, BlockState blockState, boolean refreshLight) {

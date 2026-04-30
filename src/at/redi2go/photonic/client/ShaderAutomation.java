@@ -426,20 +426,12 @@ public final class ShaderAutomation {
       this.stableSceneSettleTicks = Math.max(0, Integer.getInteger("photonics.automation.stableSceneSettleTicks", Math.max(this.captureEveryActiveTicks * 2, 120)));
       this.stableSceneBlendRegionThreshold = Math.max(0, Integer.getInteger("photonics.automation.stableSceneBlendRegionThreshold", 0));
       this.stableSceneBlendFactorThreshold = Math.max(0.0, Double.parseDouble(System.getProperty("photonics.automation.stableSceneBlendFactorThreshold", "0.0")));
-      /*
       this.timeOfDaySequence = parseLongSequence(System.getProperty("photonics.automation.timeOfDaySequence", ""));
-      */
-      // Motion-only isolation: keep the original scheduling logic above for later restoration,
-      // but force all non-camera automation events off in the active path.
-      this.timeOfDaySequence = new long[0];
       this.timeOfDayStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.timeOfDayStartActiveTick", this.cameraMotionStartActiveTick + this.cameraMotionPeriodTicks));
       this.timeOfDayStepTicks = Math.max(1, Integer.getInteger("photonics.automation.timeOfDayStepTicks", Math.max(this.captureEveryActiveTicks, 30)));
       this.blockToggleStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.blockToggleStartActiveTick", this.timeOfDayStartActiveTick + this.timeOfDayStepTicks * Math.max(this.timeOfDaySequence.length, 1)));
       this.blockTogglePeriodTicks = Math.max(1, Integer.getInteger("photonics.automation.blockTogglePeriodTicks", Math.max(this.captureEveryActiveTicks, 30)));
-      /*
       this.blockToggleCount = Math.max(0, Integer.getInteger("photonics.automation.blockToggleCount", 0));
-      */
-      this.blockToggleCount = 0;
    }
 
    public static void afterPhotonicsRender() {
@@ -3226,10 +3218,8 @@ public final class ShaderAutomation {
       }
 
       this.prepareWorldAutomation(client);
-      /*
       this.applyTimeOfDayAutomation(client);
       this.applyBlockToggleAutomation(client);
-      */
    }
 
    private void prepareWorldAutomation(MinecraftClient client) {
@@ -3672,7 +3662,10 @@ public final class ShaderAutomation {
    }
 
    private boolean shouldSuppressWorldMutationIngress() {
-      return this.worldAutomationPrepared && this.activeTicks >= this.startDelayTicks && !this.finished;
+      return Boolean.getBoolean("photonics.automation.suppressWorldMutationIngress")
+         && this.worldAutomationPrepared
+         && this.activeTicks >= this.startDelayTicks
+         && !this.finished;
    }
 
    private boolean isStableSceneNow() {

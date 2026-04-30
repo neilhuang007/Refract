@@ -89,7 +89,16 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
     );
     dstReconnectionData = currSelected ? currReconnectionDataLocal : dstReconnectionData;
 
+    // Reference parity (ScatterTemporalResampling.rt.slang:108-170):
+    //   newConfidence is snapshotted AFTER the canonical sample add and is
+    //   then bumped only by the bilinear motion-vector neighbourhood.  The
+    //   addSampleFromReservoir calls inside the prev-contributors loop mutate
+    //   dstReservoir.confidence, but that value is overwritten at the end by
+    //   `dstReservoir.confidence = min(confidenceCap, newConfidence)`.
+    //   We therefore route the loop's confidence accumulator into a throwaway
+    //   so the final motion-vector confidence is consistent with the reference.
     float newConfidence = dstConfidence;
+    float loopConfidence = dstConfidence;
 
     uint numReservoirs = lt_reproject_temporal_samples_cell_counter_value(reservoirIdx);
     uint cellOffset = lt_scatter_temporal_resampling_cell_offset_value(reservoirIdx);
@@ -102,52 +111,59 @@ RTXDI_DIReservoir ScatterTemporalResampling_run(
         );
         ReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
         float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
-        if (!RAB_IsSurfaceValid(surface) || !any(greaterThan(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)))) {
-            continue;
-        }
 
-        ShiftedPathData shiftedPrev = scatterReprojectionShift(
-            sg,
-            prevReconnectionData,
-            prevReconnectionData.time,
-            prevReconnectionData.firstHit,
-            prevReconnectionData.lensSample,
-            prevReservoir,
-            true,
-            false,
-            true
-        );
-        ReconnectionData shiftedPrevReconnectionData = ReconnectionData_update(
-            prevReconnectionData,
-            shiftedPrev
-        );
-        RTXDI_DIReservoir shiftedReservoir = prevReservoir;
-        PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedPrevReconnectionData.subPixel);
-
-        float shiftedJacobian = lt_scatter_shift_jacobian_ratio(
-            shiftedPrev.subPixelJacobian,
-            shiftedPrev.secondaryPathJacobian,
-            prevReconnectionData.subPixelJacobian,
-            prevReconnectionData.secondaryPathJacobian
-        );
-
+        // Reference parity (ScatterTemporalResampling.rt.slang:127-148):
+        // The integrand-positivity test gates only the shift evaluation; the
+        // addSampleFromReservoir call is unconditional so RNG advancement and
+        // confidence bookkeeping stay aligned with the reference.
         float prevSampleMIS = 0.0f;
-        float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
-            * shiftedJacobian
-            * lt_scatter_confidence_mis_weight(currReservoirConfidence);
-        bool invalidM1 = isnan(m1);
-        vec3 prevPHat = invalidM1 ? vec3(0.0f) : shiftedPrev.radiance;
-        shiftedJacobian = invalidM1 ? 1.0f : shiftedJacobian;
-        m1 = invalidM1 ? 0.0f : m1;
+        vec3 prevPHat = vec3(0.0f);
+        float shiftedJacobian = 1.0f;
+        ReconnectionData shiftedPrevReconnectionData = prevReconnectionData;
+        RTXDI_DIReservoir shiftedReservoir = prevReservoir;
+        bool prevHasContribution = any(greaterThan(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)));
+        if (prevHasContribution) {
+            ShiftedPathData shiftedPrev = scatterReprojectionShift(
+                sg,
+                prevReconnectionData,
+                prevReconnectionData.time,
+                prevReconnectionData.firstHit,
+                prevReconnectionData.lensSample,
+                prevReservoir,
+                true,
+                false,
+                true
+            );
+            shiftedPrevReconnectionData = ReconnectionData_update(
+                prevReconnectionData,
+                shiftedPrev
+            );
+            PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedPrevReconnectionData.subPixel);
 
-        float m2 = lt_scatter_radiance_phat(PathReservoir_getIntegrand(prevReservoir))
-            * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
-        float denominator = m1 + m2;
-        prevSampleMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
+            shiftedJacobian = lt_scatter_shift_jacobian_ratio(
+                shiftedPrev.subPixelJacobian,
+                shiftedPrev.secondaryPathJacobian,
+                prevReconnectionData.subPixelJacobian,
+                prevReconnectionData.secondaryPathJacobian
+            );
+
+            float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
+                * shiftedJacobian
+                * lt_scatter_confidence_mis_weight(currReservoirConfidence);
+            bool invalidM1 = isnan(m1);
+            prevPHat = invalidM1 ? vec3(0.0f) : shiftedPrev.radiance;
+            shiftedJacobian = invalidM1 ? 1.0f : shiftedJacobian;
+            m1 = invalidM1 ? 0.0f : m1;
+
+            float m2 = lt_scatter_radiance_phat(PathReservoir_getIntegrand(prevReservoir))
+                * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
+            float denominator = m1 + m2;
+            prevSampleMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
+        }
 
         bool prevSelected = lt_scatter_add_sample_from_reservoir(
             dstReservoir,
-            newConfidence,
+            loopConfidence,
             prevSampleMIS,
             prevPHat,
             shiftedJacobian,

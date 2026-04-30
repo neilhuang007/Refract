@@ -2292,7 +2292,7 @@ public class LightTreeRenderer extends MainRenderer {
       int gridRes = lightRegistry.getRegirGridResolution();
       this.regirComputeProgram.dispatch(
          lightRegistry.getLightsMemoryManager(),
-         lightRegistry.getRegirLightPdfMemoryManager(),
+         lightRegistry.getGlobalLightCdfMemoryManager(),
          lightRegistry.getRegirLightIndexMemoryManager(),
          lightRegistry.getRegirCompactLightDataMemoryManager(),
          lightRegistry.getRegirHashChecksumMemoryManager(),
@@ -2309,12 +2309,7 @@ public class LightTreeRenderer extends MainRenderer {
          lightRegistry.getRegirHashTableSize(),
          lightRegistry.getRegirHashCellSizeBlocks(),
          lightRegistry.getRegirHashNormalBuckets(),
-         lightRegistry.getRegirBuildRegionCells(),
-         this.lightingStageBuffer.getWriteAttachment("position"),
-         this.lightingStageBuffer.getWriteAttachment("normal"),
-         this.lightingStageBuffer.getWriteAttachment("mapped_normal"),
-         this.lightingStageBuffer.getWriteAttachment("albedo"),
-         this.lightingStageBuffer.getWriteAttachment("material")
+         lightRegistry.getRegirBuildRegionCells()
       );
    }
 

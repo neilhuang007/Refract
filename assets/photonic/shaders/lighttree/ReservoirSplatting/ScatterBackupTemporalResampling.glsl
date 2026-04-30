@@ -284,16 +284,17 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
     );
     ReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
-    RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
-    if (!RAB_IsSurfaceValid(targetSurface))
-    {
-        return false;
-    }
 
+    // Reference parity (ScatterBackupTemporalResampling.rt.slang:215-259):
+    // The integrand-positivity test only gates the shift / MIS evaluation; the
+    // addSampleFromReservoir call is unconditional so RNG advancement and
+    // confidence bookkeeping align with the reference path.
     float prevSampleMIS = 0.0f;
     vec3 prevPHat = vec3(0.0f);
     float scatteredJacobian = 1.0f;
     vec3 prevIntegrand = PathReservoir_getIntegrand(prevReservoir);
+    ReconnectionData shiftedReconnection = prevReconnectionData;
+    RTXDI_DIReservoir shiftedReservoir = prevReservoir;
     if (any(greaterThan(prevIntegrand, vec3(0.0f))))
     {
         ShiftedPathData scatteredPrev = scatterReprojectionShift(
@@ -307,11 +308,10 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
             false,
             true
         );
-        ReconnectionData shiftedReconnection = ReconnectionData_update(
+        shiftedReconnection = ReconnectionData_update(
             prevReconnectionData,
             scatteredPrev
         );
-        RTXDI_DIReservoir shiftedReservoir = prevReservoir;
         PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedReconnection.subPixel);
         scatteredJacobian = lt_ScatterBackupTemporalResampling_shifted_jacobian(
             scatteredPrev,
@@ -363,26 +363,24 @@ bool lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
         prevSampleMIS = (denominator > 0.0f)
             ? (lt_ScatterBackupTemporalResampling_mis_scale() * m2 / denominator)
             : 0.0f;
-
-        bool prevSelected = lt_scatter_add_sample_from_reservoir(
-            dstReservoir,
-            dstConfidence,
-            prevSampleMIS,
-            prevPHat,
-            scatteredJacobian,
-            lt_scatter_compute_ucw(prevReservoir, prevIntegrand),
-            prevReservoirConfidence,
-            shiftedReservoir,
-            sg
-        );
-        if (prevSelected)
-        {
-            dstReconnectionData = shiftedReconnection;
-        }
-        return prevSelected;
     }
 
-    return false;
+    bool prevSelected = lt_scatter_add_sample_from_reservoir(
+        dstReservoir,
+        dstConfidence,
+        prevSampleMIS,
+        prevPHat,
+        scatteredJacobian,
+        lt_scatter_compute_ucw(prevReservoir, prevIntegrand),
+        prevReservoirConfidence,
+        shiftedReservoir,
+        sg
+    );
+    if (prevSelected)
+    {
+        dstReconnectionData = shiftedReconnection;
+    }
+    return prevSelected;
 }
 
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE)
@@ -442,7 +440,12 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
         sg
     );
 
+    // Reference parity (ScatterBackupTemporalResampling.rt.slang): newConfidence
+    // is snapshotted after canonical+backup adds and is then bumped only by the
+    // bilinear motion-vector neighbourhood. The prev-contributor loop's
+    // confidence accumulation is discarded -- route it to a throwaway.
     float newConfidence = dstConfidence;
+    float loopConfidence = dstConfidence;
 
     uint numReservoirs = lt_reproject_temporal_samples_cell_counter_value(reservoirIdx);
     uint cellOffset = lt_scatter_temporal_resampling_cell_offset_value(reservoirIdx);
@@ -452,7 +455,7 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
         lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(
             pixel,
             dstReservoir,
-            newConfidence,
+            loopConfidence,
             dstReconnectionData,
             scatteredPixel,
             currSample,

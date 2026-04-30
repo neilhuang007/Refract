@@ -636,14 +636,7 @@ void RTXDI_UnpackLocalLightFromRISLightData(
         return;
     }
 
-    if ((tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u)
-    {
-        lightInfo = RAB_LoadCompactLightInfo(risBufferPtr, int(lightIndex));
-    }
-    else
-    {
-        lightInfo = RAB_LoadLightInfo(int(lightIndex), false);
-    }
+    lightInfo = RAB_LoadLightInfo(int(lightIndex), false);
 }
 
 void RTXDI_RandomlySelectLocalLightFromRISTile(

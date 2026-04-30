@@ -32,17 +32,18 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
     float fractionalTime = lt_multi_temporal_partition_fraction(prevReconnectionData.time);
     float newTime = lt_multi_temporal_partition_time(fractionalTime, partitionIndex);
     partitionedReconnectionData.time = newTime;
+    float prevReservoirConfidence = lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
 
-    RAB_Surface targetSurface = RAB_GetGBufferSurface(pixel, false);
-    if (!RAB_IsSurfaceValid(targetSurface))
-    {
-        return false;
-    }
-
+    // Reference parity (MultiScatterTemporalResampling.rt.slang): the
+    // integrand-positivity test gates only the shift / MIS evaluation; the
+    // addSampleFromReservoir call is unconditional so RNG advancement and
+    // confidence bookkeeping align with the reference path.
     float prevSampleMIS = 0.0f;
     vec3 prevPHat = vec3(0.0f);
     float shiftedJacobian = 1.0f;
     vec3 prevIntegrand = PathReservoir_getIntegrand(prevReservoir);
+    ReconnectionData shiftedReconnection = partitionedReconnectionData;
+    RTXDI_DIReservoir shiftedReservoir = prevReservoir;
     if (any(greaterThan(prevIntegrand, vec3(0.0f))))
     {
         ShiftedPathData shiftedPrev = scatterReprojectionShift(
@@ -56,11 +57,10 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
             false,
             false
         );
-        ReconnectionData shiftedReconnection = ReconnectionData_update(
+        shiftedReconnection = ReconnectionData_update(
             partitionedReconnectionData,
             shiftedPrev
         );
-        RTXDI_DIReservoir shiftedReservoir = prevReservoir;
         PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedReconnection.subPixel);
         shiftedJacobian = lt_scatter_shift_jacobian_ratio(
             shiftedPrev.subPixelJacobian,
@@ -77,31 +77,28 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
         shiftedJacobian = invalidM1 ? 1.0f : shiftedJacobian;
         m1 = invalidM1 ? 0.0f : m1;
 
-        float prevReservoirConfidence = lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
         float m2 = lt_scatter_radiance_phat(prevIntegrand)
             * lt_scatter_confidence_mis_weight(prevReservoirConfidence);
         float denominator = m1 + m2;
         prevSampleMIS = (denominator > 0.0f) ? (m2 / denominator) : 0.0f;
-
-        bool prevSelected = lt_scatter_add_sample_from_reservoir(
-            dstReservoir,
-            dstConfidence,
-            prevSampleMIS,
-            prevPHat,
-            shiftedJacobian * (1.0f / float(lt_multi_temporal_partition_count())),
-            lt_scatter_compute_ucw(prevReservoir, prevIntegrand),
-            prevReservoirConfidence,
-            shiftedReservoir,
-            sg
-        );
-        if (prevSelected)
-        {
-            dstReconnectionData = shiftedReconnection;
-        }
-        return prevSelected;
     }
 
-    return false;
+    bool prevSelected = lt_scatter_add_sample_from_reservoir(
+        dstReservoir,
+        dstConfidence,
+        prevSampleMIS,
+        prevPHat,
+        shiftedJacobian * (1.0f / float(lt_multi_temporal_partition_count())),
+        lt_scatter_compute_ucw(prevReservoir, prevIntegrand),
+        prevReservoirConfidence,
+        shiftedReservoir,
+        sg
+    );
+    if (prevSelected)
+    {
+        dstReconnectionData = shiftedReconnection;
+    }
+    return prevSelected;
 }
 
 float lt_MultiScatterTemporalResampling_current_sample_mis(
@@ -202,7 +199,12 @@ RTXDI_DIReservoir MultiScatterTemporalResampling_run(
         dstReconnectionData = currSample.reconnectionData;
     }
 
+    // Reference parity (MultiScatterTemporalResampling.rt.slang): newConfidence
+    // is snapshotted after the canonical add and is later overwritten with
+    // motion-vector confidence.  The prev-contributor loop's confidence
+    // accumulation is discarded -- route it into a throwaway variable.
     float newConfidence = dstConfidence;
+    float loopConfidence = dstConfidence;
 
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex)
     {
@@ -216,7 +218,7 @@ RTXDI_DIReservoir MultiScatterTemporalResampling_run(
             lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
                 pixel,
                 dstReservoir,
-                newConfidence,
+                loopConfidence,
                 dstReconnectionData,
                 scatteredPixel,
                 partitionIndex,

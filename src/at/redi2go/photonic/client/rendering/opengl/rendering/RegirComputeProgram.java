@@ -1,7 +1,6 @@
 package at.redi2go.photonic.client.rendering.opengl.rendering;
 
 import at.redi2go.photonic.client.Photonic;
-import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
@@ -42,12 +41,6 @@ public class RegirComputeProgram {
     private int locHashCellSize = -1;
     private int locHashNormalBuckets = -1;
     private int locBuildRegionCells = -1;
-    private int locStageSize = -1;
-    private int locStagePosition = -1;
-    private int locStageNormal = -1;
-    private int locStageMappedNormal = -1;
-    private int locStageAlbedo = -1;
-    private int locStageMaterial = -1;
 
     // -----------------------------------------------------------------------
     // Presample tiles program (regir_presample_tiles.glsl)
@@ -85,11 +78,6 @@ public class RegirComputeProgram {
     // Hash-grid auxiliary buffers
     private static final int bindHashChecksum       = 7;  // uint per slot, atomic claim word
     private static final int bindHashKey            = 8;  // ivec4 per slot, (cellX, cellY, cellZ, normalBucket)
-    private static final int bindStagePositionTexture = 1;
-    private static final int bindStageNormalTexture = 2;
-    private static final int bindStageMappedNormalTexture = 3;
-    private static final int bindStageAlbedoTexture = 4;
-    private static final int bindStageMaterialTexture = 5;
 
     // -----------------------------------------------------------------------
     // RIS tile buffer parameters
@@ -154,12 +142,6 @@ public class RegirComputeProgram {
         this.locHashCellSize          = GL20.glGetUniformLocation(this.programId, "ph_regir_hash_cell_size");
         this.locHashNormalBuckets     = GL20.glGetUniformLocation(this.programId, "ph_regir_hash_normal_buckets");
         this.locBuildRegionCells      = GL20.glGetUniformLocation(this.programId, "ph_regir_build_region_cells");
-        this.locStageSize             = GL20.glGetUniformLocation(this.programId, "ph_regir_stage_size");
-        this.locStagePosition         = GL20.glGetUniformLocation(this.programId, "stage_radiosity_position");
-        this.locStageNormal           = GL20.glGetUniformLocation(this.programId, "stage_radiosity_normal");
-        this.locStageMappedNormal     = GL20.glGetUniformLocation(this.programId, "stage_radiosity_mapped_normal");
-        this.locStageAlbedo           = GL20.glGetUniformLocation(this.programId, "stage_radiosity_albedo");
-        this.locStageMaterial         = GL20.glGetUniformLocation(this.programId, "stage_radiosity_material");
     }
 
     // -----------------------------------------------------------------------
@@ -362,12 +344,7 @@ public class RegirComputeProgram {
             int hashTableSize,
             float hashCellSize,
             int hashNormalBuckets,
-            int buildRegionCells,
-            TextureObject stagePosition,
-            TextureObject stageNormal,
-            TextureObject stageMappedNormal,
-            TextureObject stageAlbedo,
-            TextureObject stageMaterial) {
+            int buildRegionCells) {
 
         if (!this.compiled) return;
 
@@ -428,37 +405,29 @@ public class RegirComputeProgram {
         // Pass 2: hash-grid ReGIR build (paper variant — world-fixed cells, normal-bucketed key).
         GL20.glUseProgram(this.programId);
 
-        // Clear hash table state and the ReGIR region before any early return so
-        // a missing or resized stage texture cannot leave stale cells visible.
+        // Clear hash table state and the ReGIR region before the grid rebuild so
+        // stale cells from the previous frame cannot remain visible.
         this.clearRegirRegion(risBuffer, regirRisBufferOffset, hashTableSize, lightsPerCell);
         this.clearHashChecksumBuffer(hashChecksum, hashTableSize);
         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
 
-        int[] stageDimensions = stagePosition != null ? stagePosition.getTextureDimensions() : new int[]{0, 0};
-        int stageWidth = stageDimensions.length > 0 ? stageDimensions[0] : 0;
-        int stageHeight = stageDimensions.length > 1 ? stageDimensions[1] : 0;
-        if (stageWidth <= 0 || stageHeight <= 0) {
-            GL20.glUseProgram(0);
-            return;
-        }
-
         this.setUniforms(gridCenter, gridCells, lightsPerCell, cellSize, lightCount, buildFrameCounter,
                 numBuildSamples, samplingJitter, risTileBufferOffset, regirRisBufferOffset,
-                hashTableSize, hashCellSize, hashNormalBuckets, buildRegionCells, stageWidth, stageHeight);
+                hashTableSize, hashCellSize, hashNormalBuckets, buildRegionCells);
         this.bindBuildSsbos(lightList, lightCdf, risBuffer, compactLightData, hashChecksum, hashKey);
-        this.bindBuildStageTextures(stagePosition, stageNormal, stageMappedNormal, stageAlbedo, stageMaterial);
 
-        // One thread per stage pixel. Surface-hit pixels race to claim the sparse
-        // hash cell for their representative surface; empty sky/background pixels
-        // return immediately in the shader.
-        int totalCells   = stageWidth * stageHeight;
+        // One thread per world-space hash-grid key in the active build region:
+        // buildRegionCells^3 cells, with one key per normal bucket.
+        int cellsPerSide = Math.max(buildRegionCells, 1);
+        int bucketCount = Math.max(hashNormalBuckets, 1);
+        long totalCellKeys = (long) cellsPerSide * cellsPerSide * cellsPerSide * bucketCount;
+        int totalCells = (int) Math.min(totalCellKeys, Integer.MAX_VALUE);
         int workGroupSize = 64; // matches layout(local_size_x = 64) in regir_build.glsl
         int numGroups     = (totalCells + workGroupSize - 1) / workGroupSize;
         GL43.glDispatchCompute(numGroups, 1, 1);
 
         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
 
-        this.unbindBuildStageTextures();
         GL20.glUseProgram(0);
     }
 
@@ -467,7 +436,7 @@ public class RegirComputeProgram {
                               int numBuildSamples, float samplingJitter,
                               int risTileBufferOffset, int regirRisBufferOffset,
                               int hashTableSize, float hashCellSize, int hashNormalBuckets,
-                              int buildRegionCells, int stageWidth, int stageHeight) {
+                              int buildRegionCells) {
         GL20.glUniform3f(this.locGridCenter,              gridCenter.x, gridCenter.y, gridCenter.z);
         GL20.glUniform3i(this.locGridCells,               gridCells.x, gridCells.y, gridCells.z);
         GL20.glUniform1i(this.locLightsPerCell,           lightsPerCell);
@@ -485,7 +454,6 @@ public class RegirComputeProgram {
         if (this.locHashCellSize      >= 0) GL20.glUniform1f(this.locHashCellSize,      hashCellSize);
         if (this.locHashNormalBuckets >= 0) GL20.glUniform1i(this.locHashNormalBuckets, hashNormalBuckets);
         if (this.locBuildRegionCells  >= 0) GL20.glUniform1i(this.locBuildRegionCells,  buildRegionCells);
-        if (this.locStageSize         >= 0) GL20.glUniform2i(this.locStageSize,         stageWidth, stageHeight);
     }
 
     private void bindBuildSsbos(
@@ -504,45 +472,6 @@ public class RegirComputeProgram {
         // Hash-grid auxiliary buffers
         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindHashChecksum,     hashChecksum.getId());
         GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindHashKey,          hashKey.getId());
-    }
-
-    private void bindBuildStageTextures(
-            TextureObject stagePosition,
-            TextureObject stageNormal,
-            TextureObject stageMappedNormal,
-            TextureObject stageAlbedo,
-            TextureObject stageMaterial) {
-        this.bindBuildStageTexture(bindStagePositionTexture, this.locStagePosition, stagePosition);
-        this.bindBuildStageTexture(bindStageNormalTexture, this.locStageNormal, stageNormal);
-        this.bindBuildStageTexture(bindStageMappedNormalTexture, this.locStageMappedNormal, stageMappedNormal);
-        this.bindBuildStageTexture(bindStageAlbedoTexture, this.locStageAlbedo, stageAlbedo);
-        this.bindBuildStageTexture(bindStageMaterialTexture, this.locStageMaterial, stageMaterial);
-    }
-
-    private void bindBuildStageTexture(int textureUnit, int uniformLocation, TextureObject texture) {
-        if (texture == null) {
-            return;
-        }
-        GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnit);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture.getTextureId());
-        if (uniformLocation >= 0) {
-            GL20.glUniform1i(uniformLocation, textureUnit);
-        }
-    }
-
-    private void unbindBuildStageTextures() {
-        int[] textureUnits = new int[]{
-                bindStagePositionTexture,
-                bindStageNormalTexture,
-                bindStageMappedNormalTexture,
-                bindStageAlbedoTexture,
-                bindStageMaterialTexture
-        };
-        for (int textureUnit : textureUnits) {
-            GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnit);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
-        }
-        GL13.glActiveTexture(GL13.GL_TEXTURE0);
     }
 
     private void clearHashChecksumBuffer(GlMemoryManager hashChecksum, int hashTableSize) {
@@ -628,12 +557,6 @@ public class RegirComputeProgram {
         this.locHashCellSize           = -1;
         this.locHashNormalBuckets      = -1;
         this.locBuildRegionCells       = -1;
-        this.locStageSize              = -1;
-        this.locStagePosition          = -1;
-        this.locStageNormal            = -1;
-        this.locStageMappedNormal      = -1;
-        this.locStageAlbedo            = -1;
-        this.locStageMaterial          = -1;
 
         this.presampleLocLightCount     = -1;
         this.presampleLocTileSize       = -1;
