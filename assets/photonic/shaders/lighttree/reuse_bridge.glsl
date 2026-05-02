@@ -2349,13 +2349,13 @@ bool lt_pick_power_light_stratified(int sampleIndex, int totalSamples, out int l
 //   -1.0 or 0.0 (unbound) -> SDK default = Uniform (mode 0)
 //   0 = Uniform:   lt_pick_uniform_light for all samples
 //   1 = Power_RIS: stratified RIS tile sampling for all samples
-//   2 = ReGIR_RIS: regir_pick_light inside grid cell, Power_RIS (RIS tile) fallback outside
+//   2 = ReGIR_RIS: RIS readout from the resolved ReGIR cell, Power_RIS fallback outside
 //
 // Split RNG streams -- matches RTXDI InitialSampling.hlsli:
 //   rng         (per-pixel random)   -- drives per-sample light selection and UV draws.
-//   coherentRng (spatially coherent) -- drives ReGIR cell jitter and RIS tile selection.
-// RTXDI uses coherentRng exclusively for RTXDI_CalculateReGIRCellIndex and
-// RTXDI_SelectLocalLightReGIRRISTile so neighboring pixels share the same ReGIR cell.
+//   coherentRng (spatially coherent) -- drives ReGIR cell jitter and fallback RIS tile selection.
+// RTXDI uses coherentRng for RTXDI_CalculateReGIRCellIndex so neighboring pixels
+// in a tile share the same ReGIR lookup jitter.
 bool rtxdi_stream_local_light_rng(
     inout RTXDI_RandomSamplerState rng,
     inout RTXDI_DIReservoir reservoir,
