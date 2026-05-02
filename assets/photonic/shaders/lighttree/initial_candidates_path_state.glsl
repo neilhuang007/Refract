@@ -10,6 +10,7 @@ struct PathState
     RAB_Surface surface;
     RTXDI_RandomSamplerState sg;
     RTXDI_RandomSamplerState coherentRng;
+    RTXDI_RandomSamplerState regirLookupRng;
     RTXDI_DIReservoir reservoir;
     ReconnectionData reconnection;
     RAB_LightSample selectedLightSample;
@@ -46,6 +47,10 @@ void InitialCandidates_generatePath(out PathState path, ivec2 pixel, uint sample
         uvec2(pixel / RTXDI_TILE_SIZE_IN_PIXELS),
         runtimeParameters.frameIndex,
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
+    );
+    path.regirLookupRng = RTXDI_InitReGIRLookupRandomSampler(
+        uvec2(pixel),
+        runtimeParameters.frameIndex
     );
     path.time = RTXDI_GetNextRandom(path.sg) * ph_reservoir_splatting_shutter_speed;
     path.reservoir = RTXDI_EmptyDIReservoir();

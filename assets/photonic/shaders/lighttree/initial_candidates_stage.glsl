@@ -35,6 +35,7 @@ void InitialCandidates_tracePath(
     path.reservoir = InitialCandidates_SampleLightsForSurface(
         path.sg,
         path.coherentRng,
+        path.regirLookupRng,
         path.surface,
         params.initialSamplingParams,
         path.time,

@@ -2353,9 +2353,10 @@ bool lt_pick_power_light_stratified(int sampleIndex, int totalSamples, out int l
 //
 // Split RNG streams -- matches RTXDI InitialSampling.hlsli:
 //   rng         (per-pixel random)   -- drives per-sample light selection and UV draws.
-//   coherentRng (spatially coherent) -- drives ReGIR cell jitter and fallback RIS tile selection.
-// RTXDI uses coherentRng for RTXDI_CalculateReGIRCellIndex so neighboring pixels
-// in a tile share the same ReGIR lookup jitter.
+//   coherentRng (spatially coherent) -- drives Power RIS tile selection.
+// RTXDI also uses coherentRng for RTXDI_CalculateReGIRCellIndex, but the
+// reservoir-splatting initial-candidate path passes a separate per-pixel ReGIR
+// lookup RNG so a whole 16x16 tile does not jump cells together near strong lights.
 bool rtxdi_stream_local_light_rng(
     inout RTXDI_RandomSamplerState rng,
     inout RTXDI_DIReservoir reservoir,

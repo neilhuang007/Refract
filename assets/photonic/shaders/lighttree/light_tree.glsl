@@ -114,6 +114,17 @@ RTXDI_RandomSamplerState RTXDI_InitRandomSampler(uvec2 pixelPos, uint frameIndex
     return state;
 }
 
+// Photonics intentionally de-correlates ReGIR lookup jitter per pixel. RTXDI
+// seeds this stream from pixel / RTXDI_TILE_SIZE_IN_PIXELS, but that can make
+// an entire 16x16 tile jump to a neighboring high-energy cell together.
+RTXDI_RandomSamplerState RTXDI_InitReGIRLookupRandomSampler(uvec2 pixelPos, uint frameIndex) {
+    return RTXDI_InitRandomSampler(
+        pixelPos,
+        frameIndex,
+        RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
+    );
+}
+
 uint RTXDI_murmur3(inout RTXDI_RandomSamplerState r) {
     uint c1 = 0xcc9e2d51u;
     uint c2 = 0x1b873593u;
@@ -300,8 +311,9 @@ bool regir_resolve_cell(vec3 shadingWorldPos, vec3 shadingNormal, inout RTXDI_Ra
     }
     vec3 queryNormal = normalize(shadingNormal);
 
-    // RTXDI passes the coherent initial-sampling RNG here. The cell binding is
-    // still world-space: the RNG only jitters the world position before lookup.
+    // The cell binding is world-space: the RNG only jitters the world position
+    // before lookup. Final ReGIR sampling passes Photonics' per-pixel lookup RNG
+    // here; Power RIS fallback keeps using the tile-coherent RTXDI stream.
     float jitterScale = max(ph_regir_hash_cell_size * ph_regir_sampling_jitter, 0.0);
     vec3 jitteredPos = (jitterScale > 0.0)
         ? regir_jitter_world_cube(shadingWorldPos, jitterScale, rng)

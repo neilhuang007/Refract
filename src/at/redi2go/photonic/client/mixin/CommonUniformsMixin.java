@@ -106,8 +106,9 @@ public class CommonUniformsMixin {
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_lights_per_cell", () -> worldRegistry.get().getLightRegistry().getRegirLightsPerCell());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_cell_size", () -> 32.0F);
          // ph_regir_build_samples is compute-only (set by RegirComputeProgram.dispatch()).
-         // RTXDI ReGIR lookup jitters the surface world position using the
-         // coherent initial-sampling RNG, then maps that position to a cell.
+         // ReGIR lookup jitters the surface world position before hashing it to a cell.
+         // Photonics uses a per-pixel lookup RNG for that jitter to avoid coherent
+         // 16x16 tile jumps near strong lights; Power RIS fallback remains tile-coherent.
          uniforms.uniform1f(
             UniformUpdateFrequency.PER_FRAME,
             "ph_regir_sampling_jitter",

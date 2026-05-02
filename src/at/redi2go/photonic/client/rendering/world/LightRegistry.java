@@ -460,6 +460,7 @@ public class LightRegistry implements Destructable {
          REGIR_DEFAULT_LIGHTS_PER_CELL,
          maxLightsPerNode > 0 ? maxLightsPerNode : REGIR_MAX_LIGHTS_PER_CELL_FALLBACK
       );
+      int configuredSlots = Math.round(PhotonicsStorage.REGIR_LIGHTS_PER_CELL.value);
       if (override != null && !override.isBlank()) {
          try {
             return Math.max(1, Integer.parseInt(override.trim()));
@@ -467,7 +468,7 @@ public class LightRegistry implements Destructable {
          }
       }
 
-      return Math.max(1, defaultSlots);
+      return Math.max(1, configuredSlots > 0 ? configuredSlots : defaultSlots);
    }
 
    private boolean isLightSelectionCameraFrozenForDebug() {
@@ -1769,7 +1770,7 @@ public class LightRegistry implements Destructable {
 
    public float getRegirSamplingJitter() {
       String override = System.getProperty("photonics.regirSamplingJitter");
-      float jitterInCells = REGIR_SAMPLING_JITTER;
+      float jitterInCells = PhotonicsStorage.REGIR_BUILD_JITTER.value;
       if (override != null && !override.isBlank()) {
          try {
             jitterInCells = Float.parseFloat(override.trim());
@@ -1785,7 +1786,7 @@ public class LightRegistry implements Destructable {
       if (override == null || override.isBlank()) {
          override = System.getProperty("photonics.regirSamplingJitter");
       }
-      float jitterInCells = REGIR_LOOKUP_JITTER;
+      float jitterInCells = PhotonicsStorage.REGIR_LOOKUP_JITTER.value;
       if (override != null && !override.isBlank()) {
          try {
             jitterInCells = Float.parseFloat(override.trim());

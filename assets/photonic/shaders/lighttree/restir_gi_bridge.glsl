@@ -519,9 +519,11 @@ void RTXDI_StoreGIReservoir(RTXDI_GIReservoir reservoir, out vec4 positionData, 
 
 uniform float ph_restir_indirect_boiling_filter_strength;
 uniform float ph_restir_gi_use_boiling_filter;
+uniform float ph_restir_gi_temporal_splatting_active;
+uniform float ph_restir_gi_initial_sample_count;
+uniform float ph_restir_gi_temporal_max_splats;
 uniform float ph_restir_gi_spatial_sample_count;
 uniform float ph_restir_gi_spatial_bias_mode;
-uniform float ph_restir_gi_enable_temporal_reuse;
 
 const int gi_buffer_index_initial = 0;
 const int gi_buffer_index_spatial = 1;
@@ -553,6 +555,14 @@ int gi_runtime_bias_correction_mode(float configuredMode) {
 
 int gi_runtime_spatial_sample_count() {
     return clamp(int(round(ph_restir_gi_spatial_sample_count)), 0, 8);
+}
+
+int gi_runtime_initial_sample_count() {
+    return clamp(int(round(ph_restir_gi_initial_sample_count)), 1, 8);
+}
+
+int gi_runtime_temporal_max_splats() {
+    return clamp(int(round(ph_restir_gi_temporal_max_splats)), 1, 32);
 }
 
 float gi_runtime_spatial_radius() {
@@ -618,53 +628,18 @@ RTXDI_GIReservoir RTXDI_LoadInitialGIReservoir(ivec2 uv) {
     return RTXDI_LoadGIReservoir(gi_buffer_index_initial, uv);
 }
 
-RTXDI_GIReservoir RTXDI_LoadCurrentFrameGIReservoir(ivec2 uv, int activeCheckerboardField) {
+RTXDI_GIReservoir RTXDI_LoadCanonicalGIReservoir(ivec2 uv, int activeCheckerboardField) {
     if (ph_restir_gi_use_boiling_filter >= 0.5f) {
         return RTXDI_LoadGIReservoir(gi_buffer_index_spatial, uv, activeCheckerboardField);
     }
     return RTXDI_LoadInitialGIReservoir(uv);
 }
 
-bool gi_load_temporal_reservoir(
-    RAB_Surface currentSurface,
-    ivec2 pixelPosition,
-    int activeCheckerboardField,
-    out RTXDI_GIReservoir temporalReservoir,
-    out RAB_Surface temporalSurface
-) {
-    temporalReservoir = RTXDI_EmptyGIReservoir();
-    temporalSurface = RAB_EmptySurface();
-
-    if (ph_restir_gi_enable_temporal_reuse < 0.5f) {
-        return false;
+RTXDI_GIReservoir RTXDI_LoadCurrentFrameGIReservoir(ivec2 uv, int activeCheckerboardField) {
+    if (ph_restir_gi_temporal_splatting_active >= 0.5f || ph_restir_gi_use_boiling_filter >= 0.5f) {
+        return RTXDI_LoadGIReservoir(gi_buffer_index_spatial, uv, activeCheckerboardField);
     }
-
-    vec2 reprojectionUv = ph_reprojectf(
-        previous_modelview_projection,
-        currentSurface.worldPos + currentSurface.normal * 0.01f,
-        vec2(viewWidth, viewHeight),
-        vec2(0.0f)
-    );
-    ivec2 previousUv = ivec2(round(reprojectionUv));
-    ivec2 previousTextureSize = textureSize(prev_radiosity_position, 0);
-    if (any(lessThan(previousUv, ivec2(0))) || any(greaterThanEqual(previousUv, previousTextureSize))) {
-        return false;
-    }
-
-    temporalSurface = lt_load_previous_surface(previousUv);
-    if (!lt_is_valid_surface(temporalSurface)) {
-        return false;
-    }
-    if (!lt_surface_matches(currentSurface, temporalSurface, gi_runtime_spatial_depth_threshold(), gi_runtime_spatial_normal_threshold())) {
-        return false;
-    }
-    if (!lt_materials_similar(currentSurface, temporalSurface)) {
-        return false;
-    }
-
-    ivec2 previousReservoirPos = RTXDI_PixelPosToReservoirPos(previousUv, activeCheckerboardField);
-    temporalReservoir = RTXDI_LoadPreviousGIReservoir(previousReservoirPos, activeCheckerboardField);
-    return RTXDI_IsValidGIReservoir(temporalReservoir);
+    return RTXDI_LoadInitialGIReservoir(uv);
 }
 
 bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 samplePosition) {
@@ -930,7 +905,7 @@ void gi_finalize_initial_reservoir(inout RTXDI_GIReservoir reservoir) {
 }
 
 RTXDI_GIReservoirStore gi_build_initial_reservoir_store(RAB_Surface currentSurface) {
-    const int samplesPerPixel = max(PH_LIGHTTREE_GI_INITIAL_SAMPLES, 1);
+    int samplesPerPixel = gi_runtime_initial_sample_count();
 
     ivec2 pixelPosition = lt_current_pixel_pos();
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
@@ -955,7 +930,7 @@ RTXDI_GIReservoirStore gi_build_initial_reservoir_store(RAB_Surface currentSurfa
 // Reference parity: emits a primary-miss initial reservoir when the primary surface is invalid.
 // Matches PathTracer::handlePrimaryMiss + InitialCandidates::addCandidateReservoir in the reference.
 RTXDI_GIReservoirStore gi_build_primary_miss_initial_reservoir_store(vec3 cameraWorldPos, vec3 primaryRayDir) {
-    const int samplesPerPixel = max(PH_LIGHTTREE_GI_INITIAL_SAMPLES, 1);
+    int samplesPerPixel = gi_runtime_initial_sample_count();
     ivec2 pixelPosition = lt_current_pixel_pos();
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
         uvec2(pixelPosition),

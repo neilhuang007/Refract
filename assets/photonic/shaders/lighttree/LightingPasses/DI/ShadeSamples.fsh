@@ -122,10 +122,9 @@ vec3 lt_debug_color_regir_grid_binding(RAB_Surface surface) {
     int builtBuckets = lt_debug_regir_built_bucket_count(cellCoord);
     bool inBuildRegion = lt_debug_regir_cell_in_build_region(cellCoord);
     ivec2 pixel = lt_fragment_pixel_pos();
-    RTXDI_RandomSamplerState debugRegirRng = RTXDI_InitRandomSampler(
-        uvec2(pixel / int(RTXDI_TILE_SIZE_IN_PIXELS)),
-        uint(frameCounter),
-        RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+    RTXDI_RandomSamplerState debugRegirRng = RTXDI_InitReGIRLookupRandomSampler(
+        uvec2(pixel),
+        uint(frameCounter));
     int jitteredSlot = -1;
     bool jitteredHit = regir_resolve_cell(surface.worldPos, surfaceNormal, debugRegirRng, jitteredSlot);
 
@@ -150,7 +149,7 @@ vec3 lt_debug_color_regir_grid_binding(RAB_Surface surface) {
     }
 
     float lineAlpha = lt_debug_regir_grid_line_alpha(surface.worldPos, surfaceNormal);
-    vec3 lineColor = (surfaceSlot >= 0) ? vec3(0.0f, 0.65f, 1.0f) : vec3(1.0f, 0.18f, 0.02f);
+    vec3 lineColor = jitteredHit ? vec3(0.0f, 0.65f, 1.0f) : vec3(1.0f, 0.18f, 0.02f);
     return mix(baseColor, lineColor, lineAlpha);
 }
 

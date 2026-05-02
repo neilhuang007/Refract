@@ -530,7 +530,8 @@ float RAB_SurfaceEvaluateBrdfPdf(RAB_Surface surface, vec3 lightDir)
 }
 
 RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIRRIS(
-    inout RTXDI_RandomSamplerState lookupRng,
+    inout RTXDI_RandomSamplerState coherentRng,
+    inout RTXDI_RandomSamplerState regirLookupRng,
     RTXDI_LightBufferRegion localLightBufferRegion,
     RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams,
     RAB_Surface surface)
@@ -538,7 +539,7 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIR
     int cellIndex = -1;
     // RTXDI_CalculateReGIRCellIndex: jitter the surface world position with the
     // lookup RNG, then map that jittered world position to a ReGIR cell.
-    if (regir_resolve_cell(surface.worldPos, RAB_GetSurfaceNormal(surface), lookupRng, cellIndex) && cellIndex >= 0) {
+    if (regir_resolve_cell(surface.worldPos, RAB_GetSurfaceNormal(surface), regirLookupRng, cellIndex) && cellIndex >= 0) {
         RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
             RTXDI_SelectLocalLightReGIRRISTile(cellIndex));
         ctx.proposalFamily = LT_PROPOSAL_FAMILY_REGIR_RIS;
@@ -549,7 +550,7 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextReGIR
     if (ph_regir_local_light_sampling_fallback_mode == REGIR_LOCAL_LIGHT_FALLBACK_MODE_POWER_RIS)
     {
         RTXDI_LocalLightSelectionContext ctx = RTXDI_InitializeLocalLightSelectionContextRIS(
-            lookupRng,
+            coherentRng,
             localLightRISBufferSegmentParams);
         ctx.proposalFamily = LT_PROPOSAL_FAMILY_POWER_RIS;
         return ctx;
@@ -570,6 +571,7 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextFallb
 
 RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
     inout RTXDI_RandomSamplerState coherentRng,
+    inout RTXDI_RandomSamplerState regirLookupRng,
     int localLightSamplingMode,
     RTXDI_LightBufferRegion localLightBufferRegion,
     RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams,
@@ -579,6 +581,7 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
     {
         return RTXDI_InitializeLocalLightSelectionContextReGIRRIS(
             coherentRng,
+            regirLookupRng,
             localLightBufferRegion,
             localLightRISBufferSegmentParams,
             surface);
@@ -606,6 +609,23 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
     }
 
     return lt_make_invalid_local_light_selection_context();
+}
+
+RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContext(
+    inout RTXDI_RandomSamplerState coherentRng,
+    int localLightSamplingMode,
+    RTXDI_LightBufferRegion localLightBufferRegion,
+    RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams,
+    RAB_Surface surface)
+{
+    RTXDI_RandomSamplerState regirLookupRng = coherentRng;
+    return RTXDI_InitializeLocalLightSelectionContext(
+        coherentRng,
+        regirLookupRng,
+        localLightSamplingMode,
+        localLightBufferRegion,
+        localLightRISBufferSegmentParams,
+        surface);
 }
 
 void RTXDI_UnpackLocalLightFromRISLightData(
@@ -691,6 +711,7 @@ vec2 RTXDI_RandomlySelectLocalLightUV(inout RTXDI_RandomSamplerState rng)
 RTXDI_DIReservoir InitialCandidates_SampleLocalLightsAtTime(
     inout RTXDI_RandomSamplerState rng,
     inout RTXDI_RandomSamplerState coherentRng,
+    inout RTXDI_RandomSamplerState regirLookupRng,
     RAB_Surface surface,
     RTXDI_DIInitialSamplingParameters initialSamplingParams,
     float pathTime,
@@ -719,6 +740,7 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLightsAtTime(
     bool fastRandomMode = (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM);
     RTXDI_LocalLightSelectionContext lightSelectionContext = RTXDI_InitializeLocalLightSelectionContext(
         coherentRng,
+        regirLookupRng,
         localLightSamplingMode,
         localLightBufferRegion,
         localLightRISBufferSegmentParams,
@@ -831,9 +853,11 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLights(
     out vec3 o_selectedIrradiance,
     out vec3 o_selectedEarlyThroughput)
 {
+    RTXDI_RandomSamplerState regirLookupRng = coherentRng;
     return InitialCandidates_SampleLocalLightsAtTime(
         rng,
         coherentRng,
+        regirLookupRng,
         surface,
         initialSamplingParams,
         0.0f,
@@ -1124,6 +1148,7 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
 RTXDI_DIReservoir InitialCandidates_SampleLightsForSurface(
     inout RTXDI_RandomSamplerState rng,
     inout RTXDI_RandomSamplerState coherentRng,
+    inout RTXDI_RandomSamplerState regirLookupRng,
     RAB_Surface surface,
     RTXDI_DIInitialSamplingParameters initialSamplingParams,
     float pathTime,
@@ -1145,6 +1170,7 @@ RTXDI_DIReservoir InitialCandidates_SampleLightsForSurface(
     RTXDI_DIReservoir localReservoir = InitialCandidates_SampleLocalLightsAtTime(
         rng,
         coherentRng,
+        regirLookupRng,
         surface,
         initialSamplingParams,
         pathTime,

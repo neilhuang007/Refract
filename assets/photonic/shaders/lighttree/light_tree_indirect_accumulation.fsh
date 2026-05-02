@@ -73,26 +73,6 @@ void main() {
         inputM = currentReservoir.samples;
     }
 
-    RTXDI_GIReservoir temporalReservoir;
-    RAB_Surface temporalSurface;
-    if (gi_load_temporal_reservoir(currentSurface, pixelPosition, activeCheckerboardField, temporalReservoir, temporalSurface)) {
-        float temporalJacobian = RTXDI_GICalculateJacobian(currentSurface, temporalSurface, temporalReservoir.selected);
-        float temporalTargetPdf = RAB_GetGISampleTargetPdfForSurface(currentSurface, temporalReservoir.selected);
-        if (temporalTargetPdf > 0.0f && temporalJacobian > 0.0f) {
-            bool temporalSelected = RTXDI_CombineGIReservoirs(
-                state,
-                temporalReservoir,
-                RTXDI_GetNextRandom(rng),
-                temporalTargetPdf * temporalJacobian
-            );
-            if (temporalSelected) {
-                selectedTargetPdf = temporalTargetPdf;
-                selectedNeighborIndex = -2;
-            }
-            inputM += temporalReservoir.samples;
-        }
-    }
-
     for (int i = 0; i < activeSpatialSampleCount; i++) {
         ivec2 neighborUv = pixelPosition + lt_calculate_spatial_resampling_offset(
             neighborSampleStartIdx + i,

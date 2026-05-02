@@ -338,23 +338,32 @@ void main() {
     float diffuse2ndMoment  = nrd_luminance(diffuseIllumination.rgb);
     diffuse2ndMoment  *= diffuse2ndMoment;
 
-    // Motion vector -> prevUVSMB (reference lines 403-419)
+    // Motion vector -> prevUVSMB.
+    //
+    // Photonics convention (see ph_core.glsl: ph_compute_temporal_motion):
+    //   mv4.xy = previousPixel - currentPixelCenter (pixel-space delta)
+    //   mv4.z  = previousLinearDepth - currentLinearDepth
+    //   mv4.a  = 1.0 when the projection is valid, 0.0 when invalid (clip w<=0 etc.)
+    //
+    // This is equivalent to NRD's gMvScale.w == 0 path (pixel/UV-space motion).
+    // We never have a world-space MV; the reference's `gMvScale.w != 0` branch is
+    // intentionally absent.
     vec4 mv4 = texelFetch(radiosity_motion, tex_coord, 0);
     vec3 mv  = mv4.xyz;
 
     vec3 prevWorldPos;
     vec2 prevUVSMB;
-    bool hasExplicitWorldMV = (mv4.a > 0.5);
-    if (hasExplicitWorldMV) {
-        prevWorldPos = currWorldPos + mv;
-        prevUVSMB    = nrd_ta_project_prev(prevWorldPos);
-    } else {
-        // mv.xy = (prevPixelCenter - currPixelCenter) in pixel space
+    if (mv4.a > 0.5) {
+        // Valid MV: prev pixel = curr pixel + pixel-space delta, recover prev world from prev G-buffer.
         prevUVSMB = pixelUV + mv.xy / rectSize;
         ivec2 prevPxNear = ivec2(prevUVSMB * rectSize);
         ivec2 psz = textureSize(prev_radiosity_position, 0);
         prevPxNear = clamp(prevPxNear, ivec2(0), psz - 1);
         prevWorldPos = texelFetch(prev_radiosity_position, prevPxNear, 0).xyz;
+    } else {
+        // Invalid MV (e.g., behind camera last frame): project current world pos into prev clip.
+        prevWorldPos = currWorldPos;
+        prevUVSMB    = nrd_ta_project_prev(prevWorldPos);
     }
 
     // Parallax (reference lines 475-479)

@@ -20,67 +20,13 @@ layout(location = 7) out vec4 direct_soft_frag_out;
 uniform sampler2D denoised_direct_diffuse;
 uniform sampler2D denoised_direct_specular;
 
-// Debug: when enabled, light_reload is ignored and temporal history is never wiped
-uniform float ph_debug_disable_temporal_reset;
 // uniform float ph_debug_view_mode;
 // Declared upstream via /photonics/lighttree/samplers.glsl included from common/header.glsl.
 uniform float ph_restir_enable_denoiser_packing;
 
-const float lt_reproject_normal_threshold = 0.99f;
-const float lt_reproject_position_threshold_sq = 0.35f;
-
 vec4 lt_extract_accumulation_material(vec2 uv) {
     vec4 spec = texture(specular, uv);
     return nrd_pack_surface_material(spec);
-}
-
-bool is_valid_reprojection(ivec2 prevUv, ivec2 textureBounds) {
-    bool lightReloadActive = light_reload && (ph_debug_disable_temporal_reset < 0.5f);
-    return !lightReloadActive
-        && all(greaterThanEqual(prevUv, ivec2(0)))
-        && all(lessThan(prevUv, textureBounds));
-}
-
-bool lt_is_valid_direct_soft_reprojection(vec2 reprojectionUv, vec3 currentPosition, vec3 currentNormal) {
-    ivec2 prevUv = ivec2(round(reprojectionUv));
-    ivec2 textureBounds = textureSize(prev_radiosity_position, 0);
-    if (!is_valid_reprojection(prevUv, textureBounds)) {
-        return false;
-    }
-
-    vec3 previousNormal = texelFetch(prev_radiosity_normal, prevUv, 0).xyz;
-    if (dot(previousNormal, currentNormal) <= lt_reproject_normal_threshold) {
-        return false;
-    }
-
-    vec3 previousPosition = texelFetch(prev_radiosity_position, prevUv, 0).xyz;
-    vec3 positionDelta = previousPosition - currentPosition;
-    return dot(positionDelta, positionDelta) <= lt_reproject_position_threshold_sq;
-}
-
-vec4 load_previous_direct_soft(vec3 stagePosition, vec3 stageNormal) {
-    // Soft reprojection uses zero jitter (not TAA jitter) for stable pixel mapping.
-    // TAA jitter changes every frame and can cause reprojection to land near pixel
-    // boundaries; nearest-texel rounding keeps the history address aligned with the
-    // RTXDI/NRD-style temporal paths instead of truncating toward a neighbor.
-    if (ph_dirty_region_factor(stagePosition) > 0.0f) {
-        return vec4(0.0f);
-    }
-
-    vec2 reprojectionUv = ph_reprojectf(
-        previous_modelview_projection,
-        stagePosition + stageNormal * 0.01f,
-        vec2(viewWidth, viewHeight),
-        vec2(0.0f)
-    );
-
-    if (!lt_is_valid_direct_soft_reprojection(reprojectionUv, stagePosition, stageNormal)) {
-        return vec4(0.0f);
-    }
-
-    ivec2 prevUv = ivec2(round(reprojectionUv));
-    vec4 prevSoft = texelFetch(prev_radiosity_direct_soft, prevUv, 0);
-    return (prevSoft.a > 0.0f && !any(isnan(prevSoft))) ? prevSoft : vec4(0.0f);
 }
 
 vec4 lt_load_stage_direct_lobe(sampler2D stageTexture, ivec2 pixelPosition) {
@@ -164,13 +110,10 @@ void main() {
 
     vec3 directCombined;
     vec3 accumulatedDirect;
-    vec4 prevSoft = vec4(0.0f);
     if (ph_debug_view_mode > 0.5f) {
         directCombined = directDiffuse.rgb;
         accumulatedDirect = directCombined;
-        prevSoft = vec4(directCombined, 0.0f);
     } else {
-        prevSoft = load_previous_direct_soft(stagePosition.xyz, stageNormal.xyz);
         if (useDenoisedDirect) {
             vec3 denoisedDiffuseDemodulated = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
             vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
@@ -182,7 +125,7 @@ void main() {
         } else {
             directCombined = directDiffuse.rgb + directSpecular.rgb;
         }
-        accumulatedDirect = (prevSoft.rgb + directCombined) / max(prevSoft.a + 1.0f, 1.0f);
+        accumulatedDirect = directCombined;
     }
 
     position_frag_out = stagePosition;
@@ -192,5 +135,5 @@ void main() {
     material_frag_out = stageMaterial;
     identity_frag_out = stageIdentity;
     direct_frag_out = vec4(accumulatedDirect, directHitDistance);
-    direct_soft_frag_out = vec4(prevSoft.rgb + directCombined, prevSoft.a + 1.0f);
+    direct_soft_frag_out = vec4(directCombined, 1.0f);
 }
