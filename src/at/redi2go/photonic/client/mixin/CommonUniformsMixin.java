@@ -107,12 +107,12 @@ public class CommonUniformsMixin {
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_regir_lights_per_cell", () -> worldRegistry.get().getLightRegistry().getRegirLightsPerCell());
          uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_regir_cell_size", () -> 32.0F);
          // ph_regir_build_samples is compute-only (set by RegirComputeProgram.dispatch()).
-         // Match RTXDI by using the same sampling jitter for build and fragment-side
-         // ReGIR cell lookup.
+         // RTXDI ReGIR lookup jitters the surface world position using the
+         // coherent initial-sampling RNG, then maps that position to a cell.
          uniforms.uniform1f(
             UniformUpdateFrequency.PER_FRAME,
             "ph_regir_sampling_jitter",
-            () -> worldRegistry.get().getLightRegistry().getRegirSamplingJitter()
+            () -> worldRegistry.get().getLightRegistry().getRegirLookupJitter()
          );
          // Unified RIS buffer offsets for fragment shaders (light_tree.glsl, reuse_bridge.glsl).
          uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_ris_tile_size", () -> RegirComputeProgram.tileSize);

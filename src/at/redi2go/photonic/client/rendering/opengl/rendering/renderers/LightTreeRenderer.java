@@ -115,8 +115,10 @@ public class LightTreeRenderer extends MainRenderer {
   private static final int indirectDenoiseRegionIndex = 17;
   private static final int lightingAccumulationRegionIndex = 18;
   private static final int indirectCompositeRegionIndex = 19;
+   private static final int REGIR_STABLE_FRAME_SEED = 0;
    private boolean loggedRegirPresampleFrameSeedOverride = false;
    private boolean loggedRegirBuildFrameSeedOverride = false;
+   private boolean loggedRegirStableFrameSeed = false;
    @Nullable
    private Function<List<PhotonicsShader>, CompositeRenderer> compositeRendererCreator;
 
@@ -2241,7 +2243,19 @@ public class LightTreeRenderer extends MainRenderer {
          }
       }
 
-      return this.renderFrameIndex;
+      if (Boolean.getBoolean("photonics.regirAnimateFrameSeed")) {
+         int period = Math.max(1, Integer.getInteger("photonics.regirFrameSeedPeriod", 1));
+         return this.renderFrameIndex / period;
+      }
+
+      if (!this.loggedRegirStableFrameSeed) {
+         Photonic.info(
+            "[RegirCompute] Using stable default frame seed {}; set photonics.regirAnimateFrameSeed=true to animate ReGIR presampling",
+            REGIR_STABLE_FRAME_SEED
+         );
+         this.loggedRegirStableFrameSeed = true;
+      }
+      return REGIR_STABLE_FRAME_SEED;
    }
 
    private int resolveRegirPresampleFrameSeed() {
@@ -2304,12 +2318,14 @@ public class LightTreeRenderer extends MainRenderer {
          lightCount,
          this.resolveRegirPresampleFrameSeed(),
          this.resolveRegirBuildFrameSeed(),
-         8,    // numBuildSamples — RTXDI default from ReGIR.h:141
+         Math.max(1, Integer.getInteger("photonics.regirBuildSamples", 8)),
          lightRegistry.getRegirSamplingJitter(),
          lightRegistry.getRegirHashTableSize(),
          lightRegistry.getRegirHashCellSizeBlocks(),
          lightRegistry.getRegirHashNormalBuckets(),
-         lightRegistry.getRegirBuildRegionCells()
+         lightRegistry.getRegirBuildRegionCells(),
+         this.lightingStageBuffer.getWriteAttachment("position"),
+         this.lightingStageBuffer.getWriteAttachment("mapped_normal")
       );
    }
 

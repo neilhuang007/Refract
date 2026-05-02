@@ -12,9 +12,10 @@
 // coherent.  A separate per-thread RNG picks the within-tile entry each
 // iteration, giving independent samples.
 
-// One thread per world-space hash-grid key in the active build region. Each
-// thread owns one (cellCoord, normalBucket) pair and fills its ReGIR reservoirs.
-layout(local_size_x = 64) in;
+// One thread per world-space hash-grid light slot, matching RTXDI's
+// RTXDI_PresampleLocalLightsForReGIR dispatch shape. Each thread owns one
+// (cellCoord, normalBucket, lightInCell) slot.
+layout(local_size_x = 256) in;
 
 // ---------------------------------------------------------------------------
 // SSBOs
@@ -39,7 +40,7 @@ layout(std430, binding = 1) restrict readonly buffer ph_global_light_cdf {
 // Presample tiles occupy [ph_ris_tile_buffer_offset, ph_ris_tile_buffer_offset + tileCount*tileSize).
 // Hash-grid ReGIR slots occupy [ph_regir_ris_buffer_offset, ph_regir_ris_buffer_offset + hashTableSize*lightsPerCell).
 // Must be restrict (not readonly/writeonly) since this pass reads tiles and writes ReGIR in different regions.
-layout(std430, binding = 5) restrict buffer ph_ris_buffer {
+layout(std430, binding = 5) coherent restrict buffer ph_ris_buffer {
     uvec2 ph_ris_data[];
 };
 
@@ -65,6 +66,10 @@ layout(std430, binding = 7) coherent restrict buffer ph_regir_cell_checksums {
 layout(std430, binding = 8) coherent restrict buffer ph_regir_cell_keys {
     ivec4 ph_regir_cell_key[];
 };
+
+uniform sampler2D stage_radiosity_position;
+uniform sampler2D stage_radiosity_mapped_normal;
+uniform int ph_regir_geometry_build_enabled;
 
 // ---------------------------------------------------------------------------
 // RTXDI COMPACT_BIT / INDEX_MASK -- same constants as regir_presample_tiles.glsl
@@ -376,6 +381,25 @@ RegirHashInsertResult regir_hash_insert(ivec3 cellCoord, int bucket) {
     return regir_hash_result(-1, false);
 }
 
+bool regir_try_claim_output_slot(uint risBufferPtr) {
+    if (ph_regir_geometry_build_enabled == 0) {
+        return true;
+    }
+
+    uint existing = atomicCompSwap(ph_ris_data[risBufferPtr].y, 0u, REGIR_HASH_CLAIMED);
+    return existing == 0u;
+}
+
+void regir_store_output_slot(uint risBufferPtr, uint packedLight, uint packedWeight) {
+    if (ph_regir_geometry_build_enabled != 0) {
+        ph_ris_data[risBufferPtr].x = packedLight;
+        memoryBarrierBuffer();
+        ph_ris_data[risBufferPtr].y = packedWeight;
+    } else {
+        ph_ris_data[risBufferPtr] = uvec2(packedLight, packedWeight);
+    }
+}
+
 // Legacy helper kept so downstream code that still expects a "grid origin" compiles.
 vec3 regir_grid_origin() {
     return ph_regir_grid_center - vec3(ph_regir_grid_cells) * (ph_regir_cell_size * 0.5);
@@ -439,8 +463,19 @@ void RTXDI_UnpackLocalLightFromRISLightData(
     out uint lightIndex,
     out float invSourcePdf)
 {
+    lightInfo = RAB_EmptyLightInfo();
     lightIndex = tileData.x & RTXDI_LIGHT_INDEX_MASK;
     invSourcePdf = uintBitsToFloat(tileData.y);
+
+    if (tileData.y == 0u
+        || lightIndex >= uint(max(ph_light_count, 0))
+        || !(invSourcePdf > 0.0)
+        || isinf(invSourcePdf)
+        || isnan(invSourcePdf)) {
+        lightIndex = 0u;
+        invSourcePdf = 0.0;
+        return;
+    }
 
     if ((tileData.x & RTXDI_LIGHT_COMPACT_BIT) != 0u) {
         lightInfo = RAB_LoadCompactLightInfo(risBufferPtr, int(lightIndex));
@@ -483,14 +518,53 @@ void RTXDI_RandomlySelectLightUniformly(
 //                    -- the existing attenuation model already folds in 1/(1+d^2*falloff)
 //                    so the explicit /r^2 from the paper is captured by attenuation.
 //
-// This deliberately uses the paper's canonical target for the proposal stored in
-// the grid: no receiver cosine and no light-source cosine/cone term. Those terms
-// can be zero for a representative point even when the shading point can use the
-// light, which is the darkening-bias case the paper calls out. The real shading
-// target is still evaluated later when the sampled light is streamed into the
-// reservoir, so over-broad proposals cost efficiency rather than correctness.
+// Keep the grid-fill target conservative: directional cosine terms are evaluated
+// later against the actual shading point. Using a bucket normal and cell-center
+// representative here makes hard per-cell decisions at light/geometry edges.
+// For shaped lights, reject only cells whose conservative volume cannot intersect
+// the light's non-zero emission cone, matching RTXDI's volume-weight support test.
 // ---------------------------------------------------------------------------
+bool regir_sphere_intersects_cone(vec3 coneVertex, vec3 coneAxis, float coneHalfAngle, vec3 sphereCenter, float sphereRadius) {
+    if (coneHalfAngle >= 3.14159265) return true;
+
+    vec3 vertexToSphere = sphereCenter - coneVertex;
+    float distanceToSphere = length(vertexToSphere);
+    if (distanceToSphere <= sphereRadius) return true;
+    if (!(distanceToSphere > 1.0e-6)) return true;
+
+    float invDistance = 1.0 / distanceToSphere;
+    float axisAngle = acos(clamp(dot(vertexToSphere, coneAxis) * invDistance, -1.0, 1.0));
+    float sphereHalfAngle = asin(clamp(sphereRadius * invDistance, 0.0, 1.0));
+    return axisAngle <= sphereHalfAngle + coneHalfAngle;
+}
+
+vec3 regir_cone_vertex_for_spherical_source(vec3 sphereCenter, float sphereRadius, vec3 coneAxis, float coneHalfAngle) {
+    float sinHalfAngle = sin(min(coneHalfAngle, 1.57079633));
+    float offset = max(sphereRadius, 0.0) / max(sinHalfAngle, 1.0e-5);
+    return sphereCenter - coneAxis * offset;
+}
+
+bool regir_cell_intersects_shaped_light(RAB_LightInfo lightInfo, vec3 cellCenter, float cellRadius) {
+    if (lightInfo.orientationSpread >= 3.14159265) return true;
+
+    vec3 axis = normalize(lightInfo.emissionAxis + vec3(1.0e-6));
+
+    // Photonics' runtime radiance stays non-zero until axisAngle reaches
+    // orientationSpread + pi/2. Use that non-zero cone as RTXDI's shaping cone.
+    float coneHalfAngle = clamp(lightInfo.orientationSpread + 1.57079633, 0.0, 3.14159265);
+    vec3 coneVertex = regir_cone_vertex_for_spherical_source(
+        lightInfo.position,
+        lightInfo.blockRadius,
+        axis,
+        coneHalfAngle);
+    return regir_sphere_intersects_cone(coneVertex, axis, coneHalfAngle, cellCenter, cellRadius);
+}
+
 float RAB_GetLightTargetPdfForCell(RAB_LightInfo lightInfo, vec3 cellCenter, vec3 receiverNormal, float cellRadius) {
+    if (!regir_cell_intersects_shaped_light(lightInfo, cellCenter, cellRadius)) {
+        return 0.0;
+    }
+
     vec3  delta = cellCenter - lightInfo.position;
     float dist  = length(delta);
 
@@ -536,14 +610,10 @@ bool regir_cell_in_build_region(ivec3 cellCoord) {
 
 // ---------------------------------------------------------------------------
 // Hash-grid ReGIR build (paper variant).
-// One thread per world-space cell and normal bucket:
-//   1. enumerates a cell in the camera-centered build region
-//   2. hash-inserts (cellCoord, bucket)
-//   3. uses the world-space cell center P_c and bucket normal N_c for RIS
-//      and writes the winning light + RIS weight back into ph_ris_data.
-// This intentionally does not derive cells from current screen pixels; the grid
-// is anchored to world-space cell coordinates, and screen-space only decides
-// which shaded points query it later.
+// The default path builds the full camera-centered hash window so lookup jitter
+// cannot request cells that were missing from the current screen. Geometry mode
+// is retained as an opt-in diagnostic path and claims each output slot once so
+// duplicate stage pixels for the same (cellCoord, normalBucket) key cannot race.
 // ---------------------------------------------------------------------------
 void main() {
     if (ph_regir_hash_table_size <= 0
@@ -555,136 +625,169 @@ void main() {
         return;
     }
 
-    int buildRegionCells = max(ph_regir_build_region_cells, 1);
-    int bucketCount = max(ph_regir_hash_normal_buckets, 1);
-    uint cellsPerSide = uint(buildRegionCells);
-    uint worldCellCount = cellsPerSide * cellsPerSide * cellsPerSide;
-    uint totalThreads = worldCellCount * uint(bucketCount);
+    uint lightsPerCell = uint(ph_regir_lights_per_cell);
     uint threadId = gl_GlobalInvocationID.x;
-    if (threadId >= totalThreads) return;
+    uint lightInCell;
+    ivec3 cellCoord;
+    int bucket;
+    uint rngThreadId = threadId;
 
-    int lightsPerCell = ph_regir_lights_per_cell;
+    if (ph_regir_geometry_build_enabled != 0) {
+        ivec2 geometrySize = textureSize(stage_radiosity_position, 0);
+        if (geometrySize.x <= 0 || geometrySize.y <= 0) return;
 
-    uint cellLinearIndex = threadId / uint(bucketCount);
-    int bucket = regir_clamp_normal_bucket(int(threadId - cellLinearIndex * uint(bucketCount)));
-    ivec3 localCell = ivec3(
-        int(cellLinearIndex % cellsPerSide),
-        int((cellLinearIndex / cellsPerSide) % cellsPerSide),
-        int(cellLinearIndex / (cellsPerSide * cellsPerSide))
-    );
-    ivec3 cellCoord = regir_build_region_min_cell() + localCell;
+        uint pixelCount = uint(geometrySize.x) * uint(geometrySize.y);
+        uint totalThreads = pixelCount * lightsPerCell;
+        if (threadId >= totalThreads) return;
+
+        lightInCell = threadId % lightsPerCell;
+        uint pixelIndex = threadId / lightsPerCell;
+        ivec2 pixel = ivec2(int(pixelIndex % uint(geometrySize.x)), int(pixelIndex / uint(geometrySize.x)));
+
+        vec4 positionData = texelFetch(stage_radiosity_position, pixel, 0);
+        if (!(positionData.w > 0.0) || any(isnan(positionData.xyz)) || any(isinf(positionData.xyz))) {
+            return;
+        }
+
+        vec3 surfaceNormal = texelFetch(stage_radiosity_mapped_normal, pixel, 0).xyz;
+        float normalLengthSq = dot(surfaceNormal, surfaceNormal);
+        if (!(normalLengthSq > 1.0e-8) || any(isnan(surfaceNormal)) || any(isinf(surfaceNormal))) {
+            return;
+        }
+
+        cellCoord = ivec3(floor(positionData.xyz / ph_regir_hash_cell_size));
+        if (!regir_cell_in_build_region(cellCoord)) return;
+        bucket = regir_normal_to_bucket(normalize(surfaceNormal));
+
+        rngThreadId = (regir_hash_pcg_key(cellCoord, bucket) ^ regir_hash_xxhash_checksum(cellCoord, bucket))
+            * lightsPerCell + lightInCell;
+    } else {
+        int buildRegionCells = max(ph_regir_build_region_cells, 1);
+        int bucketCount = max(ph_regir_hash_normal_buckets, 1);
+        uint cellsPerSide = uint(buildRegionCells);
+        uint worldCellCount = cellsPerSide * cellsPerSide * cellsPerSide;
+        uint totalThreads = worldCellCount * uint(bucketCount) * lightsPerCell;
+        if (threadId >= totalThreads) return;
+
+        lightInCell = threadId % lightsPerCell;
+        uint cellKeyIndex = threadId / lightsPerCell;
+
+        uint cellLinearIndex = cellKeyIndex / uint(bucketCount);
+        bucket = regir_clamp_normal_bucket(int(cellKeyIndex - cellLinearIndex * uint(bucketCount)));
+        ivec3 localCell = ivec3(
+            int(cellLinearIndex % cellsPerSide),
+            int((cellLinearIndex / cellsPerSide) % cellsPerSide),
+            int(cellLinearIndex / (cellsPerSide * cellsPerSide))
+        );
+        cellCoord = regir_build_region_min_cell() + localCell;
+    }
+
     vec3 representativePos = (vec3(cellCoord) + vec3(0.5)) * ph_regir_hash_cell_size;
     vec3 representativeNormal = regir_bucket_to_normal(bucket);
 
     RegirHashInsertResult insert = regir_hash_insert(cellCoord, bucket);
-    if (insert.slot < 0 || !insert.inserted) return;
+    if (insert.slot < 0) return;
     int slot = insert.slot;
 
-    // If build samples is zero, mark the slot's RIS entries empty and bail.
+    uint risBufferPtr = ph_regir_ris_buffer_offset
+                      + uint(slot) * lightsPerCell
+                      + lightInCell;
+
+    if (!regir_try_claim_output_slot(risBufferPtr)) return;
+
+    // If build samples is zero, mark this slot empty and bail.
     if (ph_regir_build_samples == 0u) {
-        for (int s = 0; s < lightsPerCell; s++) {
-            uint risPtr = ph_regir_ris_buffer_offset + uint(slot) * uint(lightsPerCell) + uint(s);
-            ph_ris_data[risPtr] = uvec2(0u, 0u);
-        }
+        regir_store_output_slot(risBufferPtr, 0u, 0u);
         return;
     }
 
-    // Cell radius for the average-distance approximation. This matches the
-    // world-space hash cell extent; lookup jitter chooses neighboring cells
-    // stochastically instead of inflating the cell during construction.
-    float cellRadius = ph_regir_hash_cell_size * sqrt(3.0) * 0.5;
+    // RTXDI ReGIR uses the full cell diagonal as the conservative volume radius,
+    // then expands it by sampling jitter. Using a half diagonal clips shaped and
+    // near lights at cell edges.
+    float cellRadius = ph_regir_hash_cell_size * sqrt(3.0)
+        * (max(ph_regir_sampling_jitter, 0.0) + 1.0);
 
     bool usePowerRisPresampling = ph_regir_local_light_presampling_mode == REGIR_LOCAL_LIGHT_PRESAMPLING_MODE_POWER_RIS;
 
     uint numBuildSamples = ph_regir_build_samples;
     float invNumSamples = 1.0 / float(numBuildSamples);
 
-    // RIS each lightsPerCell slot independently, exactly as the volumetric
-    // variant did, but per-slot we get an independent stream of candidates.
-    for (int lightInCell = 0; lightInCell < lightsPerCell; lightInCell++) {
-        uint risBufferPtr = ph_regir_ris_buffer_offset
-                          + uint(slot) * uint(lightsPerCell)
-                          + uint(lightInCell);
+    // Match RTXDI PresampleReGIR.hlsl RNGs:
+    // rng         = RTXDI_InitRandomSampler(uint2(GlobalIndex & 0xfff, GlobalIndex >> 12), frameIndex, 1)
+    // coherentRng = RTXDI_InitRandomSampler(uint2(GlobalIndex >> 8, 0), frameIndex, 1)
+    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
+        uvec2(rngThreadId & 0xfffu, rngThreadId >> 12),
+        ph_ris_frame_index,
+        1u
+    );
+    RTXDI_RandomSamplerState coherentRng = RTXDI_InitRandomSampler(
+        uvec2(rngThreadId >> 8, 0u),
+        ph_ris_frame_index,
+        1u
+    );
 
-        // Per-slot RNG seeded by the slot index + bucket + lightInCell so that
-        // (a) all 16 slots in the same hash bucket draw independent candidates
-        // and (b) different cells/buckets that hash-collide before being routed
-        // to different slots still get decorrelated streams.
-        RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
-            uvec2(uint(slot) ^ uint(bucket * 0x1234567u),
-                  uint(lightInCell) * 0x9E37u + uint(slot >> 16)),
-            ph_ris_frame_index,
-            1u
-        );
-        RTXDI_RandomSamplerState coherentRng = RTXDI_InitRandomSampler(
-            uvec2(uint(slot) >> 4, 0u),
-            ph_ris_frame_index,
-            1u
-        );
+    RISTileInfo risTileInfo;
+    if (usePowerRisPresampling) {
+        risTileInfo = RTXDI_RandomlySelectRISTile(coherentRng);
+    }
 
-        RISTileInfo risTileInfo;
+    RAB_LightInfo selectedLightInfo = RAB_EmptyLightInfo();
+    uint  selectedLight = 0u;
+    float selectedTargetPdf = 0.0;
+    float weightSum = 0.0;
+
+    for (uint i = 0u; i < numBuildSamples; i++) {
+        float rand = RTXDI_GetNextRandom(rng);
+
+        uint rndLight;
+        RAB_LightInfo lightInfo = RAB_EmptyLightInfo();
+        float invSourcePdf;
         if (usePowerRisPresampling) {
-            risTileInfo = RTXDI_RandomlySelectRISTile(coherentRng);
-        }
-
-        RAB_LightInfo selectedLightInfo = RAB_EmptyLightInfo();
-        uint  selectedLight = 0u;
-        float selectedTargetPdf = 0.0;
-        float weightSum = 0.0;
-
-        for (uint i = 0u; i < numBuildSamples; i++) {
-            float rand = RTXDI_GetNextRandom(rng);
-
-            uint rndLight;
-            RAB_LightInfo lightInfo = RAB_EmptyLightInfo();
-            float invSourcePdf;
-            if (usePowerRisPresampling) {
-                RTXDI_SelectNextLocalLight(risTileInfo, rand, lightInfo, rndLight, invSourcePdf);
-                if (rndLight >= uint(max(ph_light_count, 0))
-                    || !(invSourcePdf > 0.0)
-                    || isinf(invSourcePdf)
-                    || isnan(invSourcePdf)) {
-                    RTXDI_RandomlySelectLightUniformly(rand, lightInfo, rndLight, invSourcePdf);
-                }
-            } else {
-                RTXDI_RandomlySelectLightUniformly(rand, lightInfo, rndLight, invSourcePdf);
-            }
-
+            RTXDI_SelectNextLocalLight(risTileInfo, rand, lightInfo, rndLight, invSourcePdf);
             if (rndLight >= uint(max(ph_light_count, 0))
                 || !(invSourcePdf > 0.0)
                 || isinf(invSourcePdf)
                 || isnan(invSourcePdf)) {
-                continue;
+                RTXDI_RandomlySelectLightUniformly(rand, lightInfo, rndLight, invSourcePdf);
             }
-
-            invSourcePdf *= invNumSamples;
-
-            float targetPdf = RAB_GetLightTargetPdfForCell(
-                lightInfo,
-                representativePos,
-                representativeNormal,
-                cellRadius);
-
-            float risRnd = RTXDI_GetNextRandom(rng);
-            float risWeight = targetPdf * invSourcePdf;
-            weightSum += risWeight;
-
-            if (risRnd * weightSum < risWeight) {
-                selectedLightInfo = lightInfo;
-                selectedLight     = rndLight;
-                selectedTargetPdf = targetPdf;
-            }
+        } else {
+            RTXDI_RandomlySelectLightUniformly(rand, lightInfo, rndLight, invSourcePdf);
         }
 
-        float weight = (selectedTargetPdf > 0.0)
-            ? (weightSum / selectedTargetPdf)
-            : 0.0;
-
-        if (weight > 0.0) {
-            if (RAB_StoreCompactLightInfo(risBufferPtr, selectedLightInfo)) {
-                selectedLight |= RTXDI_LIGHT_COMPACT_BIT;
-            }
+        if (rndLight >= uint(max(ph_light_count, 0))
+            || !(invSourcePdf > 0.0)
+            || isinf(invSourcePdf)
+            || isnan(invSourcePdf)) {
+            continue;
         }
-        ph_ris_data[risBufferPtr] = uvec2(selectedLight, floatBitsToUint(weight));
+
+        invSourcePdf *= invNumSamples;
+
+        float targetPdf = RAB_GetLightTargetPdfForCell(
+            lightInfo,
+            representativePos,
+            representativeNormal,
+            cellRadius);
+
+        float risRnd = RTXDI_GetNextRandom(rng);
+        float risWeight = targetPdf * invSourcePdf;
+        weightSum += risWeight;
+
+        if (risRnd * weightSum < risWeight) {
+            selectedLightInfo = lightInfo;
+            selectedLight     = rndLight;
+            selectedTargetPdf = targetPdf;
+        }
     }
+
+    float weight = (selectedTargetPdf > 0.0)
+        ? (weightSum / selectedTargetPdf)
+        : 0.0;
+
+    if (weight > 0.0) {
+        // Keep ReGIR slots lean: the sampled path can reload the selected light
+        // by index, while compact payloads stay reserved for Power RIS tiles.
+        selectedLight &= RTXDI_LIGHT_INDEX_MASK;
+    }
+    regir_store_output_slot(risBufferPtr, selectedLight, floatBitsToUint(weight));
 }

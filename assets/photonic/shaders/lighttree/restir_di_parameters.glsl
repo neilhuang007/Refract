@@ -179,20 +179,23 @@ RTXDI_ReservoirBufferParameters lt_build_reservoir_buffer_parameters()
 RTXDI_DIInitialSamplingParameters lt_build_di_initial_sampling_parameters()
 {
     RTXDI_DIInitialSamplingParameters initialSamplingParams;
+    int requestedLocalLightSamplingMode = (ph_restir_local_light_sampling_mode <= 0.0)
+        ? RTXDI_LOCAL_LIGHT_SAMPLING_UNIFORM
+        : int(round(ph_restir_local_light_sampling_mode));
+
     // Reservoir Splatting owns SPP in InitialCandidates_run(); the local-light
-    // count is per path and must not default to the same SPP value again.
+    // count is per path and must not default to the same SPP value again. ReGIR
+    // is the RTXDI exception: FullSample defaults ReGIR RIS to 8 local-light
+    // candidates so a surface samples a cell reservoir distribution instead of
+    // exposing one selected cell light as a visible color patch.
     initialSamplingParams.numLocalLightSamples = uint((ph_restir_initial_num_local_samples > 0.0)
         ? max(int(ph_restir_initial_num_local_samples), 1)
-        : 1);
+        : ((requestedLocalLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_REGIR_RIS) ? 8 : 1));
     initialSamplingParams.numInfiniteLightSamples = 0u;
     initialSamplingParams.numEnvironmentSamples = 0u;
     initialSamplingParams.numBrdfSamples = 0u;
     initialSamplingParams.brdfCutoff = (ph_restir_initial_brdf_cutoff > 0.0) ? ph_restir_initial_brdf_cutoff : 0.0001f;
     initialSamplingParams.brdfRayMinT = 0.001f;
-
-    int requestedLocalLightSamplingMode = (ph_restir_local_light_sampling_mode <= 0.0)
-        ? RTXDI_LOCAL_LIGHT_SAMPLING_UNIFORM
-        : int(round(ph_restir_local_light_sampling_mode));
 
     initialSamplingParams.localLightSamplingMode = uint(requestedLocalLightSamplingMode);
     initialSamplingParams.enableInitialVisibility = (ph_restir_initial_enable_visibility > -0.5f) ? 1u : 0u;

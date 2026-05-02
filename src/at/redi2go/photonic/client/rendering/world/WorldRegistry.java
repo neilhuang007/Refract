@@ -311,6 +311,11 @@ public class WorldRegistry implements MemoryOwner, Destructable {
         boolean tracedLightSetDirty = this.blockLightEnabled && this.lightRegistry.consumeTracedLightSetDirty();
         boolean lightActivityDirty = this.blockLightEnabled && this.lightRegistry.consumeLightActivityDirty();
         int pendingTracedLightMutations = this.blockLightEnabled ? this.lightRegistry.consumePendingTracedLightMutations() : 0;
+        if (this.blockLightEnabled) {
+            for (BlockPos dirtyLightBlock : this.lightRegistry.consumeDirtyLightBlocks()) {
+                this.markLightBlendBlock(dirtyLightBlock);
+            }
+        }
         boolean lightWorkNeeded = this.blockLightEnabled && (chunkTopologyChanged || tracedLightSetDirty || lightActivityDirty);
         String pendingResetReason = null;
         if (shouldForceTemporalResetForLightMutation(chunkTopologyChanged, pendingTracedLightMutations)) {
@@ -1284,7 +1289,7 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          return this.lightRegistry.canonicalizeTracedLightBlockState(blockState);
       }
       if (this.lightRegistry.hasPossibleLight(blockState)) {
-         return blockState;
+         return this.lightRegistry.canonicalizeLightBlockState(blockState);
       }
       return this.canonicalizeRtNonLightDynamicState(blockState);
    }

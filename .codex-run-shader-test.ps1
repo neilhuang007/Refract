@@ -266,7 +266,11 @@ function Get-ShaderCompileFailureMessage {
     }
   }
 
-  return 'Fatal shader compilation failure detected in latest.log'
+  if ($Content -match 'Failed to create shader rendering pipeline|The shaderpack failed to load!') {
+    return 'Fatal shader compilation failure detected in latest.log'
+  }
+
+  return $null
 }
 
 function Get-ExplicitFailureMessage {

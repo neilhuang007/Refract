@@ -480,7 +480,8 @@ class LightRegistryIncrementalInvalidationTest {
       String churn = registry.describeRecentChurn();
       assertTrue(churn.contains("added=0"), churn);
       assertTrue(churn.contains("removed=0"), churn);
-      assertTrue(churn.contains("lightInfo=2"), churn);
+      assertTrue(churn.contains("lightInfo=0"), churn);
+      assertTrue(churn.contains("radiometry=2"), churn);
    }
 
    @Test
@@ -517,9 +518,10 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
-   void regirSamplingJitterMatchesRtxdiRuntimeScale() {
+   void regirSamplingAndLookupJitterMatchRtxdiRuntimeScale() {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
       assertEquals(2.0F, registry.getRegirSamplingJitter(), 1.0e-6F);
+      assertEquals(2.0F, registry.getRegirLookupJitter(), 1.0e-6F);
    }
 
    @Test
@@ -538,7 +540,7 @@ class LightRegistryIncrementalInvalidationTest {
    }
 
    @Test
-   void buildSpatialGridSkipsInactivePlaceholderLights() throws Exception {
+   void buildSpatialGridKeepsInactivePlaceholderTopology() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
       BlockLightInfo info = createTestLightInfo(100.0F);
       LightInstance[] lights = new LightInstance[] {
@@ -551,7 +553,25 @@ class LightRegistryIncrementalInvalidationTest {
       @SuppressWarnings("unchecked")
       Map<Long, java.util.List<Integer>> lightGrid = (Map<Long, java.util.List<Integer>>) getField(registry, "lightGrid");
       assertFalse(lightGrid.isEmpty(), "Active lights should still populate the grid");
-      assertTrue(lightGrid.values().stream().allMatch(indices -> indices.stream().allMatch(index -> index == 0)));
+      assertTrue(lightGrid.values().stream().anyMatch(indices -> indices.contains(1)),
+         "Inactive placeholders should remain in spatial topology so toggling on does not require a grid rebuild");
+   }
+
+   @Test
+   void semanticLayoutHashIgnoresRadiometryChanges() throws Exception {
+      LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 128);
+      Vector3f lightPos = new Vector3f(1.5F, 1.5F, 1.5F);
+      setField(registry, "tracedLights", new LightInstance[] {
+         new LightInstance(1, lightPos, createTestLightInfo(100.0F), true)
+      });
+      long initialHash = registry.getSemanticLayoutHash();
+
+      setField(registry, "tracedLights", new LightInstance[] {
+         new LightInstance(1, lightPos, createTestLightInfo(25.0F), true)
+      });
+
+      assertEquals(initialHash, registry.getSemanticLayoutHash(),
+         "Intensity changes should update light buffers/PDFs without changing the sampling layout identity");
    }
 
    @Test

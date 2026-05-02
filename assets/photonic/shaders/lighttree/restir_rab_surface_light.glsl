@@ -127,7 +127,7 @@ RAB_LightInfo RAB_LoadCompactLightInfo(uint risBufferPtr, int lightIndex)
         return RAB_EmptyLightInfo();
     }
 
-    return load_light(lightIndex);
+    return load_compact_light(risBufferPtr, lightIndex);
 }
 
 RAB_LightSample RAB_SamplePolymorphicLight(Light light, RAB_Surface surface, vec2 sampleUv)

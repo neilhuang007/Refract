@@ -176,7 +176,7 @@ public class ModSettingsScreen extends Screen {
          debugViewMode.value = getNextDebugViewMode(debugViewMode.value);
          debugViewMode.modified();
          w.setMessage(Text.of("Debug View: " + formatDebugViewMode(debugViewMode.value)));
-      }, "Cycles debug visualization overlays:\nOff, Distance Heatmap, ReGIR Grid Hit/Miss, ReGIR Cell Index,\nReGIR Coverage, Initial Sampling Reason, Final Visibility Class, Selected Light Distance,\nReservoir Inv PDF, Reservoir Target PDF, Selected Solid Angle PDF,\nIncident Radiance, BRDF Response.", () -> true));
+      }, "Cycles debug visualization overlays:\nOff, Distance Heatmap, ReGIR Grid Hit/Miss, ReGIR Cell Index,\nReGIR Coverage, Initial Sampling Reason, Final Visibility Class, Selected Light Distance,\nReservoir Inv PDF, Reservoir Target PDF, Selected Solid Angle PDF,\nIncident Radiance, BRDF Response, ReGIR Grid Binding.", () -> true));
       OilifySlider oilifySizeSlider = new OilifySlider(PhotonicsStorage.OILIFY_SIZE, 3.0f, 15.0f, "OILIFY_SIZE", true);
       OilifySlider oilifySharpnessSlider = new OilifySlider(PhotonicsStorage.OILIFY_SHARPNESS, 0.0f, 1.0f, "Sharpness", false);
       OilifySlider oilifyScaleSlider = new OilifySlider(PhotonicsStorage.OILIFY_SCALE, 1.0f, 4.0f, "Scale", false);
@@ -430,13 +430,14 @@ public class ModSettingsScreen extends Screen {
          case 10 -> "Solid Angle PDF";
          case 11 -> "Incident Radiance";
          case 12 -> "BRDF Response";
+         case 13 -> "ReGIR Binding";
          default -> "Off";
       };
    }
 
    private static float getNextDebugViewMode(float current) {
       int m = Math.round(current);
-      return (float) ((m + 1) % 13);
+      return (float) ((m + 1) % 14);
    }
 
    private static String getNextDirectStageView(String current) {

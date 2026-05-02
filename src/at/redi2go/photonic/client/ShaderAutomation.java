@@ -44,6 +44,7 @@ public final class ShaderAutomation {
    private static final int RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED = 1;
    private static final int RTXDI_TILE_SIZE_IN_PIXELS = 16;
    private static final float REGIR_CELL_SIZE = 32.0f;
+   private static final int REGIR_HASH_MAX_PROBES = 128;
    private static final double FIREFLY_LUMA_THRESHOLD = 16.0;
    private static final double SEVERE_FIREFLY_LUMA_THRESHOLD = 64.0;
    private static final double WHOLE_LIGHT_FLASH_DIRECT_DROP_THRESHOLD = 0.35;
@@ -1218,9 +1219,9 @@ public final class ShaderAutomation {
 
       int width = resolvedDimensions[0];
       int height = resolvedDimensions[1];
-      int gridResolution = lightRegistry.getRegirGridResolution();
-      float samplingJitter = lightRegistry.getRegirSamplingJitter();
-      Vector3f gridCenter = new Vector3f(lightRegistry.getRegirGridCenter());
+      float samplingJitter = lightRegistry.getRegirLookupJitter();
+      float hashCellSize = lightRegistry.getRegirHashCellSizeBlocks();
+      int hashNormalBuckets = lightRegistry.getRegirHashNormalBuckets();
       double[] cellValidSlotRows = new double[height];
       double[] cellMeanWeightRows = new double[height];
       double[] outsideGridRows = new double[height];
@@ -1276,37 +1277,36 @@ public final class ShaderAutomation {
                resolvedStrictValidVisiblePixels++;
             }
 
-            int shaderCellIndex = calculateExactReGIRCellIndexWithoutJitter(gridCenter, gridResolution, px, py, pz);
-            int jitteredReferenceCellIndex = calculateExactReGIRCellIndex(
+            ReGIRHashCellCoord shaderCellCoord = calculateExactReGIRHashCellCoord(hashCellSize, px, py, pz);
+            ReGIRHashCellCoord jitteredReferenceCellCoord = calculateJitteredReGIRHashCellCoord(
                x,
                y,
                frameIndex,
-               gridCenter,
-               gridResolution,
+               hashCellSize,
                samplingJitter,
                px,
                py,
                pz
             );
-            if (shaderCellIndex != jitteredReferenceCellIndex) {
+            if (!shaderCellCoord.equals(jitteredReferenceCellCoord)) {
                rowJitteredCellChangedPixels++;
                jitteredCellChangedVisiblePixels++;
             }
-            if ((shaderCellIndex < 0) != (jitteredReferenceCellIndex < 0)) {
+
+            ReGIRCellSampleStats shaderCellStats = lookupReGIRHashCellStats(cellBufferStats, shaderCellCoord, hashNormalBuckets);
+            ReGIRCellSampleStats jitteredCellStats = lookupReGIRHashCellStats(cellBufferStats, jitteredReferenceCellCoord, hashNormalBuckets);
+            if (shaderCellStats.found() != jitteredCellStats.found()) {
                rowJitteredOutsideGridDeltaPixels++;
                jitteredOutsideGridDeltaVisiblePixels++;
             }
-            if (shaderCellIndex >= 0
-               && shaderCellIndex < cellBufferStats.meanWeights().length
-               && jitteredReferenceCellIndex >= 0
-               && jitteredReferenceCellIndex < cellBufferStats.meanWeights().length) {
-               double shaderCellMeanWeight = cellBufferStats.meanWeights()[shaderCellIndex];
-               double jitteredCellMeanWeight = cellBufferStats.meanWeights()[jitteredReferenceCellIndex];
+            if (shaderCellStats.found() && jitteredCellStats.found()) {
+               double shaderCellMeanWeight = shaderCellStats.meanWeight();
+               double jitteredCellMeanWeight = jitteredCellStats.meanWeight();
                double jitteredCellMeanWeightDelta = Math.abs(jitteredCellMeanWeight - shaderCellMeanWeight);
                rowJitteredCellMeanWeightDeltaSum += jitteredCellMeanWeightDelta;
                jitteredCellMeanWeightDeltaSum += jitteredCellMeanWeightDelta;
             }
-            if (shaderCellIndex < 0 || shaderCellIndex >= cellBufferStats.validSlotCounts().length) {
+            if (!shaderCellStats.found()) {
                rowOutsideGridPixels++;
                exactOutsideGridVisiblePixels++;
                if (strictValid) {
@@ -1317,8 +1317,8 @@ public final class ShaderAutomation {
                continue;
             }
 
-            int cellValidSlots = cellBufferStats.validSlotCounts()[shaderCellIndex];
-            double cellMeanWeight = cellBufferStats.meanWeights()[shaderCellIndex];
+            int cellValidSlots = shaderCellStats.validSlots();
+            double cellMeanWeight = shaderCellStats.meanWeight();
             rowCellSlotSum += cellValidSlots;
             rowCellWeightSum += cellMeanWeight;
 
@@ -1373,22 +1373,26 @@ public final class ShaderAutomation {
    }
 
    private static ReGIRCellBufferStats downloadReGIRCellBufferStats(LightRegistry lightRegistry) {
-      int gridResolution = lightRegistry.getRegirGridResolution();
-      int totalCells = gridResolution * gridResolution * gridResolution;
+      int hashTableSize = lightRegistry.getRegirHashTableSize();
       int lightsPerCell = lightRegistry.getRegirLightsPerCell();
-      if (totalCells <= 0 || lightsPerCell <= 0) {
+      if (hashTableSize <= 0 || lightsPerCell <= 0) {
          return ReGIRCellBufferStats.EMPTY;
       }
 
-      int[] validSlotCounts = new int[totalCells];
-      double[] meanWeights = new double[totalCells];
+      int[] validSlotCounts = new int[hashTableSize];
+      double[] meanWeights = new double[hashTableSize];
+      int[] checksums = new int[hashTableSize];
+      int[] keyX = new int[hashTableSize];
+      int[] keyY = new int[hashTableSize];
+      int[] keyZ = new int[hashTableSize];
+      int[] keyBucket = new int[hashTableSize];
       int regirEntryOffset = RegirComputeProgram.tileCount * RegirComputeProgram.tileSize;
       lightRegistry.getRegirLightIndexMemoryManager().download(downloadedBuffer -> {
          ByteBuffer data = downloadedBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-         for (int cellIndex = 0; cellIndex < totalCells; cellIndex++) {
+         for (int hashSlot = 0; hashSlot < hashTableSize; hashSlot++) {
             int validSlots = 0;
             double weightSum = 0.0;
-            int cellEntryBase = regirEntryOffset + cellIndex * lightsPerCell;
+            int cellEntryBase = regirEntryOffset + hashSlot * lightsPerCell;
             for (int slot = 0; slot < lightsPerCell; slot++) {
                int byteIndex = (cellEntryBase + slot) * 8;
                if (byteIndex + 8 > data.capacity()) {
@@ -1402,56 +1406,152 @@ public final class ShaderAutomation {
                }
             }
 
-            validSlotCounts[cellIndex] = validSlots;
-            meanWeights[cellIndex] = validSlots == 0 ? 0.0 : weightSum / validSlots;
+            validSlotCounts[hashSlot] = validSlots;
+            meanWeights[hashSlot] = validSlots == 0 ? 0.0 : weightSum / validSlots;
+         }
+      });
+      lightRegistry.getRegirHashChecksumMemoryManager().download(downloadedBuffer -> {
+         ByteBuffer data = downloadedBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+         for (int hashSlot = 0; hashSlot < hashTableSize && hashSlot * Integer.BYTES + Integer.BYTES <= data.capacity(); hashSlot++) {
+            checksums[hashSlot] = data.getInt(hashSlot * Integer.BYTES);
+         }
+      });
+      lightRegistry.getRegirHashKeyMemoryManager().download(downloadedBuffer -> {
+         ByteBuffer data = downloadedBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+         for (int hashSlot = 0; hashSlot < hashTableSize; hashSlot++) {
+            int byteIndex = hashSlot * 4 * Integer.BYTES;
+            if (byteIndex + 4 * Integer.BYTES > data.capacity()) {
+               break;
+            }
+            keyX[hashSlot] = data.getInt(byteIndex);
+            keyY[hashSlot] = data.getInt(byteIndex + Integer.BYTES);
+            keyZ[hashSlot] = data.getInt(byteIndex + 2 * Integer.BYTES);
+            keyBucket[hashSlot] = data.getInt(byteIndex + 3 * Integer.BYTES);
          }
       });
 
-      return new ReGIRCellBufferStats(validSlotCounts, meanWeights);
+      return new ReGIRCellBufferStats(validSlotCounts, meanWeights, checksums, keyX, keyY, keyZ, keyBucket);
    }
 
-   private static int calculateExactReGIRCellIndex(
+   private static ReGIRHashCellCoord calculateJitteredReGIRHashCellCoord(
       int pixelX,
       int pixelY,
       int frameIndex,
-      Vector3f gridCenter,
-      int gridResolution,
+      float hashCellSize,
       float samplingJitter,
       float worldX,
       float worldY,
       float worldZ
    ) {
+      ReGIRHashCellCoord baseCell = calculateExactReGIRHashCellCoord(hashCellSize, worldX, worldY, worldZ);
+      int geometrySeed = regirHashPcgKey(baseCell.x(), baseCell.y(), baseCell.z(), 0)
+         ^ regirHashXxhashChecksum(baseCell.x(), baseCell.y(), baseCell.z(), 0);
       RandomSamplerState coherentRng = initRTXDIRandomSampler(
-         pixelX / RTXDI_TILE_SIZE_IN_PIXELS,
-         pixelY / RTXDI_TILE_SIZE_IN_PIXELS,
-         frameIndex,
+         geometrySeed,
+         geometrySeed >>> 16,
+         0,
          RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
       );
-      float jitterScale = samplingJitter * REGIR_CELL_SIZE;
+      float jitterScale = samplingJitter * hashCellSize * 0.5f;
       float jitteredX = worldX + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
       float jitteredY = worldY + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
       float jitteredZ = worldZ + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
-      return calculateExactReGIRCellIndexWithoutJitter(gridCenter, gridResolution, jitteredX, jitteredY, jitteredZ);
+      return calculateExactReGIRHashCellCoord(hashCellSize, jitteredX, jitteredY, jitteredZ);
    }
 
-   private static int calculateExactReGIRCellIndexWithoutJitter(
-      Vector3f gridCenter,
-      int gridResolution,
+   private static ReGIRHashCellCoord calculateExactReGIRHashCellCoord(
+      float hashCellSize,
       float worldX,
       float worldY,
       float worldZ
    ) {
-      float gridOriginX = gridCenter.x - gridResolution * REGIR_CELL_SIZE * 0.5f;
-      float gridOriginY = gridCenter.y - gridResolution * REGIR_CELL_SIZE * 0.5f;
-      float gridOriginZ = gridCenter.z - gridResolution * REGIR_CELL_SIZE * 0.5f;
-      int cellX = (int) Math.floor((worldX - gridOriginX) / REGIR_CELL_SIZE);
-      int cellY = (int) Math.floor((worldY - gridOriginY) / REGIR_CELL_SIZE);
-      int cellZ = (int) Math.floor((worldZ - gridOriginZ) / REGIR_CELL_SIZE);
-      if (cellX < 0 || cellY < 0 || cellZ < 0 || cellX >= gridResolution || cellY >= gridResolution || cellZ >= gridResolution) {
+      return new ReGIRHashCellCoord(
+         (int) Math.floor(worldX / hashCellSize),
+         (int) Math.floor(worldY / hashCellSize),
+         (int) Math.floor(worldZ / hashCellSize)
+      );
+   }
+
+   private static ReGIRCellSampleStats lookupReGIRHashCellStats(
+      ReGIRCellBufferStats stats,
+      ReGIRHashCellCoord cellCoord,
+      int normalBuckets
+   ) {
+      int validSlots = 0;
+      double weightSum = 0.0;
+      int representativeSlot = -1;
+      for (int bucket = 0; bucket < Math.max(1, normalBuckets); bucket++) {
+         int hashSlot = lookupReGIRHashSlot(stats, cellCoord, bucket);
+         if (hashSlot < 0) {
+            continue;
+         }
+         if (representativeSlot < 0) {
+            representativeSlot = hashSlot;
+         }
+         int bucketValidSlots = stats.validSlotCounts()[hashSlot];
+         validSlots += bucketValidSlots;
+         weightSum += stats.meanWeights()[hashSlot] * bucketValidSlots;
+      }
+
+      return new ReGIRCellSampleStats(
+         representativeSlot,
+         validSlots,
+         validSlots == 0 ? 0.0 : weightSum / validSlots
+      );
+   }
+
+   private static int lookupReGIRHashSlot(ReGIRCellBufferStats stats, ReGIRHashCellCoord cellCoord, int bucket) {
+      int hashTableSize = stats.checksums().length;
+      if (hashTableSize <= 0) {
          return -1;
       }
 
-      return cellX + (cellY + cellZ * gridResolution) * gridResolution;
+      int checksum = regirHashXxhashChecksum(cellCoord.x(), cellCoord.y(), cellCoord.z(), bucket);
+      int slot = Integer.remainderUnsigned(regirHashPcgKey(cellCoord.x(), cellCoord.y(), cellCoord.z(), bucket), hashTableSize);
+      for (int probe = 0; probe < REGIR_HASH_MAX_PROBES; probe++) {
+         int stored = stats.checksums()[slot];
+         if (stored == 0 || stored == -1) {
+            return -1;
+         }
+         if (stored == checksum
+            && stats.keyX()[slot] == cellCoord.x()
+            && stats.keyY()[slot] == cellCoord.y()
+            && stats.keyZ()[slot] == cellCoord.z()
+            && stats.keyBucket()[slot] == bucket) {
+            return slot;
+         }
+         slot = (slot + 1) % hashTableSize;
+      }
+      return -1;
+   }
+
+   private static int regirHashPcgKey(int cellX, int cellY, int cellZ, int bucket) {
+      return regirPcgStep(bucket + regirPcgStep(cellZ + regirPcgStep(cellY + regirPcgStep(cellX))));
+   }
+
+   private static int regirHashXxhashChecksum(int cellX, int cellY, int cellZ, int bucket) {
+      int hash = regirXxhashStep(bucket + regirXxhashStep(cellZ + regirXxhashStep(cellY + regirXxhashStep(cellX))));
+      if (hash == 0) {
+         return 1;
+      }
+      if (hash == -1) {
+         return -2;
+      }
+      return hash;
+   }
+
+   private static int regirPcgStep(int h) {
+      h = h * 747796405 + (int) 2891336453L;
+      h = ((h >>> ((h >>> 28) + 4)) ^ h) * 277803737;
+      return (h >>> 22) ^ h;
+   }
+
+   private static int regirXxhashStep(int h) {
+      h += 374761393;
+      h = 668265263 * Integer.rotateLeft(h, 17);
+      h = -2048144777 * (h ^ (h >>> 15));
+      h = -1028477379 * (h ^ (h >>> 13));
+      return h ^ (h >>> 16);
    }
 
    private static RandomSamplerState initRTXDIRandomSampler(int pixelX, int pixelY, int frameIndex, int pass) {
@@ -1852,7 +1952,7 @@ public final class ShaderAutomation {
             lightRegistry.getRegirGridCenter(),
             lightRegistry.getRegirGridResolution(),
             32.0f,
-            lightRegistry.getRegirSamplingJitter()
+            lightRegistry.getRegirLookupJitter()
          );
          int frameIndex = SystemTimeUniforms.COUNTER.getAsInt();
          ReGIRPixelCorrelationStats regirPixelCorrelationStats = computeReGIRPixelCorrelationStats(
@@ -3985,9 +4085,31 @@ public final class ShaderAutomation {
 
    private record ReGIRCellBufferStats(
       int[] validSlotCounts,
-      double[] meanWeights
+      double[] meanWeights,
+      int[] checksums,
+      int[] keyX,
+      int[] keyY,
+      int[] keyZ,
+      int[] keyBucket
    ) {
-      private static final ReGIRCellBufferStats EMPTY = new ReGIRCellBufferStats(new int[0], new double[0]);
+      private static final ReGIRCellBufferStats EMPTY = new ReGIRCellBufferStats(
+         new int[0],
+         new double[0],
+         new int[0],
+         new int[0],
+         new int[0],
+         new int[0],
+         new int[0]
+      );
+   }
+
+   private record ReGIRHashCellCoord(int x, int y, int z) {
+   }
+
+   private record ReGIRCellSampleStats(int representativeSlot, int validSlots, double meanWeight) {
+      boolean found() {
+         return this.representativeSlot >= 0;
+      }
    }
 
    private record ReGIRPixelCorrelationStats(

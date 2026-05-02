@@ -3,7 +3,7 @@
 
 // ReGIR output buffer -- each cell has lightsPerCell fixed-position slots.
 // Stored as uvec2 matching the RIS tile buffer format:
-//   .x = lightIndex & RTXDI_LIGHT_INDEX_MASK  (bit 31 = RTXDI_LIGHT_COMPACT_BIT when set by build pass)
+//   .x = lightIndex & RTXDI_LIGHT_INDEX_MASK  (ReGIR leaves RTXDI_LIGHT_COMPACT_BIT clear)
 //   .y = floatBitsToUint(weight), which the selection path reuses as the slot's invSourcePdf
 //        exactly like RTXDI's ReGIR RIS mini-tile readback.
 // Invalid entries: .x = RTXDI_LIGHT_INDEX_MASK (all lower bits set), .y = 0.
@@ -235,20 +235,16 @@ int regir_hash_lookup(ivec3 cellCoord, int bucket) {
     return -1;
 }
 
-// Tangent-plane jitter (paper §"Lookup & Jittering"): jitter only in the plane
-// perpendicular to the surface normal so the jittered position never leaves
-// the surface. radius defaults to cellSize * 0.5.
-vec3 regir_jitter_tangent_plane(vec3 worldPos, vec3 normal, float radius, inout RTXDI_RandomSamplerState rng) {
-    // Build a tangent basis from the normal.
-    vec3 t1 = (abs(normal.x) > 0.5)
-        ? normalize(cross(normal, vec3(0.0, 1.0, 0.0)))
-        : normalize(cross(normal, vec3(1.0, 0.0, 0.0)));
-    vec3 t2 = cross(normal, t1);
-
-    // Uniform sample on a disk.
-    float r = sqrt(RTXDI_GetNextRandom(rng)) * radius;
-    float theta = RTXDI_GetNextRandom(rng) * 6.283185307179586;
-    return worldPos + t1 * (r * cos(theta)) + t2 * (r * sin(theta));
+// RTXDI_CalculateReGIRCellIndex jitters the world-space lookup independently
+// on each axis: (rand3 - 0.5) * samplingJitter * cellSize. Using the same
+// support here keeps lookup jitter consistent with the build-time cell radius.
+vec3 regir_jitter_world_cube(vec3 worldPos, float jitterScale, inout RTXDI_RandomSamplerState rng) {
+    vec3 cellJitter = vec3(
+        RTXDI_GetNextRandom(rng),
+        RTXDI_GetNextRandom(rng),
+        RTXDI_GetNextRandom(rng)
+    ) - vec3(0.5);
+    return worldPos + cellJitter * jitterScale;
 }
 
 // Unpack a ReGIR output slot. Slot is a hash-table slot index (NOT a linear cell
@@ -305,11 +301,11 @@ bool regir_resolve_cell(vec3 shadingWorldPos, vec3 shadingNormal, inout RTXDI_Ra
     }
     vec3 queryNormal = normalize(shadingNormal);
 
-    // Tangent-plane jitter (paper). The jitter radius is cellSize*0.5 by default;
-    // ph_regir_sampling_jitter scales it for tuning.
-    float jitterRadius = max(ph_regir_hash_cell_size * 0.5 * ph_regir_sampling_jitter, 0.0);
-    vec3 jitteredPos = (jitterRadius > 0.0)
-        ? regir_jitter_tangent_plane(shadingWorldPos, queryNormal, jitterRadius, rng)
+    // RTXDI passes the coherent initial-sampling RNG here. The cell binding is
+    // still world-space: the RNG only jitters the world position before lookup.
+    float jitterScale = max(ph_regir_hash_cell_size * ph_regir_sampling_jitter, 0.0);
+    vec3 jitteredPos = (jitterScale > 0.0)
+        ? regir_jitter_world_cube(shadingWorldPos, jitterScale, rng)
         : shadingWorldPos;
 
     ivec3 cellCoord = ivec3(floor(jitteredPos / ph_regir_hash_cell_size));
@@ -320,8 +316,8 @@ bool regir_resolve_cell(vec3 shadingWorldPos, vec3 shadingNormal, inout RTXDI_Ra
         // Paper recommends a small number of retries with re-jitter when a cell
         // miss is found. One retry is cheap and noticeably reduces lookup misses
         // at cell boundaries.
-        if (jitterRadius > 0.0) {
-            jitteredPos = regir_jitter_tangent_plane(shadingWorldPos, queryNormal, jitterRadius, rng);
+        if (jitterScale > 0.0) {
+            jitteredPos = regir_jitter_world_cube(shadingWorldPos, jitterScale, rng);
             cellCoord   = ivec3(floor(jitteredPos / ph_regir_hash_cell_size));
             slot        = regir_hash_lookup(cellCoord, bucket);
         }

@@ -52,12 +52,27 @@ ivec2 lt_debug_reservoir_pos_for_pixel(ivec2 pixelPosition, int activeCheckerboa
     return RTXDI_PixelPosToReservoirPos(activePixel, activeCheckerboardField);
 }
 
+ivec3 lt_debug_regir_build_region_min_cell() {
+    int buildRegionCells = max(ph_regir_build_region_cells, 1);
+    ivec3 centerCell = ivec3(floor(ph_regir_grid_center / max(ph_regir_hash_cell_size, 1.0e-6f)));
+    return centerCell - ivec3(buildRegionCells / 2);
+}
+
+bool lt_debug_regir_cell_in_build_region(ivec3 cellCoord) {
+    int buildRegionCells = max(ph_regir_build_region_cells, 1);
+    ivec3 minCell = lt_debug_regir_build_region_min_cell();
+    ivec3 maxCell = minCell + ivec3(buildRegionCells);
+    return all(greaterThanEqual(cellCoord, minCell)) && all(lessThan(cellCoord, maxCell));
+}
+
 vec3 lt_debug_color_regir_coverage(RAB_Surface surface) {
-    float nominalHalfExtent = float(ph_regir_grid_cells.x) * ph_regir_cell_size * 0.5f;
-    float jitterMargin = ph_regir_sampling_jitter * ph_regir_cell_size * 0.5f;
-    vec3 delta = abs(surface.worldPos - ph_regir_grid_center);
-    bool insideNominal = all(lessThanEqual(delta, vec3(nominalHalfExtent)));
-    bool insideExpanded = all(lessThanEqual(delta, vec3(nominalHalfExtent + jitterMargin)));
+    ivec3 cellCoord = ivec3(floor(surface.worldPos / max(ph_regir_hash_cell_size, 1.0e-6f)));
+    int jitterCells = int(ceil(max(ph_regir_sampling_jitter, 0.0f) * 0.5f));
+    ivec3 minCell = lt_debug_regir_build_region_min_cell();
+    ivec3 maxCell = minCell + ivec3(max(ph_regir_build_region_cells, 1));
+    bool insideNominal = all(greaterThanEqual(cellCoord, minCell)) && all(lessThan(cellCoord, maxCell));
+    bool insideExpanded = all(greaterThanEqual(cellCoord, minCell - ivec3(jitterCells)))
+        && all(lessThan(cellCoord, maxCell + ivec3(jitterCells)));
 
     if (insideNominal) {
         return vec3(0.0f, 1.0f, 0.0f);
@@ -66,6 +81,77 @@ vec3 lt_debug_color_regir_coverage(RAB_Surface surface) {
         return vec3(1.0f, 1.0f, 0.0f);
     }
     return vec3(1.0f, 0.0f, 0.0f);
+}
+
+float lt_debug_regir_grid_line_alpha(vec3 worldPos, vec3 surfaceNormal) {
+    float cellSize = max(ph_regir_hash_cell_size, 1.0e-6f);
+    vec3 cellUv = fract(worldPos / cellSize);
+    vec3 edgeDistance = min(cellUv, vec3(1.0f) - cellUv);
+
+    vec3 n = dot(surfaceNormal, surfaceNormal) > 1.0e-8f ? abs(normalize(surfaceNormal)) : vec3(0.0f, 1.0f, 0.0f);
+    float nearestEdge;
+    if (n.x >= n.y && n.x >= n.z) {
+        nearestEdge = min(edgeDistance.y, edgeDistance.z);
+    } else if (n.y >= n.z) {
+        nearestEdge = min(edgeDistance.x, edgeDistance.z);
+    } else {
+        nearestEdge = min(edgeDistance.x, edgeDistance.y);
+    }
+
+    float lineWidth = clamp(max(max(fwidth(cellUv.x), fwidth(cellUv.y)), fwidth(cellUv.z)) * 2.0f, 0.025f, 0.12f);
+    return 1.0f - smoothstep(lineWidth, lineWidth * 1.75f, nearestEdge);
+}
+
+int lt_debug_regir_built_bucket_count(ivec3 cellCoord) {
+    int builtCount = 0;
+    int bucketCount = min(max(ph_regir_hash_normal_buckets, 0), 32);
+    for (int bucket = 0; bucket < bucketCount; bucket++) {
+        if (regir_hash_lookup(cellCoord, bucket) >= 0) {
+            builtCount++;
+        }
+    }
+    return builtCount;
+}
+
+vec3 lt_debug_color_regir_grid_binding(RAB_Surface surface) {
+    float cellSize = max(ph_regir_hash_cell_size, 1.0e-6f);
+    ivec3 cellCoord = ivec3(floor(surface.worldPos / cellSize));
+    vec3 surfaceNormal = RAB_GetSurfaceNormal(surface);
+    int surfaceBucket = regir_clamp_normal_bucket(regir_normal_to_bucket(surfaceNormal));
+    int surfaceSlot = regir_hash_lookup(cellCoord, surfaceBucket);
+    int builtBuckets = lt_debug_regir_built_bucket_count(cellCoord);
+    bool inBuildRegion = lt_debug_regir_cell_in_build_region(cellCoord);
+    ivec2 pixel = lt_fragment_pixel_pos();
+    RTXDI_RandomSamplerState debugRegirRng = RTXDI_InitRandomSampler(
+        uvec2(pixel),
+        uint(frameCounter),
+        RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+    int jitteredSlot = -1;
+    bool jitteredHit = regir_resolve_cell(surface.worldPos, surfaceNormal, debugRegirRng, jitteredSlot);
+
+    float jitteredSlotHash = (jitteredSlot >= 0)
+        ? fract(float(jitteredSlot) * 0.00006103515625f)
+        : 0.0f;
+    vec3 builtForSurface = mix(vec3(0.02f, 0.16f, 1.0f), vec3(0.0f, 0.78f, 1.0f), jitteredSlotHash);
+    vec3 builtForOtherNormal = vec3(0.16f, 0.06f, 0.82f);
+    vec3 missingCell = vec3(0.92f, 0.04f, 0.02f);
+    vec3 outsideBuild = vec3(0.22f, 0.0f, 0.0f);
+
+    vec3 baseColor = missingCell;
+    if (jitteredHit) {
+        baseColor = builtForSurface;
+    } else if (surfaceSlot >= 0) {
+        baseColor = vec3(0.0f, 0.34f, 0.88f);
+    } else if (builtBuckets > 0) {
+        baseColor = builtForOtherNormal;
+    }
+    if (!inBuildRegion) {
+        baseColor = mix(baseColor, outsideBuild, 0.72f);
+    }
+
+    float lineAlpha = lt_debug_regir_grid_line_alpha(surface.worldPos, surfaceNormal);
+    vec3 lineColor = (surfaceSlot >= 0) ? vec3(0.0f, 0.65f, 1.0f) : vec3(1.0f, 0.18f, 0.02f);
+    return mix(baseColor, lineColor, lineAlpha);
 }
 
 bool lt_debug_load_selected_light_sample(
@@ -275,6 +361,8 @@ void main() {
         } else if (debugMode == 12) {
             ivec2 reservoirPos = lt_debug_reservoir_pos_for_pixel(pixel, int(params.activeCheckerboardField));
             debugColor = lt_debug_color_selected_brdf_response(reservoirPos, surface);
+        } else if (debugMode == 13) {
+            debugColor = lt_debug_color_regir_grid_binding(surface);
         }
 
         direct_diffuse_frag_out = vec4(debugColor, 1.0f);

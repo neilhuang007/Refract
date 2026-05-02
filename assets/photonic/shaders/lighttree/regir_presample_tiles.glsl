@@ -241,14 +241,17 @@ void main() {
     uint risBufferPtr = sampleInTile + tileIndex * tileSize;
     bool compact = false;
     float invSourcePdf = 0.0;
-    if (pdf > 0.0) {
+    bool validLightIndex = lightIndex < uint(max(ph_light_count, 0));
+    if (pdf > 0.0 && validLightIndex) {
         invSourcePdf = 1.0 / pdf;
         compact = RAB_StoreCompactLightInfo(risBufferPtr, int(lightIndex));
     }
 
     // RTXDI: RIS_BUFFER[risBufferPtr] = uint2(lightIndex, asuint(invSourcePdf))
     // Attempt compact storage; if successful, set COMPACT_BIT on the stored index.
-    uint packedIndex = lightIndex & RTXDI_LIGHT_INDEX_MASK;
+    uint packedIndex = (invSourcePdf > 0.0)
+        ? (lightIndex & RTXDI_LIGHT_INDEX_MASK)
+        : RTXDI_LIGHT_INDEX_MASK;
     if (compact) {
         packedIndex |= RTXDI_LIGHT_COMPACT_BIT;
     }

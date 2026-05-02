@@ -1,6 +1,7 @@
 package at.redi2go.photonic.client.rendering.opengl.rendering;
 
 import at.redi2go.photonic.client.Photonic;
+import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.world.buffer.GlMemoryManager;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
@@ -41,6 +42,9 @@ public class RegirComputeProgram {
     private int locHashCellSize = -1;
     private int locHashNormalBuckets = -1;
     private int locBuildRegionCells = -1;
+    private int locGeometryBuildEnabled = -1;
+    private int locStagePosition = -1;
+    private int locStageMappedNormal = -1;
 
     // -----------------------------------------------------------------------
     // Presample tiles program (regir_presample_tiles.glsl)
@@ -64,6 +68,8 @@ public class RegirComputeProgram {
     private int pdfTextureMipLevels = 0;
     private FloatBuffer pdfUploadBuffer = null;
     private static final int bindPdfTextureUnit = 0; // texture unit for sampler2D
+    private static final int bindStagePositionTextureUnit = 1;
+    private static final int bindStageMappedNormalTextureUnit = 2;
 
     // -----------------------------------------------------------------------
     // SSBO binding points
@@ -142,6 +148,9 @@ public class RegirComputeProgram {
         this.locHashCellSize          = GL20.glGetUniformLocation(this.programId, "ph_regir_hash_cell_size");
         this.locHashNormalBuckets     = GL20.glGetUniformLocation(this.programId, "ph_regir_hash_normal_buckets");
         this.locBuildRegionCells      = GL20.glGetUniformLocation(this.programId, "ph_regir_build_region_cells");
+        this.locGeometryBuildEnabled  = GL20.glGetUniformLocation(this.programId, "ph_regir_geometry_build_enabled");
+        this.locStagePosition         = GL20.glGetUniformLocation(this.programId, "stage_radiosity_position");
+        this.locStageMappedNormal     = GL20.glGetUniformLocation(this.programId, "stage_radiosity_mapped_normal");
     }
 
     // -----------------------------------------------------------------------
@@ -323,7 +332,7 @@ public class RegirComputeProgram {
      *                      Must be sized: (tileCount*tileSize + hashTableSize*lightsPerCell) * 8 bytes.
      * @param gridCenter    world-space center of the ReGIR grid (= camera position)
      * @param numBuildSamples RTXDI default = 8 (ReGIR.h:141)
-     * @param samplingJitter  RTXDI FullSample uploads 2.0 here for the default UI jitter of 1.0
+     * @param samplingJitter  RTXDI ReGIR samplingJitter, used directly by the build shader
      */
     public void dispatch(
             GlMemoryManager lightList,
@@ -344,7 +353,9 @@ public class RegirComputeProgram {
             int hashTableSize,
             float hashCellSize,
             int hashNormalBuckets,
-            int buildRegionCells) {
+            int buildRegionCells,
+            TextureObject stagePositionTexture,
+            TextureObject stageMappedNormalTexture) {
 
         if (!this.compiled) return;
 
@@ -416,19 +427,69 @@ public class RegirComputeProgram {
                 hashTableSize, hashCellSize, hashNormalBuckets, buildRegionCells);
         this.bindBuildSsbos(lightList, lightCdf, risBuffer, compactLightData, hashChecksum, hashKey);
 
-        // One thread per world-space hash-grid key in the active build region:
-        // buildRegionCells^3 cells, with one key per normal bucket.
-        int cellsPerSide = Math.max(buildRegionCells, 1);
-        int bucketCount = Math.max(hashNormalBuckets, 1);
-        long totalCellKeys = (long) cellsPerSide * cellsPerSide * cellsPerSide * bucketCount;
-        int totalCells = (int) Math.min(totalCellKeys, Integer.MAX_VALUE);
-        int workGroupSize = 64; // matches layout(local_size_x = 64) in regir_build.glsl
-        int numGroups     = (totalCells + workGroupSize - 1) / workGroupSize;
+        boolean geometryBuildEnabled = this.bindGeometryBuildTextures(stagePositionTexture, stageMappedNormalTexture);
+
+        // The default path builds the full camera-centered hash window so lookup jitter and
+        // offscreen edge cells do not miss just because they were absent from the current stage
+        // image. The screen-geometry path remains available as an opt-in diagnostic mode.
+        long totalCellSlots;
+        if (geometryBuildEnabled) {
+            int[] dimensions = stagePositionTexture.getTextureDimensions();
+            int width = dimensions.length > 0 ? Math.max(dimensions[0], 1) : 1;
+            int height = dimensions.length > 1 ? Math.max(dimensions[1], 1) : 1;
+            totalCellSlots = (long) width * height * Math.max(lightsPerCell, 1);
+        } else {
+            int cellsPerSide = Math.max(buildRegionCells, 1);
+            int bucketCount = Math.max(hashNormalBuckets, 1);
+            totalCellSlots = (long) cellsPerSide * cellsPerSide * cellsPerSide * bucketCount * Math.max(lightsPerCell, 1);
+        }
+
+        int totalSlots = (int) Math.min(totalCellSlots, Integer.MAX_VALUE);
+        int workGroupSize = 256; // matches layout(local_size_x = 256) in regir_build.glsl
+        int numGroups     = (totalSlots + workGroupSize - 1) / workGroupSize;
         GL43.glDispatchCompute(numGroups, 1, 1);
 
         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+        this.unbindGeometryBuildTextures(geometryBuildEnabled);
 
         GL20.glUseProgram(0);
+    }
+
+    private boolean bindGeometryBuildTextures(TextureObject stagePositionTexture, TextureObject stageMappedNormalTexture) {
+        boolean enabled = Boolean.getBoolean("photonics.regirGeometryBuildEnabled")
+                && stagePositionTexture != null
+                && stageMappedNormalTexture != null;
+        if (this.locGeometryBuildEnabled >= 0) {
+            GL20.glUniform1i(this.locGeometryBuildEnabled, enabled ? 1 : 0);
+        }
+        if (!enabled) {
+            return false;
+        }
+
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + bindStagePositionTextureUnit);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, stagePositionTexture.getTextureId());
+        if (this.locStagePosition >= 0) {
+            GL20.glUniform1i(this.locStagePosition, bindStagePositionTextureUnit);
+        }
+
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + bindStageMappedNormalTextureUnit);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, stageMappedNormalTexture.getTextureId());
+        if (this.locStageMappedNormal >= 0) {
+            GL20.glUniform1i(this.locStageMappedNormal, bindStageMappedNormalTextureUnit);
+        }
+
+        return true;
+    }
+
+    private void unbindGeometryBuildTextures(boolean geometryBuildEnabled) {
+        if (!geometryBuildEnabled) {
+            return;
+        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + bindStagePositionTextureUnit);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + bindStageMappedNormalTextureUnit);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
     }
 
     private void setUniforms(Vector3f gridCenter, Vector3i gridCells, int lightsPerCell,
