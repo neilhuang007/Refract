@@ -330,7 +330,7 @@ public class RegirComputeProgram {
      *
      * @param risBuffer     uvec2 SSBO — unified RIS buffer (tiles at [0..tileCount*tileSize), ReGIR after).
      *                      Must be sized: (tileCount*tileSize + hashTableSize*lightsPerCell) * 8 bytes.
-     * @param gridCenter    world-space center of the ReGIR grid (= camera position)
+     * @param gridCenter    world-space center of the ReGIR grid
      * @param numBuildSamples RTXDI default = 8 (ReGIR.h:141)
      * @param samplingJitter  RTXDI ReGIR samplingJitter, used directly by the build shader
      */
@@ -429,9 +429,9 @@ public class RegirComputeProgram {
 
         boolean geometryBuildEnabled = this.bindGeometryBuildTextures(stagePositionTexture, stageMappedNormalTexture);
 
-        // The default path builds the full camera-centered hash window so lookup jitter and
-        // offscreen edge cells do not miss just because they were absent from the current stage
-        // image. The screen-geometry path remains available as an opt-in diagnostic mode.
+        // The default path builds the full hash window so lookup jitter and offscreen
+        // edge cells do not miss just because they were absent from the current stage image.
+        // The screen-geometry path remains available as an opt-in diagnostic mode.
         long totalCellSlots;
         if (geometryBuildEnabled) {
             int[] dimensions = stagePositionTexture.getTextureDimensions();

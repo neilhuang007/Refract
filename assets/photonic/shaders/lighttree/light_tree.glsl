@@ -46,9 +46,8 @@ Light load_compact_light(uint risBufferPtr, int lightIndex) {
     );
 }
 
-// ph_regir_grid_center: world-space center of the ReGIR build region (= camera position).
-// In the hash-grid variant the grid is world-fixed; the center only decides which
-// cells the build *fills* this frame. Lookups still hash the actual surface position.
+// ph_regir_grid_center: world-space center of the ReGIR build region.
+// In the hash-grid variant, lookups hash the actual surface position.
 uniform vec3  ph_regir_grid_center;
 uniform ivec3 ph_regir_grid_cells;             // legacy uniform retained for diagnostic shaders
 uniform int   ph_regir_lights_per_cell;
@@ -312,22 +311,6 @@ bool regir_resolve_cell(vec3 shadingWorldPos, vec3 shadingNormal, inout RTXDI_Ra
     int   bucket    = regir_normal_to_bucket(queryNormal);
 
     int slot = regir_hash_lookup(cellCoord, bucket);
-    if (slot < 0) {
-        // Paper recommends a small number of retries with re-jitter when a cell
-        // miss is found. One retry is cheap and noticeably reduces lookup misses
-        // at cell boundaries.
-        if (jitterScale > 0.0) {
-            jitteredPos = regir_jitter_world_cube(shadingWorldPos, jitterScale, rng);
-            cellCoord   = ivec3(floor(jitteredPos / ph_regir_hash_cell_size));
-            slot        = regir_hash_lookup(cellCoord, bucket);
-        }
-        if (slot < 0) {
-            // Fall back to the un-jittered position.
-            cellCoord = ivec3(floor(shadingWorldPos / ph_regir_hash_cell_size));
-            slot      = regir_hash_lookup(cellCoord, bucket);
-        }
-    }
-
     if (slot < 0) return false;
     flatCellIndex = slot;
     return true;

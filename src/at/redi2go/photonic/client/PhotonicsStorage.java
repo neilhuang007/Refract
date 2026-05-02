@@ -51,6 +51,8 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_HISTORY_CLAMPING = boolParam("debug_enable_direct_history_clamping", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ANTI_FIREFLY = boolParam("debug_enable_direct_anti_firefly", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_INDIRECT_GI = boolParam("debug_enable_indirect_gi", true);
+   public static final Parameter<Boolean> DEBUG_ENABLE_INDIRECT_DENOISE = boolParam("debug_enable_indirect_denoise", false);
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
    public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "power_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
@@ -64,10 +66,13 @@ public final class PhotonicsStorage {
    public static final Parameter<Float> NRD_ATROUS_PASSES = floatParam("nrd_atrous_passes", -1.0F);
    public static final Parameter<Float> RESTIR_INITIAL_SAMPLES = floatParam("restir_initial_samples", -1.0F);
    public static final Parameter<Float> RESTIR_SPATIAL_SAMPLES = floatParam("restir_spatial_samples", -1.0F);
-   public static final Parameter<Float> RESTIR_GI_SPATIAL_SAMPLES = floatParam("restir_gi_spatial_samples", -1.0F);
+   public static final Parameter<Float> RESTIR_GI_SPATIAL_SAMPLES = floatParam("restir_gi_spatial_samples", 1.0F);
    public static final Parameter<Float> RESTIR_TIME_PARTITIONS = floatParam("restir_time_partitions", 2.0F);
    public static final Parameter<Float> RESTIR_SPATIAL_RADIUS = floatParam("restir_spatial_radius", -1.0F);
    public static final Parameter<Float> RESTIR_SPATIAL_BIAS_MODE = floatParam("restir_spatial_bias_mode", -1.0F);
+   public static final Parameter<Float> RESTIR_GI_SPATIAL_BIAS_MODE = floatParam("restir_gi_spatial_bias_mode", -1.0F);
+   public static final Parameter<Float> RESTIR_GI_BOILING_FILTER_STRENGTH = floatParam("restir_gi_boiling_filter_strength", 0.0F);
+   public static final Parameter<Boolean> RESTIR_GI_TEMPORAL_REUSE = boolParam("restir_gi_temporal_reuse", true);
    public static final Parameter<Boolean> DEBUG_CONSTANT_ALBEDO = boolParam("debug_constant_albedo", false);
    public static final Parameter<Float> DEBUG_VIEW_MODE = floatParam("debug_view_mode", 0.0F);
    public static final Parameter<Boolean> OILIFY_ENABLED = boolParam("oilify_enabled", false);
@@ -129,6 +134,9 @@ public final class PhotonicsStorage {
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectHistoryClamping", DEBUG_ENABLE_DIRECT_HISTORY_CLAMPING);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectAntiFirefly", DEBUG_ENABLE_DIRECT_ANTI_FIREFLY);
       applyBooleanSystemPropertyOverride("photonics.debugEnableDirectAtrous", DEBUG_ENABLE_DIRECT_ATROUS);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableIndirectGI", DEBUG_ENABLE_INDIRECT_GI);
+      applyBooleanSystemPropertyOverride("photonics.debugEnableIndirectDenoise", DEBUG_ENABLE_INDIRECT_DENOISE);
+      applyBooleanSystemPropertyOverride("photonics.restirGITemporalReuse", RESTIR_GI_TEMPORAL_REUSE);
       applyStringSystemPropertyOverride("photonics.restirLocalLightSamplingMode", RESTIR_LOCAL_LIGHT_SAMPLING_MODE);
       applyStringSystemPropertyOverride("photonics.temporalReuse", RESTIR_TEMPORAL_REUSE);
       applyStringSystemPropertyOverride("photonics.temporalGatherMode", RESTIR_TEMPORAL_GATHER_MODE);

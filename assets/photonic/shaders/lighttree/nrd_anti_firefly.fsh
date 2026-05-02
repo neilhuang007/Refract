@@ -2,100 +2,151 @@
 
 in vec4 direction_vert_out;
 
-layout(location = 0) out vec4 direct_firefly_out;
+// MRT layout -- contract section 7, AntiFirefly
+// Writes back into the permanent diff/spec illum prev buffers (in-place rewrite).
+layout(location = 0) out vec4 nrd_diff_illum_prev_firefly_out;
+layout(location = 1) out vec4 nrd_spec_illum_prev_firefly_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
-uniform sampler2D direct_firefly_input;
-uniform float ph_debug_enable_direct_anti_firefly;
-uniform float ph_nrd_denoising_range;
+// Samplers declared in samplers.glsl (via header.glsl → photonics.glsl → ph_samplers.glsl → samplers.glsl):
+//   nrd_out_diff_radiance_hitdist, nrd_out_spec_radiance_hitdist,
+//   nrd_in_tiles, radiosity_material, radiosity_position
 
-void main() {
-    // NRD RELAX_AntiFirefly.cs.hlsl: early out on sky/out-of-world tiles.
-    // Reference uses gIn_ViewZ > gDenoisingRange; we have no dedicated viewZ
-    // texture, so we use two complementary proxies:
-    //   1. is_in_world(): depth-buffer sky check (depthtex0 >= 0.99999).
-    //   2. Normal-length check: an invalid/sky pixel has no geometry normal
-    //      and will read as a near-zero vector from radiosity_normal.
-    // Either condition failing is sufficient to treat the pixel as out-of-world.
-    if (!is_in_world()) {
-        direct_firefly_out = texelFetch(direct_firefly_input, tex_coord, 0);
-        return;
-    }
+// RELAX_AntiFirefly.cs.hlsl -- Cross-bilateral RCRS (Rank-Conditioned Rank-Selection) filter.
+// Fused diffuse + specular in one pass, matching the reference structure exactly.
+// Reference lines 50-170.
+void runRCRS(
+    ivec2 pixelPos,
+    ivec2 texSize,
+    vec4 centerMaterial,
+    out vec4 outDiffuse,
+    out vec4 outSpecular
+) {
+    // Fetch center data (RELAX_AntiFirefly.cs.hlsl:62-87)
+    vec4 diffCenter = texelFetch(nrd_out_diff_radiance_hitdist, pixelPos, 0);
+    vec3 diffuseIlluminationCenter = diffCenter.rgb;
+    float diffuse2ndMomentCenter = diffCenter.a;  // preserved unchanged per reference line 168
+    float diffuseLuminanceCenter = nrd_luminance(diffuseIlluminationCenter);
 
-    if (ph_debug_enable_direct_anti_firefly < 0.5) {
-        direct_firefly_out = texelFetch(direct_firefly_input, tex_coord, 0);
-        return;
-    }
+    vec4 specCenter = texelFetch(nrd_out_spec_radiance_hitdist, pixelPos, 0);
+    vec3 specularIlluminationCenter = specCenter.rgb;
+    float specular2ndMomentCenter = specCenter.a;  // preserved unchanged per reference line 159
+    float specularLuminanceCenter = nrd_luminance(specularIlluminationCenter);
 
-    // Center pixel validity: NRD reference early-out is upper-bound only.
-    // Reference (RELAX_AntiFirefly.cs.hlsl:186-187):
-    //   float centerViewZ = UnpackViewZ(gIn_ViewZ[pixelPos]);
-    //   if (centerViewZ > gDenoisingRange) return;
-    // No lower-bound check exists in the reference.
-    vec3 centerPos = texelFetch(radiosity_position, tex_coord, 0).xyz;
-    float centerViewZ = nrd_compute_view_z(centerPos);
-    if (centerViewZ > ph_nrd_denoising_range) {
-        direct_firefly_out = texelFetch(direct_firefly_input, tex_coord, 0);
-        return;
-    }
+    // RELAX_AntiFirefly.cs.hlsl:82-87 -- init min/max trackers, sentinel at center coords
+    float maxDiffuseLuminance = -1.0;
+    float minDiffuseLuminance = 1.0e6;
+    ivec2 maxDiffuseLuminanceCoords = pixelPos;
+    ivec2 minDiffuseLuminanceCoords = pixelPos;
 
-    // center.a is the 2nd moment of luminance, preserved unchanged through the
-    // filter (see NRD reference: outDiffuse = float4(rgb_from_coords, diffuse2ndMomentCenter)).
-    vec4 center = texelFetch(direct_firefly_input, tex_coord, 0);
-    float centerLuma = nrd_luminance(center.rgb);
-    float center2ndMoment = center.a;  // preserved; not filtered
+    // RELAX_AntiFirefly.cs.hlsl:72-76 -- spec min/max trackers
+    float maxSpecularLuminance = -1.0;
+    float minSpecularLuminance = 1.0e6;
+    ivec2 maxSpecularLuminanceCoords = pixelPos;
+    ivec2 minSpecularLuminanceCoords = pixelPos;
 
-    vec4 centerMaterial = texelFetch(stage_radiosity_material, tex_coord, 0);
+    // RELAX_AntiFirefly.cs.hlsl:89-149 -- 3x3 neighbourhood scan with material gate
+    for (int yy = -1; yy <= 1; yy++) {
+        for (int xx = -1; xx <= 1; xx++) {
+            if (xx == 0 && yy == 0) continue;
 
-    // Cross-bilateral RCRS (Rank-Conditioned Rank-Selection) filter.
-    // Tracks the min/max luminance neighbor coords in the 3x3 neighbourhood,
-    // gated by material compatibility. Sentinel initialisation to tex_coord
-    // means no-compatible-neighbour keeps the center value -- matches NRD.
-    float maxLuma = -1.0;
-    float minLuma = 1.0e6;
-    ivec2 maxLumaCoord = tex_coord;
-    ivec2 minLumaCoord = tex_coord;
+            ivec2 sampleCoord = pixelPos + ivec2(xx, yy);
 
-    ivec2 texSize = textureSize(direct_firefly_input, 0);
-
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            if (dx == 0 && dy == 0) continue;
-
-            ivec2 sampleCoord = tex_coord + ivec2(dx, dy);
+            // RELAX_AntiFirefly.cs.hlsl:101-102 -- bounds check
             if (any(lessThan(sampleCoord, ivec2(0))) || any(greaterThanEqual(sampleCoord, texSize))) continue;
 
-            // NRD CompareMaterials with gDiffMinMaterial -- gated per-sample.
-            // Reference has NO per-sample viewZ check inside the RCRS loop.
-            // (RELAX_AntiFirefly.cs.hlsl:115-148 -- only material gate, no viewZ per tap.)
-            vec4 sampleMaterial = texelFetch(stage_radiosity_material, sampleCoord, 0);
-            if (nrd_material_weight(centerMaterial, sampleMaterial) <= 0.0) continue;
+            // RELAX_AntiFirefly.cs.hlsl:115 / 133 -- CompareMaterials per signal
+            // Reference has no per-tap viewZ check inside the loop (only center early-out above).
+            vec4 sampleMaterial = texelFetch(radiosity_material, sampleCoord, 0);
 
-            float sampleLuma = nrd_luminance(texelFetch(direct_firefly_input, sampleCoord, 0).rgb);
+            // Diffuse: RELAX_AntiFirefly.cs.hlsl:133-147 -- CompareMaterials(sampleMaterialID, centerMaterialID, gDiffMinMaterial)
+            if (nrd_material_weight(centerMaterial, sampleMaterial) > 0.0) {
+                float diffuseLuminanceSample = nrd_luminance(texelFetch(nrd_out_diff_radiance_hitdist, sampleCoord, 0).rgb);
 
-            if (sampleLuma > maxLuma) {
-                maxLuma = sampleLuma;
-                maxLumaCoord = sampleCoord;
+                // RELAX_AntiFirefly.cs.hlsl:134-138
+                if (diffuseLuminanceSample > maxDiffuseLuminance) {
+                    maxDiffuseLuminance = diffuseLuminanceSample;
+                    maxDiffuseLuminanceCoords = sampleCoord;
+                }
+                // RELAX_AntiFirefly.cs.hlsl:139-143
+                if (diffuseLuminanceSample < minDiffuseLuminance) {
+                    minDiffuseLuminance = diffuseLuminanceSample;
+                    minDiffuseLuminanceCoords = sampleCoord;
+                }
             }
-            if (sampleLuma < minLuma) {
-                minLuma = sampleLuma;
-                minLumaCoord = sampleCoord;
+
+            // Specular: RELAX_AntiFirefly.cs.hlsl:117-131 -- CompareMaterials(sampleMaterialID, centerMaterialID, gSpecMinMaterial)
+            if (nrd_material_weight(centerMaterial, sampleMaterial) > 0.0) {
+                float specularLuminanceSample = nrd_luminance(texelFetch(nrd_out_spec_radiance_hitdist, sampleCoord, 0).rgb);
+
+                // RELAX_AntiFirefly.cs.hlsl:118-122
+                if (specularLuminanceSample > maxSpecularLuminance) {
+                    maxSpecularLuminance = specularLuminanceSample;
+                    maxSpecularLuminanceCoords = sampleCoord;
+                }
+                // RELAX_AntiFirefly.cs.hlsl:123-127
+                if (specularLuminanceSample < minSpecularLuminance) {
+                    minSpecularLuminance = specularLuminanceSample;
+                    minSpecularLuminanceCoords = sampleCoord;
+                }
             }
         }
     }
 
-    // Replace center with the min/max neighbor when the center is outside the
-    // neighbor luminance range. The 2nd moment (center.a) is always taken from
-    // the center pixel, not the replacement -- matching the NRD reference:
-    //   outDiffuse = float4(s_Diff[diffuseCoords].rgb, diffuse2ndMomentCenter)
-    ivec2 resultCoord = tex_coord;
-    if (centerLuma > maxLuma)
-        resultCoord = maxLumaCoord;
-    if (centerLuma < minLuma)
-        resultCoord = minLumaCoord;
+    // RELAX_AntiFirefly.cs.hlsl:162-168 -- diffuse RCRS selection
+    // Replace center with min/max neighbor if center is outside [min, max] range.
+    // Center 2nd moment is always preserved (not taken from replacement neighbor).
+    ivec2 diffuseCoords = pixelPos;
+    if (diffuseLuminanceCenter > maxDiffuseLuminance)
+        diffuseCoords = maxDiffuseLuminanceCoords;
+    if (diffuseLuminanceCenter < minDiffuseLuminance)
+        diffuseCoords = minDiffuseLuminanceCoords;
+    outDiffuse = vec4(texelFetch(nrd_out_diff_radiance_hitdist, diffuseCoords, 0).rgb, diffuse2ndMomentCenter);
 
-    vec3 result = texelFetch(direct_firefly_input, resultCoord, 0).rgb;
-    direct_firefly_out = vec4(result, center2ndMoment);
+    // RELAX_AntiFirefly.cs.hlsl:153-159 -- specular RCRS selection
+    ivec2 specularCoords = pixelPos;
+    if (specularLuminanceCenter > maxSpecularLuminance)
+        specularCoords = maxSpecularLuminanceCoords;
+    if (specularLuminanceCenter < minSpecularLuminance)
+        specularCoords = minSpecularLuminanceCoords;
+    outSpecular = vec4(texelFetch(nrd_out_spec_radiance_hitdist, specularCoords, 0).rgb, specular2ndMomentCenter);
+}
+
+void main() {
+    // RELAX_AntiFirefly.cs.hlsl:177, 180-182 -- tile early-out
+    // Contract section 11.7: if tile flag > 0.5, this pixel is sky; discard.
+    if (texelFetch(nrd_in_tiles, tex_coord >> 4, 0).r > 0.5) {
+        discard;
+    }
+
+    // RELAX_AntiFirefly.cs.hlsl:184-187 -- viewZ early-out
+    // Pixels beyond the denoising range are written back unchanged (not discarded).
+    vec3 centerPos = texelFetch(radiosity_position, tex_coord, 0).xyz;
+    float centerViewZ = nrd_compute_view_z(centerPos);
+    if (centerViewZ > ph_nrd_denoising_range) {
+        nrd_diff_illum_prev_firefly_out = texelFetch(nrd_out_diff_radiance_hitdist, tex_coord, 0);
+        nrd_spec_illum_prev_firefly_out = texelFetch(nrd_out_spec_radiance_hitdist, tex_coord, 0);
+        return;
+    }
+
+    // RELAX_AntiFirefly.cs.hlsl:190-207 -- run fused RCRS for diff and spec
+    vec4 centerMaterial = texelFetch(radiosity_material, tex_coord, 0);
+    ivec2 texSize = textureSize(nrd_out_diff_radiance_hitdist, 0);
+
+    vec4 outDiffuseIlluminationAnd2ndMoment;
+    vec4 outSpecularIlluminationAnd2ndMoment;
+
+    runRCRS(
+        tex_coord,
+        texSize,
+        centerMaterial,
+        outDiffuseIlluminationAnd2ndMoment,
+        outSpecularIlluminationAnd2ndMoment
+    );
+
+    // RELAX_AntiFirefly.cs.hlsl:209-215 -- write outputs
+    nrd_diff_illum_prev_firefly_out = outDiffuseIlluminationAnd2ndMoment;
+    nrd_spec_illum_prev_firefly_out = outSpecularIlluminationAnd2ndMoment;
 }

@@ -123,7 +123,7 @@ vec3 lt_debug_color_regir_grid_binding(RAB_Surface surface) {
     bool inBuildRegion = lt_debug_regir_cell_in_build_region(cellCoord);
     ivec2 pixel = lt_fragment_pixel_pos();
     RTXDI_RandomSamplerState debugRegirRng = RTXDI_InitRandomSampler(
-        uvec2(pixel),
+        uvec2(pixel / int(RTXDI_TILE_SIZE_IN_PIXELS)),
         uint(frameCounter),
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
     int jitteredSlot = -1;

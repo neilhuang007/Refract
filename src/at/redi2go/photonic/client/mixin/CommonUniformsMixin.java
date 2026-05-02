@@ -98,7 +98,6 @@ public class CommonUniformsMixin {
             Raytracer rt = Raytracer.INSTANCE;
             return rt == null ? 0 : rt.getWorldRegistry().getLightRegistry().lightCount();
          });
-         // RTXDI: center-based grid anchoring — origin derived in shader as center - gridRes * cellSize * 0.5
          uniforms.uniform3f(UniformUpdateFrequency.PER_FRAME, "ph_regir_grid_center", () -> worldRegistry.get().getLightRegistry().getRegirGridCenter());
          uniforms.uniform3i(UniformUpdateFrequency.PER_FRAME, "ph_regir_grid_cells", () -> {
             int gridRes = worldRegistry.get().getLightRegistry().getRegirGridResolution();

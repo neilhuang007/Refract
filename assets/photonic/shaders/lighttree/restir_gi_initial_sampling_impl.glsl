@@ -96,14 +96,7 @@ float RTXDI_LightBrdfMisWeight(
 #endif
 
 // ---------------------------------------------------------------------------
-// Local-light selection context sentinel (reference parity):
-// RTXDI_InitializeLocalLightSelectionContext may fail to produce a usable
-// POWER_RIS tile or REGIR_RIS cell. In that case the caller must short-circuit
-// RTXDI_SelectNextLocalLight with invSourcePdf=0 rather than silently falling
-// back to uniform sampling (which would bias the initial candidate stream).
-// These sentinels are consumed by ``lt_make_invalid_local_light_selection_context``
-// and the ``ctx.mode == RTXDI_LocalLightContextSamplingMode_INVALID`` branch in
-// ``RTXDI_SelectNextLocalLight`` (see reuse_bridge.glsl).
+// Local-light selection context sentinel for unsupported Photonics modes.
 const uint LT_PROPOSAL_FAMILY_INVALID = 0xFFFFFFFFu;
 const int REGIR_LOCAL_LIGHT_FALLBACK_MODE_UNIFORM = 0;
 const int REGIR_LOCAL_LIGHT_FALLBACK_MODE_POWER_RIS = 1;
@@ -659,14 +652,8 @@ void RTXDI_RandomlySelectLocalLightFromRISTile(
 
     uvec2 risTileData;
     uint risBufferPtr;
-    for (int attempt = 0; attempt < 8; attempt++) {
-        float retryRnd = fract(rnd + float(attempt) * 0.61803398875f);
-        RTXDI_RandomlySelectLightDataFromRISTile(retryRnd, risTileInfo, risTileData, risBufferPtr);
-        RTXDI_UnpackLocalLightFromRISLightData(risTileData, risBufferPtr, lightInfo, lightIndex, invSourcePdf);
-        if (invSourcePdf > 0.0f && lightIndex < uint(ph_light_count)) {
-            return;
-        }
-    }
+    RTXDI_RandomlySelectLightDataFromRISTile(rnd, risTileInfo, risTileData, risBufferPtr);
+    RTXDI_UnpackLocalLightFromRISLightData(risTileData, risBufferPtr, lightInfo, lightIndex, invSourcePdf);
 }
 
 void RTXDI_SelectNextLocalLight(
@@ -676,8 +663,6 @@ void RTXDI_SelectNextLocalLight(
     out uint lightIndex,
     out float invSourcePdf)
 {
-    // Reference parity: an INVALID context (ReGIR cell missing or RIS tiles
-    // absent) short-circuits with no candidate instead of degrading to uniform.
     if (ctx.mode == RTXDI_LocalLightContextSamplingMode_INVALID)
     {
         lightInfo = RAB_EmptyLightInfo();
@@ -689,11 +674,6 @@ void RTXDI_SelectNextLocalLight(
     if (ctx.mode == RTXDI_LocalLightContextSamplingMode_RIS)
     {
         RTXDI_RandomlySelectLocalLightFromRISTile(rnd, ctx.risTileInfo, lightInfo, lightIndex, invSourcePdf);
-        if (invSourcePdf <= 0.0f
-            && ctx.proposalFamily == LT_PROPOSAL_FAMILY_REGIR_RIS
-            && ctx.lightBufferRegion.numLights > 0u) {
-            RTXDI_RandomlySelectLightUniformly(rnd, ctx.lightBufferRegion, lightInfo, lightIndex, invSourcePdf);
-        }
         return;
     }
 
@@ -737,23 +717,12 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLightsAtTime(
     RTXDI_RISBufferSegmentParameters localLightRISBufferSegmentParams = RTXDI_GetLocalLightRISBufferSegmentParameters();
     int localLightSamplingMode = int(initialSamplingParams.localLightSamplingMode);
     bool fastRandomMode = (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_FAST_RANDOM);
-    RTXDI_LocalLightSelectionContext lightSelectionContext;
-    if (localLightSamplingMode == RTXDI_LOCAL_LIGHT_SAMPLING_REGIR_RIS) {
-        RTXDI_RandomSamplerState regirLookupRng = rng;
-        lightSelectionContext = RTXDI_InitializeLocalLightSelectionContextReGIRRIS(
-            regirLookupRng,
-            localLightBufferRegion,
-            localLightRISBufferSegmentParams,
-            surface);
-        rng = regirLookupRng;
-    } else {
-        lightSelectionContext = RTXDI_InitializeLocalLightSelectionContext(
-            coherentRng,
-            localLightSamplingMode,
-            localLightBufferRegion,
-            localLightRISBufferSegmentParams,
-            surface);
-    }
+    RTXDI_LocalLightSelectionContext lightSelectionContext = RTXDI_InitializeLocalLightSelectionContext(
+        coherentRng,
+        localLightSamplingMode,
+        localLightBufferRegion,
+        localLightRISBufferSegmentParams,
+        surface);
 
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
 

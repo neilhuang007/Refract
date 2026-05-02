@@ -3,6 +3,36 @@
 
 #include "/photonics/lighttree/nrd_material_id.glsl"
 
+// ---------------------------------------------------------------------------
+// Uniforms declared by the NRD pipeline -- registered by LightTreeRenderer.
+// Shader agents declare these here so all NRD shaders share the definitions.
+// ---------------------------------------------------------------------------
+uniform float ph_nrd_denoising_range;           // gDenoisingRange
+uniform float ph_nrd_depth_threshold;           // gDepthThreshold
+uniform float ph_nrd_disocclusion_threshold;    // gDisocclusionThreshold
+uniform float ph_nrd_disocclusion_threshold_alt;// gDisocclusionThresholdAlternate
+uniform float ph_nrd_max_accumulated_frame_num; // gDiffMaxAccumulatedFrameNum
+uniform float ph_nrd_max_fast_accumulated_frame_num; // gDiffMaxFastAccumulatedFrameNum
+uniform float ph_nrd_phi_luminance_diff;        // gDiffPhiLuminance  (default 1.0)
+uniform float ph_nrd_phi_luminance_spec;        // gSpecPhiLuminance  (default 1.5)
+uniform float ph_nrd_lobe_angle_fraction;       // gLobeAngleFraction (default 0.5)
+uniform float ph_nrd_roughness_fraction;        // gRoughnessFraction (default 0.15)
+uniform float ph_nrd_spec_lobe_angle_slack;     // gSpecLobeAngleSlack (default 0.0)
+uniform float ph_nrd_history_fix_frame_num;     // gHistoryFixFrameNum (default 3)
+uniform float ph_nrd_history_fix_base_stride;   // gHistoryFixBasePixelStride (default 14)
+uniform float ph_nrd_history_fix_normal_power;  // gHistoryFixEdgeStoppingNormalPower (default 8)
+uniform float ph_nrd_anti_firefly;              // 1.0 enabled, 0.0 skip
+uniform float ph_nrd_hitdist_reconstruction;    // 0.0 disabled, 1.0 = 3x3, 2.0 = 5x5
+uniform float ph_nrd_history_clamping_color_box_sigma_scale; // gFastHistoryClampingSigmaScale (default 2.0)
+uniform float ph_nrd_history_acceleration_amount;   // gHistoryAccelerationAmount (default 0.3)
+uniform float ph_nrd_history_reset_temporal_sigma_scale; // gHistoryResetTemporalSigmaScale (default 0.5)
+uniform float ph_nrd_history_reset_spatial_sigma_scale;  // gHistoryResetSpatialSigmaScale (default 4.5)
+uniform float ph_nrd_history_reset_amount;      // gHistoryResetAmount (default 0.5)
+uniform float ph_nrd_diff_prepass_blur_radius;  // gDiffuseBlurRadius (default 30)
+uniform float ph_nrd_spec_prepass_blur_radius;  // gSpecularBlurRadius (default 50)
+uniform float ph_nrd_reset_history;             // gResetHistory (1.0 = reset all history this frame)
+uniform float ph_nrd_roughness_edge_stopping_relaxation; // gRoughnessEdgeStoppingRelaxation (default 0.3)
+
 const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;
@@ -191,6 +221,12 @@ float nrd_spec_normal_weight_atrous_full(vec2 params0, vec3 n0, vec3 n, vec3 v0,
     return clamp(1.0 - a * params0.y, 0.0, 1.0);
 }
 
+// RELAX_HistoryFix.cs.hlsl:92 MirrorUv -- folds OOB taps back into [0,1] instead of
+// wasting them on clamped border pixels. Equivalent to a periodic mirror at 0 and 1.
+vec2 nrd_mirror_uv(vec2 uv) {
+    return 1.0 - abs(1.0 - fract(uv * 0.5) * 2.0);
+}
+
 // NRD Common.hlsli:289 IsInScreenNearest
 float nrd_is_in_screen_nearest(vec2 uv) {
     return (all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) ? 1.0 : 0.0;
@@ -311,6 +347,13 @@ float nrd_pow5(float x) {
 const float RELAX_NORMAL_ULP = 1.5 / 255.0;
 const float NRD_INF = 1e30;
 const float RELAX_MAX_ACCUM_FRAME_NUM = 255.0;
+
+// NRD Common.hlsli:87 NRD_MAX_ALLOWED_VIRTUAL_MOTION_ACCELERATION
+const float NRD_MAX_ALLOWED_VIRTUAL_MOTION_ACCELERATION = 5.0;
+// NRD Common.hlsli:86 NRD_CURVATURE_HIGH_PARALLAX_DISOCCLUSION_THRESHOLD (normalized %)
+const float NRD_CURVATURE_HIGH_PARALLAX_DISOCCLUSION_THRESHOLD = 0.04;
+// NRD RELAX TemporalAccumulation: variance boost when 2nd moment is 0 and confidence is low
+const float NRD_SPEC_VARIANCE_BOOST = 1.0;
 
 // Area-ReSTIR / PathTracer reference writes materialID = 0.f in NRD-facing guide buffers.
 const float NRD_DEFAULT_MIN_MATERIAL = 0.0;
@@ -486,6 +529,119 @@ vec4 nrd_mix_direct_history(vec4 previousHistory, NrdDirectHistorySample current
     vec3 radiance = mix(previous.radiance, currentHistory.radiance, alpha);
     float secondMoment = mix(previous.secondMoment, currentHistory.secondMoment, alpha);
     return nrd_pack_direct_history(radiance, secondMoment);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers added for the four new NRD passes (ClassifyTiles, HitDistReconstruction,
+// PrePass, Copy). Reference: Common.hlsli and RELAX_Common.hlsli.
+// ---------------------------------------------------------------------------
+
+// Common.hlsli:548 GetGaussianWeight -- exp(-0.66 * r^2), r normalised to 1
+// RELAX_PrePass.cs.hlsl: used with offset.z (precomputed length in Poisson table)
+float nrd_gaussian_weight(float r) {
+    return exp(-0.66 * r * r);
+}
+
+// Common.hlsli:489-497 GetHitDistanceWeightParams
+// Returns vec2(a, b) such that ComputeExponentialWeight(hitDist, a, b) is the weight.
+// nonLinearAccumSpeed = 1.0/9.0 in PrePass (reference line 140,291).
+vec2 nrd_hit_distance_weight_params(float hitDist, float nonLinearAccumSpeed) {
+    float a = 1.0 / nonLinearAccumSpeed;
+    float b = hitDist * a;
+    return vec2(a, -b);
+}
+
+// Common.hlsli:531-532 ComputeExponentialWeight (NRD_EXP_WEIGHT_DEFAULT_SCALE = 3.0)
+// ExpApprox(-3 * |x*px + py|) = 1 / ((x*px+py)^2 - (x*px+py) + 1)
+// Used wherever the reference calls ComputeExponentialWeight / ComputeWeight.
+float nrd_exp_approx(float x) {
+    // Common.hlsli:526: rcp((x)*(x) - (x) + 1.0)
+    return 1.0 / (x * x - x + 1.0);
+}
+
+float nrd_compute_exponential_weight(float x, float px, float py) {
+    // NRD_EXP_WEIGHT_DEFAULT_SCALE = 3.0 (Common.hlsli:84)
+    return nrd_exp_approx(-3.0 * abs(x * px + py));
+}
+
+// Common.hlsli:164-165 GetBilateralWeight: Math::LinearStep(0.03, 0.0, |z-zc|/max(z,zc))
+// Used in HitDistReconstruction for cross-bilateral viewZ weight.
+float nrd_bilateral_weight(float z, float zc) {
+    float relDiff = abs(z - zc) / max(max(z, zc), 1e-6);
+    // LinearStep(edge0, edge1, x) = saturate((x-edge0)/(edge1-edge0))
+    // LinearStep(0.03, 0.0, relDiff) = saturate(relDiff / 0.03 * (-1) + 1) = 1 - relDiff/0.03 clamped
+    return clamp(1.0 - relDiff / 0.03, 0.0, 1.0);
+}
+
+// Common.hlsli:508-517 GetRelaxedRoughnessWeightParams
+// Used in HitDistReconstruction for specular roughness gate.
+vec2 nrd_get_relaxed_roughness_weight_params(float m) {
+    // m = roughness*roughness (already squared)
+    float a = 1.0 / mix(NRD_ROUGHNESS_SENSITIVITY, 1.0, mix(m * m, m, clamp(1.0, 0.0, 1.0)));
+    float b = m * a;
+    return vec2(a, -b);
+}
+
+// Poisson-8 kernel from Poisson.hlsli -- used by PrePass (g_Poisson8).
+// .xy = disc offset, .z = precomputed length.
+const vec3 nrd_poisson8[8] = vec3[8](
+    vec3(-0.4706069, -0.4427112, 0.6461146),
+    vec3(-0.9057375,  0.3003471, 0.9542373),
+    vec3(-0.3487388,  0.4037880, 0.5335386),
+    vec3( 0.1023042,  0.6439373, 0.6520134),
+    vec3( 0.5699277,  0.3513750, 0.6695386),
+    vec3( 0.2939128, -0.1131226, 0.3149309),
+    vec3( 0.7836658, -0.4208784, 0.8895339),
+    vec3( 0.1564120, -0.8198990, 0.8346850)
+);
+
+// Rotate a 2D offset using a vec4 rotator (cos, sin, -sin, cos packed as .xyzw).
+// Reference: Geometry::RotateVector from ml.hlsli.
+vec2 nrd_rotate_vector(vec4 rotator, vec2 v) {
+    return vec2(dot(v, rotator.xy), dot(v, rotator.zw));
+}
+
+// Build a simple frame-index-based rotator (NRD_FRAME mode = 1 in reference).
+// Reference: Common.hlsli:267 GetBlurKernelRotation with mode=NRD_FRAME.
+// gRotatorPre is a constant from NRD settings; we approximate with frameCounter.
+vec4 nrd_get_kernel_rotation(int frameIndex) {
+    // Reference stores a base rotator in gRotatorPre; here we build from a fixed
+    // golden-angle sequence per frame for the fragment-shader variant.
+    // The actual rotation angle comes from the frame index only (NRD_FRAME mode).
+    // golden angle ~= 2.39996 radians
+    float angle = float(frameIndex) * 2.39996;
+    float s = sin(angle);
+    float c = cos(angle);
+    return vec4(c, s, -s, c);
+}
+
+// Reconstruct world-space position from pixel UV and viewZ.
+// Photonics uses actual world-space positions from the G-buffer; this helper
+// is a fallback reconstruction from clip-space for sampled taps where we only
+// have the viewZ from textures (not the world position texture).
+// Reference: Common.hlsli:66-80 GetCurrentWorldPosFromClipSpaceXY.
+// In Photonics the view basis vectors are not directly available as uniforms;
+// we use the G-buffer position texture for the center and reconstruct offset
+// taps via a simple proportional extrapolation using (uv - centerUv) scaled
+// by viewZ (perspective).  This matches the reference for the perspective case.
+vec3 nrd_world_pos_from_uv(vec2 uv, float viewZ, vec3 centerWorldPos, float centerViewZ) {
+    // Simple perspective reconstruction: dx/dy in view space proportional to uv delta.
+    // Avoids needing frustum forward/right/up vectors as uniforms.
+    // This is an approximation; the reference uses frustum vectors.
+    vec2 uvDelta = uv - vec2(tex_coord) / vec2(viewWidth, viewHeight);
+    // The screen-space tangent of half FOV ~ centerWorldPos / centerViewZ (camera-relative).
+    vec3 camRelCenter = centerWorldPos - world_camera_position;
+    vec3 approxPos = world_camera_position + camRelCenter * (viewZ / max(centerViewZ, 1e-3));
+    approxPos += vec3(uvDelta * viewZ * 2.0, 0.0); // crude lateral correction
+    return approxPos;
+}
+
+// Accurate version: reconstruct world pos from pixel integer coord and viewZ using
+// the position stored in the G-buffer for the center, scaling laterally.
+// For the PrePass spatial loop this gives good-enough plane-distance checks.
+// Reference (exact): uses frustum vectors; Photonics stores world pos in G-buffer.
+vec3 nrd_world_pos_from_texel(ivec2 coord, sampler2D positionTex) {
+    return texelFetch(positionTex, coord, 0).xyz;
 }
 
 #endif

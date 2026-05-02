@@ -48,16 +48,17 @@ public class LightTreeRenderer extends MainRenderer {
       FINAL
    }
 
-   private static final String relaxDiffuseTemporalAccumulationFragment = "lighttree/nrd_temporal_accumulation.fsh";
-   private static final String relaxDiffuseHistoryFixFragment = "lighttree/nrd_history_fix.fsh";
-   private static final String relaxDiffuseAntiFireflyFragment = "lighttree/nrd_anti_firefly.fsh";
-   private static final String relaxDiffuseAtrousFragment = "lighttree/nrd_atrous.fsh";
-   private static final String relaxDiffuseHistoryClampingFragment = "lighttree/nrd_history_clamping.fsh";
-   private static final String relaxSpecularTemporalAccumulationFragment = "lighttree/nrd_spec_temporal_accumulation.fsh";
-   private static final String relaxSpecularHistoryFixFragment = "lighttree/nrd_spec_history_fix.fsh";
-   private static final String relaxSpecularAntiFireflyFragment = "lighttree/nrd_spec_anti_firefly.fsh";
-   private static final String relaxSpecularAtrousFragment = "lighttree/nrd_spec_atrous.fsh";
-   private static final String relaxSpecularHistoryClampingFragment = "lighttree/nrd_spec_history_clamping.fsh";
+   // NRD RELAX_DiffuseSpecular fused pipeline shader fragments (contract §9)
+   private static final String relaxTemporalAccumulationFragment = "lighttree/nrd_temporal_accumulation.fsh";
+   private static final String relaxHistoryFixFragment = "lighttree/nrd_history_fix.fsh";
+   private static final String relaxAntiFireflyFragment = "lighttree/nrd_anti_firefly.fsh";
+   private static final String relaxAtrousFragment = "lighttree/nrd_atrous.fsh";
+   private static final String relaxHistoryClampingFragment = "lighttree/nrd_history_clamping.fsh";
+   private static final String nrdClassifyTilesFragment = "lighttree/nrd_classify_tiles.fsh";
+   private static final String nrdHitDistReconstructionFragment = "lighttree/nrd_hitdist_reconstruction.fsh";
+   private static final String nrdPrepassFragment = "lighttree/nrd_prepass.fsh";
+   private static final String nrdCopyFragment = "lighttree/nrd_copy.fsh";
+   private static final String nrdAtrousSmemFragment = "lighttree/nrd_atrous_smem.fsh";
    private static final String indirectBoilingFragment = "lighttree/light_tree_indirect_boiling_filter.fsh";
    private static final String indirectAccumulationFragment = "lighttree/light_tree_indirect_accumulation.fsh";
    private static final String indirectInitialFragment = "lighttree/light_tree_indirect_initial.fsh";
@@ -89,36 +90,42 @@ public class LightTreeRenderer extends MainRenderer {
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_RECORD_VEC4_COUNT = 5;
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_STRIDE_BYTES =
       TEMPORAL_GATHER_SHIFTED_PATH_RECORD_VEC4_COUNT * 4 * Float.BYTES;
+   // GPU profiler region names match the new fused NRD pipeline (contract §9).
    private static final String[] gpuProfilerRegionNames = new String[]{
-      "LightTreeSamplingStage", "InitialCandidates", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples", "NRDPrepareInputs", "RELAXDiffuseTemporalAccumulation", "RELAXDiffuseHistoryFix", "RELAXDiffuseHistoryClamping", "RELAXDiffuseAntiFirefly", "RELAXDiffuseAtrous", "RELAXSpecularTemporalAccumulation", "RELAXSpecularHistoryFix", "RELAXSpecularHistoryClamping", "RELAXSpecularAntiFirefly", "RELAXSpecularAtrous", "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
+      "LightTreeSamplingStage", "InitialCandidates", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples",
+      "NRDClassifyTiles", "NRDHitDistReconstruction", "NRDPrepass",
+      "RELAXTemporalAccumulation", "RELAXHistoryFix", "RELAXHistoryClamping",
+      "NRDCopy", "RELAXAntiFirefly", "RELAXAtrousSmem", "RELAXAtrous",
+      "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
    };
    private static final String[] profilerPassNames = new String[]{
-      "LightTreeSamplingStage", "InitialCandidates", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples", "NRDPrepareInputs", "RELAXDiffuseTemporalAccumulation", "RELAXDiffuseHistoryFix", "RELAXDiffuseHistoryClamping", "RELAXDiffuseAntiFirefly", "RELAXDiffuseAtrous", "RELAXSpecularTemporalAccumulation", "RELAXSpecularHistoryFix", "RELAXSpecularHistoryClamping", "RELAXSpecularAntiFirefly", "RELAXSpecularAtrous", "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
+      "LightTreeSamplingStage", "InitialCandidates", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples",
+      "NRDClassifyTiles", "NRDHitDistReconstruction", "NRDPrepass",
+      "RELAXTemporalAccumulation", "RELAXHistoryFix", "RELAXHistoryClamping",
+      "NRDCopy", "RELAXAntiFirefly", "RELAXAtrousSmem", "RELAXAtrous",
+      "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
    };
    private static final int lightTreeSamplingStageRegionIndex = 0;
    private static final int initialCandidatesRegionIndex = 1;
    private static final int diTemporalResamplingRegionIndex = 2;
    private static final int diSpatialResamplingRegionIndex = 3;
    private static final int diShadeSamplesRegionIndex = 4;
-   private static final int nrdPrepareInputsRegionIndex = 5;
-   private static final int relaxDiffuseTemporalAccumulationRegionIndex = 6;
-   private static final int relaxDiffuseHistoryFixRegionIndex = 7;
-   private static final int relaxDiffuseHistoryClampingRegionIndex = 8;
-   private static final int relaxDiffuseAntiFireflyRegionIndex = 9;
-   private static final int relaxDiffuseAtrousRegionIndex = 10;
-   private static final int relaxSpecularTemporalAccumulationRegionIndex = 11;
-   private static final int relaxSpecularHistoryFixRegionIndex = 12;
-   private static final int relaxSpecularHistoryClampingRegionIndex = 13;
-   private static final int relaxSpecularAntiFireflyRegionIndex = 14;
-  private static final int relaxSpecularAtrousRegionIndex = 15;
-  private static final int restirGIRegionIndex = 16;
-  private static final int indirectDenoiseRegionIndex = 17;
-  private static final int lightingAccumulationRegionIndex = 18;
-  private static final int indirectCompositeRegionIndex = 19;
-   private static final int REGIR_STABLE_FRAME_SEED = 0;
+   private static final int nrdClassifyTilesRegionIndex = 5;
+   private static final int nrdHitDistReconstructionRegionIndex = 6;
+   private static final int nrdPrepassRegionIndex = 7;
+   private static final int relaxTemporalAccumulationRegionIndex = 8;
+   private static final int relaxHistoryFixRegionIndex = 9;
+   private static final int relaxHistoryClampingRegionIndex = 10;
+   private static final int nrdCopyRegionIndex = 11;
+   private static final int relaxAntiFireflyRegionIndex = 12;
+   private static final int relaxAtrousSmemRegionIndex = 13;
+   private static final int relaxAtrousRegionIndex = 14;
+   private static final int restirGIRegionIndex = 15;
+   private static final int indirectDenoiseRegionIndex = 16;
+   private static final int lightingAccumulationRegionIndex = 17;
+   private static final int indirectCompositeRegionIndex = 18;
    private boolean loggedRegirPresampleFrameSeedOverride = false;
    private boolean loggedRegirBuildFrameSeedOverride = false;
-   private boolean loggedRegirStableFrameSeed = false;
    @Nullable
    private Function<List<PhotonicsShader>, CompositeRenderer> compositeRendererCreator;
 
@@ -131,26 +138,29 @@ public class LightTreeRenderer extends MainRenderer {
   private final ColorFramebuffer directConfidenceBuffer;
   private final ColorFramebuffer directInitialDebugBuffer;
   private final ColorFramebuffer compatDirectSoftBuffer;
-  private final ColorFramebuffer directHistoryLengthBuffer;
-   private final ColorFramebuffer directNoisyBuffer;
-   private final ColorFramebuffer directResponsiveBuffer;
-   private final ColorFramebuffer directSlowBuffer;
-   private final ColorFramebuffer directFastBuffer;
-   private final ColorFramebuffer directAntiFireflyBuffer;
-   private final ColorFramebuffer directClampedSlowBuffer;
-   private final ColorFramebuffer directClampedFastBuffer;
-   private final ColorFramebuffer directDenoisedBuffer;
-   private final ColorFramebuffer directAtrousPingBuffer;
-   private final ColorFramebuffer specularNoisyBuffer;
-   private final ColorFramebuffer specularResponsiveBuffer;
-   private final ColorFramebuffer specularSlowBuffer;
-   private final ColorFramebuffer specularFastBuffer;
-   private final ColorFramebuffer specularAntiFireflyBuffer;
-   private final ColorFramebuffer specularClampedSlowBuffer;
-   private final ColorFramebuffer specularClampedFastBuffer;
-   private final ColorFramebuffer specularDenoisedBuffer;
-   private final ColorFramebuffer specularAtrousPingBuffer;
-   private final ColorFramebuffer specularHistoryLengthBuffer;
+   // NRD RELAX_DiffuseSpecular permanent (swap-buffered) FBOs (contract §8).
+   // These survive across frames; .read = prev frame, .write = current frame.
+   private final ColorFramebuffer nrdDiffIllumPrevFb;             // RGBA16F
+   private final ColorFramebuffer nrdDiffIllumResponsivePrevFb;   // RGBA16F
+   private final ColorFramebuffer nrdSpecIllumPrevFb;             // RGBA16F
+   private final ColorFramebuffer nrdSpecIllumResponsivePrevFb;   // RGBA16F
+   private final ColorFramebuffer nrdHistoryLengthPrevFb;         // R8
+   private final ColorFramebuffer nrdReflectionHitTPrevFb;        // R16F
+   // NRD RELAX_DiffuseSpecular transient (single-buffered) FBOs (contract §8).
+   // Written and consumed within the same frame.
+   private final ColorFramebuffer nrdTilesFb;                     // R8 at ceil(w/16)xceil(h/16)
+   private final ColorFramebuffer nrdDiffIllumPingFb;             // RGBA16F
+   private final ColorFramebuffer nrdDiffIllumPongFb;             // RGBA16F
+   private final ColorFramebuffer nrdSpecIllumPingFb;             // RGBA16F
+   private final ColorFramebuffer nrdSpecIllumPongFb;             // RGBA16F
+   private final ColorFramebuffer nrdHistoryLengthFb;             // R8
+   private final ColorFramebuffer nrdSpecReprojectionConfidenceFb;// R8
+   private final ColorFramebuffer nrdReflectionHitTCurrFb;        // R16F
+   private final ColorFramebuffer nrdOutDiffRadianceHitDistFb;    // RGBA16F
+   private final ColorFramebuffer nrdOutSpecRadianceHitDistFb;    // RGBA16F
+   // Additional transient FBOs for hit-distance reconstruction (optional pass)
+   private final ColorFramebuffer nrdDiffHitDistReconFb;          // RGBA16F
+   private final ColorFramebuffer nrdSpecHitDistReconFb;          // RGBA16F
   private final ColorFramebuffer indirectInitialReservoirBuffer;
   private final ColorFramebuffer indirectReservoirBuffer;
   private final ColorFramebuffer indirectDenoisedBuffer;
@@ -180,17 +190,17 @@ public class LightTreeRenderer extends MainRenderer {
   private final RoutingFramebuffer proposalFramebuffer;
   private final RoutingFramebuffer proposalReservoirFramebuffer;
   private final RoutingFramebuffer reuseResolveFramebuffer;
-  private final RoutingFramebuffer directFeatureFramebuffer;
+  // NRD RELAX_DiffuseSpecular fused pipeline routing framebuffers (contract §9).
+  private final RoutingFramebuffer nrdClassifyTilesFramebuffer;
+  private final RoutingFramebuffer nrdHitDistReconstructionFramebuffer;
+  private final RoutingFramebuffer nrdPrepassFramebuffer;
   private final RoutingFramebuffer directTemporalFramebuffer;
-  private final RoutingFramebuffer directAntiFireflyFramebuffer;
   private final RoutingFramebuffer directHistoryFixFramebuffer;
   private final RoutingFramebuffer directHistoryClampingFramebuffer;
+  private final RoutingFramebuffer nrdCopyFramebuffer;
+  private final RoutingFramebuffer directAntiFireflyFramebuffer;
+  private final RoutingFramebuffer nrdAtrousSmemFramebuffer;
   private final RoutingFramebuffer directAtrousFramebuffer;
-  private final RoutingFramebuffer specTemporalFramebuffer;
-  private final RoutingFramebuffer specAntiFireflyFramebuffer;
-  private final RoutingFramebuffer specHistoryFixFramebuffer;
-  private final RoutingFramebuffer specHistoryClampingFramebuffer;
-  private final RoutingFramebuffer specAtrousFramebuffer;
   private final RoutingFramebuffer indirectInitialFramebuffer;
   private final RoutingFramebuffer indirectBoilingFramebuffer;
   private final RoutingFramebuffer indirectAccumulationFramebuffer;
@@ -210,28 +220,27 @@ public class LightTreeRenderer extends MainRenderer {
   private CompositeRenderer proposalReservoirRenderer;
   @Nullable
   private CompositeRenderer reuseResolveRenderer;
+  // NRD RELAX_DiffuseSpecular fused pipeline renderers (contract §9).
   @Nullable
-  private CompositeRenderer directFeatureRenderer;
+  private CompositeRenderer nrdClassifyTilesRenderer;
+  @Nullable
+  private CompositeRenderer nrdHitDistReconstructionRenderer;
+  @Nullable
+  private CompositeRenderer nrdPrepassRenderer;
   @Nullable
   private CompositeRenderer directTemporalRenderer;
-  @Nullable
-  private CompositeRenderer directAntiFireflyRenderer;
   @Nullable
   private CompositeRenderer directHistoryFixRenderer;
   @Nullable
   private CompositeRenderer directHistoryClampingRenderer;
   @Nullable
+  private CompositeRenderer nrdCopyRenderer;
+  @Nullable
+  private CompositeRenderer directAntiFireflyRenderer;
+  @Nullable
+  private CompositeRenderer nrdAtrousSmemRenderer;
+  @Nullable
   private CompositeRenderer directAtrousRenderer;
-  @Nullable
-  private CompositeRenderer specTemporalRenderer;
-  @Nullable
-  private CompositeRenderer specAntiFireflyRenderer;
-  @Nullable
-  private CompositeRenderer specHistoryFixRenderer;
-  @Nullable
-  private CompositeRenderer specHistoryClampingRenderer;
-  @Nullable
-  private CompositeRenderer specAtrousRenderer;
   @Nullable
   private CompositeRenderer indirectInitialRenderer;
   @Nullable
@@ -279,16 +288,18 @@ public class LightTreeRenderer extends MainRenderer {
   private final GpuTimerQuery gpuTimerQuery;
   @Nullable
   private RegirComputeProgram regirComputeProgram;
-  private final int[] directAtrousStepSizes;
+  // Hard-coded 5-pass atrous cascade per contract §1: SMEM(stride=1) + 4 passes (strides 2,4,8,16).
+  // directAtrousIteration 0 = SMEM pass (nrdAtrousSmemRenderer), 1-4 = regular atrous passes.
+  private static final int[] NRD_ATROUS_STRIDES = {1, 2, 4, 8, 16};
   private final Consumer<String> localLightSamplingModeObserver;
   private final Consumer<String> temporalScatterIsolationModeObserver;
    private int temporalScatterPixelCapacity;
   private int temporalScatterContributorCapacity;
   private int directAtrousIteration = 0;
-  private int specAtrousIteration = 0;
    private boolean compatDirectSoftDirty = true;
    private boolean reservoirHistoryDirty = true;
    private boolean directTemporalReuseActiveThisFrame = false;
+   private boolean disabledIndirectOutputsCleared = false;
    private int renderFrameIndex = 0;
   private int profilerFrameCounter = 0;
   private long lastCpuLightTreeSamplingStageNanos;
@@ -296,21 +307,20 @@ public class LightTreeRenderer extends MainRenderer {
   private long lastCpuDITemporalResamplingNanos;
   private long lastCpuDISpatialResamplingNanos;
   private long lastCpuDIShadeSamplesNanos;
-  private long lastCpuNRDPrepareInputsNanos;
-  private long lastCpuRELAXDiffuseTemporalAccumulationNanos;
-  private long lastCpuRELAXDiffuseHistoryFixNanos;
-  private long lastCpuRELAXDiffuseHistoryClampingNanos;
-  private long lastCpuRELAXDiffuseAntiFireflyNanos;
-  private long lastCpuRELAXDiffuseAtrousNanos;
+  private long lastCpuNRDClassifyTilesNanos;
+  private long lastCpuNRDHitDistReconstructionNanos;
+  private long lastCpuNRDPrepassNanos;
+  private long lastCpuRELAXTemporalAccumulationNanos;
+  private long lastCpuRELAXHistoryFixNanos;
+  private long lastCpuRELAXHistoryClampingNanos;
+  private long lastCpuNRDCopyNanos;
+  private long lastCpuRELAXAntiFireflyNanos;
+  private long lastCpuRELAXAtrousSmemNanos;
+  private long lastCpuRELAXAtrousNanos;
   private long[] lastCpuDirectAtrousIterationNanos;
-  private long lastCpuRELAXSpecularTemporalAccumulationNanos;
-  private long lastCpuRELAXSpecularHistoryFixNanos;
-  private long lastCpuRELAXSpecularHistoryClampingNanos;
   private float[] cachedRegirPdfPowers;
   private int cachedRegirPdfLightCount = -1;
   private long cachedRegirSemanticLayoutHash = Long.MIN_VALUE;
-  private long lastCpuRELAXSpecularAntiFireflyNanos;
-  private long lastCpuRELAXSpecularAtrousNanos;
   private long lastCpuReSTIRGINanos;
   private long lastCpuIndirectDenoiseNanos;
   private long lastCpuLightingAccumulationNanos;
@@ -318,8 +328,8 @@ public class LightTreeRenderer extends MainRenderer {
    public LightTreeRenderer(WorldRegistry worldRegistry, float renderScale, PhotonicsProperties properties) {
       super(worldRegistry, renderScale);
       this.properties = properties;
-      this.directAtrousStepSizes = resolveDirectAtrousStepSizes(properties);
-      this.lastCpuDirectAtrousIterationNanos = new long[this.directAtrousStepSizes.length];
+      // Hard-coded 5-pass cascade: SMEM(iter=0) + 4 regular atrous passes (iters 1-4).
+      this.lastCpuDirectAtrousIterationNanos = new long[NRD_ATROUS_STRIDES.length];
       this.lightingBuffer = new ColorFramebuffer(renderScale);
       this.createLightingBufferAttachments(this.lightingBuffer);
       this.lightingStageBuffer = new ColorFramebuffer(renderScale);
@@ -341,26 +351,26 @@ public class LightTreeRenderer extends MainRenderer {
       this.directInitialDebugBuffer = this.createDirectPackedDebugFramebuffer(renderScale);
       this.compatDirectSoftBuffer = new ColorFramebuffer(renderScale);
       this.compatDirectSoftBuffer.createAttachment("direct_soft_compat", "RGBA16F", false);
-      this.directHistoryLengthBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directNoisyBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directResponsiveBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directSlowBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directFastBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directAntiFireflyBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directClampedSlowBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directClampedFastBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directDenoisedBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directAtrousPingBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularNoisyBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularResponsiveBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularSlowBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularFastBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularAntiFireflyBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularClampedSlowBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularClampedFastBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularDenoisedBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularAtrousPingBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.specularHistoryLengthBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      // NRD permanent (swap-buffered) FBOs
+      this.nrdDiffIllumPrevFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdDiffIllumResponsivePrevFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdSpecIllumPrevFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdSpecIllumResponsivePrevFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdHistoryLengthPrevFb       = this.createDirectSignalFramebuffer(renderScale, "R8");
+      this.nrdReflectionHitTPrevFb      = this.createDirectSignalFramebuffer(renderScale, "R16F");
+      // NRD transient (single-buffered) FBOs
+      this.nrdTilesFb                   = this.createNrdTileFramebuffer(renderScale);
+      this.nrdDiffIllumPingFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdDiffIllumPongFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdSpecIllumPingFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdSpecIllumPongFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdHistoryLengthFb           = this.createDirectSignalFramebuffer(renderScale, "R8");
+      this.nrdSpecReprojectionConfidenceFb = this.createDirectSignalFramebuffer(renderScale, "R8");
+      this.nrdReflectionHitTCurrFb      = this.createDirectSignalFramebuffer(renderScale, "R16F");
+      this.nrdOutDiffRadianceHitDistFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdOutSpecRadianceHitDistFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdDiffHitDistReconFb        = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdSpecHitDistReconFb        = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.indirectInitialReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
       this.indirectReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
       this.indirectDenoisedBuffer = new ColorFramebuffer(renderScale);
@@ -368,17 +378,16 @@ public class LightTreeRenderer extends MainRenderer {
       this.proposalFramebuffer = this.createProposalGeometryFramebuffer();
       this.proposalReservoirFramebuffer = this.createProposalReservoirFramebuffer();
       this.reuseResolveFramebuffer = this.createReuseResolveFramebuffer();
-      this.directFeatureFramebuffer = this.createDirectFeatureFramebuffer();
-      this.directTemporalFramebuffer = this.createDirectTemporalFramebuffer();
-      this.directAntiFireflyFramebuffer = this.createDirectAntiFireflyFramebuffer();
-      this.directHistoryFixFramebuffer = this.createDirectHistoryFixFramebuffer();
+      this.nrdClassifyTilesFramebuffer      = this.createNrdClassifyTilesFramebuffer();
+      this.nrdHitDistReconstructionFramebuffer = this.createNrdHitDistReconstructionFramebuffer();
+      this.nrdPrepassFramebuffer            = this.createNrdPrepassFramebuffer();
+      this.directTemporalFramebuffer        = this.createDirectTemporalFramebuffer();
+      this.directHistoryFixFramebuffer      = this.createDirectHistoryFixFramebuffer();
       this.directHistoryClampingFramebuffer = this.createDirectHistoryClampingFramebuffer();
-      this.directAtrousFramebuffer = this.createDirectAtrousFramebuffer();
-      this.specTemporalFramebuffer = this.createSpecTemporalFramebuffer();
-      this.specAntiFireflyFramebuffer = this.createSpecAntiFireflyFramebuffer();
-      this.specHistoryFixFramebuffer = this.createSpecHistoryFixFramebuffer();
-      this.specHistoryClampingFramebuffer = this.createSpecHistoryClampingFramebuffer();
-      this.specAtrousFramebuffer = this.createSpecAtrousFramebuffer();
+      this.nrdCopyFramebuffer               = this.createNrdCopyFramebuffer();
+      this.directAntiFireflyFramebuffer     = this.createDirectAntiFireflyFramebuffer();
+      this.nrdAtrousSmemFramebuffer         = this.createNrdAtrousSmemFramebuffer();
+      this.directAtrousFramebuffer          = this.createDirectAtrousFramebuffer();
       this.indirectInitialFramebuffer = this.createIndirectInitialFramebuffer();
       this.indirectBoilingFramebuffer = this.createIndirectBoilingFramebuffer();
       this.indirectAccumulationFramebuffer = this.createIndirectAccumulationFramebuffer();
@@ -460,38 +469,36 @@ public class LightTreeRenderer extends MainRenderer {
       this.scatterTemporalRenderer = null;
       this.scatterBackupTemporalRenderer = null;
       this.multiScatterTemporalRenderer = null;
-      this.directFeatureRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader("lighttree/direct_feature_extract.fsh", "common/screen.vsh", this.memoryCollection, this.directFeatureFramebuffer))
+      // NRD RELAX_DiffuseSpecular fused pipeline renderers (contract §9).
+      this.nrdClassifyTilesRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(nrdClassifyTilesFragment, "common/screen.vsh", this.memoryCollection, this.nrdClassifyTilesFramebuffer))
+      );
+      this.nrdHitDistReconstructionRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(nrdHitDistReconstructionFragment, "common/screen.vsh", this.memoryCollection, this.nrdHitDistReconstructionFramebuffer))
+      );
+      this.nrdPrepassRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(nrdPrepassFragment, "common/screen.vsh", this.memoryCollection, this.nrdPrepassFramebuffer))
       );
       this.directTemporalRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxDiffuseTemporalAccumulationFragment, "common/screen.vsh", this.memoryCollection, this.directTemporalFramebuffer))
-      );
-      this.directAntiFireflyRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxDiffuseAntiFireflyFragment, "common/screen.vsh", this.memoryCollection, this.directAntiFireflyFramebuffer))
+         List.of(new PhotonicsShader(relaxTemporalAccumulationFragment, "common/screen.vsh", this.memoryCollection, this.directTemporalFramebuffer))
       );
       this.directHistoryFixRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxDiffuseHistoryFixFragment, "common/screen.vsh", this.memoryCollection, this.directHistoryFixFramebuffer))
+         List.of(new PhotonicsShader(relaxHistoryFixFragment, "common/screen.vsh", this.memoryCollection, this.directHistoryFixFramebuffer))
       );
       this.directHistoryClampingRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxDiffuseHistoryClampingFragment, "common/screen.vsh", this.memoryCollection, this.directHistoryClampingFramebuffer))
+         List.of(new PhotonicsShader(relaxHistoryClampingFragment, "common/screen.vsh", this.memoryCollection, this.directHistoryClampingFramebuffer))
+      );
+      this.nrdCopyRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(nrdCopyFragment, "common/screen.vsh", this.memoryCollection, this.nrdCopyFramebuffer))
+      );
+      this.directAntiFireflyRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(relaxAntiFireflyFragment, "common/screen.vsh", this.memoryCollection, this.directAntiFireflyFramebuffer))
+      );
+      this.nrdAtrousSmemRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(nrdAtrousSmemFragment, "common/screen.vsh", this.memoryCollection, this.nrdAtrousSmemFramebuffer))
       );
       this.directAtrousRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxDiffuseAtrousFragment, "common/screen.vsh", this.memoryCollection, this.directAtrousFramebuffer))
-      );
-      this.specTemporalRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxSpecularTemporalAccumulationFragment, "common/screen.vsh", this.memoryCollection, this.specTemporalFramebuffer))
-      );
-      this.specAntiFireflyRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxSpecularAntiFireflyFragment, "common/screen.vsh", this.memoryCollection, this.specAntiFireflyFramebuffer))
-      );
-      this.specHistoryFixRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxSpecularHistoryFixFragment, "common/screen.vsh", this.memoryCollection, this.specHistoryFixFramebuffer))
-      );
-      this.specHistoryClampingRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxSpecularHistoryClampingFragment, "common/screen.vsh", this.memoryCollection, this.specHistoryClampingFramebuffer))
-      );
-      this.specAtrousRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxSpecularAtrousFragment, "common/screen.vsh", this.memoryCollection, this.specAtrousFramebuffer))
+         List.of(new PhotonicsShader(relaxAtrousFragment, "common/screen.vsh", this.memoryCollection, this.directAtrousFramebuffer))
       );
       this.indirectInitialRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(indirectInitialFragment, "common/screen.vsh", this.memoryCollection, this.indirectInitialFramebuffer))
@@ -678,10 +685,6 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "radiosity_indirect_resolved", this::getResolvedIndirectTexture);
       this.addTextureSampler(samplers, "radiosity_motion", () -> this.motionVectorBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "direct_confidence_input", () -> this.directConfidenceBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "diffuse_confidence_input", () -> this.directConfidenceBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "spec_confidence_input", () -> this.directConfidenceBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "spec_history_confidence_input", () -> this.specularResponsiveBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "spec_reprojection_confidence_input", () -> this.specularResponsiveBuffer.getWriteAttachment("data"));
       this.addTextureSampler(samplers, "stage_radiosity_position", () -> this.lightingStageBuffer.getWriteAttachment("position"));
       this.addTextureSampler(samplers, "stage_radiosity_normal", () -> this.lightingStageBuffer.getWriteAttachment("normal"));
       this.addTextureSampler(samplers, "stage_radiosity_mapped_normal", () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"));
@@ -735,57 +738,32 @@ public class LightTreeRenderer extends MainRenderer {
       this.addTextureSampler(samplers, "prev_radiosity_indirect_reservoir_meta", () -> this.indirectReservoirBuffer.getReadAttachment("meta"));
       this.addTextureSampler(samplers, "prev_radiosity_motion", () -> this.motionVectorBuffer.getReadAttachment("data"));
       this.addTextureSampler(samplers, "prev_direct_confidence_input", () -> this.directConfidenceBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "direct_noisy_input", () -> this.directNoisyBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_responsive_input", () -> this.directResponsiveBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_slow_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_fast_input", () -> this.directFastBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_history_length_input", () -> this.directHistoryLengthBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "prev_direct_noisy_input", () -> this.directNoisyBuffer.getReadAttachment("data"));
-      // RELAX temporal accumulation consumes the final slow / fast histories produced by
-      // history clamping in the previous frame.
-      this.addTextureSampler(samplers, "prev_direct_slow_input", () -> this.directAntiFireflyBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "prev_direct_fast_input", () -> this.directClampedFastBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "prev_direct_history_length_input", () -> this.directHistoryLengthBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "direct_firefly_input", () -> this.directClampedSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_historyfix_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_historyfix_output", () -> this.directClampedSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_diff_slow_input", () -> this.directSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_diff_fast_input", () -> this.directFastBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_diff_noisy_input", () -> this.directNoisyBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_history_length_tex", () -> {
-         if (this.shouldUseCurrentDirectHistoryLength()) {
-            return this.directHistoryLengthBuffer.getWriteAttachment("data");
-         }
-         return this.directHistoryLengthBuffer.getReadAttachment("data");
-      });
-      this.addTextureSampler(samplers, "direct_history_length_tex", () -> {
-         if (this.shouldUseCurrentDirectHistoryLength()) {
-            return this.directHistoryLengthBuffer.getWriteAttachment("data");
-         }
-         return this.directHistoryLengthBuffer.getReadAttachment("data");
-      });
-      this.addTextureSampler(samplers, "direct_history_length_clamp_input", () -> this.directHistoryLengthBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_atrous_input", this::getCurrentDirectAtrousInputTexture);
-      this.addTextureSampler(samplers, "spec_noisy_input", () -> this.specularNoisyBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "prev_spec_noisy_input", () -> this.specularNoisyBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "spec_slow_input", () -> this.specularSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "prev_spec_slow_input", () -> this.specularAntiFireflyBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "spec_fast_input", () -> this.specularFastBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "prev_spec_fast_input", () -> this.specularClampedFastBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "spec_history_length_input", () -> {
-         if (this.shouldUseCurrentSpecHistoryLength()) {
-            return this.specularHistoryLengthBuffer.getWriteAttachment("data");
-         }
-         return this.specularHistoryLengthBuffer.getReadAttachment("data");
-      });
-      this.addTextureSampler(samplers, "spec_history_length_clamp_input", () -> this.specularHistoryLengthBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "prev_spec_history_length_input", () -> this.specularHistoryLengthBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "spec_firefly_input", () -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "spec_historyfix_input", () -> this.specularSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "spec_historyfix_output", () -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "spec_clamped_slow_input", () -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "spec_clamped_fast_input", () -> this.specularClampedFastBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "spec_atrous_input", this::getCurrentSpecAtrousInputTexture);
+      // NRD RELAX_DiffuseSpecular pipeline samplers (contract §6).
+      // Tile classifier (R8, 1/16 resolution)
+      this.addTextureSampler(samplers, "nrd_in_tiles", () -> this.nrdTilesFb.getWriteAttachment("data"));
+      // Raw radiance+hitDist from sampling stage (NRD-packed by light_tree_sampling_stage.fsh)
+      this.addTextureSampler(samplers, "nrd_in_diff_radiance_hitdist", () -> this.lightingStageBuffer.getWriteAttachment("direct"));
+      this.addTextureSampler(samplers, "nrd_in_spec_radiance_hitdist", () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"));
+      // Transient ping/pong buffers
+      this.addTextureSampler(samplers, "nrd_diff_illum_ping", () -> this.nrdDiffIllumPingFb.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_diff_illum_pong", () -> this.nrdDiffIllumPongFb.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_spec_illum_ping", () -> this.nrdSpecIllumPingFb.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_spec_illum_pong", () -> this.nrdSpecIllumPongFb.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_history_length", () -> this.nrdHistoryLengthFb.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_spec_reprojection_confidence", () -> this.nrdSpecReprojectionConfidenceFb.getWriteAttachment("data"));
+      // Permanent prev-frame buffers: temporal reads .read (prev frame); atrous smem reads .write (post-anti-firefly)
+      this.addTextureSampler(samplers, "nrd_diff_illum_prev", this::getCurrentNrdDiffIllumPrevTexture);
+      this.addTextureSampler(samplers, "nrd_diff_illum_responsive_prev", this::getCurrentNrdDiffIllumResponsivePrevTexture);
+      this.addTextureSampler(samplers, "nrd_spec_illum_prev", this::getCurrentNrdSpecIllumPrevTexture);
+      this.addTextureSampler(samplers, "nrd_spec_illum_responsive_prev", this::getCurrentNrdSpecIllumResponsivePrevTexture);
+      this.addTextureSampler(samplers, "nrd_history_length_prev", () -> this.nrdHistoryLengthPrevFb.getReadAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_reflection_hit_t_curr", () -> this.nrdReflectionHitTCurrFb.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_reflection_hit_t_prev", () -> this.nrdReflectionHitTPrevFb.getReadAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_out_diff_radiance_hitdist", () -> this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_out_spec_radiance_hitdist", () -> this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data"));
+      // A-trous ping-pong inputs (Java rebinds per-pass to the correct ping or pong buffer)
+      this.addTextureSampler(samplers, "nrd_diff_atrous_input", this::getCurrentDiffAtrousInputTexture);
+      this.addTextureSampler(samplers, "nrd_spec_atrous_input", this::getCurrentSpecAtrousInputTexture);
       this.addTextureSampler(samplers, "denoised_direct_diffuse", this::getResolvedDirectDiffuseTexture);
       this.addTextureSampler(samplers, "denoised_direct_specular", this::getResolvedSpecularAtrousTexture);
    }
@@ -1018,39 +996,48 @@ public class LightTreeRenderer extends MainRenderer {
       // visibility on the final shading pass, then reuse that visibility while
       // reservoir age/spatial distance limits remain valid.
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_final_visibility", () -> 1.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_enable_final_mis", () -> 1.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_boiling_filter_strength", () -> 0.2f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_indirect_boiling_filter_strength", () -> PhotonicsStorage.RESTIR_GI_BOILING_FILTER_STRENGTH.value);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_use_boiling_filter", () -> this.shouldRunIndirectBoilingFilter() ? 1.0f : 0.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_spatial_sample_count", () -> {
+         float configuredSamples = PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value;
+         return configuredSamples >= 0.0f ? configuredSamples : 1.0f;
+      });
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_spatial_bias_mode", () -> PhotonicsStorage.RESTIR_GI_SPATIAL_BIAS_MODE.value);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_enable_temporal_reuse", () -> PhotonicsStorage.RESTIR_GI_TEMPORAL_REUSE.value ? 1.0f : 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_reuse_final_visibility", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 1.0f);
-      uniforms.uniform1f(
-         UniformUpdateFrequency.PER_FRAME,
-         "ph_debug_enable_direct_temporal_accumulation",
-         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_ACCUMULATION.value ? 1.0f : 0.0f
-      );
-      uniforms.uniform1f(
-         UniformUpdateFrequency.PER_FRAME,
-         "ph_debug_enable_direct_history_fix",
-         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_HISTORY_FIX.value ? 1.0f : 0.0f
-      );
-      uniforms.uniform1f(
-         UniformUpdateFrequency.PER_FRAME,
-         "ph_debug_enable_direct_history_clamping",
-         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_HISTORY_CLAMPING.value ? 1.0f : 0.0f
-      );
-      uniforms.uniform1f(
-         UniformUpdateFrequency.PER_FRAME,
-         "ph_debug_enable_direct_anti_firefly",
-         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_ANTI_FIREFLY.value ? 1.0f : 0.0f
-      );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_debug_view_mode",
          () -> PhotonicsStorage.DEBUG_VIEW_MODE.value
       );
+      // NRD RELAX_DiffuseSpecular uniforms (contract §6). All registered here so
+      // LightTreeRenderer is the single source of truth for default values.
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_accumulated_frame_num", () -> 30.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_fast_accumulated_frame_num", () -> 6.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_depth_threshold", () -> 0.003f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_denoising_range", () -> 500.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_disocclusion_threshold", () -> 0.005f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_disocclusion_threshold_alt", () -> 0.05f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_phi_luminance_diff", () -> 1.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_phi_luminance_spec", () -> 1.5f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_lobe_angle_fraction", () -> 0.5f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_roughness_fraction", () -> 0.15f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_spec_lobe_angle_slack", () -> 0.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_frame_num", () -> 3.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_base_stride", () -> 14.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_normal_power", () -> 8.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_clamping_color_box_sigma_scale", () -> 2.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_acceleration_amount", () -> 0.3f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_temporal_sigma_scale", () -> 0.5f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_spatial_sigma_scale", () -> 4.5f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_amount", () -> 0.5f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_diff_prepass_blur_radius", () -> 30.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_spec_prepass_blur_radius", () -> 50.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_anti_firefly", () -> 1.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_hitdist_reconstruction", () -> 0.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_reset_history", () -> 0.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_roughness_edge_stopping_relaxation", () -> 0.3f);
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_scatter_temporal_enabled",
@@ -1351,26 +1338,13 @@ public class LightTreeRenderer extends MainRenderer {
       this.motionVectorBuffer.swap();
       this.directReservoirBuffer.swap();
       this.directConfidenceBuffer.swap();
-      this.directHistoryLengthBuffer.swap();
-      this.directNoisyBuffer.swap();
-      this.directResponsiveBuffer.swap();
-      this.directSlowBuffer.swap();
-      this.directFastBuffer.swap();
-      this.directAntiFireflyBuffer.swap();
-      this.directClampedSlowBuffer.swap();
-      this.directClampedFastBuffer.swap();
-      this.directDenoisedBuffer.swap();
-      this.directAtrousPingBuffer.swap();
-      this.specularNoisyBuffer.swap();
-      this.specularResponsiveBuffer.swap();
-      this.specularSlowBuffer.swap();
-      this.specularFastBuffer.swap();
-      this.specularAntiFireflyBuffer.swap();
-      this.specularClampedSlowBuffer.swap();
-      this.specularClampedFastBuffer.swap();
-      this.specularDenoisedBuffer.swap();
-      this.specularAtrousPingBuffer.swap();
-      this.specularHistoryLengthBuffer.swap();
+      // Swap permanent NRD history buffers so current-frame writes become next-frame reads.
+      this.nrdDiffIllumPrevFb.swap();
+      this.nrdDiffIllumResponsivePrevFb.swap();
+      this.nrdSpecIllumPrevFb.swap();
+      this.nrdSpecIllumResponsivePrevFb.swap();
+      this.nrdHistoryLengthPrevFb.swap();
+      this.nrdReflectionHitTPrevFb.swap();
       this.indirectInitialReservoirBuffer.swap();
       this.indirectReservoirBuffer.swap();
       this.indirectDenoisedBuffer.swap();
@@ -1392,46 +1366,49 @@ public class LightTreeRenderer extends MainRenderer {
       //    monolithic ShadeSamples/ResolveReSTIR pass
       this.renderShadeSamplesProfiled();
       long t5 = System.nanoTime();
-      this.renderProfiled(nrdPrepareInputsRegionIndex, this.directFeatureRenderer);
+      // NRD RELAX_DiffuseSpecular fused pipeline (contract §9, pipeline order §1).
       long t6 = System.nanoTime();
-      this.renderProfiled(relaxDiffuseTemporalAccumulationRegionIndex, this.directTemporalRenderer);
+      this.renderProfiled(nrdClassifyTilesRegionIndex, this.nrdClassifyTilesRenderer);
       long t7 = System.nanoTime();
-      this.renderProfiled(relaxDiffuseHistoryFixRegionIndex, this.directHistoryFixRenderer);
+      if (this.shouldRunHitDistReconstruction()) {
+         this.renderProfiled(nrdHitDistReconstructionRegionIndex, this.nrdHitDistReconstructionRenderer);
+      }
       long t8 = System.nanoTime();
-      this.renderProfiled(relaxDiffuseHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
+      this.renderProfiled(nrdPrepassRegionIndex, this.nrdPrepassRenderer);
       long t9 = System.nanoTime();
-      this.renderProfiled(relaxDiffuseAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
+      this.renderProfiled(relaxTemporalAccumulationRegionIndex, this.directTemporalRenderer);
       long t10 = System.nanoTime();
-      this.renderDirectAtrousProfiled();
+      this.renderProfiled(relaxHistoryFixRegionIndex, this.directHistoryFixRenderer);
       long t11 = System.nanoTime();
-      this.renderProfiled(relaxSpecularTemporalAccumulationRegionIndex, this.specTemporalRenderer);
+      this.renderProfiled(relaxHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
       long t12 = System.nanoTime();
-      this.renderProfiled(relaxSpecularHistoryFixRegionIndex, this.specHistoryFixRenderer);
+      this.renderProfiled(nrdCopyRegionIndex, this.nrdCopyRenderer);
       long t13 = System.nanoTime();
-      this.renderProfiled(relaxSpecularHistoryClampingRegionIndex, this.specHistoryClampingRenderer);
+      this.renderProfiled(relaxAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
       long t14 = System.nanoTime();
-      this.renderProfiled(relaxSpecularAntiFireflyRegionIndex, this.specAntiFireflyRenderer);
+      this.renderNrdAtrousProfiled();
       long t15 = System.nanoTime();
-      this.renderSpecAtrousProfiled();
-      long t16 = System.nanoTime();
-      if (this.shouldRunReservoirSplattingIndirectPipeline()) {
+      long t16 = t15;
+      boolean runReservoirSplattingIndirect = this.shouldRunReservoirSplattingIndirectPipeline();
+      if (runReservoirSplattingIndirect) {
+         this.disabledIndirectOutputsCleared = false;
          this.renderIndirectAccumulationProfiled();
       } else {
          this.clearDisabledIndirectOutputs();
       }
       long t17 = System.nanoTime();
-      if (this.shouldRunReservoirSplattingIndirectPipeline()) {
+      this.renderProfiled(lightingAccumulationRegionIndex, this.accumulationRenderer);
+      long t18 = System.nanoTime();
+      if (runReservoirSplattingIndirect && this.shouldRunIndirectDenoise()) {
          this.renderProfiled(indirectDenoiseRegionIndex, this.indirectDenoisingRenderer);
       }
-      long t18 = System.nanoTime();
-      this.renderProfiled(lightingAccumulationRegionIndex, this.accumulationRenderer);
       long t19 = System.nanoTime();
-      if (this.shouldRunReservoirSplattingIndirectPipeline()) {
+      if (runReservoirSplattingIndirect) {
          this.renderProfiled(indirectCompositeRegionIndex, this.indirectRenderer);
       }
       long t20 = System.nanoTime();
       this.swapScatterTemporalHistory();
-      this.recordCpuPassTimes(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20);
+      this.recordCpuPassTimes(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t17, t18, t19, t20);
       this.worldRegistry.advanceLightBlendFrame(this.renderFrameIndex);
       this.logRenderProfileIfNeeded(t20 - t0);
    }
@@ -1444,14 +1421,16 @@ public class LightTreeRenderer extends MainRenderer {
          Map.entry("direct_reservoir_resolved", this.directReservoirBuffer.getReadAttachment("data")),
          Map.entry("direct_soft", this.getCompatDirectSoftTexture()),
          Map.entry("direct_soft_prev", this.getPreviousCompatDirectSoftTexture()),
-         Map.entry("direct_noisy", this.directNoisyBuffer.getWriteAttachment("data")),
-         Map.entry("direct_responsive", this.directResponsiveBuffer.getWriteAttachment("data")),
-         Map.entry("direct_slow", this.directSlowBuffer.getWriteAttachment("data")),
-         Map.entry("direct_fast", this.directFastBuffer.getWriteAttachment("data")),
-         Map.entry("direct_clamped_slow", this.directClampedSlowBuffer.getWriteAttachment("data")),
-         Map.entry("direct_clamped_fast", this.directClampedFastBuffer.getWriteAttachment("data")),
-         Map.entry("direct_anti_firefly", this.directAntiFireflyBuffer.getWriteAttachment("data")),
-         Map.entry("direct_denoised", this.directDenoisedBuffer.getWriteAttachment("data")),
+         // NRD-pipeline mapped names (contract §8 Task 8).
+         Map.entry("nrd_in_diff", this.lightingStageBuffer.getWriteAttachment("direct")),
+         Map.entry("tiles", this.nrdTilesFb.getWriteAttachment("data")),
+         Map.entry("prepass_diff", this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data")),
+         Map.entry("direct_slow", this.nrdDiffIllumPingFb.getWriteAttachment("data")),
+         Map.entry("direct_fast", this.nrdDiffIllumPongFb.getWriteAttachment("data")),
+         Map.entry("direct_clamped_slow", this.nrdDiffIllumPrevFb.getWriteAttachment("data")),
+         Map.entry("direct_clamped_fast", this.nrdDiffIllumResponsivePrevFb.getWriteAttachment("data")),
+         Map.entry("direct_anti_firefly", this.nrdDiffIllumPrevFb.getWriteAttachment("data")),
+         Map.entry("direct_denoised", this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data")),
          Map.entry("direct_atrous", this.getResolvedDiffuseAtrousTexture()),
          Map.entry("direct_raw", this.lightingStageBuffer.getWriteAttachment("direct")),
          Map.entry("spec_denoised", this.getResolvedSpecularAtrousTexture()),
@@ -1461,12 +1440,11 @@ public class LightTreeRenderer extends MainRenderer {
          Map.entry("indirect", this.getResolvedIndirectTexture()),
          Map.entry("indirect_raw", this.lightingBuffer.getWriteAttachment("indirect")),
          Map.entry("indirect_reservoir", this.indirectReservoirBuffer.getWriteAttachment("radiance")),
-         Map.entry("lighting", this.directSlowBuffer.getWriteAttachment("data")),
+         Map.entry("lighting", this.nrdDiffIllumPingFb.getWriteAttachment("data")),
          Map.entry("stage_albedo", this.lightingStageBuffer.getWriteAttachment("albedo")),
          Map.entry("stage_direct", this.lightingStageBuffer.getWriteAttachment("direct")),
          Map.entry("stage_mapped_normal", this.lightingStageBuffer.getWriteAttachment("mapped_normal")),
          Map.entry("stage_material", this.lightingStageBuffer.getWriteAttachment("material")),
-         Map.entry("stage_lighting", this.directResponsiveBuffer.getWriteAttachment("data")),
          Map.entry("stage_normal", this.lightingStageBuffer.getWriteAttachment("normal")),
          Map.entry("stage_position", this.lightingStageBuffer.getWriteAttachment("position")),
          Map.entry("stage_indirect", this.lightingBuffer.getWriteAttachment("indirect")),
@@ -1479,28 +1457,29 @@ public class LightTreeRenderer extends MainRenderer {
       this.directReservoirBuffer.updatePerFrame();
       this.directSpatialReservoirBuffer.updatePerFrame();
       this.updateScatterTemporalResourcesPerFrame();
-      this.directHistoryLengthBuffer.updatePerFrame();
-      this.directNoisyBuffer.updatePerFrame();
       this.directConfidenceBuffer.updatePerFrame();
       this.directInitialDebugBuffer.updatePerFrame();
-      this.directResponsiveBuffer.updatePerFrame();
-      this.directSlowBuffer.updatePerFrame();
-      this.directFastBuffer.updatePerFrame();
-      this.directAntiFireflyBuffer.updatePerFrame();
-      this.directClampedSlowBuffer.updatePerFrame();
-      this.directClampedFastBuffer.updatePerFrame();
-      this.directAtrousPingBuffer.updatePerFrame();
-      this.specularNoisyBuffer.updatePerFrame();
-      this.specularResponsiveBuffer.updatePerFrame();
-      this.specularSlowBuffer.updatePerFrame();
-      this.specularFastBuffer.updatePerFrame();
-      this.specularAntiFireflyBuffer.updatePerFrame();
-      this.specularClampedSlowBuffer.updatePerFrame();
-      this.specularClampedFastBuffer.updatePerFrame();
-      this.specularDenoisedBuffer.updatePerFrame();
-      this.specularAtrousPingBuffer.updatePerFrame();
-      this.specularHistoryLengthBuffer.updatePerFrame();
       this.motionVectorBuffer.updatePerFrame();
+      // NRD permanent FBOs
+      this.nrdDiffIllumPrevFb.updatePerFrame();
+      this.nrdDiffIllumResponsivePrevFb.updatePerFrame();
+      this.nrdSpecIllumPrevFb.updatePerFrame();
+      this.nrdSpecIllumResponsivePrevFb.updatePerFrame();
+      this.nrdHistoryLengthPrevFb.updatePerFrame();
+      this.nrdReflectionHitTPrevFb.updatePerFrame();
+      // NRD transient FBOs (tile FBO recalculated by updatePerFrame - size computed in ColorFramebuffer via supplier)
+      this.nrdTilesFb.updatePerFrame();
+      this.nrdDiffIllumPingFb.updatePerFrame();
+      this.nrdDiffIllumPongFb.updatePerFrame();
+      this.nrdSpecIllumPingFb.updatePerFrame();
+      this.nrdSpecIllumPongFb.updatePerFrame();
+      this.nrdHistoryLengthFb.updatePerFrame();
+      this.nrdSpecReprojectionConfidenceFb.updatePerFrame();
+      this.nrdReflectionHitTCurrFb.updatePerFrame();
+      this.nrdOutDiffRadianceHitDistFb.updatePerFrame();
+      this.nrdOutSpecRadianceHitDistFb.updatePerFrame();
+      this.nrdDiffHitDistReconFb.updatePerFrame();
+      this.nrdSpecHitDistReconFb.updatePerFrame();
       this.indirectInitialReservoirBuffer.updatePerFrame();
       this.indirectReservoirBuffer.updatePerFrame();
       this.indirectDenoisedBuffer.updatePerFrame();
@@ -1519,16 +1498,16 @@ public class LightTreeRenderer extends MainRenderer {
       this.recalculateRenderer(this.scatterBackupTemporalRenderer);
       this.recalculateRenderer(this.multiScatterTemporalRenderer);
       this.recalculateRenderer(this.reuseResolveRenderer);
+      this.recalculateRenderer(this.nrdClassifyTilesRenderer);
+      this.recalculateRenderer(this.nrdHitDistReconstructionRenderer);
+      this.recalculateRenderer(this.nrdPrepassRenderer);
       this.recalculateRenderer(this.directTemporalRenderer);
-      this.recalculateRenderer(this.directAntiFireflyRenderer);
       this.recalculateRenderer(this.directHistoryFixRenderer);
       this.recalculateRenderer(this.directHistoryClampingRenderer);
+      this.recalculateRenderer(this.nrdCopyRenderer);
+      this.recalculateRenderer(this.directAntiFireflyRenderer);
+      this.recalculateRenderer(this.nrdAtrousSmemRenderer);
       this.recalculateRenderer(this.directAtrousRenderer);
-      this.recalculateRenderer(this.specTemporalRenderer);
-      this.recalculateRenderer(this.specAntiFireflyRenderer);
-      this.recalculateRenderer(this.specHistoryFixRenderer);
-      this.recalculateRenderer(this.specHistoryClampingRenderer);
-      this.recalculateRenderer(this.specAtrousRenderer);
       this.recalculateRenderer(this.indirectInitialRenderer);
       this.recalculateRenderer(this.indirectBoilingRenderer);
       this.recalculateRenderer(this.indirectAccumulationRenderer);
@@ -1548,17 +1527,17 @@ public class LightTreeRenderer extends MainRenderer {
       this.proposalFramebuffer.destroy();
       this.proposalReservoirFramebuffer.destroy();
       this.reuseResolveFramebuffer.destroy();
-      this.directFeatureFramebuffer.destroy();
+      // NRD RELAX_DiffuseSpecular fused routing framebuffers
+      this.nrdClassifyTilesFramebuffer.destroy();
+      this.nrdHitDistReconstructionFramebuffer.destroy();
+      this.nrdPrepassFramebuffer.destroy();
       this.directTemporalFramebuffer.destroy();
-      this.directAntiFireflyFramebuffer.destroy();
       this.directHistoryFixFramebuffer.destroy();
       this.directHistoryClampingFramebuffer.destroy();
+      this.nrdCopyFramebuffer.destroy();
+      this.directAntiFireflyFramebuffer.destroy();
+      this.nrdAtrousSmemFramebuffer.destroy();
       this.directAtrousFramebuffer.destroy();
-      this.specTemporalFramebuffer.destroy();
-      this.specAntiFireflyFramebuffer.destroy();
-      this.specHistoryFixFramebuffer.destroy();
-      this.specHistoryClampingFramebuffer.destroy();
-      this.specAtrousFramebuffer.destroy();
       this.indirectInitialFramebuffer.destroy();
       this.indirectBoilingFramebuffer.destroy();
       this.indirectAccumulationFramebuffer.destroy();
@@ -1576,26 +1555,26 @@ public class LightTreeRenderer extends MainRenderer {
       this.directReservoirBuffer.destroy();
       this.directSpatialReservoirBuffer.destroy();
       this.directConfidenceBuffer.destroy();
-      this.directHistoryLengthBuffer.destroy();
-      this.directNoisyBuffer.destroy();
-      this.directResponsiveBuffer.destroy();
-      this.directSlowBuffer.destroy();
-      this.directFastBuffer.destroy();
-      this.directAntiFireflyBuffer.destroy();
-      this.directClampedSlowBuffer.destroy();
-      this.directClampedFastBuffer.destroy();
-      this.directDenoisedBuffer.destroy();
-      this.directAtrousPingBuffer.destroy();
-      this.specularNoisyBuffer.destroy();
-      this.specularResponsiveBuffer.destroy();
-      this.specularSlowBuffer.destroy();
-      this.specularFastBuffer.destroy();
-      this.specularAntiFireflyBuffer.destroy();
-      this.specularClampedSlowBuffer.destroy();
-      this.specularClampedFastBuffer.destroy();
-      this.specularDenoisedBuffer.destroy();
-      this.specularAtrousPingBuffer.destroy();
-      this.specularHistoryLengthBuffer.destroy();
+      // NRD permanent (swap-buffered) FBOs
+      this.nrdDiffIllumPrevFb.destroy();
+      this.nrdDiffIllumResponsivePrevFb.destroy();
+      this.nrdSpecIllumPrevFb.destroy();
+      this.nrdSpecIllumResponsivePrevFb.destroy();
+      this.nrdHistoryLengthPrevFb.destroy();
+      this.nrdReflectionHitTPrevFb.destroy();
+      // NRD transient FBOs
+      this.nrdTilesFb.destroy();
+      this.nrdDiffIllumPingFb.destroy();
+      this.nrdDiffIllumPongFb.destroy();
+      this.nrdSpecIllumPingFb.destroy();
+      this.nrdSpecIllumPongFb.destroy();
+      this.nrdHistoryLengthFb.destroy();
+      this.nrdSpecReprojectionConfidenceFb.destroy();
+      this.nrdReflectionHitTCurrFb.destroy();
+      this.nrdOutDiffRadianceHitDistFb.destroy();
+      this.nrdOutSpecRadianceHitDistFb.destroy();
+      this.nrdDiffHitDistReconFb.destroy();
+      this.nrdSpecHitDistReconFb.destroy();
       this.indirectInitialReservoirBuffer.destroy();
       this.indirectReservoirBuffer.destroy();
       this.indirectDenoisedBuffer.destroy();
@@ -1614,16 +1593,17 @@ public class LightTreeRenderer extends MainRenderer {
       this.destroyRenderer(this.scatterBackupTemporalRenderer);
       this.destroyRenderer(this.multiScatterTemporalRenderer);
       this.destroyRenderer(this.reuseResolveRenderer);
+      // NRD RELAX_DiffuseSpecular fused pipeline renderers
+      this.destroyRenderer(this.nrdClassifyTilesRenderer);
+      this.destroyRenderer(this.nrdHitDistReconstructionRenderer);
+      this.destroyRenderer(this.nrdPrepassRenderer);
       this.destroyRenderer(this.directTemporalRenderer);
-      this.destroyRenderer(this.directAntiFireflyRenderer);
       this.destroyRenderer(this.directHistoryFixRenderer);
       this.destroyRenderer(this.directHistoryClampingRenderer);
+      this.destroyRenderer(this.nrdCopyRenderer);
+      this.destroyRenderer(this.directAntiFireflyRenderer);
+      this.destroyRenderer(this.nrdAtrousSmemRenderer);
       this.destroyRenderer(this.directAtrousRenderer);
-      this.destroyRenderer(this.specTemporalRenderer);
-      this.destroyRenderer(this.specAntiFireflyRenderer);
-      this.destroyRenderer(this.specHistoryFixRenderer);
-      this.destroyRenderer(this.specHistoryClampingRenderer);
-      this.destroyRenderer(this.specAtrousRenderer);
       this.destroyRenderer(this.indirectInitialRenderer);
       this.destroyRenderer(this.indirectBoilingRenderer);
       this.destroyRenderer(this.indirectAccumulationRenderer);
@@ -1769,69 +1749,116 @@ public class LightTreeRenderer extends MainRenderer {
       return framebufferSize;
    }
 
+   // ---------------------------------------------------------------------------
+   // NRD RELAX_DiffuseSpecular framebuffer factory methods (contract §7/§8)
+   // ---------------------------------------------------------------------------
+
+   private ColorFramebuffer createNrdTileFramebuffer(float renderScale) {
+      // Tile classifier runs at ceil(w/16) x ceil(h/16).  We encode this as a
+      // custom resolution supplier so updatePerFrame() recalculates correctly.
+      Supplier<Vector2f> tileSizeSupplier = () -> {
+         Vector2f base = this.getDirectReservoirResolution();
+         return new Vector2f(
+            (float) Math.ceil(base.x / 16.0),
+            (float) Math.ceil(base.y / 16.0)
+         );
+      };
+      ColorFramebuffer framebuffer = new ColorFramebuffer(tileSizeSupplier, renderScale);
+      framebuffer.createAttachment("data", "R8", false);
+      return framebuffer;
+   }
+
+   private RoutingFramebuffer createNrdClassifyTilesFramebuffer() {
+      return this.createRoutingFramebuffer(() -> this.nrdTilesFb.getWriteAttachment("data"));
+   }
+
+   private RoutingFramebuffer createNrdHitDistReconstructionFramebuffer() {
+      return this.createRoutingFramebuffer(
+         () -> this.nrdDiffHitDistReconFb.getWriteAttachment("data"),
+         () -> this.nrdSpecHitDistReconFb.getWriteAttachment("data")
+      );
+   }
+
+   private RoutingFramebuffer createNrdPrepassFramebuffer() {
+      return this.createRoutingFramebuffer(
+         () -> this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data"),
+         () -> this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data")
+      );
+   }
+
+   // Temporal accumulation: 7 outputs per contract §7
+   //   loc 0 -> nrdHistoryLengthFb
+   //   loc 1 -> nrdDiffIllumPingFb
+   //   loc 2 -> nrdSpecIllumPingFb
+   //   loc 3 -> nrdDiffIllumPongFb
+   //   loc 4 -> nrdSpecIllumPongFb
+   //   loc 5 -> nrdReflectionHitTCurrFb
+   //   loc 6 -> nrdSpecReprojectionConfidenceFb
    private RoutingFramebuffer createDirectTemporalFramebuffer() {
       return this.createRoutingFramebuffer(
-         () -> this.directNoisyBuffer.getWriteAttachment("data"),
-         () -> this.directResponsiveBuffer.getWriteAttachment("data"),
-         () -> this.directSlowBuffer.getWriteAttachment("data"),
-         () -> this.directFastBuffer.getWriteAttachment("data"),
-         () -> this.directHistoryLengthBuffer.getWriteAttachment("data")
+         () -> this.nrdHistoryLengthFb.getWriteAttachment("data"),
+         () -> this.nrdDiffIllumPingFb.getWriteAttachment("data"),
+         () -> this.nrdSpecIllumPingFb.getWriteAttachment("data"),
+         () -> this.nrdDiffIllumPongFb.getWriteAttachment("data"),
+         () -> this.nrdSpecIllumPongFb.getWriteAttachment("data"),
+         () -> this.nrdReflectionHitTCurrFb.getWriteAttachment("data"),
+         () -> this.nrdSpecReprojectionConfidenceFb.getWriteAttachment("data")
       );
    }
 
-   private RoutingFramebuffer createDirectFeatureFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.lightingStageBuffer.getWriteAttachment("material"),
-         () -> this.directConfidenceBuffer.getWriteAttachment("data")
-      );
-   }
-
-   private RoutingFramebuffer createDirectAntiFireflyFramebuffer() {
-      return this.createRoutingFramebuffer(() -> this.directAntiFireflyBuffer.getWriteAttachment("data"));
-   }
-
+   // History fix: 2 outputs -> pong buffers (loc 0 = diff pong, loc 1 = spec pong)
    private RoutingFramebuffer createDirectHistoryFixFramebuffer() {
-      return this.createRoutingFramebuffer(() -> this.directClampedSlowBuffer.getWriteAttachment("data"));
+      return this.createRoutingFramebuffer(
+         () -> this.nrdDiffIllumPongFb.getWriteAttachment("data"),
+         () -> this.nrdSpecIllumPongFb.getWriteAttachment("data")
+      );
    }
 
+   // History clamping: 5 outputs -> permanent prev-frame history
+   //   loc 0 -> nrdDiffIllumPrevFb.write
+   //   loc 1 -> nrdDiffIllumResponsivePrevFb.write
+   //   loc 2 -> nrdSpecIllumPrevFb.write
+   //   loc 3 -> nrdSpecIllumResponsivePrevFb.write
+   //   loc 4 -> nrdHistoryLengthPrevFb.write
    private RoutingFramebuffer createDirectHistoryClampingFramebuffer() {
       return this.createRoutingFramebuffer(
-         () -> this.directClampedSlowBuffer.getWriteAttachment("data"),
-         () -> this.directClampedFastBuffer.getWriteAttachment("data")
+         () -> this.nrdDiffIllumPrevFb.getWriteAttachment("data"),
+         () -> this.nrdDiffIllumResponsivePrevFb.getWriteAttachment("data"),
+         () -> this.nrdSpecIllumPrevFb.getWriteAttachment("data"),
+         () -> this.nrdSpecIllumResponsivePrevFb.getWriteAttachment("data"),
+         () -> this.nrdHistoryLengthPrevFb.getWriteAttachment("data")
       );
    }
 
+   private RoutingFramebuffer createNrdCopyFramebuffer() {
+      return this.createRoutingFramebuffer(
+         () -> this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data"),
+         () -> this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data")
+      );
+   }
+
+   // Anti-firefly: 2 outputs -> prev-frame illum write sides (post-clamping in-place update)
+   private RoutingFramebuffer createDirectAntiFireflyFramebuffer() {
+      return this.createRoutingFramebuffer(
+         () -> this.nrdDiffIllumPrevFb.getWriteAttachment("data"),
+         () -> this.nrdSpecIllumPrevFb.getWriteAttachment("data")
+      );
+   }
+
+   // AtrousSmem: 2 outputs -> pong buffers (first regular atrous pass input)
+   private RoutingFramebuffer createNrdAtrousSmemFramebuffer() {
+      return this.createRoutingFramebuffer(
+         () -> this.nrdDiffIllumPongFb.getWriteAttachment("data"),
+         () -> this.nrdSpecIllumPongFb.getWriteAttachment("data")
+      );
+   }
+
+   // Regular A-trous: 2 outputs via ping-pong routing helpers
    private RoutingFramebuffer createDirectAtrousFramebuffer() {
-      return this.createRoutingFramebuffer(this::getCurrentDirectAtrousOutputTexture);
-   }
-
-   private RoutingFramebuffer createSpecTemporalFramebuffer() {
       return this.createRoutingFramebuffer(
-         () -> this.specularNoisyBuffer.getWriteAttachment("data"),
-         () -> this.specularResponsiveBuffer.getWriteAttachment("data"),
-         () -> this.specularSlowBuffer.getWriteAttachment("data"),
-         () -> this.specularFastBuffer.getWriteAttachment("data"),
-         () -> this.specularHistoryLengthBuffer.getWriteAttachment("data")
+         this::getCurrentDiffAtrousOutputTexture,
+         this::getCurrentSpecAtrousOutputTexture
       );
-   }
-
-   private RoutingFramebuffer createSpecAntiFireflyFramebuffer() {
-      return this.createRoutingFramebuffer(() -> this.specularAntiFireflyBuffer.getWriteAttachment("data"));
-   }
-
-   private RoutingFramebuffer createSpecHistoryFixFramebuffer() {
-      return this.createRoutingFramebuffer(() -> this.specularClampedSlowBuffer.getWriteAttachment("data"));
-   }
-
-   private RoutingFramebuffer createSpecHistoryClampingFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.specularClampedSlowBuffer.getWriteAttachment("data"),
-         () -> this.specularClampedFastBuffer.getWriteAttachment("data")
-      );
-   }
-
-   private RoutingFramebuffer createSpecAtrousFramebuffer() {
-      return this.createRoutingFramebuffer(this::getCurrentSpecAtrousOutputTexture);
    }
 
    private RoutingFramebuffer createIndirectInitialFramebuffer() {
@@ -2089,100 +2116,110 @@ public class LightTreeRenderer extends MainRenderer {
          || this.isCurrentPhotonicsFragment(diScatterTemporalResamplingFragment)
          || this.isCurrentPhotonicsFragment(diScatterBackupTemporalResamplingFragment)
          || this.isCurrentPhotonicsFragment(diMultiScatterTemporalResamplingFragment)
-         || this.isCurrentPhotonicsFragment(relaxDiffuseAntiFireflyFragment)
-         || this.isCurrentPhotonicsFragment(relaxDiffuseHistoryFixFragment)
-         || this.isCurrentPhotonicsFragment(relaxDiffuseHistoryClampingFragment)
-         || this.isCurrentPhotonicsFragment(relaxDiffuseAtrousFragment)
-         || this.isCurrentPhotonicsFragment(relaxSpecularTemporalAccumulationFragment)
-         || this.isCurrentPhotonicsFragment(relaxSpecularAntiFireflyFragment)
-         || this.isCurrentPhotonicsFragment(relaxSpecularHistoryFixFragment)
-         || this.isCurrentPhotonicsFragment(relaxSpecularHistoryClampingFragment)
-         || this.isCurrentPhotonicsFragment(relaxSpecularAtrousFragment)
+         // NRD RELAX fused pipeline passes that read stage geometry (current frame)
+         || this.isCurrentPhotonicsFragment(nrdClassifyTilesFragment)
+         || this.isCurrentPhotonicsFragment(nrdHitDistReconstructionFragment)
+         || this.isCurrentPhotonicsFragment(nrdPrepassFragment)
+         || this.isCurrentPhotonicsFragment(relaxTemporalAccumulationFragment)
+         || this.isCurrentPhotonicsFragment(relaxHistoryFixFragment)
+         || this.isCurrentPhotonicsFragment(relaxHistoryClampingFragment)
+         || this.isCurrentPhotonicsFragment(nrdCopyFragment)
+         || this.isCurrentPhotonicsFragment(relaxAntiFireflyFragment)
+         || this.isCurrentPhotonicsFragment(nrdAtrousSmemFragment)
+         || this.isCurrentPhotonicsFragment(relaxAtrousFragment)
          || this.isCurrentPhotonicsFragment(indirectAccumulationFragment)
          // GI denoising runs before the accumulation pass copies the current frame
          // guides into lightingBuffer, so it must read the live stage geometry.
          || this.isCurrentPhotonicsFragment(indirectDenoisingFragment);
    }
 
-   private boolean shouldUseCurrentDirectHistoryLength() {
-      return this.isCurrentPhotonicsFragment(relaxDiffuseTemporalAccumulationFragment)
-         || this.isCurrentPhotonicsFragment(relaxDiffuseHistoryFixFragment)
-         || this.isCurrentPhotonicsFragment(relaxDiffuseHistoryClampingFragment)
-         || this.isCurrentPhotonicsFragment(relaxDiffuseAtrousFragment);
+   // ---------------------------------------------------------------------------
+   // NRD RELAX fused A-trous ping-pong routing (contract §1, hard-coded 5-pass cascade)
+   // directAtrousIteration: 1 = first regular pass (reads from SMEM output / pong),
+   //                        2-4 = subsequent passes.
+   // SMEM pass (iter=0) always writes to pong; regular passes ping-pong between
+   // pong (iter=1 input) -> ping (iter=1 output) -> pong ... Final pass (iter=4)
+   // writes to nrdOutDiff/SpecRadianceHitDistFb.
+   // ---------------------------------------------------------------------------
+
+   // nrd_diff_illum_prev / nrd_spec_illum_prev:
+   //   temporal accumulation reads PREVIOUS frame's clamped slow (.read).
+   //   nrd_copy reads THIS frame's clamping output (.write) and republishes it.
+   //   atrous smem reads THIS frame's post-anti-firefly slow (.write).
+   //   anti-firefly does not sample this binding (it reads nrd_out_*).
+   private boolean shouldUseCurrentNrdIllumPrev() {
+      return this.isCurrentPhotonicsFragment(nrdAtrousSmemFragment)
+         || this.isCurrentPhotonicsFragment(nrdCopyFragment);
    }
 
-   private boolean shouldUseCurrentSpecHistoryLength() {
-      return this.isCurrentPhotonicsFragment(relaxSpecularTemporalAccumulationFragment)
-         || this.isCurrentPhotonicsFragment(relaxSpecularHistoryFixFragment)
-         || this.isCurrentPhotonicsFragment(relaxSpecularHistoryClampingFragment)
-         || this.isCurrentPhotonicsFragment(relaxSpecularAtrousFragment);
-   }
-
-   private TextureObject getCurrentDirectAtrousInputTexture() {
-      if (this.directAtrousIteration == 0) {
-         return this.directAntiFireflyBuffer.getWriteAttachment("data");
+   private TextureObject getCurrentNrdDiffIllumPrevTexture() {
+      if (this.shouldUseCurrentNrdIllumPrev()) {
+         return this.nrdDiffIllumPrevFb.getWriteAttachment("data");
       }
+      return this.nrdDiffIllumPrevFb.getReadAttachment("data");
+   }
+
+   private TextureObject getCurrentNrdDiffIllumResponsivePrevTexture() {
+      if (this.shouldUseCurrentNrdIllumPrev()) {
+         return this.nrdDiffIllumResponsivePrevFb.getWriteAttachment("data");
+      }
+      return this.nrdDiffIllumResponsivePrevFb.getReadAttachment("data");
+   }
+
+   private TextureObject getCurrentNrdSpecIllumPrevTexture() {
+      if (this.shouldUseCurrentNrdIllumPrev()) {
+         return this.nrdSpecIllumPrevFb.getWriteAttachment("data");
+      }
+      return this.nrdSpecIllumPrevFb.getReadAttachment("data");
+   }
+
+   private TextureObject getCurrentNrdSpecIllumResponsivePrevTexture() {
+      if (this.shouldUseCurrentNrdIllumPrev()) {
+         return this.nrdSpecIllumResponsivePrevFb.getWriteAttachment("data");
+      }
+      return this.nrdSpecIllumResponsivePrevFb.getReadAttachment("data");
+   }
+
+   // Regular A-trous input: ping/pong based on iteration parity.
+   // iteration 1 reads pong (SMEM output), iteration 2 reads ping, etc.
+   private TextureObject getCurrentDiffAtrousInputTexture() {
       if ((this.directAtrousIteration & 1) == 1) {
-         return this.directAtrousPingBuffer.getWriteAttachment("data");
+         return this.nrdDiffIllumPongFb.getWriteAttachment("data");
       }
-      return this.directDenoisedBuffer.getWriteAttachment("data");
-   }
-
-   private boolean isFinalDirectAtrousIteration() {
-      return this.directAtrousIteration == this.directAtrousStepSizes.length - 1;
-   }
-
-   private TextureObject getCurrentDirectAtrousOutputTexture() {
-      boolean isFinalPass = this.isFinalDirectAtrousIteration();
-      boolean readsDenoisedBuffer = this.directAtrousIteration > 0 && (this.directAtrousIteration & 1) == 0;
-      if (isFinalPass && readsDenoisedBuffer) {
-         return this.directAtrousPingBuffer.getWriteAttachment("data");
-      }
-      if (isFinalPass) {
-         return this.directDenoisedBuffer.getWriteAttachment("data");
-      }
-      if ((this.directAtrousIteration & 1) == 0) {
-         return this.directAtrousPingBuffer.getWriteAttachment("data");
-      }
-      return this.directDenoisedBuffer.getWriteAttachment("data");
+      return this.nrdDiffIllumPingFb.getWriteAttachment("data");
    }
 
    private TextureObject getCurrentSpecAtrousInputTexture() {
-      if (this.specAtrousIteration == 0) {
-         return this.specularAntiFireflyBuffer.getWriteAttachment("data");
+      if ((this.directAtrousIteration & 1) == 1) {
+         return this.nrdSpecIllumPongFb.getWriteAttachment("data");
       }
-      if ((this.specAtrousIteration & 1) == 1) {
-         return this.specularAtrousPingBuffer.getWriteAttachment("data");
-      }
-      return this.specularDenoisedBuffer.getWriteAttachment("data");
+      return this.nrdSpecIllumPingFb.getWriteAttachment("data");
    }
 
-   private boolean isFinalSpecAtrousIteration() {
-      return this.specAtrousIteration == this.directAtrousStepSizes.length - 1;
+   // Regular A-trous output: opposite of input, except final pass -> nrdOutXxx.
+   private TextureObject getCurrentDiffAtrousOutputTexture() {
+      if (this.directAtrousIteration == NRD_ATROUS_STRIDES.length - 1) {
+         return this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data");
+      }
+      if ((this.directAtrousIteration & 1) == 1) {
+         return this.nrdDiffIllumPingFb.getWriteAttachment("data");
+      }
+      return this.nrdDiffIllumPongFb.getWriteAttachment("data");
    }
 
    private TextureObject getCurrentSpecAtrousOutputTexture() {
-      boolean isFinalPass = this.isFinalSpecAtrousIteration();
-      boolean readsDenoisedBuffer = this.specAtrousIteration > 0 && (this.specAtrousIteration & 1) == 0;
-      if (isFinalPass && readsDenoisedBuffer) {
-         return this.specularAtrousPingBuffer.getWriteAttachment("data");
+      if (this.directAtrousIteration == NRD_ATROUS_STRIDES.length - 1) {
+         return this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data");
       }
-      if (isFinalPass) {
-         return this.specularDenoisedBuffer.getWriteAttachment("data");
+      if ((this.directAtrousIteration & 1) == 1) {
+         return this.nrdSpecIllumPingFb.getWriteAttachment("data");
       }
-      if ((this.specAtrousIteration & 1) == 0) {
-         return this.specularAtrousPingBuffer.getWriteAttachment("data");
-      }
-      return this.specularDenoisedBuffer.getWriteAttachment("data");
+      return this.nrdSpecIllumPongFb.getWriteAttachment("data");
    }
 
    private int getCurrentDirectAtrousStepSize() {
-      // During specular A-trous, use specAtrousIteration — directAtrousIteration is past-the-end.
-      int iteration = this.isCurrentPhotonicsFragment(relaxSpecularAtrousFragment)
-         ? this.specAtrousIteration
-         : this.directAtrousIteration;
-      int iterationIndex = Math.max(0, Math.min(iteration, this.directAtrousStepSizes.length - 1));
-      return this.directAtrousStepSizes[iterationIndex];
+      int iterationIndex = Math.max(0, Math.min(this.directAtrousIteration, NRD_ATROUS_STRIDES.length - 1));
+      return NRD_ATROUS_STRIDES[iterationIndex];
    }
 
    private float getDirectSampleBudgetScale() {
@@ -2190,24 +2227,13 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private int getCurrentDirectAtrousIsLastPass() {
-      int iteration = this.isCurrentPhotonicsFragment(relaxSpecularAtrousFragment)
-         ? this.specAtrousIteration
-         : this.directAtrousIteration;
-      return iteration == this.directAtrousStepSizes.length - 1 ? 1 : 0;
+      return this.directAtrousIteration == NRD_ATROUS_STRIDES.length - 1 ? 1 : 0;
    }
 
-   private static int[] resolveDirectAtrousStepSizes(PhotonicsProperties properties) {
-      int passCount = Math.clamp(properties.getNrdAtrousPasses(), 1, 7);
-      return switch (passCount) {
-         case 1 -> new int[]{4};
-         case 2 -> new int[]{1, 8};
-         case 3 -> new int[]{1, 4, 16};
-         case 4 -> new int[]{1, 2, 8, 16};
-         case 5 -> new int[]{1, 2, 4, 8, 16};
-         case 6 -> new int[]{1, 2, 4, 8, 16, 16};
-         case 7 -> new int[]{1, 2, 4, 8, 16, 16, 16};
-         default -> throw new IllegalStateException("Unexpected direct atrous pass count: " + passCount);
-      };
+   private boolean shouldRunHitDistReconstruction() {
+      // Default ph_nrd_hitdist_reconstruction = 0.0, so this is always false unless
+      // overridden via uniform. Gated here to avoid the pass when not needed.
+      return false;
    }
 
    private GpuTimerQuery createGpuTimerQuery() {
@@ -2243,19 +2269,7 @@ public class LightTreeRenderer extends MainRenderer {
          }
       }
 
-      if (Boolean.getBoolean("photonics.regirAnimateFrameSeed")) {
-         int period = Math.max(1, Integer.getInteger("photonics.regirFrameSeedPeriod", 1));
-         return this.renderFrameIndex / period;
-      }
-
-      if (!this.loggedRegirStableFrameSeed) {
-         Photonic.info(
-            "[RegirCompute] Using stable default frame seed {}; set photonics.regirAnimateFrameSeed=true to animate ReGIR presampling",
-            REGIR_STABLE_FRAME_SEED
-         );
-         this.loggedRegirStableFrameSeed = true;
-      }
-      return REGIR_STABLE_FRAME_SEED;
+      return this.renderFrameIndex;
    }
 
    private int resolveRegirPresampleFrameSeed() {
@@ -2583,7 +2597,7 @@ public class LightTreeRenderer extends MainRenderer {
       if (this.indirectInitialRenderer != null) {
          this.indirectInitialRenderer.renderAll();
       }
-      if (this.indirectBoilingRenderer != null) {
+      if (this.shouldRunIndirectBoilingFilter() && this.indirectBoilingRenderer != null) {
          this.indirectBoilingRenderer.renderAll();
          // Spatial GI should read the freshly filtered temporal reservoir and write
          // the frame-final GI reservoir back into the opposite side of the ping-pong buffer.
@@ -2596,29 +2610,52 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private boolean shouldRunReservoirSplattingIndirectPipeline() {
-      // Keep the ReSTIR GI codepath intact, but do not schedule it while
-      // diagnosing Reservoir Splatting against the DI-only reference pipeline.
-      return false;
+      return PhotonicsStorage.DEBUG_ENABLE_INDIRECT_GI.value;
+   }
+
+   private boolean shouldRunIndirectBoilingFilter() {
+      return this.shouldRunReservoirSplattingIndirectPipeline()
+         && PhotonicsStorage.RESTIR_GI_BOILING_FILTER_STRENGTH.value > 0.0f;
+   }
+
+   private boolean shouldRunIndirectDenoise() {
+      return this.shouldRunReservoirSplattingIndirectPipeline()
+         && PhotonicsStorage.DEBUG_ENABLE_INDIRECT_DENOISE.value;
    }
 
    private void clearDisabledIndirectOutputs() {
-      Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
-      this.indirectInitialReservoirBuffer.clear(clearColor);
-      this.indirectReservoirBuffer.clear(clearColor);
-      this.indirectDenoisedBuffer.clear(clearColor);
-   }
-
-   private void renderDirectAtrousProfiled() {
-      if (!this.isDirectAtrousEnabled() || this.directAtrousRenderer == null) {
+      if (this.disabledIndirectOutputsCleared) {
          return;
       }
-      this.beginGpuRegion(relaxDiffuseAtrousRegionIndex);
-      for (this.directAtrousIteration = 0; this.directAtrousIteration < this.directAtrousStepSizes.length; this.directAtrousIteration++) {
-         long iterationStart = System.nanoTime();
-         this.directAtrousRenderer.renderAll();
-         this.lastCpuDirectAtrousIterationNanos[this.directAtrousIteration] = System.nanoTime() - iterationStart;
+
+      Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+      this.indirectInitialReservoirBuffer.clearBothSides(clearColor);
+      this.indirectReservoirBuffer.clearBothSides(clearColor);
+      this.indirectDenoisedBuffer.clearBothSides(clearColor);
+      this.disabledIndirectOutputsCleared = true;
+   }
+
+   // Dispatches SMEM pass (iteration index 0) then 4 regular A-trous passes (1-4).
+   // directAtrousIteration is used by ping-pong routing helpers and step-size uniforms.
+   private void renderNrdAtrousProfiled() {
+      if (!this.isDirectAtrousEnabled()) {
+         return;
       }
-      this.endGpuRegion(relaxDiffuseAtrousRegionIndex);
+      // SMEM pass: iteration index 0 (strides[0] == 1)
+      this.directAtrousIteration = 0;
+      long smemStart = System.nanoTime();
+      this.renderProfiled(relaxAtrousSmemRegionIndex, this.nrdAtrousSmemRenderer);
+      this.lastCpuDirectAtrousIterationNanos[0] = System.nanoTime() - smemStart;
+      // Regular A-trous passes: iterations 1-4
+      if (this.directAtrousRenderer != null) {
+         this.beginGpuRegion(relaxAtrousRegionIndex);
+         for (this.directAtrousIteration = 1; this.directAtrousIteration < NRD_ATROUS_STRIDES.length; this.directAtrousIteration++) {
+            long iterationStart = System.nanoTime();
+            this.directAtrousRenderer.renderAll();
+            this.lastCpuDirectAtrousIterationNanos[this.directAtrousIteration] = System.nanoTime() - iterationStart;
+         }
+         this.endGpuRegion(relaxAtrousRegionIndex);
+      }
    }
 
    private void renderShadeSamplesProfiled() {
@@ -2667,14 +2704,6 @@ public class LightTreeRenderer extends MainRenderer {
       return this.scatterReconnectionBuffer.getWriteAttachment(name);
    }
 
-   private void renderSpecAtrousProfiled() {
-      this.beginGpuRegion(relaxSpecularAtrousRegionIndex);
-      for (this.specAtrousIteration = 0; this.specAtrousIteration < this.directAtrousStepSizes.length; this.specAtrousIteration++) {
-         this.specAtrousRenderer.renderAll();
-      }
-      this.endGpuRegion(relaxSpecularAtrousRegionIndex);
-   }
-
    private void beginGpuRegion(int regionIndex) {
       this.gpuTimerQuery.begin(regionIndex);
    }
@@ -2687,32 +2716,14 @@ public class LightTreeRenderer extends MainRenderer {
       this.gpuTimerQuery.destroy();
    }
 
-   private boolean directAtrousFinalWroteToPing() {
-      // After the A-trous loop, determine which buffer holds the final output.
-      // The final iteration index is (length - 1). When that index is > 0 and even,
-      // the output texture function routes to atrousPingBuffer (because it reads from
-      // denoisedBuffer and must write elsewhere). Otherwise it writes to denoisedBuffer.
-      int lastIteration = this.directAtrousStepSizes.length - 1;
-      return lastIteration > 0 && (lastIteration & 1) == 0;
-   }
-
-   private boolean specAtrousFinalWroteToPing() {
-      int lastIteration = this.directAtrousStepSizes.length - 1;
-      return lastIteration > 0 && (lastIteration & 1) == 0;
-   }
-
+   // After the 5-pass cascade the final result is always in nrdOutXxxRadianceHitDistFb
+   // (the last regular atrous pass writes there regardless of ping-pong parity).
    private TextureObject getResolvedDiffuseAtrousTexture() {
-      if (this.directAtrousFinalWroteToPing()) {
-         return this.directAtrousPingBuffer.getWriteAttachment("data");
-      }
-      return this.directDenoisedBuffer.getWriteAttachment("data");
+      return this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data");
    }
 
    private TextureObject getResolvedSpecularAtrousTexture() {
-      if (this.specAtrousFinalWroteToPing()) {
-         return this.specularAtrousPingBuffer.getWriteAttachment("data");
-      }
-      return this.specularDenoisedBuffer.getWriteAttachment("data");
+      return this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data");
    }
 
    @Nullable
@@ -2726,15 +2737,16 @@ public class LightTreeRenderer extends MainRenderer {
          case "stage_direct", "direct_raw", "raw" -> this.lightingStageBuffer.getWriteAttachment("direct");
          case "stage_specular", "spec_raw", "direct_specular" -> this.lightingStageBuffer.getWriteAttachment("direct_specular");
          case "stage_indirect", "indirect_raw" -> this.lightingStageBuffer.getWriteAttachment("indirect");
-         case "direct_noisy", "noisy", "temporal", "temporal_raw" -> this.directNoisyBuffer.getWriteAttachment("data");
-         case "direct_responsive", "responsive" -> this.directResponsiveBuffer.getWriteAttachment("data");
-         case "direct_slow", "slow" -> this.directSlowBuffer.getWriteAttachment("data");
-         case "direct_fast", "fast" -> this.directFastBuffer.getWriteAttachment("data");
-         case "direct_historyfix", "historyfix" -> this.directClampedSlowBuffer.getWriteAttachment("data");
-         case "direct_anti_firefly", "anti_firefly" -> this.directAntiFireflyBuffer.getWriteAttachment("data");
-         case "direct_clamped_slow", "clamped_slow" -> this.directClampedSlowBuffer.getWriteAttachment("data");
-         case "direct_clamped_fast", "clamped_fast" -> this.directClampedFastBuffer.getWriteAttachment("data");
-         case "direct_denoised", "denoised" -> this.directDenoisedBuffer.getWriteAttachment("data");
+         // NRD fused pipeline intermediate buffers
+         case "direct_noisy", "noisy", "temporal", "temporal_raw" -> this.nrdDiffIllumPingFb.getWriteAttachment("data");
+         case "direct_responsive", "responsive" -> this.nrdDiffIllumPongFb.getWriteAttachment("data");
+         case "direct_slow", "slow" -> this.nrdDiffIllumPingFb.getWriteAttachment("data");
+         case "direct_fast", "fast" -> this.nrdDiffIllumPongFb.getWriteAttachment("data");
+         case "direct_historyfix", "historyfix" -> this.nrdDiffIllumPongFb.getWriteAttachment("data");
+         case "direct_anti_firefly", "anti_firefly" -> this.nrdDiffIllumPrevFb.getWriteAttachment("data");
+         case "direct_clamped_slow", "clamped_slow" -> this.nrdDiffIllumPrevFb.getWriteAttachment("data");
+         case "direct_clamped_fast", "clamped_fast" -> this.nrdDiffIllumResponsivePrevFb.getWriteAttachment("data");
+         case "direct_denoised", "denoised" -> this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data");
          case "direct_atrous", "atrous" -> this.getResolvedDiffuseAtrousTexture();
          default -> null;
       };
@@ -2742,7 +2754,8 @@ public class LightTreeRenderer extends MainRenderer {
 
    private TextureObject getResolvedDirectDiffuseTexture() {
       if (!this.isDirectAtrousEnabled()) {
-         return this.directAntiFireflyBuffer.getWriteAttachment("data");
+         // When atrous is disabled the anti-firefly output is the final diffuse result.
+         return this.nrdDiffIllumPrevFb.getWriteAttachment("data");
       }
       return this.getResolvedDiffuseAtrousTexture();
    }
@@ -2763,6 +2776,9 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private TextureObject getResolvedIndirectTexture() {
+      if (!this.shouldRunIndirectDenoise()) {
+         return this.lightingBuffer.getWriteAttachment("indirect");
+      }
       return this.indirectDenoisedBuffer.getWriteAttachment("data");
    }
 
@@ -2916,26 +2932,36 @@ public class LightTreeRenderer extends MainRenderer {
       this.compatDirectSoftBuffer.clear(clearColor);
    }
 
-   private void recordCpuPassTimes(long t0, long t1, long t2, long t3, long t4, long t5, long t6, long t7, long t8, long t9, long t10, long t11, long t12, long t13, long t14, long t15, long t16, long t17, long t18, long t19, long t20) {
+   // Timestamps t0..t19 correspond to the 19 NRD pipeline segments (contract §1):
+   // [0] LightTreeSamplingStage [1] InitialCandidates [2] DITemporalResampling
+   // [3] DISpatialResampling [4] DIShadeSamples [5] NRDClassifyTiles
+   // [6] NRDHitDistReconstruction [7] NRDPrepass [8] RELAXTemporalAccumulation
+   // [9] RELAXHistoryFix [10] RELAXHistoryClamping [11] NRDCopy
+   // [12] RELAXAntiFirefly [13] RELAXAtrousSmem+Atrous (fused) [14] ReSTIRGI
+   // [15] LightingAccumulation [16] IndirectDenoise [17] IndirectComposite
+   // render() uses t0..t20 but t16==t15 (no separate Atrous segment in timestamps).
+   private void recordCpuPassTimes(long t0, long t1, long t2, long t3, long t4, long t5,
+                                    long t6, long t7, long t8, long t9, long t10, long t11,
+                                    long t12, long t13, long t14, long t15, long t17, long t18,
+                                    long t19, long t20) {
       this.lastCpuLightTreeSamplingStageNanos = t1 - t0;
       this.lastCpuInitialCandidatesNanos = t2 - t1;
       this.lastCpuDITemporalResamplingNanos = t3 - t2;
       this.lastCpuDISpatialResamplingNanos = t4 - t3;
       this.lastCpuDIShadeSamplesNanos = t5 - t4;
-      this.lastCpuNRDPrepareInputsNanos = t6 - t5;
-      this.lastCpuRELAXDiffuseTemporalAccumulationNanos = t7 - t6;
-      this.lastCpuRELAXDiffuseHistoryFixNanos = t8 - t7;
-      this.lastCpuRELAXDiffuseHistoryClampingNanos = t9 - t8;
-      this.lastCpuRELAXDiffuseAntiFireflyNanos = t10 - t9;
-      this.lastCpuRELAXDiffuseAtrousNanos = t11 - t10;
-      this.lastCpuRELAXSpecularTemporalAccumulationNanos = t12 - t11;
-      this.lastCpuRELAXSpecularHistoryFixNanos = t13 - t12;
-      this.lastCpuRELAXSpecularHistoryClampingNanos = t14 - t13;
-      this.lastCpuRELAXSpecularAntiFireflyNanos = t15 - t14;
-      this.lastCpuRELAXSpecularAtrousNanos = t16 - t15;
-      this.lastCpuReSTIRGINanos = t17 - t16;
-      this.lastCpuIndirectDenoiseNanos = t18 - t17;
-      this.lastCpuLightingAccumulationNanos = t19 - t18;
+      this.lastCpuNRDClassifyTilesNanos = t6 - t5;
+      this.lastCpuNRDHitDistReconstructionNanos = t7 - t6;
+      this.lastCpuNRDPrepassNanos = t8 - t7;
+      this.lastCpuRELAXTemporalAccumulationNanos = t9 - t8;
+      this.lastCpuRELAXHistoryFixNanos = t10 - t9;
+      this.lastCpuRELAXHistoryClampingNanos = t11 - t10;
+      this.lastCpuNRDCopyNanos = t12 - t11;
+      this.lastCpuRELAXAntiFireflyNanos = t13 - t12;
+      this.lastCpuRELAXAtrousSmemNanos = t14 - t13;
+      this.lastCpuRELAXAtrousNanos = t15 - t14;
+      this.lastCpuReSTIRGINanos = t17 - t15;
+      this.lastCpuLightingAccumulationNanos = t18 - t17;
+      this.lastCpuIndirectDenoiseNanos = t19 - t18;
       this.lastCpuIndirectCompositeNanos = t20 - t19;
    }
 
@@ -2980,23 +3006,22 @@ public class LightTreeRenderer extends MainRenderer {
          this.describeStageGeometryUsage()
       );
       Photonic.info(
-         "[Profiler] RTXDI/NRD CPU passes: LightTreeSamplingStage={}us InitialCandidates={}us DITemporalResampling={}us DISpatialResampling={}us DIShadeSamples={}us NRDPrepareInputs={}us RELAXDiffuseTemporalAccumulation={}us RELAXDiffuseHistoryFix={}us RELAXDiffuseHistoryClamping={}us RELAXDiffuseAntiFirefly={}us RELAXDiffuseAtrous={}us RELAXSpecularTemporalAccumulation={}us RELAXSpecularHistoryFix={}us RELAXSpecularHistoryClamping={}us RELAXSpecularAntiFirefly={}us RELAXSpecularAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
+         "[Profiler] RTXDI/NRD CPU passes: LightTreeSamplingStage={}us InitialCandidates={}us DITemporalResampling={}us DISpatialResampling={}us DIShadeSamples={}us NRDClassifyTiles={}us NRDHitDistReconstruction={}us NRDPrepass={}us RELAXTemporalAccumulation={}us RELAXHistoryFix={}us RELAXHistoryClamping={}us NRDCopy={}us RELAXAntiFirefly={}us RELAXAtrousSmem={}us RELAXAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
          this.toMicros(cpuPassNanos[lightTreeSamplingStageRegionIndex]),
          this.toMicros(cpuPassNanos[initialCandidatesRegionIndex]),
          this.toMicros(cpuPassNanos[diTemporalResamplingRegionIndex]),
          this.toMicros(cpuPassNanos[diSpatialResamplingRegionIndex]),
          this.toMicros(cpuPassNanos[diShadeSamplesRegionIndex]),
-         this.toMicros(cpuPassNanos[nrdPrepareInputsRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxDiffuseTemporalAccumulationRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxDiffuseHistoryFixRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxDiffuseHistoryClampingRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxDiffuseAntiFireflyRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxDiffuseAtrousRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxSpecularTemporalAccumulationRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxSpecularHistoryFixRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxSpecularHistoryClampingRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxSpecularAntiFireflyRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxSpecularAtrousRegionIndex]),
+         this.toMicros(cpuPassNanos[nrdClassifyTilesRegionIndex]),
+         this.toMicros(cpuPassNanos[nrdHitDistReconstructionRegionIndex]),
+         this.toMicros(cpuPassNanos[nrdPrepassRegionIndex]),
+         this.toMicros(cpuPassNanos[relaxTemporalAccumulationRegionIndex]),
+         this.toMicros(cpuPassNanos[relaxHistoryFixRegionIndex]),
+         this.toMicros(cpuPassNanos[relaxHistoryClampingRegionIndex]),
+         this.toMicros(cpuPassNanos[nrdCopyRegionIndex]),
+         this.toMicros(cpuPassNanos[relaxAntiFireflyRegionIndex]),
+         this.toMicros(cpuPassNanos[relaxAtrousSmemRegionIndex]),
+         this.toMicros(cpuPassNanos[relaxAtrousRegionIndex]),
          this.toMicros(cpuPassNanos[restirGIRegionIndex]),
          this.toMicros(cpuPassNanos[indirectDenoiseRegionIndex]),
          this.toMicros(cpuPassNanos[lightingAccumulationRegionIndex]),
@@ -3011,17 +3036,16 @@ public class LightTreeRenderer extends MainRenderer {
          + gpuPassNanos[diTemporalResamplingRegionIndex]
          + gpuPassNanos[diSpatialResamplingRegionIndex]
          + gpuPassNanos[diShadeSamplesRegionIndex];
-      long relaxTotal = gpuPassNanos[nrdPrepareInputsRegionIndex]
-         + gpuPassNanos[relaxDiffuseTemporalAccumulationRegionIndex]
-         + gpuPassNanos[relaxDiffuseHistoryFixRegionIndex]
-         + gpuPassNanos[relaxDiffuseHistoryClampingRegionIndex]
-         + gpuPassNanos[relaxDiffuseAntiFireflyRegionIndex]
-         + gpuPassNanos[relaxDiffuseAtrousRegionIndex]
-         + gpuPassNanos[relaxSpecularTemporalAccumulationRegionIndex]
-         + gpuPassNanos[relaxSpecularHistoryFixRegionIndex]
-         + gpuPassNanos[relaxSpecularHistoryClampingRegionIndex]
-         + gpuPassNanos[relaxSpecularAntiFireflyRegionIndex]
-         + gpuPassNanos[relaxSpecularAtrousRegionIndex];
+      long relaxTotal = gpuPassNanos[nrdClassifyTilesRegionIndex]
+         + gpuPassNanos[nrdHitDistReconstructionRegionIndex]
+         + gpuPassNanos[nrdPrepassRegionIndex]
+         + gpuPassNanos[relaxTemporalAccumulationRegionIndex]
+         + gpuPassNanos[relaxHistoryFixRegionIndex]
+         + gpuPassNanos[relaxHistoryClampingRegionIndex]
+         + gpuPassNanos[nrdCopyRegionIndex]
+         + gpuPassNanos[relaxAntiFireflyRegionIndex]
+         + gpuPassNanos[relaxAtrousSmemRegionIndex]
+         + gpuPassNanos[relaxAtrousRegionIndex];
       long indirectTotal = gpuPassNanos[restirGIRegionIndex]
          + gpuPassNanos[indirectDenoiseRegionIndex];
       long compositeTotal = gpuPassNanos[lightingAccumulationRegionIndex]
@@ -3033,23 +3057,22 @@ public class LightTreeRenderer extends MainRenderer {
       int renderHeight = Math.round(fbHeight * this.renderScale);
       long renderPixels = (long) renderWidth * renderHeight;
       Photonic.info(
-         "[Profiler] RTXDI/NRD GPU passes: LightTreeSamplingStage={}us InitialCandidates={}us DITemporalResampling={}us DISpatialResampling={}us DIShadeSamples={}us NRDPrepareInputs={}us RELAXDiffuseTemporalAccumulation={}us RELAXDiffuseHistoryFix={}us RELAXDiffuseHistoryClamping={}us RELAXDiffuseAntiFirefly={}us RELAXDiffuseAtrous={}us RELAXSpecularTemporalAccumulation={}us RELAXSpecularHistoryFix={}us RELAXSpecularHistoryClamping={}us RELAXSpecularAntiFirefly={}us RELAXSpecularAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
+         "[Profiler] RTXDI/NRD GPU passes: LightTreeSamplingStage={}us InitialCandidates={}us DITemporalResampling={}us DISpatialResampling={}us DIShadeSamples={}us NRDClassifyTiles={}us NRDHitDistReconstruction={}us NRDPrepass={}us RELAXTemporalAccumulation={}us RELAXHistoryFix={}us RELAXHistoryClamping={}us NRDCopy={}us RELAXAntiFirefly={}us RELAXAtrousSmem={}us RELAXAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
          this.toMicros(gpuPassNanos[lightTreeSamplingStageRegionIndex]),
          this.toMicros(gpuPassNanos[initialCandidatesRegionIndex]),
          this.toMicros(gpuPassNanos[diTemporalResamplingRegionIndex]),
          this.toMicros(gpuPassNanos[diSpatialResamplingRegionIndex]),
          this.toMicros(gpuPassNanos[diShadeSamplesRegionIndex]),
-         this.toMicros(gpuPassNanos[nrdPrepareInputsRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxDiffuseTemporalAccumulationRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxDiffuseHistoryFixRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxDiffuseHistoryClampingRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxDiffuseAntiFireflyRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxDiffuseAtrousRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxSpecularTemporalAccumulationRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxSpecularHistoryFixRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxSpecularHistoryClampingRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxSpecularAntiFireflyRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxSpecularAtrousRegionIndex]),
+         this.toMicros(gpuPassNanos[nrdClassifyTilesRegionIndex]),
+         this.toMicros(gpuPassNanos[nrdHitDistReconstructionRegionIndex]),
+         this.toMicros(gpuPassNanos[nrdPrepassRegionIndex]),
+         this.toMicros(gpuPassNanos[relaxTemporalAccumulationRegionIndex]),
+         this.toMicros(gpuPassNanos[relaxHistoryFixRegionIndex]),
+         this.toMicros(gpuPassNanos[relaxHistoryClampingRegionIndex]),
+         this.toMicros(gpuPassNanos[nrdCopyRegionIndex]),
+         this.toMicros(gpuPassNanos[relaxAntiFireflyRegionIndex]),
+         this.toMicros(gpuPassNanos[relaxAtrousSmemRegionIndex]),
+         this.toMicros(gpuPassNanos[relaxAtrousRegionIndex]),
          this.toMicros(gpuPassNanos[restirGIRegionIndex]),
          this.toMicros(gpuPassNanos[indirectDenoiseRegionIndex]),
          this.toMicros(gpuPassNanos[lightingAccumulationRegionIndex]),
@@ -3097,7 +3120,7 @@ public class LightTreeRenderer extends MainRenderer {
          passSummary.append("pass")
             .append(i)
             .append("(step=")
-            .append(this.directAtrousStepSizes[i])
+            .append(NRD_ATROUS_STRIDES[i])
             .append(")=")
             .append(this.toMicros(iterationNanos))
             .append("us");
@@ -3110,58 +3133,56 @@ public class LightTreeRenderer extends MainRenderer {
          "[Profiler] RTXDI/NRD RELAXDiffuseAtrous breakdown: passes={} worstPass=pass{}(step={})={}us",
          passSummary,
          worstPass,
-         this.directAtrousStepSizes[worstPass],
+         NRD_ATROUS_STRIDES[worstPass],
          this.toMicros(worstNanos)
       );
    }
 
    private long[] getCpuPassNanos() {
       return new long[]{
-         this.lastCpuLightTreeSamplingStageNanos,
-         this.lastCpuInitialCandidatesNanos,
-         this.lastCpuDITemporalResamplingNanos,
-         this.lastCpuDISpatialResamplingNanos,
-         this.lastCpuDIShadeSamplesNanos,
-         this.lastCpuNRDPrepareInputsNanos,
-         this.lastCpuRELAXDiffuseTemporalAccumulationNanos,
-         this.lastCpuRELAXDiffuseHistoryFixNanos,
-         this.lastCpuRELAXDiffuseHistoryClampingNanos,
-         this.lastCpuRELAXDiffuseAntiFireflyNanos,
-         this.lastCpuRELAXDiffuseAtrousNanos,
-         this.lastCpuRELAXSpecularTemporalAccumulationNanos,
-         this.lastCpuRELAXSpecularHistoryFixNanos,
-         this.lastCpuRELAXSpecularHistoryClampingNanos,
-         this.lastCpuRELAXSpecularAntiFireflyNanos,
-         this.lastCpuRELAXSpecularAtrousNanos,
-         this.lastCpuReSTIRGINanos,
-         this.lastCpuIndirectDenoiseNanos,
-         this.lastCpuLightingAccumulationNanos,
-         this.lastCpuIndirectCompositeNanos
+         this.lastCpuLightTreeSamplingStageNanos,       // index 0
+         this.lastCpuInitialCandidatesNanos,            // index 1
+         this.lastCpuDITemporalResamplingNanos,         // index 2
+         this.lastCpuDISpatialResamplingNanos,          // index 3
+         this.lastCpuDIShadeSamplesNanos,               // index 4
+         this.lastCpuNRDClassifyTilesNanos,             // index 5
+         this.lastCpuNRDHitDistReconstructionNanos,     // index 6
+         this.lastCpuNRDPrepassNanos,                   // index 7
+         this.lastCpuRELAXTemporalAccumulationNanos,    // index 8
+         this.lastCpuRELAXHistoryFixNanos,              // index 9
+         this.lastCpuRELAXHistoryClampingNanos,         // index 10
+         this.lastCpuNRDCopyNanos,                      // index 11
+         this.lastCpuRELAXAntiFireflyNanos,             // index 12
+         this.lastCpuRELAXAtrousSmemNanos,              // index 13
+         this.lastCpuRELAXAtrousNanos,                  // index 14
+         this.lastCpuReSTIRGINanos,                     // index 15
+         this.lastCpuIndirectDenoiseNanos,              // index 16
+         this.lastCpuLightingAccumulationNanos,         // index 17
+         this.lastCpuIndirectCompositeNanos             // index 18
       };
    }
 
    private long[] getGpuPassNanos() {
       return new long[]{
-         this.gpuTimerQuery.getTimeNanos(lightTreeSamplingStageRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(initialCandidatesRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(diTemporalResamplingRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(diSpatialResamplingRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(diShadeSamplesRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(nrdPrepareInputsRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxDiffuseTemporalAccumulationRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxDiffuseHistoryFixRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxDiffuseHistoryClampingRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxDiffuseAntiFireflyRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxDiffuseAtrousRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxSpecularTemporalAccumulationRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxSpecularHistoryFixRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxSpecularHistoryClampingRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxSpecularAntiFireflyRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(relaxSpecularAtrousRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(restirGIRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(indirectDenoiseRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(lightingAccumulationRegionIndex),
-         this.gpuTimerQuery.getTimeNanos(indirectCompositeRegionIndex)
+         this.gpuTimerQuery.getTimeNanos(lightTreeSamplingStageRegionIndex),      // 0
+         this.gpuTimerQuery.getTimeNanos(initialCandidatesRegionIndex),           // 1
+         this.gpuTimerQuery.getTimeNanos(diTemporalResamplingRegionIndex),        // 2
+         this.gpuTimerQuery.getTimeNanos(diSpatialResamplingRegionIndex),         // 3
+         this.gpuTimerQuery.getTimeNanos(diShadeSamplesRegionIndex),              // 4
+         this.gpuTimerQuery.getTimeNanos(nrdClassifyTilesRegionIndex),            // 5
+         this.gpuTimerQuery.getTimeNanos(nrdHitDistReconstructionRegionIndex),    // 6
+         this.gpuTimerQuery.getTimeNanos(nrdPrepassRegionIndex),                  // 7
+         this.gpuTimerQuery.getTimeNanos(relaxTemporalAccumulationRegionIndex),   // 8
+         this.gpuTimerQuery.getTimeNanos(relaxHistoryFixRegionIndex),             // 9
+         this.gpuTimerQuery.getTimeNanos(relaxHistoryClampingRegionIndex),        // 10
+         this.gpuTimerQuery.getTimeNanos(nrdCopyRegionIndex),                     // 11
+         this.gpuTimerQuery.getTimeNanos(relaxAntiFireflyRegionIndex),            // 12
+         this.gpuTimerQuery.getTimeNanos(relaxAtrousSmemRegionIndex),             // 13
+         this.gpuTimerQuery.getTimeNanos(relaxAtrousRegionIndex),                 // 14
+         this.gpuTimerQuery.getTimeNanos(restirGIRegionIndex),                    // 15
+         this.gpuTimerQuery.getTimeNanos(indirectDenoiseRegionIndex),             // 16
+         this.gpuTimerQuery.getTimeNanos(lightingAccumulationRegionIndex),        // 17
+         this.gpuTimerQuery.getTimeNanos(indirectCompositeRegionIndex)            // 18
       };
    }
 
@@ -3200,7 +3221,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private String describeStageGeometryUsage() {
-      return "DIShadeSamples+RELAXDiffuseHistoryFix+RELAXDiffuseHistoryClamping+RELAXDiffuseAtrous+IndirectDenoise";
+      return "DIShadeSamples+NRDClassifyTiles+NRDHitDistReconstruction+NRDPrepass+RELAXTemporalAccumulation+RELAXHistoryFix+RELAXHistoryClamping+NRDCopy+RELAXAntiFirefly+RELAXAtrousSmem+RELAXAtrous+IndirectDenoise";
    }
 
    private long toMicros(long nanos) {

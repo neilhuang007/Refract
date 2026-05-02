@@ -4,23 +4,11 @@
 #include "/photonics/lighttree/light_tree.glsl"
 #include "/photonics/lighttree/reuse_bridge.glsl"
 #include "/photonics/lighttree/restir_gi_initial_sampling_impl.glsl"
-#include "/photonics/lighttree/restir_di_spatial_impl.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
 #ifndef PH_LIGHTTREE_GI_INITIAL_SAMPLES
 #define PH_LIGHTTREE_GI_INITIAL_SAMPLES PH_LIGHTTREE_INITIAL_SAMPLES
 #endif
-
-RTXDI_DIReservoir RTXDI_DISpatialResampling(
-    uvec2 pixelPosition,
-    RAB_Surface centerSurface,
-    RTXDI_DIReservoir centerSample,
-    inout RTXDI_RandomSamplerState rng,
-    RTXDI_RuntimeParameters params,
-    RTXDI_ReservoirBufferParameters reservoirParams,
-    uint sourceBufferIndex,
-    RTXDI_DISpatialResamplingParameters sparams,
-    inout RAB_LightSample selectedLightSample);
 
 const float lt_indirect_max_history = 8.0f;
 const float lt_gi_pi = 3.14159265359f;
@@ -121,11 +109,13 @@ float gi_skylight_distance() {
 }
 
 bool gi_sample_is_valid(RTXDI_GISample giSample) {
-    return true; // RTXDI has no sample-level validity; validity is reservoir.M != 0
+    return ph_luminance(max(giSample.radiance, vec3(0.0f))) > 1e-6f;
 }
 
 bool RTXDI_IsValidGIReservoir(RTXDI_GIReservoir reservoir) {
-    return reservoir.samples > 0.0f; // RTXDI: M != 0
+    return reservoir.samples > 0.0f
+        && reservoir.weight_sum > 0.0f
+        && gi_sample_is_valid(reservoir.selected);
 }
 
 vec3 gi_surface_albedo(RAB_Surface surface) {
@@ -242,24 +232,13 @@ float gi_brdf_sample_pdf(RAB_Surface surface, vec3 sampleDir) {
     return mix(specularPdf, diffusePdf, diffuseProbability);
 }
 
-vec3 RAB_GetReflectedBrdfRadiance(RAB_Surface surface, RTXDI_GISample giSample) {
+vec3 gi_evaluate_reflected_integrand(RAB_Surface surface, RTXDI_GISample giSample) {
     SplitBrdf brdf = EvaluateBrdf(surface, giSample.position, gi_surface_roughness(surface));
     return giSample.radiance * (brdf.demodulatedDiffuse * gi_surface_albedo(surface) + brdf.specular);
 }
 
-float GetMISWeight(SplitBrdf roughBrdf, SplitBrdf trueBrdf, vec3 diffuseAlbedo) {
-    vec3 combinedRoughBrdf = roughBrdf.demodulatedDiffuse * diffuseAlbedo + roughBrdf.specular;
-    vec3 combinedTrueBrdf = trueBrdf.demodulatedDiffuse * diffuseAlbedo + trueBrdf.specular;
-
-    combinedRoughBrdf = clamp(combinedRoughBrdf, vec3(1e-4f), vec3(lt_gi_max_brdf_value));
-    combinedTrueBrdf = clamp(combinedTrueBrdf, vec3(0.0f), vec3(lt_gi_max_brdf_value));
-
-    float initialWeight = clamp(
-        ph_luminance(combinedTrueBrdf) / max(ph_luminance(combinedTrueBrdf + combinedRoughBrdf), 1e-6f),
-        0.0f,
-        1.0f
-    );
-    return initialWeight * initialWeight * initialWeight;
+vec3 RAB_GetReflectedBrdfRadiance(RAB_Surface surface, RTXDI_GISample giSample) {
+    return max(giSample.radiance, vec3(0.0f));
 }
 
 vec3 gi_clamp_secondary_radiance(vec3 radiance) {
@@ -269,10 +248,6 @@ vec3 gi_clamp_secondary_radiance(vec3 radiance) {
         radiance *= 10.0f / indirectLuminance;
     }
     return radiance;
-}
-
-vec3 gi_demodulate_specular(vec3 specular, RAB_Surface surface) {
-    return specular / max(vec3(0.01f), gi_surface_f0(surface));
 }
 
 bool gi_project_secondary_surface(RAB_Surface secondarySurface, out ivec2 secondaryPixelPosition, out float secondaryViewDepth) {
@@ -292,40 +267,6 @@ bool gi_project_secondary_surface(RAB_Surface secondarySurface, out ivec2 second
     secondaryPixelPosition = ivec2((secondaryClipPosition.xy * 0.5f + 0.5f) * vec2(viewWidth, viewHeight));
     secondaryViewDepth = secondaryClipPosition.w;
     return lt_is_viewport_uv_in_bounds(secondaryPixelPosition);
-}
-
-void gi_spatial_resample_secondary_light(
-    RAB_Surface secondarySurface,
-    inout RTXDI_RandomSamplerState rng,
-    inout RTXDI_DIReservoir secondaryLightReservoir,
-    inout RAB_LightSample secondaryLightSample
-) {
-    if (!RTXDI_IsValidDIReservoir(secondaryLightReservoir)) {
-        return;
-    }
-
-    ivec2 secondaryPixelPosition = ivec2(0);
-    float secondaryViewDepth = 0.0f;
-    if (!gi_project_secondary_surface(secondarySurface, secondaryPixelPosition, secondaryViewDepth)) {
-        return;
-    }
-
-    RAB_Surface resamplingSurface = secondarySurface;
-    resamplingSurface.viewDepth = secondaryViewDepth;
-
-    const RTXDI_Parameters restirDI = lt_build_restir_di_parameters();
-    const RTXDI_RuntimeParameters runtimeParams = lt_build_runtime_parameters();
-    secondaryLightReservoir = RTXDI_DISpatialResampling(
-        uvec2(secondaryPixelPosition),
-        resamplingSurface,
-        secondaryLightReservoir,
-        rng,
-        runtimeParams,
-        restirDI.reservoirBufferParams,
-        restirDI.bufferIndices.shadingInputBufferIndex,
-        restirDI.spatialResamplingParams,
-        secondaryLightSample
-    );
 }
 
 bool RAB_ValidateGISampleWithJacobian(inout float jacobian) {
@@ -576,9 +517,11 @@ void RTXDI_StoreGIReservoir(RTXDI_GIReservoir reservoir, out vec4 positionData, 
     metaData = store.metaData;
 }
 
-uniform float ph_restir_indirect_enable_final_mis;
-
 uniform float ph_restir_indirect_boiling_filter_strength;
+uniform float ph_restir_gi_use_boiling_filter;
+uniform float ph_restir_gi_spatial_sample_count;
+uniform float ph_restir_gi_spatial_bias_mode;
+uniform float ph_restir_gi_enable_temporal_reuse;
 
 const int gi_buffer_index_initial = 0;
 const int gi_buffer_index_spatial = 1;
@@ -586,11 +529,11 @@ const int gi_buffer_index_spatial = 1;
 const int gi_bias_correction_mode_off = 0;
 const int gi_bias_correction_mode_basic = 1;
 const int gi_bias_correction_mode_ray_traced = 3;
-const int gi_default_bias_correction_mode = gi_bias_correction_mode_basic;
+const int gi_default_bias_correction_mode = gi_bias_correction_mode_off;
 const float gi_default_spatial_depth_threshold = 0.1f;
 const float gi_default_spatial_normal_threshold = 0.6f;
 const float gi_default_spatial_sampling_radius = 32.0f;
-const float gi_default_boiling_filter_strength = 0.2f;
+const float gi_default_boiling_filter_strength = 0.0f;
 
 int gi_runtime_bias_correction_mode(float configuredMode) {
     if (configuredMode < -0.5f) {
@@ -609,7 +552,7 @@ int gi_runtime_bias_correction_mode(float configuredMode) {
 
 
 int gi_runtime_spatial_sample_count() {
-    return ph_restir_spatial_sample_count > 0.0f ? clamp(int(ph_restir_spatial_sample_count), 1, 32) : 2;
+    return clamp(int(round(ph_restir_gi_spatial_sample_count)), 0, 8);
 }
 
 float gi_runtime_spatial_radius() {
@@ -669,13 +612,59 @@ RTXDI_GIReservoir RTXDI_LoadPreviousGIReservoir(ivec2 reservoirPos, int activeCh
     return RTXDI_LoadPreviousGIReservoir(reservoirPos);
 }
 
-vec3 GetFinalVisibility(RAB_Surface surface, RTXDI_GISample giSample);
-bool gi_sample_requires_final_visibility(RAB_Surface surface, RTXDI_GISample giSample);
-
 RTXDI_GIReservoir RTXDI_LoadInitialGIReservoir(ivec2 uv) {
     // Parity with reference: the initial stage's selected sample (position/normal/radiance) and M come directly
     // from the reservoir it wrote. No secondary radiance texture is consulted.
     return RTXDI_LoadGIReservoir(gi_buffer_index_initial, uv);
+}
+
+RTXDI_GIReservoir RTXDI_LoadCurrentFrameGIReservoir(ivec2 uv, int activeCheckerboardField) {
+    if (ph_restir_gi_use_boiling_filter >= 0.5f) {
+        return RTXDI_LoadGIReservoir(gi_buffer_index_spatial, uv, activeCheckerboardField);
+    }
+    return RTXDI_LoadInitialGIReservoir(uv);
+}
+
+bool gi_load_temporal_reservoir(
+    RAB_Surface currentSurface,
+    ivec2 pixelPosition,
+    int activeCheckerboardField,
+    out RTXDI_GIReservoir temporalReservoir,
+    out RAB_Surface temporalSurface
+) {
+    temporalReservoir = RTXDI_EmptyGIReservoir();
+    temporalSurface = RAB_EmptySurface();
+
+    if (ph_restir_gi_enable_temporal_reuse < 0.5f) {
+        return false;
+    }
+
+    vec2 reprojectionUv = ph_reprojectf(
+        previous_modelview_projection,
+        currentSurface.worldPos + currentSurface.normal * 0.01f,
+        vec2(viewWidth, viewHeight),
+        vec2(0.0f)
+    );
+    ivec2 previousUv = ivec2(round(reprojectionUv));
+    ivec2 previousTextureSize = textureSize(prev_radiosity_position, 0);
+    if (any(lessThan(previousUv, ivec2(0))) || any(greaterThanEqual(previousUv, previousTextureSize))) {
+        return false;
+    }
+
+    temporalSurface = lt_load_previous_surface(previousUv);
+    if (!lt_is_valid_surface(temporalSurface)) {
+        return false;
+    }
+    if (!lt_surface_matches(currentSurface, temporalSurface, gi_runtime_spatial_depth_threshold(), gi_runtime_spatial_normal_threshold())) {
+        return false;
+    }
+    if (!lt_materials_similar(currentSurface, temporalSurface)) {
+        return false;
+    }
+
+    ivec2 previousReservoirPos = RTXDI_PixelPosToReservoirPos(previousUv, activeCheckerboardField);
+    temporalReservoir = RTXDI_LoadPreviousGIReservoir(previousReservoirPos, activeCheckerboardField);
+    return RTXDI_IsValidGIReservoir(temporalReservoir);
 }
 
 bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 samplePosition) {
@@ -701,96 +690,32 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 samplePosition) {
     return lt_visibility_trace_is_unoccluded();
 }
 
-vec3 GetFinalVisibility(RAB_Surface surface, RTXDI_GISample giSample) {
-    if (gi_is_skylight_sample_position(giSample.position, surface.worldPos)) {
-        return vec3(1.0f);
-    }
-
-    vec3 rayOrigin;
-    vec3 rayDirection;
-    float traceMinDistance;
-    float traceMaxDistance;
-    if (!lt_setup_visibility_ray(surface, giSample.position, 0.01f, rayOrigin, rayDirection, traceMinDistance, traceMaxDistance)) {
-        return vec3(0.0f);
-    }
-
-    ray.origin = rayOrigin;
-    ray.direction = rayDirection;
-    ray_target = ivec3(-9999);
-    ray_ignore_block_id = -1;
-    ray_min_trace_distance = traceMinDistance;
-    ray_max_trace_distance = traceMaxDistance;
-    trace_ray(ray, true);
-    ray_target = ivec3(-9999);
-    ray_ignore_block_id = -1;
-    ray_min_trace_distance = 0.0f;
-    ray_max_trace_distance = -1.0f;
-
-    if (!lt_visibility_trace_is_unoccluded()) {
-        return vec3(0.0f);
-    }
-
-    return lt_trace_visibility_transmittance();
-}
-
-bool gi_sample_requires_final_visibility(RAB_Surface surface, RTXDI_GISample giSample) {
-    if (gi_is_skylight_sample_position(giSample.position, surface.worldPos)) {
-        return false;
-    }
-    return lt_build_shading_parameters().enableFinalVisibility != 0u;
-}
-
 bool gi_shade_secondary_surface(
     RAB_Surface currentSurface,
     RAB_Surface secondarySurface,
     inout RTXDI_RandomSamplerState rng,
     inout vec3 shadedRadiance
 ) {
-    vec3 directRadiance = vec3(0.0f);
-
-    uvec2 reservoirPosition = uvec2(lt_current_reservoir_pos());
-    RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(
-        reservoirPosition / RTXDI_TILE_SIZE_IN_PIXELS,
-        0u,
-        RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
-    );
-    RTXDI_DIInitialSamplingParameters initialSamplingParams = lt_build_di_initial_sampling_parameters();
-    RTXDI_ShadingParameters shadingParams = lt_build_shading_parameters();
-    RAB_LightSample secondaryLightSample = RAB_EmptyLightSample();
-    RTXDI_DIReservoir secondaryLightReservoir = RTXDI_SampleLightsForSurface(
-        rng,
-        tileRng,
-        secondarySurface,
-        initialSamplingParams,
-        secondaryLightSample
-    );
-
-    if (gi_runtime_spatial_sample_count() > 0) {
-        gi_spatial_resample_secondary_light(secondarySurface, rng, secondaryLightReservoir, secondaryLightSample);
-    }
-
-    if (secondaryLightSample.solidAnglePdf > 0.0f) {
-        vec3 secondaryVisibility = vec3(1.0f);
-        if (shadingParams.enableFinalVisibility != 0u) {
-            float secondaryLightDistance = 0.0f;
-            secondaryVisibility = lt_trace_final_visibility_with_offset(
-                secondaryLightSample,
-                secondarySurface,
-                0.01f,
-                secondaryLightDistance
+    ivec2 secondaryPixelPosition = ivec2(0);
+    float secondaryViewDepth = 0.0f;
+    if (gi_project_secondary_surface(secondarySurface, secondaryPixelPosition, secondaryViewDepth)) {
+        RAB_Surface visibleSecondarySurface = lt_load_surface(secondaryPixelPosition);
+        if (lt_surface_matches(secondarySurface, visibleSecondarySurface, 0.1f, gi_runtime_spatial_normal_threshold())
+            && lt_materials_similar(secondarySurface, visibleSecondarySurface)) {
+            vec4 directDiffuseData = texelFetch(stage_radiosity_direct, secondaryPixelPosition, 0);
+            vec4 directSpecularData = texelFetch(stage_radiosity_direct_specular, secondaryPixelPosition, 0);
+            vec3 directDiffuse = nrd_safe_remodulate(
+                nrd_unpack_direct_signal(directDiffuseData).radiance,
+                max(secondarySurface.material.diffuseAlbedo, vec3(NRD_MATERIAL_FACTOR_MIN_SCALE))
             );
-        }
-
-        secondaryLightSample.color *= secondaryVisibility;
-        secondaryLightSample.color *= RTXDI_GetDIReservoirInvPdf(secondaryLightReservoir) / secondaryLightSample.solidAnglePdf;
-
-        if (any(greaterThan(secondaryLightSample.color, vec3(0.0f)))) {
-            LtSplitRadiance indirect = lt_shade_surface_split(secondarySurface, secondaryLightSample);
-            directRadiance += indirect.diffuse * secondarySurface.material.diffuseAlbedo + indirect.specular;
+            vec3 directSpecular = nrd_safe_remodulate(
+                nrd_unpack_direct_signal(directSpecularData).radiance,
+                nrd_compute_specular_demodulation(secondarySurface.material.diffuseAlbedo, gi_surface_metalness(secondarySurface))
+            );
+            shadedRadiance += max(directDiffuse + directSpecular, vec3(0.0f));
         }
     }
 
-    shadedRadiance += directRadiance;
     shadedRadiance = gi_clamp_secondary_radiance(shadedRadiance);
     return ph_luminance(shadedRadiance) > 1e-6f;
 }
@@ -897,9 +822,19 @@ void gi_trace_initial_candidate(
             return;
         }
 
-        outSample.position = currentSurface.worldPos + sampleDir * gi_skylight_distance();
-        outSample.normal = -sampleDir;
-        outSample.radiance = skyRadiance;
+        RTXDI_GISample incidentSample = RTXDI_GISample(
+            currentSurface.worldPos + sampleDir * gi_skylight_distance(),
+            -sampleDir,
+            skyRadiance
+        );
+        vec3 reflectedIntegrand = gi_evaluate_reflected_integrand(currentSurface, incidentSample);
+        if (ph_luminance(reflectedIntegrand) <= 1e-6f) {
+            return;
+        }
+
+        outSample.position = incidentSample.position;
+        outSample.normal = incidentSample.normal;
+        outSample.radiance = reflectedIntegrand;
         outSourcePdf = samplePdf;
         outFlags = GI_CANDIDATE_FLAG_VALID | GI_CANDIDATE_FLAG_SKYLIGHT;
         return;
@@ -930,9 +865,19 @@ void gi_trace_initial_candidate(
         return;
     }
 
-    outSample.position = secondarySurface.worldPos;
-    outSample.normal = secondarySurface.normal;
-    outSample.radiance = secondaryRadiance * secondaryThroughput;
+    RTXDI_GISample incidentSample = RTXDI_GISample(
+        secondarySurface.worldPos,
+        secondarySurface.normal,
+        secondaryRadiance * secondaryThroughput
+    );
+    vec3 reflectedIntegrand = gi_evaluate_reflected_integrand(currentSurface, incidentSample);
+    if (ph_luminance(reflectedIntegrand) <= 1e-6f) {
+        return;
+    }
+
+    outSample.position = incidentSample.position;
+    outSample.normal = incidentSample.normal;
+    outSample.radiance = reflectedIntegrand;
     outSourcePdf = samplePdf;
     outFlags = GI_CANDIDATE_FLAG_VALID; // not skylight
 }
@@ -952,7 +897,13 @@ void gi_add_initial_candidate(
         return;
     }
 
-    float candidateWeight = 1.0f / sourcePdf;
+    float candidateTargetPdf = ph_luminance(max(candidateSample.radiance, vec3(0.0f)));
+    if (candidateTargetPdf <= 0.0f) {
+        reservoir.samples += 1.0f;
+        return;
+    }
+
+    float candidateWeight = candidateTargetPdf / sourcePdf;
     float misWeight = 1.0f / float(max(samplesPerPixel, 1));
     float risWeight = misWeight * candidateWeight;
 
@@ -965,6 +916,17 @@ void gi_add_initial_candidate(
         reservoir.age = 0.0f;
         reservoir.miscData = ((flags & GI_CANDIDATE_FLAG_SKYLIGHT) != 0u) ? gi_misc_flag_skylight : 0u;
     }
+}
+
+void gi_finalize_initial_reservoir(inout RTXDI_GIReservoir reservoir) {
+    float selectedTargetPdf = ph_luminance(max(reservoir.selected.radiance, vec3(0.0f)));
+    if (reservoir.weight_sum <= 0.0f || selectedTargetPdf <= 0.0f) {
+        reservoir = RTXDI_EmptyGIReservoir();
+        return;
+    }
+
+    reservoir.weight_sum /= selectedTargetPdf;
+    reservoir.samples = 1.0f;
 }
 
 RTXDI_GIReservoirStore gi_build_initial_reservoir_store(RAB_Surface currentSurface) {
@@ -986,13 +948,7 @@ RTXDI_GIReservoirStore gi_build_initial_reservoir_store(RAB_Surface currentSurfa
         gi_add_initial_candidate(reservoir, candidateSample, candidateSourcePdf, candidateFlags, rng, samplesPerPixel);
     }
 
-    // Reference parity: InitialCandidates.cs.slang:58-62 always writes a
-    // reservoir entry with confidence = 1 after the SPP loop, even when no
-    // candidate was selected ("dead" pixel: totalWeight = 0, integrand = 0).
-    // We therefore never emit an M = 0 invalid store from this pass; instead
-    // we emit the empty reservoir with its samples normalized to 1 so the
-    // per-pixel entry has unit history weight for downstream reuse/splatting.
-    reservoir.samples = 1.0f;
+    gi_finalize_initial_reservoir(reservoir);
     return gi_make_initial_reservoir_store(reservoir);
 }
 
@@ -1016,10 +972,7 @@ RTXDI_GIReservoirStore gi_build_primary_miss_initial_reservoir_store(vec3 camera
         gi_add_initial_candidate(reservoir, candidateSample, candidateSourcePdf, candidateFlags, rng, samplesPerPixel);
     }
 
-    // Reference parity: always write an entry with confidence = 1, even for a
-    // fully dead primary-miss pixel (matches unconditional addCandidateReservoir
-    // call in InitialCandidates.cs.slang:97).
-    reservoir.samples = 1.0f;
+    gi_finalize_initial_reservoir(reservoir);
     return gi_make_initial_reservoir_store(reservoir);
 }
 
@@ -1065,32 +1018,7 @@ void gi_shade_reservoir(RAB_Surface currentSurface, RTXDI_GIReservoir reservoir,
         return;
     }
 
-    vec3 finalRadiance = reservoir.selected.radiance * reservoir.weight_sum;
-    if (gi_sample_requires_final_visibility(currentSurface, reservoir.selected)) {
-        finalRadiance *= GetFinalVisibility(currentSurface, reservoir.selected);
-    }
-
-    SplitBrdf finalBrdf = EvaluateBrdf(currentSurface, reservoir.selected.position, gi_surface_roughness(currentSurface));
-
-    if (ph_restir_indirect_enable_final_mis >= 0.5f) {
-        vec3 initialRadiance = initialReservoir.selected.radiance * initialReservoir.weight_sum;
-        SplitBrdf initialBrdf = EvaluateBrdf(currentSurface, initialReservoir.selected.position, gi_surface_roughness(currentSurface));
-        float roughnessForMis = max(gi_surface_roughness(currentSurface), lt_gi_mis_roughness);
-        SplitBrdf roughFinalBrdf = EvaluateBrdf(currentSurface, reservoir.selected.position, roughnessForMis);
-        SplitBrdf roughInitialBrdf = EvaluateBrdf(currentSurface, initialReservoir.selected.position, roughnessForMis);
-        float finalWeight = 1.0f - GetMISWeight(roughFinalBrdf, finalBrdf, gi_surface_albedo(currentSurface));
-        float initialWeight = GetMISWeight(roughInitialBrdf, initialBrdf, gi_surface_albedo(currentSurface));
-
-        outDiffuse = finalBrdf.demodulatedDiffuse * finalRadiance * finalWeight
-                   + initialBrdf.demodulatedDiffuse * initialRadiance * initialWeight;
-        outSpecular = finalBrdf.specular * finalRadiance * finalWeight
-                    + initialBrdf.specular * initialRadiance * initialWeight;
-    } else {
-        outDiffuse = finalBrdf.demodulatedDiffuse * finalRadiance;
-        outSpecular = finalBrdf.specular * finalRadiance;
-    }
-
-    outSpecular = gi_demodulate_specular(outSpecular, currentSurface);
+    outDiffuse = max(reservoir.selected.radiance * reservoir.weight_sum, vec3(0.0f));
 }
 
 #endif

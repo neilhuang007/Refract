@@ -54,7 +54,7 @@ void main() {
         uint(frameCounter),
         RTXDI_GI_SPATIAL_RESAMPLING_RANDOM_SEED
     );
-    RTXDI_GIReservoir currentReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, currentReservoirPos, activeCheckerboardField);
+    RTXDI_GIReservoir currentReservoir = RTXDI_LoadCurrentFrameGIReservoir(currentReservoirPos, activeCheckerboardField);
     RTXDI_GIReservoir state = RTXDI_EmptyGIReservoir();
     float selectedTargetPdf = 0.0f;
     float inputM = 0.0f;
@@ -65,12 +65,32 @@ void main() {
     float spatialReuseRadius = gi_runtime_spatial_radius();
     float spatialDepthThreshold = gi_runtime_spatial_depth_threshold();
     float spatialNormalThreshold = gi_runtime_spatial_normal_threshold();
-    int biasCorrectionMode = gi_runtime_bias_correction_mode(ph_restir_spatial_bias_mode);
+    int biasCorrectionMode = gi_runtime_bias_correction_mode(ph_restir_gi_spatial_bias_mode);
 
     if (RTXDI_IsValidGIReservoir(currentReservoir)) {
         selectedTargetPdf = RAB_GetGISampleTargetPdfForSurface(currentSurface, currentReservoir.selected);
         RTXDI_CombineGIReservoirs(state, currentReservoir, 0.5f, selectedTargetPdf);
         inputM = currentReservoir.samples;
+    }
+
+    RTXDI_GIReservoir temporalReservoir;
+    RAB_Surface temporalSurface;
+    if (gi_load_temporal_reservoir(currentSurface, pixelPosition, activeCheckerboardField, temporalReservoir, temporalSurface)) {
+        float temporalJacobian = RTXDI_GICalculateJacobian(currentSurface, temporalSurface, temporalReservoir.selected);
+        float temporalTargetPdf = RAB_GetGISampleTargetPdfForSurface(currentSurface, temporalReservoir.selected);
+        if (temporalTargetPdf > 0.0f && temporalJacobian > 0.0f) {
+            bool temporalSelected = RTXDI_CombineGIReservoirs(
+                state,
+                temporalReservoir,
+                RTXDI_GetNextRandom(rng),
+                temporalTargetPdf * temporalJacobian
+            );
+            if (temporalSelected) {
+                selectedTargetPdf = temporalTargetPdf;
+                selectedNeighborIndex = -2;
+            }
+            inputM += temporalReservoir.samples;
+        }
     }
 
     for (int i = 0; i < activeSpatialSampleCount; i++) {
@@ -84,7 +104,7 @@ void main() {
         RAB_Surface neighborSurface = lt_load_surface(neighborUv);
         if (!lt_surface_matches(currentSurface, neighborSurface, spatialDepthThreshold, spatialNormalThreshold)) {
             ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
-            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
+            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadCurrentFrameGIReservoir(neighborReservoirPos, activeCheckerboardField);
             if (!gi_sample_is_skylight(neighborReservoir, currentSurface)) {
                 continue;
             }
@@ -92,14 +112,14 @@ void main() {
 
         if (!lt_materials_similar(currentSurface, neighborSurface)) {
             ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
-            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
+            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadCurrentFrameGIReservoir(neighborReservoirPos, activeCheckerboardField);
             if (!gi_sample_is_skylight(neighborReservoir, currentSurface)) {
                 continue;
             }
         }
 
         ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
-        RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
+        RTXDI_GIReservoir neighborReservoir = RTXDI_LoadCurrentFrameGIReservoir(neighborReservoirPos, activeCheckerboardField);
         if (!RTXDI_IsValidGIReservoir(neighborReservoir)) {
             continue;
         }
@@ -138,7 +158,7 @@ void main() {
 
             RAB_Surface neighborSurface = lt_load_surface(neighborUv);
             ivec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(neighborUv, activeCheckerboardField);
-            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(gi_buffer_index_spatial, neighborReservoirPos, activeCheckerboardField);
+            RTXDI_GIReservoir neighborReservoir = RTXDI_LoadCurrentFrameGIReservoir(neighborReservoirPos, activeCheckerboardField);
             float ps = RAB_GetGISampleTargetPdfForSurface(neighborSurface, state.selected);
 
             if (biasCorrectionMode == gi_bias_correction_mode_ray_traced && ps > 0.0f && !RAB_GetConservativeVisibility(neighborSurface, state.selected.position)) {
@@ -170,6 +190,7 @@ void main() {
 
     vec3 resolvedIndirectDiffuse = max(shadedDiffuse, vec3(0.0f));
     float history = min(state.age + 1.0f, 8.0f);
+    state.age = history;
     float luma = ph_luminance(resolvedIndirectDiffuse);
     float secondMoment = luma * luma;
     float variance = max(secondMoment / max(history, 1.0f), 1e-6f);

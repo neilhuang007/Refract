@@ -87,8 +87,6 @@ uniform sampler2D prev_spec_slow_input;
 uniform sampler2D prev_spec_fast_input;
 uniform sampler2D prev_spec_history_length_input;
 
-uniform sampler2D diffuse_confidence_input;
-uniform sampler2D spec_confidence_input;
 uniform sampler2D spec_history_confidence_input;
 uniform sampler2D spec_reprojection_confidence_input;
 
@@ -134,6 +132,32 @@ vec3 sample_photonics_indirect(vec2 tex_coord) {
     if (ph_debug_show_indirect < 0.5) return vec3(0.0);
     return texture(radiosity_indirect_resolved, tex_coord).rgb;
 }
+
+// ---------------------------------------------------------------------------
+// NRD RELAX_DiffuseSpecular pipeline samplers (contract section 6).
+// Java agent registers these against the corresponding FBOs.
+// ---------------------------------------------------------------------------
+uniform sampler2D nrd_in_tiles;                       // R8   nrdTilesFb
+uniform sampler2D nrd_in_diff_radiance_hitdist;       // RGBA16F  lightingStageBuffer.direct
+uniform sampler2D nrd_in_spec_radiance_hitdist;       // RGBA16F  lightingStageBuffer.direct_specular
+uniform sampler2D nrd_diff_illum_ping;                // RGBA16F  nrdDiffIllumPingFb
+uniform sampler2D nrd_diff_illum_pong;                // RGBA16F  nrdDiffIllumPongFb
+uniform sampler2D nrd_spec_illum_ping;                // RGBA16F  nrdSpecIllumPingFb
+uniform sampler2D nrd_spec_illum_pong;                // RGBA16F  nrdSpecIllumPongFb
+uniform sampler2D nrd_history_length;                 // R8   nrdHistoryLengthFb
+uniform sampler2D nrd_spec_reprojection_confidence;   // R8   nrdSpecReprojectionConfidenceFb
+uniform sampler2D nrd_diff_illum_prev;                // RGBA16F  nrdDiffIllumPrevFb.read
+uniform sampler2D nrd_diff_illum_responsive_prev;     // RGBA16F  nrdDiffIllumResponsivePrevFb.read
+uniform sampler2D nrd_spec_illum_prev;                // RGBA16F  nrdSpecIllumPrevFb.read
+uniform sampler2D nrd_spec_illum_responsive_prev;     // RGBA16F  nrdSpecIllumResponsivePrevFb.read
+uniform sampler2D nrd_history_length_prev;            // R8   nrdHistoryLengthPrevFb.read
+uniform sampler2D nrd_reflection_hit_t_curr;          // R16F nrdReflectionHitTCurrFb
+uniform sampler2D nrd_reflection_hit_t_prev;          // R16F nrdReflectionHitTPrevFb.read
+uniform sampler2D nrd_out_diff_radiance_hitdist;      // RGBA16F  nrdOutDiffRadianceHitDistFb
+uniform sampler2D nrd_out_spec_radiance_hitdist;      // RGBA16F  nrdOutSpecRadianceHitDistFb
+// A-trous ping-pong inputs (Java rebinds per pass to nrdDiffIllumPing/PongFb)
+uniform sampler2D nrd_diff_atrous_input;              // RGBA16F  ping or pong (previous pass output)
+uniform sampler2D nrd_spec_atrous_input;              // RGBA16F  ping or pong (previous pass output)
 
 // Reservoir Splatting temporal pipeline uniforms
 uniform float ph_reservoir_splatting_camera_aperture_radius;

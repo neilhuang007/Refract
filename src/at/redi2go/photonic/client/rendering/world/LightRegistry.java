@@ -84,9 +84,9 @@ public class LightRegistry implements Destructable {
    // 3 blocks reduces the visible cell footprint while keeping enough local
    // lights per cell for stable RIS proposals in dense Minecraft scenes.
    private static final float REGIR_HASH_CELL_SIZE_BLOCKS = 3.0F;
-   // 6 axis-aligned normal buckets (+X,-X,+Y,-Y,+Z,-Z). Paper recommends
-   // including the surface normal in the hash so opposing faces don't share
-   // the same reservoirs.
+   // 6 axis-aligned normal buckets (+X,-X,+Y,-Y,+Z,-Z). Photonics keeps the
+   // bucket in the hash key for lookup binding; the current build target is
+   // volumetric and fills buckets identically.
    private static final int REGIR_HASH_NORMAL_BUCKETS = 6;
    // Hash table capacity. The active build set is REGIR_BUILD_REGION_CELLS^3
    // * REGIR_HASH_NORMAL_BUCKETS keys; keep the table comfortably below 50%
@@ -99,7 +99,6 @@ public class LightRegistry implements Destructable {
    // Covers a 72-block cube around the camera, leaving room for lookup jitter
    // without going back to a screen-bound build.
    private static final int REGIR_BUILD_REGION_CELLS = 24;
-   private static final int REGIR_GRID_RECENTER_HYSTERESIS_CELLS = Math.max(1, (REGIR_BUILD_REGION_CELLS - 2) / 4);
    private static final int RESIDENT_LIGHT_REMOVAL_CONFIRMATION_SCANS = 64;
    private static final int LIGHT_ACTIVITY_CONFIRMATION_SCANS = 32;
    private static final int INCREMENTAL_PARALLEL_THRESHOLD = 32;
@@ -350,10 +349,8 @@ public class LightRegistry implements Destructable {
   private boolean identityLightMappingPending = false;
   private int regirActiveCellCount = 0;
   private int regirActiveLightSlotCount = 0;
-  // RTXDI: stores the center of the grid (= camera position, snapped to cell boundaries).
-  // The origin is derived in the shader as: origin = center - vec3(gridRes) * cellSize * 0.5
+  // Stores the most recently resolved ReGIR build center.
   private final Vector3f regirGridCenter = new Vector3f();
-  private boolean regirGridCenterInitialized = false;
   private final Vector3f frozenLightSelectionCamera = new Vector3f();
   private final Vector3f frozenRegirGridCenter = new Vector3f();
   private boolean frozenLightSelectionCameraInitialized = false;
@@ -520,8 +517,7 @@ public class LightRegistry implements Destructable {
    private Vector3f resolveRegirGridCenter() {
       Vector3f cameraPosition = getCurrentCameraPosition();
       if (!this.isRegirGridCenterFrozenForDebug()) {
-         this.updateStableRegirGridCenter(cameraPosition);
-         return new Vector3f(this.regirGridCenter);
+         return cameraPosition;
       }
 
       if (!this.frozenRegirGridCenterInitialized) {
@@ -530,34 +526,6 @@ public class LightRegistry implements Destructable {
       }
 
       return new Vector3f(this.frozenRegirGridCenter);
-   }
-
-   private void updateStableRegirGridCenter(Vector3f cameraPosition) {
-      if (!this.regirGridCenterInitialized || shouldRecenterRegirGridCenter(this.regirGridCenter, cameraPosition)) {
-         this.regirGridCenter.set(snapRegirGridCenter(cameraPosition));
-         this.regirGridCenterInitialized = true;
-      }
-   }
-
-   static boolean shouldRecenterRegirGridCenter(Vector3f currentCenter, Vector3f cameraPosition) {
-      int currentCellX = regirHashCellCoord(currentCenter.x);
-      int currentCellY = regirHashCellCoord(currentCenter.y);
-      int currentCellZ = regirHashCellCoord(currentCenter.z);
-      int cameraCellX = regirHashCellCoord(cameraPosition.x);
-      int cameraCellY = regirHashCellCoord(cameraPosition.y);
-      int cameraCellZ = regirHashCellCoord(cameraPosition.z);
-      int threshold = REGIR_GRID_RECENTER_HYSTERESIS_CELLS;
-      return Math.abs(cameraCellX - currentCellX) >= threshold
-         || Math.abs(cameraCellY - currentCellY) >= threshold
-         || Math.abs(cameraCellZ - currentCellZ) >= threshold;
-   }
-
-   static Vector3f snapRegirGridCenter(Vector3f cameraPosition) {
-      return new Vector3f(
-         regirHashCellCoord(cameraPosition.x) * REGIR_HASH_CELL_SIZE_BLOCKS,
-         regirHashCellCoord(cameraPosition.y) * REGIR_HASH_CELL_SIZE_BLOCKS,
-         regirHashCellCoord(cameraPosition.z) * REGIR_HASH_CELL_SIZE_BLOCKS
-      );
    }
 
    static int regirHashCellCoord(float coordinate) {
@@ -1771,7 +1739,7 @@ public class LightRegistry implements Destructable {
       return REGIR_BUILD_REGION_CELLS;
    }
 
-   /** Returns the world-space center of the ReGIR grid (RTXDI: gridCenter = camera position). */
+   /** Returns the world-space center of the ReGIR grid. */
    public Vector3f getRegirGridCenter() {
       Vector3f center = this.resolveRegirGridCenter();
       this.regirGridCenter.set(center);
