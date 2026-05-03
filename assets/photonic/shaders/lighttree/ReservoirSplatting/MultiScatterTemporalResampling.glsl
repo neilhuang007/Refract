@@ -28,10 +28,8 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
         uvec2(previousReservoirPixel)
     );
     ReconnectionData prevReconnectionData = RestirDI_loadPreviousFrameReconnection(previousReservoirPixel);
-    ReconnectionData partitionedReconnectionData = prevReconnectionData;
     float fractionalTime = lt_multi_temporal_partition_fraction(prevReconnectionData.time);
     float newTime = lt_multi_temporal_partition_time(fractionalTime, partitionIndex);
-    partitionedReconnectionData.time = newTime;
     float prevReservoirConfidence = lt_scatter_reservoir_confidence(prevReservoir, prevReconnectionData);
 
     // Reference parity (MultiScatterTemporalResampling.rt.slang): the
@@ -42,31 +40,32 @@ bool lt_MultiScatterTemporalResampling_add_scattered_previous_sample(
     vec3 prevPHat = vec3(0.0f);
     float shiftedJacobian = 1.0f;
     vec3 prevIntegrand = PathReservoir_getIntegrand(prevReservoir);
-    ReconnectionData shiftedReconnection = partitionedReconnectionData;
+    ReconnectionData shiftedReconnection = prevReconnectionData;
     RTXDI_DIReservoir shiftedReservoir = prevReservoir;
     if (any(greaterThan(prevIntegrand, vec3(0.0f))))
     {
         ShiftedPathData shiftedPrev = scatterReprojectionShift(
             sg,
-            partitionedReconnectionData,
+            prevReconnectionData,
             newTime,
-            partitionedReconnectionData.firstHit,
-            partitionedReconnectionData.lensSample,
+            prevReconnectionData.firstHit,
+            prevReconnectionData.lensSample,
             prevReservoir,
             true,
             false,
             false
         );
         shiftedReconnection = ReconnectionData_update(
-            partitionedReconnectionData,
+            prevReconnectionData,
             shiftedPrev
         );
+        shiftedReconnection.time = newTime;
         PathReservoir_setSubPixel(shiftedReservoir, pixel, shiftedReconnection.subPixel);
         shiftedJacobian = lt_scatter_shift_jacobian_ratio(
             shiftedPrev.subPixelJacobian,
             shiftedPrev.secondaryPathJacobian,
-            partitionedReconnectionData.subPixelJacobian,
-            partitionedReconnectionData.secondaryPathJacobian
+            prevReconnectionData.subPixelJacobian,
+            prevReconnectionData.secondaryPathJacobian
         );
 
         float m1 = lt_scatter_radiance_phat(shiftedPrev.radiance)
@@ -116,16 +115,13 @@ float lt_MultiScatterTemporalResampling_current_sample_mis(
         / timePartitions;
     float shiftedTime = fractionalPartitionTime * lt_di_temporal_shutter_speed();
 
-    ReconnectionData partitionedCurrReconnection = currSample.reconnectionData;
-    partitionedCurrReconnection.time = shiftedTime + lt_di_temporal_artificial_frame_time();
-
-    ReconnectionData shiftedCurrReconnection = partitionedCurrReconnection;
+    ReconnectionData shiftedCurrReconnection = currSample.reconnectionData;
     ShiftedPathData shiftedCurr = scatterReprojectionShift(
             sg,
             shiftedCurrReconnection,
-            partitionedCurrReconnection.time,
-            partitionedCurrReconnection.firstHit,
-            partitionedCurrReconnection.lensSample,
+            shiftedTime + lt_di_temporal_artificial_frame_time(),
+            currSample.reconnectionData.firstHit,
+            currSample.reconnectionData.lensSample,
             currSample.reservoir,
             false,
             true,
@@ -142,7 +138,6 @@ float lt_MultiScatterTemporalResampling_current_sample_mis(
         return 1.0f;
     }
 
-    ivec2 previousReservoirPixel = ScatterTemporalResampling_previous_reservoir_pixel(scatteredPixel);
     float prevReservoirConfidence = ScatterTemporalResampling_load_previous_reservoir_confidence(scatteredPixel);
 
     float m1 = lt_scatter_radiance_phat(PathReservoir_getIntegrand(currSample.reservoir))
@@ -167,6 +162,9 @@ RTXDI_DIReservoir MultiScatterTemporalResampling_run(
     currReconnectionData = ReconnectionData_init();
 
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
+    if (!RAB_IsSurfaceValid(surface)) {
+        return RTXDI_EmptyDIReservoir();
+    }
 
     RTXDI_RandomSamplerState sg = lt_init_random_sampler(uvec2(pixel), uint(frameCounter), 5u);
     uint reservoirIdx = lt_temporal_scatter_cell_index_from_pixel(pixel);

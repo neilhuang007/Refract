@@ -395,6 +395,9 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
     currReconnectionData = ReconnectionData_init();
 
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
+    if (!RAB_IsSurfaceValid(surface)) {
+        return RTXDI_EmptyDIReservoir();
+    }
 
     RTXDI_RandomSamplerState sg = lt_init_random_sampler(
         uvec2(pixel),
@@ -449,7 +452,11 @@ RTXDI_DIReservoir ScatterBackupTemporalResampling_run(
 
     uint numReservoirs = lt_reproject_temporal_samples_cell_counter_value(reservoirIdx);
     uint cellOffset = lt_scatter_temporal_resampling_cell_offset_value(reservoirIdx);
-    for (uint i = 0u; i < numReservoirs; ++i)
+    bool stableCurrentHistory = currSample.confidence >= (PATH_RESERVOIR_CONFIDENCE_CAP * 0.5f)
+        && currReservoir.M >= (PATH_RESERVOIR_CONFIDENCE_CAP * 0.5f)
+        && length(GatherData_getMotionVector(pixel) * vec2(viewWidth, viewHeight)) < 0.35f;
+    uint contributorLimit = stableCurrentHistory ? min(numReservoirs, 2u) : numReservoirs;
+    for (uint i = 0u; i < contributorLimit; ++i)
     {
         ivec2 scatteredPixel = ivec2(lt_scatter_temporal_resampling_load_sorted_reservoir(cellOffset + i));
         lt_ScatterBackupTemporalResampling_add_scattered_previous_sample(

@@ -162,9 +162,12 @@ bool GatherTemporalResampling_load_current_sample(
     out float currConfidence)
 {
     currReservoir = GatherTemporalResampling_load_current_reservoir(pixel);
-    currReconnectionData = GatherTemporalResampling_load_current_reconnection(pixel, currReservoir);
     currConfidence = PathReservoir_getConfidence(currReservoir);
-    return any(greaterThan(PathReservoir_getIntegrand(currReservoir), vec3(0.0f)));
+    bool hasContribution = any(greaterThan(PathReservoir_getIntegrand(currReservoir), vec3(0.0f)));
+    currReconnectionData = hasContribution
+        ? GatherTemporalResampling_load_current_reconnection(pixel, currReservoir)
+        : ReconnectionData_init();
+    return hasContribution;
 }
 
 bool GatherTemporalResampling_load_previous_sample(
@@ -174,9 +177,12 @@ bool GatherTemporalResampling_load_previous_sample(
     out float prevConfidence)
 {
     prevReservoir = GatherTemporalResampling_load_previous_reservoir(pixel);
-    prevReconnectionData = GatherTemporalResampling_load_previous_temporal_reconnection(pixel, prevReservoir);
     prevConfidence = PathReservoir_getConfidence(prevReservoir);
-    return any(greaterThan(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)));
+    bool hasContribution = any(greaterThan(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)));
+    prevReconnectionData = hasContribution
+        ? GatherTemporalResampling_load_previous_temporal_reconnection(pixel, prevReservoir)
+        : ReconnectionData_init();
+    return hasContribution;
 }
 
 float GatherTemporalResampling_shift_current_sample_time(float time)
@@ -368,11 +374,18 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
     ivec2 pixel,
     out ReconnectionData currReconnectionData)
 {
+    RAB_Surface currentSurface = GatherTemporalResampling_load_current_surface(pixel);
+    if (!RAB_IsSurfaceValid(currentSurface))
+    {
+        currReconnectionData = ReconnectionData_init();
+        return RTXDI_EmptyDIReservoir();
+    }
+
     RTXDI_RandomSamplerState sg = lt_init_random_sampler(uvec2(pixel), uint(frameCounter), 3u);
     RTXDI_DIReservoir currReservoir;
     ReconnectionData currReconnection;
     float currConfidence = 0.0f;
-    GatherTemporalResampling_load_current_sample(
+    bool hasCurrentSample = GatherTemporalResampling_load_current_sample(
         pixel,
         currReservoir,
         currReconnection,
@@ -382,19 +395,24 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
     RTXDI_DIReservoir prevReservoir;
     ReconnectionData prevReconnectionData;
     float prevConfidence = 0.0f;
-    GatherTemporalResampling_load_previous_sample(
+    bool hasPreviousSample = GatherTemporalResampling_load_previous_sample(
         pixel,
         prevReservoir,
         prevReconnectionData,
         prevConfidence
     );
 
+    if (!hasCurrentSample && !hasPreviousSample)
+    {
+        currReconnectionData = ReconnectionData_init();
+        return RTXDI_EmptyDIReservoir();
+    }
+
     const bool hasDepthOfField = lt_di_temporal_camera_aperture_radius() > 0.0f;
     vec2 depthOfFieldProbs = vec2(1.0f, 0.0f);
     if (hasDepthOfField)
     {
-        RAB_Surface centerSurface = GatherTemporalResampling_load_current_surface(pixel);
-        depthOfFieldProbs = lt_di_temporal_resolve_dof_probabilities(centerSurface);
+        depthOfFieldProbs = lt_di_temporal_resolve_dof_probabilities(currentSurface);
     }
 
     const bool doLensVertexCopy = (depthOfFieldProbs.x > 0.0f);

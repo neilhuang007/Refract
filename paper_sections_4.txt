@@ -1,0 +1,291 @@
+SIGGRAPH Conference Papers ’25, August 10–14, 2025, Vancouver, BC, Canada                   Jeffrey Liu, Daqi Lin, Markus Kettunen, Chris Wyman, and Ravi Ramamoorthi
+
+
+    Temporal resampling. Each pixel 𝑖 backprojects along its back-                       Note that Area ReSTIR only approximately retains primary hits;
+ward motion vector to choose prior-frame reservoir 𝑗. The results                     this may degrade temporal reuse near subpixel details. Our reservoir
+of GRIS between 𝑌 𝑗 = 𝑇 𝑗 (𝑋 𝑗 ) and 𝑋𝑖∗ , using confidence weights                   splatting exactly retains primary hits, improving temporal reuse.
+𝑐 𝑗 and 𝑁 init , replaces 𝑋𝑖 , a new 𝑊𝑋𝑖 is computed, and 𝑐𝑖 is set to
+min(𝑐 cap, 𝑐 𝑗 + 𝑁 init ), where 𝑐 cap is a fixed confidence cap.                     3.6    Motion Blur
+   Spatial resampling. Each pixel 𝑖 chooses 𝑁 spat spatial neighbors                  Zhang et al.’s Area ReSTIR integrates the measurement integral at
+𝑗1, . . . , 𝑗𝑁spat randomly from a box around 𝑖, and performs GRIS be-                a fixed time. However, rendering motion blur requires integrating
+tween 𝑋𝑖 and each 𝑋 𝑗𝑘 , using the corresponding confidence weights.                  over a time interval [𝑡 0, 𝑡 1 ), where Δ𝑡 = 𝑡 1 − 𝑡 0 is the exposure time.
+The result overwrites 𝑋𝑖 ; 𝑊𝑋𝑖 is updated with Equation 5, and 𝑐𝑖                     Intensity of pixel 𝑖 is then
+sums the samples’ confidence weights, again clamped to 𝑐 cap .                                                 ∫ 𝑡1 ∫
+                                                                                                        𝐼𝑖 =                       ¯ 𝑡)𝑓 (𝑥,
+                                                                                                                               ℎ𝑖 (𝑥,     ¯ 𝑡) d𝑥¯ d𝑡,            (9)
+  Shading. The final color for pixel 𝑖 is evaluated as 𝑓 (𝑋𝑖 )𝑊𝑋𝑖 , and                                         𝑡0   Ω𝑖 (𝑡 )
+the same process repeats in the next frame.
+                                                                                                ¯ 𝑡) is the camera’s pixel filter at time 𝑡 ∈ [𝑡 0, 𝑡 1 ).
+                                                                                      where ℎ𝑖 (𝑥,
+3.5   Area ReSTIR                                                                       We experimented by naïvely extending Area ReSTIR for motion
+Prior to Area ReSTIR [Zhang et al. 2024], screen-space algorithms                     blur by adding sample time 𝑡 to the reservoirs. But backprojecting
+such as Lin et al. [2022] applied ReSTIR to path space starting at                    each pixel’s motion 𝛿𝑖 at a single time causes suboptimal reuse, as
+secondary hits, 𝑥 2 , finding primary hits 𝑥 1 by ray tracing at prede-               apparent motion depends on both sample time and subpixel location,
+termined subpixel locations (e.g., pixel centers).                                    which vary independently. Our splatting uses samples’ real motion
+   Zhang et al. [2024] note this adds instabilities near high-frequency               between frames, exactly contributing to the relevant pixels.
+details: even if a reused path suffix [𝑥 2𝑥 3 · · · 𝑥𝑛 ] remains valid, it
+may be incompatible with a new pixel’s implicitly defined prefix                      4     RESERVOIR SPLATTING
+[𝑥 0𝑥 1 ]. To cure this, they add subpixel location (and lens position)               Prior ReSTIR methods gather reusable temporal neighbors in the
+as additional dimensions to reservoirs, essentially storing full paths                prior frame; each pixel 𝑗 is backprojected to the prior frame by
+[𝑥 0𝑥 1 · · · 𝑥𝑛 ]. Target functions no longer vary with each pixel’s                 a single backward motion vector 𝛿 𝑗 to find candidates for reuse
+implicit prefix, as the shift maps propose complete, reusable paths.                  [Bitterli et al. 2020; Zhang et al. 2024]. Paths are then reused with the
+This significantly boosts reuse quality.                                              negated image-space motion −𝛿 𝑗 , regardless of the reuse candidate’s
+   To improve subpixel precision for temporal path reuse, Zhang et al.                                          real image-space motion. This inexact track-
+[2024] backproject the hit point at each pixel 𝑖’s center to the prior                                          ing of shading points between frames can
+                             frame, via an image-space shift with motion                                        cause reuse failures in cases of subpixel de-
+                             vector 𝛿𝑖 , building a 1 × 1 pixel fractional                                      tail, including factors like multiple objects
+                             reservoir around the result. This off-grid frac-                                   (e.g., foliage) or region scaling (zooming),
+                             tional reservoir is populated with samples               spuriously discarding the sample history that ReSTIR exploits.
+                             from the overlapping 2 × 2 block of pixels                  We instead scatter prior-frame candidates by forward reprojec-
+(via RIS), and the chosen sample is shifted back to the current frame                 tion, or splatting, to map them to the current frame. Each splatted
+with motion vector −𝛿𝑖 , approximately retaining the primary hit.                     point uniquely maps to the current image,
+   As no samples in the 2 × 2 block of prior-                                         always contributing to the pixel it lands on,
+frame pixels may fall in the fractional reser-                                        unless occluded. This exact mapping avoids
+voir, Zhang et al.’s “fast” variant can leave                                         discarding history unnecessarily.
+this reservoir empty, producing excess noise.                                            Section 4.1 details how the math of resam-
+Prior to RIS, their “robust” variant first spa-                                       pling changes when splatting. Section 4.2 combines scatter- and
+tially shifts all samples in the 2 × 2 block to the fractional reservoir.             gather-based reuse with appropriate MIS for better quality, albeit
+This solves the issue but is more expensive.                                          at higher cost. Section 4.3 discusses an approach to appropriately
+   Mathematically, Area ReSTIR integrates the measurement contri-                     update reservoir confidence when splatting. Section 4.4 expands our
+bution function for each pixel 𝑖:                                                     sample splatting to real-time motion blur, and Section 4.5 describes
+                         ∫               ∫                                            how splatting also improves Zhang et al.’s [2024] depth of field.
+                    𝐼𝑖 =     𝑓𝑖 (𝑥)
+                                 ¯ d𝑥¯ =         ¯ (𝑥)
+                                             ℎ𝑖 (𝑥)𝑓 ¯ d𝑥,¯
+                       Ω𝑖                Ω𝑖
+                                                                                      4.1    GRIS with Scatter
+where pixel 𝑖’s path space Ω𝑖 ⊂ Ω is the set of paths 𝑥¯ for which                    Lin et al.’s [2022] GRIS theory requires defining input domains
+                     ¯ > 0, and 𝑓 (𝑥)
+the pixel filter ℎ𝑖 (𝑥)            ¯ is the path contribution. We use                 without looking at the samples. Prior work worked around this by
+𝑝ˆ𝑖 (𝑥)
+     ¯ to denote the pixel-dependent target function for resampling,                  reusing based on pixel-center motion vectors. But exactly preserv-
+which we assume is defined as                                                         ing prior-frame samples’ primary hits requires examining which
+                            𝑝ˆ𝑖 (𝑥)
+                                 ¯ = ℎ𝑖 (𝑥)
+                                         ¯ 𝑝ˆ (𝑥),
+                                               ¯                            (8)       samples contribute to which pixel, which is not allowed. To recon-
+                                                                                      cile this, we conceptually define all prior samples as contributing
+often with 𝑝ˆ = 𝑓 , but cheaper approximations can also be used.                      to every pixel, but ensure zero weight for those not splatting into
+
+                                                                                  4
+Reservoir Splatting for Temporal Path Resampling and Motion Blur                                    SIGGRAPH Conference Papers ’25, August 10–14, 2025, Vancouver, BC, Canada
+
+
+current pixel 𝑗.2 This allows applying GRIS for temporal resampling                             The generalized balance heuristic [Lin et al. 2022] then reduces to
+assuming:
+                                                                                                                                  𝑐𝑖 𝑝ˆ prev (𝑋𝑖 ) |𝜕𝑇 /𝜕𝑋𝑖 | −1
+   (1) The target domain Ω is the current frame’s full path space.                                          𝑚𝑖 (𝑌𝑖 ) =                                                  ,      (11)
+                                                                                                                          𝑐 ∗ 𝑝ˆ (𝑌𝑖 ) + 𝑐𝑖 𝑝ˆ prev (𝑋𝑖 ) |𝜕𝑇 /𝜕𝑋𝑖 | −1
+   (2) The target function for pixel 𝑗 is 𝑝ˆ 𝑗 (𝑥)¯ = ℎ 𝑗 (𝑥)    ¯ 3
+                                                           ¯ 𝑝ˆ (𝑥).
+   (3) Input samples 𝑋 1, . . . , 𝑋 𝑁 come from all prior-frame area                            given confidence weights 𝑐𝑖 for samples 𝑋𝑖 and 𝑐 ∗ for canonical
+       reservoirs, i.e., 𝑁 is the screen size 𝐻 × 𝑊 . Sample domains                            sample 𝑌 ∗ . This is because shifting 𝑌𝑖 into any prior-frame domain
+       are Ω𝑖 = Ωprev , the entire prior frame’s path space.                                    Ω𝑘 results in the same path 𝑇𝑘−1 (𝑌𝑖 ) = 𝑇 −1 (𝑌𝑖 ) = 𝑋𝑖 , whose pri-
+   (4) Prior-frame candidates 𝑋𝑖 use the same shift map 𝑇𝑖 = 𝑇 ,                                mary hit belongs only to pixel 𝑖’s box filter. As a result, the balance
+       where 𝑇 is forward projection followed by the hybrid shift.                              heuristic in Equation 6 reduces from 𝑁 + 1 terms in the denominator
+   (5) Input 𝑋 𝑁 +1 is a canonical sample 𝑌 ∗ = 𝑌 𝑗∗ for current pixel 𝑗.                       to two in Equation 11. Scattering allows simply shifting each sample
+       It uses identity shift 𝑇𝑁 +1 , as it lies in the current frame.                          𝑋𝑖 once, contributing shifted sample 𝑌𝑖 to the pixel it falls in.
+                                                                                                   The initial sample 𝑌𝑁 +1 = 𝑌 ∗ gets resampling weight
+For efficient computation, we first initialize a GRIS reservoir with
+a canonical sample for each current-frame pixel. We then shift all                                                     𝑤 𝑁 +1 = 𝑚 𝑁 +1 (𝑌 ∗ ) 𝑝ˆ (𝑌 ∗ )𝑊𝑌 ∗ ,                  (12)
+prior paths 𝑋𝑖 to the current frame as 𝑌𝑖 = 𝑇 (𝑋𝑖 ), identifying the
+                                                                                                with
+pixels each contributes to, and stream 𝑌𝑖 to these pixels’ reservoirs
+                                                                                                                                             𝑐 ∗ 𝑝ˆ (𝑌 ∗ )
+(while avoiding race conditions).                                                                   𝑚 𝑁 +1 (𝑌 ∗ ) =                                                        ,   (13)
+   While a balance heuristic (Section 4.1.2) for all-to-all reuse for all                                             𝑐 ∗ 𝑝ˆ (𝑌 ∗ ) + 𝑐𝑟 𝑝ˆ prev (𝑇 −1 (𝑌 ∗ )) 𝜕𝑇 −1 /𝜕𝑌 ∗
+𝑁 pixels requires 𝑂 (𝑁 3 ) total shifts, the splat operation implicitly
+                                                                                                given confidence weight 𝑐𝑟 at prior-frame pixel defined by the re-
+zero-weights most prior-frame samples for a given pixel. This re-
+                                                                                                verse splat 𝑇 −1 (𝑌 ∗ ). If the reverse splat fails due to occlusion or
+duces to two shifts per pixel (forward-splatting the prior reservoir
+                                                                                                lying outside the image, that term becomes zero. Similarly, we only
+and reverse-splatting the initial sample) totaling 𝑂 (𝑁 ) shifts.
+                                                                                                shift the canonical sample to the prior frame once, and at most one
+4.1.1 Reprojection Shift Mapping. To splat path 𝑥¯ into the current                             prior-frame pixel has positive box filter value for the splat 𝑇 −1 (𝑌 ∗ ).
+frame, we first transform its primary hit 𝑥 1 by keeping its object                             Thus, we again reduce from 𝑁 + 1 terms in the denominator to two.
+space position; given model-to-world transform 𝑀, we get 𝑦1 =                                   4.1.3 Jacobian. Renderers often parametrize primary hits with sub-
+𝑀 (𝑀 prev ) −1𝑥 1 . For static scenes, 𝑦1 = 𝑥 1 . We then map lens vertex                       pixel locations. Consider splatting changing a previous-frame sub-
+                           𝑥 0 to the current frame. For pinhole cameras,                       pixel location 𝑣 to the current frame 𝑢. In this parametrization, the
+                           𝑦0 is the new camera position. For other                             Jacobian determinant from the reprojection (Section 4.1.1) is
+                            camera types, we can retain local lens co-
+                            ordinates or apply the cross-frame camera                                                      𝜕𝑢   𝜕𝑢 𝜕𝑦1 𝜕𝑥 1
+                                                                                                                              =             ,                                  (14)
+                            transform, i.e., 𝑦0 = 𝑀𝑣 (𝑀𝑣 ) −1𝑥 0 given
+                                                          prev
+                                                                                                                           𝜕𝑣   𝜕𝑦1 𝜕𝑥 1 𝜕𝑣
+                            view-to-world matrix 𝑀𝑣 . We test visibility                        where |𝜕𝑦1 /𝜕𝑥 1 | accounts for object scaling and |𝜕𝑦1 /𝜕𝑢 | accounts
+                            between 𝑦0 and 𝑦1 ; if occluded, the shift fails                    for projection from world- to screen-space [Lehtinen et al. 2013]:
+and remains undefined. Finally, we shift path suffix [𝑥 2𝑥 3 . . . 𝑥𝑛 ]
+into [𝑦2𝑦3 . . . 𝑦𝑛 ] using any good shift, e.g., Lin et al.’s hybrid shift.                                  𝜕𝑦1   𝜕𝑦1 𝜕𝜔   ∥𝑦1 − 𝑦0 ∥ 2
+                                                                                                                  =        =              · cos3 𝜃𝑉 ,                          (15)
+Reprojection induces an additional Jacobian we must consider to                                               𝜕𝑢    𝜕𝜔 𝜕𝑢      cos 𝜃 𝑁
+avoid bias; we discuss this in Section 4.1.3.                                                   given angle 𝜃 𝑁 between 𝑦1 ’s normal and (𝑦0 − 𝑦1 ), and angle 𝜃𝑉
+4.1.2 GRIS Formulas. Section 4.1.1 defined resampling for current                               between the camera’s forward vector and (𝑦1 −𝑦0 ). The full Jacobian
+pixel 𝑗 using 𝑁 + 1 inputs: 𝑁 prior samples 𝑋𝑖 shifted to 𝑌𝑖 = 𝑇 (𝑋𝑖 )                          |𝜕𝑇 /𝜕𝑥¯ | multiplies the subpixel Jacobian |𝜕𝑢/𝜕𝑣 | and the Jacobian
+in the current frame, plus a canonical sample 𝑌𝑁 +1 = 𝑌 ∗ . In this                             of the remaining path, e.g., from the hybrid shift:
+                                                                                                                           3 prev
+                                                                                                                                             !
+subsection, we discuss how the box filter reduces the balance heuris-
+                                                                                                    𝜕𝑇        cos 𝜃 𝑁 cos 𝜃𝑉 ∥𝑥 1 − 𝑥 0 ∥ 2      𝜕𝑦1     ′
+tic into simple expressions; the supplemental document contains                                           =        prev                        ·      · 𝑇hybrid , (16)
+                                                                                                    𝜕𝑥¯      cos 𝜃      cos3 𝜃𝑉 ∥𝑦1 − 𝑦0 ∥ 2     𝜕𝑥 1
+derivations of MIS weights with general pixel filters.                                                            𝑁
+   Starting with prior sample 𝑋𝑖 mapped to 𝑌𝑖 = 𝑇𝑖 (𝑋𝑖 ), we substi-                            where |𝜕𝑦1 /𝜕𝑥 1 | = 1 for rigid transformations. For non-rigid body
+           ¯ = ℎ 𝑗 (𝑥)
+tute 𝑝ˆ 𝑗 (𝑥)       ¯ 𝑝ˆ (𝑥)
+                          ¯ into Equation 4. Using a box filter, 𝑤𝑖 = 0 if                      deformations, this is computed as the ratio between the correspond-
+𝑌𝑖 is not in pixel 𝑗. Otherwise, for 𝑌𝑖 inside pixel 𝑗, ℎ 𝑗 (𝑌𝑖 ) = 1, so                       ing triangle’s current and prior area.
+we get
+                                                                                                4.1.4 Summary. We first scatter prior samples to the current frame,
+                                                        𝜕𝑇
+                        𝑤𝑖 = 𝑚𝑖 (𝑌𝑖 ) 𝑝ˆ (𝑌𝑖 )𝑊𝑋𝑖           .                      (10)         using them for resampling where they land. Next, we reverse-splat
+                                                        𝜕𝑋𝑖
+                                                                                                canonical samples to the prior frame to evaluate MIS weights. Last,
+                                                                                                we update UCWs for each pixels’ chosen sample. Reservoir splatting
+2 Similar formulations are used in light tracing, bidirectional path tracing, vertex con-       remains unbiased as Jacobians compensate for any screen-space
+nection and merging, and related techniques [Dutré et al. 1993; Georgiev et al. 2012;           density change, and the initial samples ensure we fully cover the
+Lafortune and Willems 1993; Veach and Guibas 1995].
+3 Building on ideas from Area ReSTIR [Zhang et al. 2024], the target function is the            path space. Efficiently implemented, reservoir splatting costs similar
+measurement contribution function defined by Veach [1997].                                      to Zhang et al.’s [2024] fast reuse in Area ReSTIR.
+
+                                                                                            5
+SIGGRAPH Conference Papers ’25, August 10–14, 2025, Vancouver, BC, Canada             Jeffrey Liu, Daqi Lin, Markus Kettunen, Chris Wyman, and Ravi Ramamoorthi
+
+
+                                                                                           Reference           Zhang +§4.4.1      ←− Splatting (Ours) −→
+4.2   Backup Sample
+Splatting projects to the current frame using the last frame’s for-
+ward motion vectors; this leaves holes where no prior-frame pixel
+contributes. We can optionally fill holes with backup samples, e.g.,
+backprojecting to the prior frame to find relevant samples.
+   To obtain a backup, we follow the rounded motion vector 𝛿 at
+each pixel center back to a prior-frame pixel 𝑏, whose sample 𝑋 𝑏
+we give as an additional input to our temporal reuse. We directly                  Splats per prior-frame sample N/A     N/A      1x      2x           4x      8x
+                                                                                                           MAPE 0.333    0.872   0.857   0.709       0.642    0.612
+use Zhang et al.’s [2024] proposed temporal shift 𝑇𝑏 .                                                      FLIP 0.246   0.650   0.589   0.491       0.454    0.439
+   This simple method improves robustness, albeit at increased cost                                    Time (ms) 53.2    48.2    47.5    55.5         60.1    77.6
+similar to Zhang et al.’s [2024] robust variant. Like any shift moving          Fig. 3. This Landscape has 4.3 billion triangles. For static cameras,
+the shading point, this works best for low frequency geometry and               Zhang et al. [2024] get good results, but the quality is lost in motion,
+lighting. In the supplementary material, we extend the MIS weights              even with naïve motion blur (Section 4.4.1). Splatting improves qual-
+from Equations 11 and 13 to correctly account for backup samples.               ity, lowers cost, and extends to multi-splatting to resample paths at
+                                                                                multiple times during the exposure, further improving quality.
+4.3   Confidence Weight Update
+Earlier methods set the confidence weight 𝑐 𝑗 to the capped sum
+of the inputs (Section 3.4). However, we conceptually have 𝐻 ×
+𝑊 inputs, of which only a few contribute. Setting the confidence                pixel. Given shift 𝑇 in Section 4.1, our motion blur shift map 𝑇ˆ is:
+weight based only on contributing reservoirs produces bias. Instead,
+we model confidence after Zhang et al. [2024], backprojecting the                               (𝑦,                          ¯ 𝑡 prev + Δ𝑡) ,
+                                                                                                            ¯ 𝑡 prev ) = (𝑇 (𝑥),
+                                                                                                 ¯ 𝑡) = 𝑇ˆ (𝑥,                                                 (18)
+current pixel-center into the prior frame and bilinearly interpolating
+the confidence weights of the 2 × 2 overlapped pixels:                          which should be read as “forward project 𝑥¯ to time 𝑡 prev + Δ𝑡”, with
+                                                        !                       𝑇 also implicitly depending on 𝑡.
+                                   4
+                                  ∑︁
+                 𝑐 𝑗 = min 𝑐𝑖 +        𝛽𝑘 ′ 𝑐𝑘 ′ , 𝑐 cap .        (17)          4.4.3 Multi-Splatting for Motion Blur. Some motion blur methods
+                                    𝑘 ′ =1                                                              [Haeberli and Akeley 1990] render repeat-
+Here, 𝛽𝑘 ′ is the bilinear weight corresponding to how much pixel 𝑘 ′                                   edly and accumulate. Similarly, splatting can
+overlaps with the backprojected pixel 𝑗. With the backup, we also                                       repeatedly shift prior samples and splat into
+add its confidence before clamping.                                                                     the current frame at different times. This re-
+                                                                                                        duces sample sparsity, improving reuse but
+4.4   Motion Blur in ReSTIR                                                                             at increased cost (see Figures 3 and 5).
+                                                                                To do this, we partition the shutter time 𝜏 = 𝑡 1 − 𝑡 0 into 𝐾 intervals
+No prior spatiotemporal resampling algorithms handle motion blur,               of length 𝜏/𝐾, and splat each sample to all 𝐾 intervals with shifts
+which requires integrating over a shutter time [𝑡 0, 𝑡 1 ) and associat-
+ing a specific time 𝑡 with each sample.                                                                                                  𝑡 prev − 𝑡 0
+                                                                                                                                                     prev !
+                                                                                                                                  𝑛𝜏
+                                                                                                          ¯ 𝑡 prev ) = 𝑇𝑛 (𝑥),
+                                                                                 (𝑦¯ (𝑛) , 𝑡 (𝑛) ) = 𝑇ˆ𝑛 (𝑥,               ¯ 𝑡0 +    +                        , (19)
+4.4.1 Naïve Area ReSTIR Extension. We started by naïvely extending                                                                𝐾              𝐾
+Zhang et al. [2024], augmenting paths 𝑥¯ into path-time pairs (𝑥,    ¯ 𝑡)
+and seeking a new shift between prior- and current-frame pairs.                 where 𝑇𝑛 reprojects 𝑥¯ from 𝑡 prev to 𝑡 (𝑁 ) , and 𝑛 = 0, . . . , 𝐾 − 1. As
+Shift mappings rely on invariants (e.g., a vertex or half-vector), and          𝑇ˆ𝑛 squeezes the time dimension by 1/𝐾, we have 𝑇ˆ𝑛′ = 𝑇𝑛′ /𝐾 in
+a sample’s offset from the frame start is a possible invariant. A shift         resampling weight and MIS formulas.
+might preserve such an offset; given frame duration Δ𝑡, a sample
+time of 𝑡 maps to 𝑡 ± Δ𝑡 in future or prior frames.                             4.5   Splatting for Depth of Field
+   Backprojecting sample (𝑥¯ 𝑗 , 𝑡 𝑗 ) from current pixel 𝑗 to previous
+time 𝑡 𝑗 − Δ𝑡 defines a motion vector. But this represents only motion          Zhang et al. [2024] achieved real-time depth of field by reusing the
+at 𝑥¯ 𝑗 , not all surfaces in pixel 𝑗. Area ReSTIR reuses from reservoirs       subpixel location 𝑢. Shifts could then be defined by either reusing the
+with fixed motion. Even with a new time-offset shift, many paths in             lens position 𝑠 (the lens vertex copy shift), or the primary hit 𝑥 1 (the
+the reservoir may be irrelevant for the current pixel due to differing          primary hit reconnection shift). Primary hit reconnection improves
+motion, sample time, or subpixel detail. This makes failed shifts and           reuse of bokeh samples for large apertures, but often leads to shift
+lost history more likely, degrading rendering quality; see Figure 3.            failures for small apertures. Neither shift produces acceptable results
+                                                                                alone, so they must be combined via heuristic-based MIS weights.
+4.4.2 Splatting for Motion Blur. Comparatively, using scattering                   In contrast, splatting explicitly preserves the primary hit 𝑥 1 and
+for motion blur is simple. Splatting forward-projects a single path,            also allows reuse of a fixed lens sample 𝑠, while the image-space lo-
+whereas backprojection seeks contributions for an entire pixel.                 cation 𝑢 is simply defined by splatted sample location. This achieves
+   Splatting by shifting forward in time Δ𝑡 simply projects the prior           high-quality bokeh using our single shift map. This saves compute
+primary hit to the correct point on its motion, mapping to a specific           time and simplifies the code. See Figure 4 for an illustration.
+
+                                                                            6
+Reservoir Splatting for Temporal Path Resampling and Motion Blur                       SIGGRAPH Conference Papers ’25, August 10–14, 2025, Vancouver, BC, Canada
+
+
+
+
+Fig. 4. To remain robust, Area ReSTIR [Zhang et al. 2024] reuses temporally by one shift that preserves lens coordinates and another that preserves
+the primary hit, and merges with MIS. Our reservoir splatting alone preserves both. Left: Area ReSTIR computes a motion vector by tracing a
+primary hit through the current lens and pixel centers (1), then reprojecting towards the prior lens center onto the prior image plane (2). Middle:
+Lens vertex copy reuses prior path’s lens coordinates (3), adds the motion vector to the image-space location (4), and traces a new primary hit (5).
+Primary hit reconnection adds the motion vector (6) and reprojects the old primary hit onto the lens through the image-space vertex (7). Right: Our
+reservoir splatting copies the local lens coordinates (1) and reprojects the old primary hit onto the image-space towards the new lens coordinates (2).
+
+                                                                                            Reference               1 Splat       2 Splats   4 Splats    8 Splats
+5    IMPLEMENTATION DETAILS
+We implement our reservoir splatting4 in Falcor [Kallweit et al.
+2022]. We use Zhang et al.’s [2024] area reservoir storage format,
+adding the explicit object-space primary hit, as well as a sample
+time when enabling motion blur. For correctness and efficiency, a
+few key details should be considered.
+   Multiple splats can land in any pixel, requiring atomics to avoid
+race conditions, as in order-independent transparency algorithms                                           MAPE     0.600          0.444      0.346           0.290
+[Maule et al. 2011] such as real-time K-buffering [Bavoil et al. 2007].                                     FLIP    0.330          0.259      0.211           0.183
+   Motion blur is tricky, as it traces rays at any time 𝑡. This requires                                Time (ms)   14.5           18.0       22.8            31.9
+arbitrary-time BVH queries. While recent hardware accelerates such                 Fig. 5. The Living Room using multi-splatting with varying splats
+motion BVHs [NVIDIA 2020,a], Falcor does not. Our prototype only                   per prior pixel, with camera rotation generally leftwards.
+handles blur from dynamic cameras in static scenes, allowing use of
+regular BVHs as geometry is time-invariant. Our algorithm should                          Reference                   Splat                  Splat + Backup
+extend to dynamic scenes once we can trace rays at arbitrary times.
+   The supplemental material discusses these topics in further detail.
+
+6    RESULTS
+We generated all results at 1920×1080, with timings captured on an
+NVIDIA GeForce RTX 4090. We follow most settings from Zhang
+et al. [2024] and Lin et al. [2022], e.g., 𝑐𝑐𝑎𝑝 = 20, spatial neighbors
+from a 30 pixel radius. We enable Russian roulette, so average path
+depth is < 3 in most scenes. Unless stated, motion blur results use a
+simulated shutter of 1/24 seconds, regardless of frame time. We use                        MAPE / Time (ms)         0.980 / 7.1                 0.717 / 9.0
+MAPE to measure numerical errors and FLIP for perceptual errors
+                                                                                   Fig. 6. The Wooden Staircase captured under extreme forward mo-
+[Andersson et al. 2021].
+                                                                                   tion. In such cases, splatting prior reservoirs into single pixels leaves
+   Figure 7 shows a cross-section of results, comparing our single
+                                                                                   holes between splats. Using a backup sample (Section 4.2) helps fill
+splatting, with and without backup (Sections 4.4.2 and 4.4.3), to
+                                                                                   these holes, improving reuse.
+various baselines in tricky scenes.
+   The top three rows (Sheep In Forest, Hair, and Residential
+Lobby) compare with Zhang et al.’s [2024] Area ReSTIR, using their
+                                                                                   To avoid comparing to ad hoc post-process blur, we use a baseline of
+fast and robust temporal methods. Our splatting consistently runs
+                                                                                   Zhang et al. [2024] augmented by our naïve, backprojected motion
+5-10% faster with 10-20% lower error than fast reuse, and splatting
+                                                                                   blur from Section 4.4.1. In this case, splatting again has 10-15%
+with a backup similarly outperforms robust reuse. In tricky cases,
+                                                                                   lower error and usually lower cost. From a quality perspective, Area
+splatting alone also beats robust reuse; in simpler cases, e.g., along
+                                                                                   ReSTIR’s robust reuse has quite noticeable 2 × 2 pixel correlations.
+flat surfaces, splatting only gives quality on par with Zhang et al.’s
+                                                                                   Such correlations are not present with splatting (alone), so even
+fast reuse, though it usually retains a performance advantage.
+                                                                                   if the robust baseline has lower metrics, splatting often has less
+   The bottom rows (Bistro Exterior and Emerald Sqare) show
+                                                                                   objectionable artifacts and runs twice as fast.
+motion blur, which was incompatible with ReSTIR before our work.
+                                                                                      Qualitatively, multi-splatting could improve all our results in
+4 Implementation available at https://github.com/Jebbly/Reservoir-Splatting.       Figure 7 further (e.g., as in Figure 5), albeit at increased cost.
+
+                                                                               7
+

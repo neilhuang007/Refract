@@ -131,7 +131,7 @@ public class ShaderUtil {
    }
 
    public static String preprocessAutoUniforms(String source) {
-      return source;
+      return injectMissingUniforms(source);
    }
 
    public static String preprocessForward(String source) {

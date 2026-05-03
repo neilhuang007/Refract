@@ -1,10 +1,5 @@
-const int RTXDI_PackedDIReservoir_DistanceChannelBits = 8;
-const int RTXDI_PackedDIReservoir_DistanceXShift = 0;
-const int RTXDI_PackedDIReservoir_DistanceYShift = 8;
-const int RTXDI_PackedDIReservoir_AgeShift = 16;
-const uint RTXDI_PackedDIReservoir_MaxAge = 0xffu;
-const uint RTXDI_PackedDIReservoir_DistanceMask = (1u << RTXDI_PackedDIReservoir_DistanceChannelBits) - 1u;
-const int RTXDI_PackedDIReservoir_MaxDistance = int((1u << (RTXDI_PackedDIReservoir_DistanceChannelBits - 1)) - 1u);
+#ifndef PHOTONICS_RESTIR_DI_RESERVOIR_PACKING_GLSL
+#define PHOTONICS_RESTIR_DI_RESERVOIR_PACKING_GLSL
 
 vec3 rtxdi_unpack_visibility(uint packedVisibility) {
     return vec3(
@@ -58,16 +53,6 @@ uint rtxdi_pack_age_distance(uint age, ivec2 sd) {
         | (clampedAge << RTXDI_PackedDIReservoir_AgeShift);
 }
 
-void rtxdi_unpack_age_distance(uint packedValue, out uint age, out ivec2 sd) {
-    int sxShift = 32 - RTXDI_PackedDIReservoir_DistanceXShift - RTXDI_PackedDIReservoir_DistanceChannelBits;
-    int syShift = 32 - RTXDI_PackedDIReservoir_DistanceYShift - RTXDI_PackedDIReservoir_DistanceChannelBits;
-    int signExtendShift = 32 - RTXDI_PackedDIReservoir_DistanceChannelBits;
-    int isx = int(packedValue << sxShift) >> signExtendShift;
-    int isy = int(packedValue << syShift) >> signExtendShift;
-    age = (packedValue >> RTXDI_PackedDIReservoir_AgeShift) & RTXDI_PackedDIReservoir_MaxAge;
-    sd = ivec2(isx, isy);
-}
-
 vec4 rtxdi_pack_reservoir_meta_with_transport(
     RTXDI_DIReservoir reservoir,
     float transportAux0,
@@ -118,34 +103,18 @@ void rtxdi_unpack_reservoir_at_surface(
     // When remap=false, lightData preserves the previous-frame packed ID and validity bit.
     // RTXDI_LoadDIReservoir does not validate -- remapping happens separately at the call site.
 
-    reservoir.lightData = lightData;
-    reservoir.uvData = floatBitsToUint(sampleData.x);
-    reservoir.pixelSampleUV = rtxdi_unpack_sample_uv(floatBitsToUint(sampleData.y));
-    reservoir.lensSampleUV = rtxdi_unpack_sample_uv(floatBitsToUint(sampleData.z));
-    reservoir.pathSample = floatBitsToUint(sampleData.w);
-    reservoir.weightSum = color.y;
-    reservoir.targetPdf = color.z;
-    uint packedVisibilityAndM = floatBitsToUint(color.w);
-    reservoir.M = float((packedVisibilityAndM >> RTXDI_PackedDIReservoir_MShift) & RTXDI_PackedDIReservoir_MaxMUint);
-
-    // Unpack age+spatialDistance from meta.w, matching RTXDI distanceAge packing.
-    // packedVisibility lives in color.w with M, matching RTXDI_PackedDIReservoir::mVisibility.
-    uint packedDistanceAge = floatBitsToUint(meta.w);
-    reservoir.packedVisibility = packedVisibilityAndM & RTXDI_PackedDIReservoir_VisibilityMask;
-    rtxdi_unpack_age_distance(packedDistanceAge, reservoir.age, reservoir.spatialDistance);
-    reservoir.canonicalWeight = meta.x;
-    reservoir.transportAux0 = meta.y;
-    reservoir.transportAux1 = meta.z;
+    rtxdi_unpack_reservoir_payload(
+        reservoir,
+        lightData,
+        color,
+        sampleData,
+        meta
+    );
 
     if (!lt_area_has_valid_domain(reservoir)) {
         reservoir.pixelSampleUV = vec2(-1.0f);
         reservoir.lensSampleUV = vec2(-1.0f);
     }
-
-    // RTXDI_UnpackDIReservoir sanitization (ReservoirStorage.hlsli lines 88-91):
-    //   if (isinf(res.weightSum) || isnan(res.weightSum)) { res = RTXDI_EmptyDIReservoir(); }
-    // RTXDI only checks weightSum, not targetPdf. Match exactly.
-    if (isinf(reservoir.weightSum) || isnan(reservoir.weightSum)) {
-        reservoir = RTXDI_EmptyDIReservoir();
-    }
 }
+
+#endif

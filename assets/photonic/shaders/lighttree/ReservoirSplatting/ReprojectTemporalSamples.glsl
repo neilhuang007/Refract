@@ -26,6 +26,10 @@ void ReprojectTemporalSamples_run(
         return;
     }
 
+    float prevConfidence = PathReservoir_getConfidence(prevReservoir);
+    bool stableHistory = prevConfidence >= (PATH_RESERVOIR_CONFIDENCE_CAP * 0.5f)
+        && prevReservoir.M >= (PATH_RESERVOIR_CONFIDENCE_CAP * 0.5f);
+
     ReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
     vec2 newFractionalPixel;
     vec3 rayOrigin;
@@ -44,18 +48,44 @@ void ReprojectTemporalSamples_run(
         return;
     }
 
-    float visibilityTraceDistance = hitDistantLight
-        ? traceDistance
-        : (0.999f * traceDistance);
-    if (!lt_scatter_trace_reconnection_visibility(
-            rayOrigin,
-            rayDirection,
-            visibilityTraceDistance,
-            !hitDistantLight)) {
+    ivec2 newPixel = ivec2(floor(newFractionalPixel));
+    if (!lt_is_viewport_uv_in_bounds(newPixel)) {
         return;
     }
 
-    ivec2 newPixel = ivec2(floor(newFractionalPixel));
+    bool stableCurrentSurface = false;
+    if (stableHistory)
+    {
+        RAB_Surface prevSurface = RAB_GetGBufferSurface(pixel, true);
+        RAB_Surface currentSurface = RAB_GetGBufferSurface(newPixel, false);
+        stableCurrentSurface = RAB_IsSurfaceValid(prevSurface)
+            && RAB_IsSurfaceValid(currentSurface)
+            && RTXDI_IsValidNeighbor(
+                RAB_GetSurfaceNormal(currentSurface),
+                RAB_GetSurfaceNormal(prevSurface),
+                RAB_GetSurfaceLinearDepth(currentSurface),
+                RAB_GetSurfaceLinearDepth(prevSurface),
+                lt_surface_normal_threshold,
+                lt_depth_threshold
+            );
+    }
+
+    bool validateThisFrame = !stableCurrentSurface
+        || ((uint(pixel.x + pixel.y + int(frameCounter)) & 1u) == 0u);
+    if (validateThisFrame)
+    {
+        float visibilityTraceDistance = hitDistantLight
+            ? traceDistance
+            : (0.999f * traceDistance);
+        if (!lt_scatter_trace_reconnection_visibility(
+                rayOrigin,
+                rayDirection,
+                visibilityTraceDistance,
+                !hitDistantLight)) {
+            return;
+        }
+    }
+
     lt_reproject_temporal_samples_append_record(pixel, newPixel);
 }
 #endif

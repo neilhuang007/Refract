@@ -655,7 +655,7 @@ void main() {
 
         cellCoord = ivec3(floor(positionData.xyz / ph_regir_hash_cell_size));
         if (!regir_cell_in_build_region(cellCoord)) return;
-        bucket = regir_normal_to_bucket(normalize(surfaceNormal));
+        bucket = regir_clamp_normal_bucket(regir_normal_to_bucket(normalize(surfaceNormal)));
 
         rngThreadId = regir_rng_cell_key(cellCoord) * lightsPerCell + lightInCell;
     } else {

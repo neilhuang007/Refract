@@ -137,7 +137,7 @@ bool InitialCandidates_finalizeSelectedReservoir(
         transmittance = lt_trace_final_visibility_with_offset(
             lightSampleCopy,
             surface,
-            0.001f,
+            0.01f,
             visibilityHitDistance
         );
         if (ph_luminance(transmittance) <= 0.0f)

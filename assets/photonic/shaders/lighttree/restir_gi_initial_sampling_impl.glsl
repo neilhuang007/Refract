@@ -215,9 +215,10 @@ bool PathReservoir_add(
     float sampleMIS,
     RTXDI_DIReservoir candidateReservoir)
 {
-    float candidateTotalWeight =
-        CandidateReservoir_getTotalWeight(candidateReservoir) * candidateReservoir.targetPdf;
-    float weight = sampleMIS * candidateTotalWeight;
+    // Reservoir.slang::PathReservoir::add: candidate totalWeight already
+    // contains the candidate pHat, and the selected path reservoir later divides
+    // by the selected integrand pHat in computeUCW().
+    float weight = sampleMIS * CandidateReservoir_getTotalWeight(candidateReservoir);
     pathReservoir.M += max(candidateReservoir.M, 0.0f);
     PathReservoir_setTotalWeight(pathReservoir, PathReservoir_getTotalWeight(pathReservoir) + weight);
     float accumulatedConfidence = PathReservoir_getConfidence(pathReservoir) + 1.0f;

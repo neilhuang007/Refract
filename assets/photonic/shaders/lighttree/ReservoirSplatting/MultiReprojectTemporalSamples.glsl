@@ -1,15 +1,7 @@
 #ifndef PHOTONICS_RESERVOIR_SPLATTING_MULTI_REPROJECT_TEMPORAL_SAMPLES_GLSL
 #define PHOTONICS_RESERVOIR_SPLATTING_MULTI_REPROJECT_TEMPORAL_SAMPLES_GLSL
 
-#include "/photonics/lighttree/light_tree.glsl"
-#include "/photonics/lighttree/reuse_bridge.glsl"
-#include "/photonics/lighttree/restir_di_reconnection_restore.glsl"
-#include "/photonics/lighttree/restir_di_scatter_impl.glsl"
-#include "/photonics/lighttree/restir_di_spatial_scatter_impl.glsl"
-#include "/photonics/lighttree/restir_di_temporal_scatter_shared.glsl"
-#include "/photonics/lighttree/restir_di_temporal_shift_mapping.glsl"
-#include "/photonics/lighttree/restir_di_temporal.glsl"
-#include "/photonics/lighttree/restir_di_temporal_scatter_common.glsl"
+#include "/photonics/lighttree/restir_di_multi_temporal_reproject_bridge.glsl"
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE)
 bool lt_multi_temporal_reproject_partition(
@@ -96,10 +88,7 @@ void MultiReprojectTemporalSamples_run(
         return;
     }
 
-    RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
-        lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(pixel)
-    );
+    RTXDI_DIReservoir prevReservoir = lt_multi_temporal_load_previous_reservoir(pixel);
     if (all(equal(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)))) {
         return;
     }

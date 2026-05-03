@@ -96,6 +96,13 @@ void CollectTemporalSamples_store_empty_result()
 
 void CollectTemporalSamples_execute(ivec2 currPixel)
 {
+    if (texelFetch(radiosity_position, currPixel, 0).w == BACKGROUND_DEPTH)
+    {
+        GatherData_storeFloatingCoords(currPixel, vec2(-1.0f));
+        CollectTemporalSamples_store_empty_result();
+        return;
+    }
+
     vec2 motionVector = GatherData_getMotionVector(currPixel);
     motionVector = (length(motionVector) < 1e-6f) ? vec2(0.0f) : motionVector;
     vec2 prevPixel = vec2(currPixel) + motionVector * vec2(viewWidth, viewHeight);
@@ -201,6 +208,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
     default:
     {
         dstFloatingCoord = prevPixel;
+        bool lowMotionHistory = length(motionVector * vec2(viewWidth, viewHeight)) < 0.35f;
 
         float totalConfidence = 0.0f;
         for (int x = 0; x < 2; ++x)
@@ -228,6 +236,9 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                     CollectTemporalSamples_reservoir_confidence(neighborReservoir);
                 totalConfidence += bilinearWeight
                     * CollectTemporalSamples_confidence_weight(neighborReservoirConfidence);
+                bool stableMinecraftNeighbor = lowMotionHistory
+                    && RTXDI_IsValidDIReservoir(neighborReservoir)
+                    && neighborReservoirConfidence >= (PATH_RESERVOIR_CONFIDENCE_CAP * 0.5f);
 
                 ivec2 requiredOffset = ivec2(0);
                 if (relativeSubPixel.x < 0.0f) requiredOffset.x += 1;
@@ -260,45 +271,48 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                     * CollectTemporalSamples_confidence_weight(neighborReservoirConfidence);
                 float totalPHat = sourceWeight;
 
-                for (int tempX = 0; tempX < 2; ++tempX)
+                if (!stableMinecraftNeighbor)
                 {
-                    for (int tempY = 0; tempY < 2; ++tempY)
+                    for (int tempX = 0; tempX < 2; ++tempX)
                     {
-                        ivec2 tempOffset = ivec2(tempX, tempY);
-                        ivec2 tempOffsetPixel = prevPixelTopLeft + tempOffset;
-                        if (!lt_is_viewport_uv_in_bounds(tempOffsetPixel))
+                        for (int tempY = 0; tempY < 2; ++tempY)
                         {
-                            continue;
+                            ivec2 tempOffset = ivec2(tempX, tempY);
+                            ivec2 tempOffsetPixel = prevPixelTopLeft + tempOffset;
+                            if (!lt_is_viewport_uv_in_bounds(tempOffsetPixel))
+                            {
+                                continue;
+                            }
+
+                            ivec2 diff = tempOffset - offset;
+                            if (all(equal(diff, ivec2(0))))
+                            {
+                                continue;
+                            }
+
+                            float tempBilinearWeight =
+                                CollectTemporalSamples_bilinear_weight(fractionalCoord, tempX, tempY);
+                            ivec2 temp = diff + ivec2(1);
+                            int tempIndex = temp.x + 3 * temp.y;
+                            tempIndex = (tempIndex > 4) ? (tempIndex - 1) : tempIndex;
+
+                            ShiftedPathData tempPath =
+                                lt_temporal_load_shifted_path(neighborPixel, tempIndex);
+                            float tempPHat = lt_scatter_radiance_phat(tempPath.radiance);
+                            float tempJacobian = tempPath.secondaryPathJacobian
+                                / neighborReconnectionData.secondaryPathJacobian;
+                            float tempConfidence = CollectTemporalSamples_reservoir_confidence(
+                                RTXDI_LoadPreviousDIReservoir(
+                                    lt_build_restir_di_parameters().reservoirBufferParams,
+                                    uvec2(tempOffsetPixel)
+                                )
+                            );
+
+                            totalPHat += tempBilinearWeight
+                                * tempPHat
+                                * tempJacobian
+                                * CollectTemporalSamples_confidence_weight(tempConfidence);
                         }
-
-                        ivec2 diff = tempOffset - offset;
-                        if (all(equal(diff, ivec2(0))))
-                        {
-                            continue;
-                        }
-
-                        float tempBilinearWeight =
-                            CollectTemporalSamples_bilinear_weight(fractionalCoord, tempX, tempY);
-                        ivec2 temp = diff + ivec2(1);
-                        int tempIndex = temp.x + 3 * temp.y;
-                        tempIndex = (tempIndex > 4) ? (tempIndex - 1) : tempIndex;
-
-                        ShiftedPathData tempPath =
-                            lt_temporal_load_shifted_path(neighborPixel, tempIndex);
-                        float tempPHat = lt_scatter_radiance_phat(tempPath.radiance);
-                        float tempJacobian = tempPath.secondaryPathJacobian
-                            / neighborReconnectionData.secondaryPathJacobian;
-                        float tempConfidence = CollectTemporalSamples_reservoir_confidence(
-                            RTXDI_LoadPreviousDIReservoir(
-                                lt_build_restir_di_parameters().reservoirBufferParams,
-                                uvec2(tempOffsetPixel)
-                            )
-                        );
-
-                        totalPHat += tempBilinearWeight
-                            * tempPHat
-                            * tempJacobian
-                            * CollectTemporalSamples_confidence_weight(tempConfidence);
                     }
                 }
 

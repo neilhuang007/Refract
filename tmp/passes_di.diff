@@ -1,0 +1,404 @@
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/CollectTemporalSamples.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/CollectTemporalSamples.fsh
+index 739863a..27855b1 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/CollectTemporalSamples.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/CollectTemporalSamples.fsh
+@@ -1,4 +1,7 @@
+ #version 430
++#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 0
++#define PH_LIGHTTREE_ENABLE_POWER_LIGHT_CDF 0
++#define PH_LIGHTTREE_ENABLE_SPATIAL_NEIGHBOR_OFFSETS 0
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE 1
+ 
+ in vec4 direction_vert_out;
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/GatherTemporalResampling.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/GatherTemporalResampling.fsh
+index 3fbde56..f216696 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/GatherTemporalResampling.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/GatherTemporalResampling.fsh
+@@ -1,4 +1,7 @@
+ #version 430
++#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 0
++#define PH_LIGHTTREE_ENABLE_POWER_LIGHT_CDF 0
++#define PH_LIGHTTREE_ENABLE_SPATIAL_NEIGHBOR_OFFSETS 0
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE 1
+ 
+ in vec4 direction_vert_out;
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiScatterTemporalResampling.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiScatterTemporalResampling.fsh
+index 934f746..b0a46b7 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiScatterTemporalResampling.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiScatterTemporalResampling.fsh
+@@ -1,4 +1,7 @@
+ #version 430
++#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 0
++#define PH_LIGHTTREE_ENABLE_POWER_LIGHT_CDF 0
++#define PH_LIGHTTREE_ENABLE_SPATIAL_NEIGHBOR_OFFSETS 0
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+ #define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE 1
+ 
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiTemporalBinning.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiTemporalBinning.fsh
+index fa58bf8..4e73e82 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiTemporalBinning.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiTemporalBinning.fsh
+@@ -2,6 +2,7 @@
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+ #define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE 1
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORTING 1
++//ph_required: uniform float viewWidth, viewHeight;
+ 
+ in vec4 direction_vert_out;
+ 
+@@ -9,7 +10,6 @@ layout(location = 0) out vec4 reservoir_frag_out;
+ layout(location = 1) out vec4 reservoir_sample_frag_out;
+ layout(location = 2) out vec4 reservoir_meta_frag_out;
+ 
+-#include "/photonics/common/header.glsl"
+ #include "/photonics/lighttree/ReservoirSplatting/MultiSortReprojectedReservoirs.glsl"
+ 
+ void MultiSortReprojectedReservoirs_storeEmptySortCellDataResult()
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiTemporalBinningOffsets.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiTemporalBinningOffsets.fsh
+index f54278f..09a734e 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiTemporalBinningOffsets.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/MultiTemporalBinningOffsets.fsh
+@@ -1,6 +1,7 @@
+ #version 430
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORT_STAGE 1
+ #define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE 1
++//ph_required: uniform float viewWidth, viewHeight;
+ 
+ in vec4 direction_vert_out;
+ 
+@@ -8,7 +9,6 @@ layout(location = 0) out vec4 reservoir_frag_out;
+ layout(location = 1) out vec4 reservoir_sample_frag_out;
+ layout(location = 2) out vec4 reservoir_meta_frag_out;
+ 
+-#include "/photonics/common/header.glsl"
+ #include "/photonics/lighttree/ReservoirSplatting/MultiSortReprojectedReservoirs.glsl"
+ 
+ void MultiSortReprojectedReservoirs_storeEmptyComputeCellOffsetsResult()
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/RobustReuseOptimization.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/RobustReuseOptimization.fsh
+index de8e02a..af65e06 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/RobustReuseOptimization.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/RobustReuseOptimization.fsh
+@@ -1,4 +1,7 @@
+ #version 430
++#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 0
++#define PH_LIGHTTREE_ENABLE_POWER_LIGHT_CDF 0
++#define PH_LIGHTTREE_ENABLE_SPATIAL_NEIGHBOR_OFFSETS 0
+ #define PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE 1
+ 
+ in vec4 direction_vert_out;
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/ScatterBackupTemporalResampling.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/ScatterBackupTemporalResampling.fsh
+index bcbf39a..8bff028 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/ScatterBackupTemporalResampling.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/ScatterBackupTemporalResampling.fsh
+@@ -1,4 +1,7 @@
+ #version 430
++#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 0
++#define PH_LIGHTTREE_ENABLE_POWER_LIGHT_CDF 0
++#define PH_LIGHTTREE_ENABLE_SPATIAL_NEIGHBOR_OFFSETS 0
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE 1
+ 
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/ScatterTemporalResolve.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/ScatterTemporalResolve.fsh
+index a48e886..38612ea 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/ScatterTemporalResolve.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/ScatterTemporalResolve.fsh
+@@ -1,4 +1,7 @@
+ #version 430
++#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 0
++#define PH_LIGHTTREE_ENABLE_POWER_LIGHT_CDF 0
++#define PH_LIGHTTREE_ENABLE_SPATIAL_NEIGHBOR_OFFSETS 0
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE 1
+ 
+diff --git a/assets/photonic/shaders/lighttree/LightingPasses/DI/TemporalReprojection.fsh b/assets/photonic/shaders/lighttree/LightingPasses/DI/TemporalReprojection.fsh
+index 594c6e9..0d903d4 100644
+--- a/assets/photonic/shaders/lighttree/LightingPasses/DI/TemporalReprojection.fsh
++++ b/assets/photonic/shaders/lighttree/LightingPasses/DI/TemporalReprojection.fsh
+@@ -1,4 +1,7 @@
+ #version 430
++#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 0
++#define PH_LIGHTTREE_ENABLE_POWER_LIGHT_CDF 0
++#define PH_LIGHTTREE_ENABLE_SPATIAL_NEIGHBOR_OFFSETS 0
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+ #define PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE 1
+ 
+diff --git a/assets/photonic/shaders/lighttree/light_tree.glsl b/assets/photonic/shaders/lighttree/light_tree.glsl
+index 8383937..7d1750b 100644
+--- a/assets/photonic/shaders/lighttree/light_tree.glsl
++++ b/assets/photonic/shaders/lighttree/light_tree.glsl
+@@ -13,6 +13,11 @@
+ const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
+ const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
+ 
++#ifndef PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
++#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 1
++#endif
++
++#if PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
+ layout(std430, binding = 5) restrict buffer ph_ris_buffer {
+     uvec2 ph_ris_data[];
+ };
+@@ -45,6 +50,23 @@ Light load_compact_light(uint risBufferPtr, int lightIndex) {
+         ld3.w
+     );
+ }
++#else
++Light load_compact_light(uint risBufferPtr, int lightIndex) {
++    risBufferPtr = risBufferPtr;
++    return lightIndex < ph_light_count ? load_light(lightIndex) : Light(
++        -1,
++        0,
++        vec3(0.0f),
++        vec3(0.0f),
++        0.0f,
++        vec2(0.0f),
++        0.0f,
++        0.0f,
++        vec3(0.0f, 1.0f, 0.0f),
++        0.0f
++    );
++}
++#endif
+ 
+ // ph_regir_grid_center: world-space center of the ReGIR build region.
+ // In the hash-grid variant, lookups hash the actual surface position.
+@@ -62,6 +84,7 @@ uniform int   ph_regir_hash_normal_buckets;    // currently 6 (axis-aligned)
+ uniform int   ph_regir_build_region_cells;     // build cube side (cells)
+ 
+ // Hash-grid auxiliary buffers (read-only at lookup time; written by regir_build.glsl).
++#if PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
+ layout(std430, binding = 7) restrict readonly buffer ph_regir_cell_checksums {
+     uint ph_regir_cell_checksum[];
+ };
+@@ -69,6 +92,7 @@ layout(std430, binding = 7) restrict readonly buffer ph_regir_cell_checksums {
+ layout(std430, binding = 8) restrict readonly buffer ph_regir_cell_keys {
+     ivec4 ph_regir_cell_key[];
+ };
++#endif
+ 
+ const uint RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED = 1u;
+ const uint RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED = 2u;
+@@ -226,6 +250,11 @@ int regir_hash_lookup(ivec3 cellCoord, int bucket) {
+         return -1;
+     }
+ 
++#if !PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
++    cellCoord = cellCoord;
++    bucket = bucket;
++    return -1;
++#else
+     bucket = regir_clamp_normal_bucket(bucket);
+     uint checksum = regir_hash_xxhash_checksum(cellCoord, bucket);
+     uint slot = regir_hash_pcg_key(cellCoord, bucket) % uint(ph_regir_hash_table_size);
+@@ -243,6 +272,7 @@ int regir_hash_lookup(ivec3 cellCoord, int bucket) {
+         slot = (slot + 1u) % uint(ph_regir_hash_table_size);
+     }
+     return -1;
++#endif
+ }
+ 
+ // RTXDI_CalculateReGIRCellIndex jitters the world-space lookup independently
+@@ -271,6 +301,9 @@ bool regir_unpack_slot(int hashSlot, int cellSlot,
+         return false;
+     }
+ 
++#if !PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
++    return false;
++#else
+     int  bufferIndex   = hashSlot * ph_regir_lights_per_cell + cellSlot;
+     outRisBufferPtr    = uint(ph_regir_ris_buffer_offset) + uint(bufferIndex);
+     uvec2 slotData     = ph_ris_data[outRisBufferPtr];
+@@ -294,6 +327,7 @@ bool regir_unpack_slot(int hashSlot, int cellSlot,
+     }
+ 
+     return true;
++#endif
+ }
+ 
+ // Resolve the hash slot to query for (worldPos, normal). Returns true if the
+@@ -323,6 +357,9 @@ bool regir_resolve_cell(vec3 shadingWorldPos, vec3 shadingNormal, inout RTXDI_Ra
+     int   bucket    = regir_normal_to_bucket(queryNormal);
+ 
+     int slot = regir_hash_lookup(cellCoord, bucket);
++    if (slot < 0 && ph_regir_hash_normal_buckets == 1 && bucket != 0) {
++        slot = regir_hash_lookup(cellCoord, 0);
++    }
+     if (slot < 0) return false;
+     flatCellIndex = slot;
+     return true;
+diff --git a/assets/photonic/shaders/lighttree/light_tree_accumulation.fsh b/assets/photonic/shaders/lighttree/light_tree_accumulation.fsh
+index 461d4ea..1d60105 100644
+--- a/assets/photonic/shaders/lighttree/light_tree_accumulation.fsh
++++ b/assets/photonic/shaders/lighttree/light_tree_accumulation.fsh
+@@ -99,11 +99,13 @@ void main() {
+     vec4 stageAlbedo = useDenoisedDirect
+         ? lt_load_current_gbuffer_like(stage_radiosity_albedo, tex_coord)
+         : lt_load_stage_gbuffer_like(stage_radiosity_albedo, tex_coord);
++
+     vec2 uv = (vec2(shadingCoord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
+     vec4 stageMaterial = lt_extract_accumulation_material(uv);
+     vec4 stageIdentity = useDenoisedDirect
+         ? lt_load_current_gbuffer_like(stage_radiosity_identity, tex_coord)
+         : lt_load_stage_gbuffer_like(stage_radiosity_identity, tex_coord);
++
+     vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord);
+     vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord);
+     float directHitDistance = max(directDiffuse.a, directSpecular.a);
+diff --git a/assets/photonic/shaders/lighttree/restir_di_gather_temporal_stage.glsl b/assets/photonic/shaders/lighttree/restir_di_gather_temporal_stage.glsl
+index e872286..e53d990 100644
+--- a/assets/photonic/shaders/lighttree/restir_di_gather_temporal_stage.glsl
++++ b/assets/photonic/shaders/lighttree/restir_di_gather_temporal_stage.glsl
+@@ -162,9 +162,12 @@ bool GatherTemporalResampling_load_current_sample(
+     out float currConfidence)
+ {
+     currReservoir = GatherTemporalResampling_load_current_reservoir(pixel);
+-    currReconnectionData = GatherTemporalResampling_load_current_reconnection(pixel, currReservoir);
+     currConfidence = PathReservoir_getConfidence(currReservoir);
+-    return any(greaterThan(PathReservoir_getIntegrand(currReservoir), vec3(0.0f)));
++    bool hasContribution = any(greaterThan(PathReservoir_getIntegrand(currReservoir), vec3(0.0f)));
++    currReconnectionData = hasContribution
++        ? GatherTemporalResampling_load_current_reconnection(pixel, currReservoir)
++        : ReconnectionData_init();
++    return hasContribution;
+ }
+ 
+ bool GatherTemporalResampling_load_previous_sample(
+@@ -174,9 +177,12 @@ bool GatherTemporalResampling_load_previous_sample(
+     out float prevConfidence)
+ {
+     prevReservoir = GatherTemporalResampling_load_previous_reservoir(pixel);
+-    prevReconnectionData = GatherTemporalResampling_load_previous_temporal_reconnection(pixel, prevReservoir);
+     prevConfidence = PathReservoir_getConfidence(prevReservoir);
+-    return any(greaterThan(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)));
++    bool hasContribution = any(greaterThan(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)));
++    prevReconnectionData = hasContribution
++        ? GatherTemporalResampling_load_previous_temporal_reconnection(pixel, prevReservoir)
++        : ReconnectionData_init();
++    return hasContribution;
+ }
+ 
+ float GatherTemporalResampling_shift_current_sample_time(float time)
+@@ -368,11 +374,18 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
+     ivec2 pixel,
+     out ReconnectionData currReconnectionData)
+ {
++    RAB_Surface currentSurface = GatherTemporalResampling_load_current_surface(pixel);
++    if (!RAB_IsSurfaceValid(currentSurface))
++    {
++        currReconnectionData = ReconnectionData_init();
++        return RTXDI_EmptyDIReservoir();
++    }
++
+     RTXDI_RandomSamplerState sg = lt_init_random_sampler(uvec2(pixel), uint(frameCounter), 3u);
+     RTXDI_DIReservoir currReservoir;
+     ReconnectionData currReconnection;
+     float currConfidence = 0.0f;
+-    GatherTemporalResampling_load_current_sample(
++    bool hasCurrentSample = GatherTemporalResampling_load_current_sample(
+         pixel,
+         currReservoir,
+         currReconnection,
+@@ -382,19 +395,24 @@ RTXDI_DIReservoir GatherTemporalResampling_run(
+     RTXDI_DIReservoir prevReservoir;
+     ReconnectionData prevReconnectionData;
+     float prevConfidence = 0.0f;
+-    GatherTemporalResampling_load_previous_sample(
++    bool hasPreviousSample = GatherTemporalResampling_load_previous_sample(
+         pixel,
+         prevReservoir,
+         prevReconnectionData,
+         prevConfidence
+     );
+ 
++    if (!hasCurrentSample && !hasPreviousSample)
++    {
++        currReconnectionData = ReconnectionData_init();
++        return RTXDI_EmptyDIReservoir();
++    }
++
+     const bool hasDepthOfField = lt_di_temporal_camera_aperture_radius() > 0.0f;
+     vec2 depthOfFieldProbs = vec2(1.0f, 0.0f);
+     if (hasDepthOfField)
+     {
+-        RAB_Surface centerSurface = GatherTemporalResampling_load_current_surface(pixel);
+-        depthOfFieldProbs = lt_di_temporal_resolve_dof_probabilities(centerSurface);
++        depthOfFieldProbs = lt_di_temporal_resolve_dof_probabilities(currentSurface);
+     }
+ 
+     const bool doLensVertexCopy = (depthOfFieldProbs.x > 0.0f);
+diff --git a/assets/photonic/shaders/lighttree/restir_di_resolve.glsl b/assets/photonic/shaders/lighttree/restir_di_resolve.glsl
+index 4e1eef6..7ee687e 100644
+--- a/assets/photonic/shaders/lighttree/restir_di_resolve.glsl
++++ b/assets/photonic/shaders/lighttree/restir_di_resolve.glsl
+@@ -58,8 +58,53 @@ vec3 ResolveReSTIR(
+         * ResolveReSTIR_computeUCW(currReservoir);
+ }
+ 
++vec3 ResolveReSTIR_apply_final_visibility(
++    inout RTXDI_DIReservoir currReservoir,
++    RAB_Surface surface,
++    RAB_LightSample lightSample,
++    vec3 resolvedRadiance)
++{
++    if (ph_debug_enable_direct_final_visibility < 0.5f
++        || ph_restir_enable_final_visibility < 0.5f
++        || ph_restir_initial_enable_visibility > -0.5f) {
++        return resolvedRadiance;
++    }
++
++    vec3 visibility = vec3(0.0f);
++    bool visibilityReused = false;
++    if (ph_restir_reuse_final_visibility >= 0.5f) {
++        RTXDI_VisibilityReuseParameters visibilityReuseParams = lt_build_visibility_reuse_parameters();
++        visibilityReused = RTXDI_GetDIReservoirVisibility(
++            currReservoir,
++            visibilityReuseParams,
++            visibility
++        );
++    }
++
++    if (!visibilityReused) {
++        RAB_LightSample lightSampleCopy = lightSample;
++        float visibilityHitDistance = 0.0f;
++        visibility = lt_trace_final_visibility_with_offset(
++            lightSampleCopy,
++            surface,
++            0.01f,
++            visibilityHitDistance
++        );
++        if (ph_debug_enable_direct_visibility_transmittance < 0.5f
++            && ph_luminance(visibility) > 0.0f) {
++            visibility = vec3(1.0f);
++        }
++
++        // Final visibility must not discard the reservoir; RTXDI documents that
++        // discarding invisible final samples introduces darkening bias.
++        RTXDI_StoreVisibilityInDIReservoir(currReservoir, visibility, false);
++    }
++
++    return resolvedRadiance * visibility;
++}
++
+ bool ResolveReSTIR_shade(
+-    RTXDI_DIReservoir currReservoir,
++    inout RTXDI_DIReservoir currReservoir,
+     RAB_Surface surface,
+     out ResolveReSTIRShading shading)
+ {
+@@ -88,6 +133,16 @@ bool ResolveReSTIR_shade(
+     }
+ 
+     vec3 resolvedRadiance = max(ResolveReSTIR(currReservoir), vec3(0.0f));
++    resolvedRadiance = max(ResolveReSTIR_apply_final_visibility(
++        currReservoir,
++        surface,
++        lightSample,
++        resolvedRadiance
++    ), vec3(0.0f));
++    if (!any(greaterThan(resolvedRadiance, vec3(0.0f)))) {
++        return false;
++    }
++
+     LtSplitRadiance splitRadiance = lt_shade_surface_split(surface, lightSample);
+     vec3 diffuseCombined = max(splitRadiance.diffuse * surface.material.diffuseAlbedo, vec3(0.0f));
+     vec3 specularCombined = max(splitRadiance.specular, vec3(0.0f));

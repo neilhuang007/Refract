@@ -13,6 +13,11 @@
 const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
 const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
 
+#ifndef PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
+#define PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS 1
+#endif
+
+#if PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
 layout(std430, binding = 5) restrict buffer ph_ris_buffer {
     uvec2 ph_ris_data[];
 };
@@ -45,6 +50,23 @@ Light load_compact_light(uint risBufferPtr, int lightIndex) {
         ld3.w
     );
 }
+#else
+Light load_compact_light(uint risBufferPtr, int lightIndex) {
+    risBufferPtr = risBufferPtr;
+    return lightIndex < ph_light_count ? load_light(lightIndex) : Light(
+        -1,
+        0,
+        vec3(0.0f),
+        vec3(0.0f),
+        0.0f,
+        vec2(0.0f),
+        0.0f,
+        0.0f,
+        vec3(0.0f, 1.0f, 0.0f),
+        0.0f
+    );
+}
+#endif
 
 // ph_regir_grid_center: world-space center of the ReGIR build region.
 // In the hash-grid variant, lookups hash the actual surface position.
@@ -62,6 +84,7 @@ uniform int   ph_regir_hash_normal_buckets;    // currently 6 (axis-aligned)
 uniform int   ph_regir_build_region_cells;     // build cube side (cells)
 
 // Hash-grid auxiliary buffers (read-only at lookup time; written by regir_build.glsl).
+#if PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
 layout(std430, binding = 7) restrict readonly buffer ph_regir_cell_checksums {
     uint ph_regir_cell_checksum[];
 };
@@ -69,6 +92,7 @@ layout(std430, binding = 7) restrict readonly buffer ph_regir_cell_checksums {
 layout(std430, binding = 8) restrict readonly buffer ph_regir_cell_keys {
     ivec4 ph_regir_cell_key[];
 };
+#endif
 
 const uint RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED = 1u;
 const uint RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED = 2u;
@@ -226,6 +250,11 @@ int regir_hash_lookup(ivec3 cellCoord, int bucket) {
         return -1;
     }
 
+#if !PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
+    cellCoord = cellCoord;
+    bucket = bucket;
+    return -1;
+#else
     bucket = regir_clamp_normal_bucket(bucket);
     uint checksum = regir_hash_xxhash_checksum(cellCoord, bucket);
     uint slot = regir_hash_pcg_key(cellCoord, bucket) % uint(ph_regir_hash_table_size);
@@ -243,6 +272,7 @@ int regir_hash_lookup(ivec3 cellCoord, int bucket) {
         slot = (slot + 1u) % uint(ph_regir_hash_table_size);
     }
     return -1;
+#endif
 }
 
 // RTXDI_CalculateReGIRCellIndex jitters the world-space lookup independently
@@ -271,6 +301,9 @@ bool regir_unpack_slot(int hashSlot, int cellSlot,
         return false;
     }
 
+#if !PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
+    return false;
+#else
     int  bufferIndex   = hashSlot * ph_regir_lights_per_cell + cellSlot;
     outRisBufferPtr    = uint(ph_regir_ris_buffer_offset) + uint(bufferIndex);
     uvec2 slotData     = ph_ris_data[outRisBufferPtr];
@@ -294,6 +327,7 @@ bool regir_unpack_slot(int hashSlot, int cellSlot,
     }
 
     return true;
+#endif
 }
 
 // Resolve the hash slot to query for (worldPos, normal). Returns true if the
@@ -323,6 +357,9 @@ bool regir_resolve_cell(vec3 shadingWorldPos, vec3 shadingNormal, inout RTXDI_Ra
     int   bucket    = regir_normal_to_bucket(queryNormal);
 
     int slot = regir_hash_lookup(cellCoord, bucket);
+    if (slot < 0 && ph_regir_hash_normal_buckets == 1 && bucket != 0) {
+        slot = regir_hash_lookup(cellCoord, 0);
+    }
     if (slot < 0) return false;
     flatCellIndex = slot;
     return true;

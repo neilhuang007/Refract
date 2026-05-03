@@ -1,0 +1,562 @@
+ReservoirSplattingforTemporalPathResamplingandMotionBlur
+JEFFREYLIU,UniversityofIllinoisUrbana-Champaign,USA
+DAQILIN,NVIDIA,USA
+MARKUSKETTUNEN,NVIDIA,Finland
+CHRISWYMAN,NVIDIA,USA
+RAVIRAMAMOORTHI,NVIDIAandUCSanDiego,USA
+Time:63msSlowrightwardcameramotion→Time:71msSlowrightwardcameramotion→Time:13msFastforwardcameramotion⊗Time:14msFastforwardcameramotion⊗AreaReSTIR+NaïveMotionBlurOursReferenceAreaReSTIR+NaïveMotionBlurOursReferenceTime:63msSlowrightwardcameramotion→Time:71msSlowrightwardcameramotion→Time:13msFastforwardcameramotion⊗Time:14msFastforwardcameramotion⊗AreaReSTIR+NaïveMotionBlurOursReferenceAreaReSTIR+NaïveMotionBlurOursReferenceAreaReSTIR[Zhangetal.2024]ReservoirSplatting(Ours)AreaReSTIR[Zhangetal.2024]ReservoirSplatting(Ours)
+Fig. 1.Prior ReSTIR methods [Zhang et al.2024] degrade during camera motion, as sequential frames rarely shade identical primary hits, making perfect reuse tricky. This worsens near fine details, like foliage and fur, where sequential frames may not hit the same surface. By forwardsplatting hitsfromlastframe,weguaranteetheyarereevaluated.Addingtimetosamplesalsoenablesresamplingformotionblurwhileshadingonlyonesampleperpixel.Hereweshowtwoscenesundercameramotion(SheepInForestandSubway)withstockAreaReSTIR[Zhangetal.2024]and ournewsplatting-basedReSTIR.InsetsalsoshowanofflinereferenceandanaïvemotionblurbaselineusingZhangetal.’s[2024]backprojection.
+
+Recentextensionstospatiotemporalpathreuse,orReSTIR,improveren-dering efficiency in the presence of high-frequency content by augmentingpath reservoirs to represent contributions over full pixel footprints. Still, ifhistorical paths fail to contribute to future frames, these benefits disappear.Prior ReSTIR work backprojects to the prior frame to identify paths for reuse.Backprojectioncanfailtofindrelevantpathsformanyreasons,includingmoving cameras or subpixel geometry with differing motion.
+Weintroducereservoirsplatting toreducethesefailures.Splattingforward-projectstheprimaryhitsofprior-framepaths.Unlikebackprojection,forward-projectedpathsamplesfallintothecurrent-framepixelrelevanttotheirexactprimaryhits,makingsuccessfulreusemorelikely.Thisalsoenablesmotion blur for ReSTIR, by splatting at multiple time steps, and supportsdepthoffieldwithoutthespecializedshiftmapsneededpreviously.
+Beyondenablingmotionblur,splattingimprovesresamplingqualityoverZhangetal.’s[2024]AreaReSTIRatupto10%lowercost.Toimproverobustness,weshowhowtoMISsplattedandbackprojectedsamplestohelpeverycurrent-framepixelgetatleastonehistoricalpathproposedforreuse.
+CCSConcepts:•Computingmethodologies→Rendering.
+
+ThisworkislicensedunderaCreativeCommonsAttribution4.0InternationalLicense.
+SIGGRAPHConferencePapers’25,August10–14,2025,Vancouver,BC,Canada
+© 2025 Copyright held by the owner/author(s).ACMISBN979-8-4007-1540-2/2025/08
+https://doi.org/10.1145/3721238.3730646
+AdditionalKeyWordsandPhrases:real-timeraytracing,resampledimpor-tance sampling, ReSTIR, antialiasing, depth of field, motion blur
+ACMReferenceFormat:
+JeffreyLiu,DaqiLin,MarkusKettunen,ChrisWyman,andRaviRamamoor-thi. 2025. Reservoir Splatting for Temporal Path Resampling and Motion Blur.InSpecialInterestGrouponComputerGraphicsandInteractiveTechniquesConference Conference Papers (SIGGRAPH Conference Papers ’25), August10–14,2025,Vancouver,BC,Canada.ACM,NewYork,NY,USA,11pages.https://doi.org/10.1145/3721238.3730646
+INTRODUCTION
+Recentimportancesamplingtechniquesbasedonresampledimpor-tance sampling (RIS) [Talbot et al.2005] and iterated RIS (also known as ReSTIR) [Bitterli et al.2020] dramatically improve rendering ef-ficiency in interactive contexts by spatiotemporally reusing path samples.Overtime,thesemethodscanconvergetonear-optimalimportancesamplingwithonlyonenewsampleperpixel(spp).This convergence relies on maintaining an easily-reusable path history. Whenhistoryresets,qualitytemporarilydegradestothatofnaïve,1 spppathtracing.Reducingthefrequencyofspurioussamplehistory resetsisthuskeytomaintainingReSTIR’sefficiency.
+Recently,Zhangetal.[2024]showedthatelevatingapath’sdi-mensionality with the subpixel location allows better maintenance oftemporalhistoryinthepresenceofhigh-frequencynormalmaps.
+
+StaticUnderMotion
+
+MAPE:0.503MAPE:0.940
+Fig.2.Priorwork,likeAreaReSTIR[Zhangetal.2024],converges quitewell with1sppusingastatic camera.Whenmoving, quality degrades significantly, especially for the high-frequency geometry in Emerald Square. This motivates our search for better ways to maintain historical samples.
+
+ButlikeotherReSTIRpapers[Linetal.2022;Ouyangetal.2021], Zhangetal.stillusetemporalbackprojection;thisregularlychanges apath’sprimaryhitpointbetweenframes,whenevermotionoccurs. Such a history is challenging to reuse, especially where pixel color dependsonaggregategeometry,e.g.,hairorfoliage;seeFigure2.
+Inthispaper,weforwardreproject(orsplat)prior-framesamples tofurtherimprovereuse.Unlessoccludedinthecurrentframe,such samplescanbereusedwithoutchangingtheirobject-spaceprimary hit;thisstabilizesreuseandreduceshistoryresets.
+Ourspecificcontributionsinthispaperinclude:
+A scatter-based reservoir reuse that exactly preserves object-spaceprimaryhitsbetweenframes(Section4),
+A simple “backup” sample mechanism to fill holes between splattedsamples,e.g.,duringzooming(Section4.2),
+Applyingsplattingtomotionblur;weshowthefirstReSTIR-acceleratedmotionbluralgorithm(Section4.4),
+Enabling depth of field without Zhang et al.’s [2024] special-izedshiftmaporhand-tunedMISweights(Section4.5).
+Overall,ourworksimplifiesAreaReSTIRsampling,givesbetter performance,enhancesresamplingquality,andenablesmotionblur anddepthoffieldout-of-the-box.
+RELATEDWORK
+Ray and path tracing [Kajiya1986; Whitted1979] have long proven costly,motivatingresearcherstoexploretechniquestooptimize, reducesamples,andamortizecosts.Weoverviewanumberofcom-monmethods,includingtemporalreprojection,denoising,gradient-domain rendering, path reuse, and resampling techniques. We then reviewalgorithmsspecificallydevelopedformotionblurrendering.
+TemporalReprojectionandDenoising
+Early real-time ray tracing researchers lacked the benefits of hard-wareacceleration[Kilgariffetal.2018],oftenmakingdowithsig-nificantly less than one ray per pixel. Frameless rendering [Bishopet al.1994] recomputes a subset of pixels each frame, reusing others until they get updated. Adding prior-frame reprojection [Adelsonand Hodges1995; Corso et al.2017] repositions reused pixels, and a rendercache[Nehabetal.2007;Scherzeretal.2007;Walteretal.1999]reusescomputationovermultipleframes.Adaptiveframe-less rendering [Dayal et al.2005] carefully places new samples and runs(cached)samplesthroughspatiotemporalreconstruction.Yang
+et al.[2011] reprojected bidirectionally, i.e., from both forward and backward frames, to help reconstruct intermediate frames.
+Outsideofraytracing,gameswidelyapplytemporalantialiasing (TAA)[Yangetal.2020]toreduceundersamplingusingprior-frame data.ModernTAAmethodsalsoupsampletheiroutput[Yangetal.2009],butcanintroduceghosting,blur,andshimmer.Toreduce theseartifacts,manyapplyfastneuralnetworks[Liu2020;Xiaoetal.2020]thatextendandaccelerateofflinesuperresolutionnetworks (e.g., Dong et al.[2015]).
+Real-timedenoisers(e.g.,Schiedetal.[2017,2018])ofteningestlow-sampleinputs,sotheyemploytemporalreprojectiontoincrease effective sample counts [NVIDIA2020b]. As in temporal superres-olution, many denoisers also apply neural networks [Bako et al.2017;Chaitanyaetal.2017;Işıketal.2021],sometimestouncoveradaptivesamplingopportunities[Hasselgrenetal.2020;Kuznetsovet al.2018].
+Our method is the first to demonstrate how prior-frame samples canbeusedviaforward-reprojectionwithoutintroducingbias.
+PathReuse
+Path reuse [Bekaert et al.2002] amortizes costs by reusing paths or segments within pixel blocks, though such reuse has challenges; Xuand Sbert[2007] explore ways to reduce tile correlations. Gradient-domain rendering builds correlated paths for close-by pixels with shiftmappings[Kettunenetal.2015;Lehtinenetal.2013]toevaluate finitedifferences.Bauszatetal.[2017]usetheseshiftmappingsto betterreusespecularpathswithinpixelblocks.
+Recently, resampling algorithms [Bitterli et al.2020] have signifi-cantly improved path reuse, demonstrating real-time performance for many light transport problems; our work fits into this category ofspatiotemporalreservoirresampling(orReSTIR)algorithms.
+ResamplingforRendering
+Resampledimportancesampling(RIS)[Talbotetal.2005]aggre-gates𝑀samples,whicharethenresampledinto𝑁samples,ap-proximately distributed according to a normalized target function. Bitterlietal.’s[2020]ReSTIRDIcombinesRIS(using𝑁=1)with weighted reservoir sampling [Chao1982], with each per-pixel reser-voirstoringasamplewhosedistributionisrefinedbyresampling fromspatialandtemporalneighbors.Ouyangetal.[2021]treat longer paths as virtual point lights [Keller1997] to handle indirect light.Linetal.[2022]shiftfullpathsbetweenneighborstoprop-erly handle glossy surfaces. Their generalized RIS (GRIS) providesamathematicalfoundationforReSTIR.Zhangetal.’s[2024]AreaReSTIR improves robustness for depth of field and subpixel details by reusing lens and subpixel coordinates with fractional motion vectors.WebuildonAreaReSTIR,butredesignitstemporalreuse.
+MotionBlur
+Motion blurarisesascameras havenon-zeroexposuretimes. Per-ceptually, itconveysrelativemotion withinaframe.But temporalintegration is expensive, so real-time methods use various approxi-mations, e.g., accumulating multiple frames [Haeberli and Akeley1990], blurring per-pixel [Rosado2007], extruding geometry [Gribeletal.2010;Tatarchuketal.2003],orscreen-spacevelocitymaps
+
+[McGuireetal.2012].SeeNavarroetal.[2011]forasurvey.Such approximationstypicallyfavorperformanceoveraccuracy.
+Ray tracers can stochastically sample time to render motion blur; this is generally more expensive but produces better results. Multi-dimensional adaptive sampling [Hachisuka et al.2008; Meister andHachisuka2022]concentratessamplesinmotion-blurredregions. Frequencyanalysis[Eganetal.2009]enablessparsersampling drivenbyashearedspace-timefilter.Lightfieldreconstruction [Lehtinenetal.2011,2012;Munkbergetal.2014]canefficientlyren-der motion blur. Covariance tracing [Belcour et al.2013] computesarequiredper-pixelsamplecount,andreconstructsinimage-space. Manzietal.[2016]acceleratemotionblurbyevaluatingtemporal differences with cross-frame shift maps. Oberberger et al.[2022] furtheraccountformotionblurinthedenoisingprocess.
+To our knowledge, we achieve the first motion blur via resampling, potentiallyenablingreal-timemotionblurinlow-samplerenderers.
+PRELIMINARIES
+WefirstprovideareviewofkeyconceptsrelatedtoReSTIR.
+UnbiasedContributionWeights
+SincetheresultofRISdoesnothaveatractablePDF,Linetal.[2022]
+reuse1.Shiftmappingsalsochangepathandprobabilitydensities,so formulasusingshiftsneedJacobiandeterminants|𝑇′(𝑥)|or|𝜕𝑇/𝜕𝑥|.
+GRIS
+Givencandidatesamples 𝑋1,...,𝑋𝑁,theircorrespondingdomains Ω1,...,Ω𝑁 , a target domainΩ for resampling, and a non-negative targetfunction𝑝ˆdefinedinΩ,GRIS[Linetal.2022]aggregates
+𝑋1,...,𝑋𝑁intoaresult𝑌∈Ω,approximatelydistributedpropor-tional to𝑝ˆ.First,each 𝑋𝑖∈Ω𝑖is shiftedtoasimilar sample𝑌𝑖∈Ω via shift map𝑇𝑖:
+𝑌𝑖=𝑇𝑖(𝑋𝑖).(3)
+Then,aresamplingweight𝑤𝑖iscomputedforeach𝑌𝑖:
+ˆ𝜕𝑇𝑖ˆ𝜕𝑇𝑖1111𝑤𝑖=𝑚𝑖(𝑌𝑖)𝑝(𝑌𝑖)𝑊𝑋𝑖𝜕𝑋𝑖,(4)
+where𝑚𝑖isaresamplingMISweight,𝑊𝑋𝑖issample𝑋𝑖’sUCWinits originaldomainΩ𝑖,and|𝜕𝑇𝑖/𝜕𝑋𝑖|istheJacobianofshift𝑇𝑖.Finally, output𝑌is resampled from the𝑌𝑖proportional to weights𝑤𝑖. The new contribution weight for 𝑌is
+𝑁𝑁1∑︁𝑊𝑌=ˆ𝑤𝑖.(5)
+
+abandonthetraditional𝑓/𝑝estimators
+E𝑓(𝑋)=∫
+
+𝑓(𝑥)d𝑥(1)
+𝑝(𝑌)𝑖=1
+Ifthesupportsofcandidates𝑌𝑖togethercoverthesupportof𝑝ˆ,
+
+𝑝(𝑋)
+supp𝑋
+𝑊𝑌isunbiased,as per Section3.1. Taking one canonical sample
+guaranteesthiscoverage;acanonical 𝑋𝑐issampledfromΩ𝑐=Ω,
+
+infavorofthemoregeneral𝑓(𝑋)𝑊𝑋estimatorswith
+𝑋𝑋E[𝑓(𝑋)𝑊𝑋]=∫supp𝑓(𝑥)d𝑥,(2)
+withanidentityshiftmap𝑇𝑐,sothat𝑋𝑐alonecovers𝑝ˆ’ssupport.
+Linetal.[2022]introducethegeneralizedbalanceheuristic to computeresamplingMISweights:
+𝑐𝑝ˆ(𝑦)
+
+ÍÍ𝑚𝑖 (𝑦) =𝑖←𝑖,(6)
+
+whererandomvariable𝑊𝑋isanunbiasedcontributionweight (UCW) for𝑋.Arandomvariable𝑊𝑋isaUCWfor𝑋ifandonlyifEquation2istrueforallintegrable𝑓;thisisequivalenttoE[𝑊𝑋|𝑋]=1/𝑝𝑋(𝑋) [Lin et al.2022].
+𝑁
+𝑗=1
+−1−1𝑗𝑗whichusesthe“𝑝ˆfrom”function
+𝑐𝑗𝑝ˆ←𝑗(𝑦)
+
+WhileRISresamplinggenerallyresultsinintractablePDFs,it
+ˆˆ1
+1𝜕𝑇1
+
+UCWsviathis𝑓(𝑋)𝑊𝑋integrationframework.UCWsviathis𝑓(𝑋)𝑊𝑋integrationframework.𝑗𝑗11𝜕𝑦𝜕𝑦11allowsunbiasedintegrationanditerativeresamplingwithsimple
+𝑝←𝑗(𝑦)=𝑝𝑗(𝑇−(𝑦))11
+(7)
+
+
+ShiftMappings
+Reusing a path between pixels requires modifying some vertices to change which pixel it contributes to. Shift mappings𝑇move paths between domains, e.g., pixels. Formally, a shift map from Ω1 to Ω2isabijectivefunctionfromasubsetofΩ1toasubsetofΩ2.
+Thereconnectionshift[Lehtinenetal.2013]isacommonlyusedshift mapping. Given two camera positions 𝑥0and𝑦0and primary hits𝑥1and𝑦1,thisshiftmapsbasepath𝑥¯=[𝑥0𝑥1𝑥2...𝑥𝑛]into offsetpath𝑇(𝑥¯)=[𝑦0𝑦1𝑥2...𝑥𝑛],reconnectingto𝑥¯immediately afterprimaryhit𝑦1. Thisworkswellonroughsurfaces,butfails thegoalofgoodshifts(that 𝑓(𝑥¯)≈𝑓(𝑇(𝑥¯)))ifanyof𝑥1,𝑥2, or
+𝑦1arenearlyspecular.Kettunenetal.’s[2015]half-vectorshiftand
+Linetal.’s[2022]hybridshiftpostponereconnectionuntilrough
+asan(unnormalized)proxyforthePDFof𝑦=𝑇𝑗(𝑧𝑗),originatingin domainΩ𝑗as𝑧𝑗=𝑇−1(𝑦).TheJacobianmodifiestheproxytheway probabilitydensitiestransforminshiftmappings.Theconfidenceweights𝑐𝑗controltherelativeweightofcandidatesamples.
+𝑗𝑗ReSTIR
+ReSTIRrepeatedlyappliesGRIStosharesamplesspatiotemporally. Eachpixel𝑖 stores a reservoircontaining a sample𝑋𝑖, its UCW𝑊𝑋𝑖, andconfidenceweight𝑐𝑖 .SeeWymanetal.’s[2023]coursenotes fordetails,butatahighlevel,theprocesstypicallygoesasfollows:
+Initialsampling.Eachpixel𝑖getssomenumber𝑁initinitialcan-didates,e.g.,newly-tracedindependentpaths.Oneisselectedvia
+RIS,producingacanonicalinitialsample𝑋∗withUCW𝑊𝑋∗.
+
+verticesarefound,moreeffectivelyhandlingspecularmaterials.
+𝑖𝑖
+
+Forwardand backward shifts𝑇and𝑇−1need not be defined for allpaths,butwhendefined,bijectivityisessentialforunbiasedpath
+
+
+1Failuretoensureinvertibility,i.e.,𝑇 (𝑇−1(𝑦))=𝑦and𝑇−1(𝑇(𝑥))=𝑥,isacommonsource of bias.
+
+𝑖𝑖Temporalresampling.Eachpixel𝑖 backprojectsalongitsback-ward motionvectortochoose prior-framereservoir𝑗 .Theresults ofGRISbetween𝑌𝑗=𝑇𝑗(𝑋𝑗)and𝑋∗,usingconfidenceweights
+𝑐𝑗and𝑁init,replaces𝑋𝑖,anew𝑊𝑋𝑖iscomputed,and𝑐𝑖issetto
+min(𝑐cap,𝑐𝑗+𝑁init),where𝑐capisafixedconfidencecap.
+Spatialresampling.Eachpixel𝑖chooses𝑁spatspatialneighbors
+𝑗1,...,𝑗𝑁spatrandomly from a box around𝑖, and performs GRIS be-tween𝑋𝑖andeach𝑋𝑗𝑘,usingthecorrespondingconfidenceweights. Theresultoverwrites𝑋𝑖;𝑊𝑋𝑖is updated with Equation 5, and𝑐𝑖
+sumsthesamples’confidenceweights,againclampedto𝑐cap.
+NotethatAreaReSTIRonlyapproximatelyretainsprimaryhits;this may degrade temporal reuse near subpixel details. Our reservoirsplattingexactlyretainsprimaryhits,improvingtemporalreuse.
+3.6MotionBlur
+Zhang et al.’s Area ReSTIR integrates the measurement integral ata fixed time. However, rendering motion blur requires integrating overatimeinterval[𝑡0,𝑡1), where Δ𝑡=𝑡1−𝑡0is the exposure time. Intensity of pixel𝑖 is then
+
+Shading.Thefinalcolorforpixel𝑖isevaluatedas𝑓(𝑋𝑖)𝑊𝑋𝑖,andShading.Thefinalcolorforpixel𝑖isevaluatedas𝑓(𝑋𝑖)𝑊𝑋𝑖,and𝐼𝑖𝐼𝑖=∫𝑡1∫
+¯¯d¯d
+(9)
+
+ℎ𝑖(𝑥,𝑡)𝑓(𝑥,𝑡)ℎ𝑖(𝑥,𝑡)𝑓(𝑥,𝑡)𝑥𝑥𝑡,𝑡,thesameprocessrepeatsinthenextframe.
+AreaReSTIR
+PriortoAreaReSTIR[Zhangetal.2024],screen-spacealgorithms suchasLinetal.[2022]appliedReSTIRtopathspacestartingatsecondaryhits,𝑥2, finding primary hits𝑥1by ray tracing at prede-terminedsubpixellocations(e.g.,pixelcenters).
+Zhangetal.[2024]notethisaddsinstabilitiesnearhigh-frequency details:evenif a reused path suffix[𝑥2𝑥3 ···𝑥𝑛] remains valid, it maybeincompatiblewithanewpixel’simplicitlydefinedprefix [𝑥0𝑥1].Tocurethis,theyaddsubpixellocation(andlensposition) as additional dimensions to reservoirs, essentially storing full paths [𝑥0𝑥1···𝑥𝑛].Targetfunctions no longer vary with each pixel’s implicit prefix, as the shift maps propose complete, reusable paths. This significantly boosts reuse quality.
+To improve subpixel precision for temporal path reuse, Zhang et al.[2024]backprojectthehitpointateachpixel𝑖’scentertotheprior
+frame, via an image-space shift with motion vector𝛿𝑖,buildinga1×1pixelfractionalreservoiraroundtheresult.Thisoff-gridfrac-tionalreservoirispopulatedwithsamples fromtheoverlapping2 ×2blockofpixels
+(viaRIS),andthechosensampleisshiftedbacktothecurrentframe with motionvector−𝛿𝑖,approximately retainingtheprimaryhit.
+Asno samples in the 2×2 block of prior-framepixelsmayfallinthefractionalreser-
+voir,Zhangetal.’s“fast”variantcanleave this reservoir empty, producing excess noise. PriortoRIS,their“robust”variantfirstspa-
+tiallyshifts all samples in the 2×2 block to the fractional reservoir. Thissolvestheissuebutismoreexpensive.
+∫∫∫∫Mathematically,AreaReSTIRintegratesthemeasurementcontri-butionfunctionforeachpixel𝑖:
+𝐼𝑖=𝑓𝑖(𝑥¯)d𝑥¯=ℎ𝑖(𝑥¯)𝑓(𝑥¯)d𝑥¯,
+Ω𝑖Ω𝑖
+wherepixel𝑖’spathspace Ω𝑖⊂ Ωisthesetofpaths𝑥¯forwhich thepixelfilterℎ𝑖(𝑥¯)>0,and𝑓(𝑥¯)isthepathcontribution.Weuse
+𝑝ˆ𝑖(𝑥¯)todenotethepixel-dependenttargetfunctionforresampling, whichweassumeisdefinedas
+𝑝ˆ𝑖(𝑥¯)=ℎ𝑖(𝑥¯)𝑝ˆ(𝑥¯),(8)
+oftenwith𝑝ˆ=𝑓,butcheaperapproximationscanalsobeused.
+𝑡0𝑡0Ω𝑖(𝑡)Ω𝑖(𝑡)
+whereℎ𝑖(𝑥¯,𝑡)isthecamera’spixelfilterattime𝑡∈[𝑡0,𝑡1).
+We experimented by naïvely extending Area ReSTIR for motion blur by adding sample time 𝑡to the reservoirs. But backprojecting each pixel’smotion𝛿𝑖at asingletimecauses suboptimalreuse,asapparent motion depends on both sample time and subpixel location, which vary independently. Our splatting uses samples’ real motion betweenframes,exactlycontributingtotherelevantpixels.
+RESERVOIRSPLATTING
+PriorReSTIRmethodsgatherreusabletemporalneighborsinthe priorframe;eachpixel𝑗isbackprojectedtothepriorframeby asinglebackwardmotionvector𝛿𝑗tofindcandidatesforreuse [Bitterlietal.2020;Zhangetal.2024].Pathsarethenreusedwiththe negatedimage-spacemotion−𝛿𝑗,regardlessofthereusecandidate’s
+realimage-spacemotion.Thisinexacttrack-
+ingofshadingpointsbetweenframescan cause reuse failures in cases of subpixel de-tail, includingfactors likemultiple objects (e.g.,foliage)orregionscaling(zooming),
+spuriouslydiscardingthesamplehistorythatReSTIRexploits.
+Weinsteadscatterprior-framecandidatesbyforwardreprojec-tion,orsplatting,tomapthemtothecurrentframe.Eachsplatted pointuniquelymapstothecurrentimage,
+always contributing to the pixel it lands on, unlessoccluded.Thisexactmappingavoids discardinghistoryunnecessarily.
+Section4.1detailshowthemathofresam-
+pling changes when splatting. Section 4.2combines scatter- and gather-basedreusewithappropriateMISforbetterquality,albeitathighercost.Section4.3discussesanapproachtoappropriatelyupdatereservoirconfidencewhensplatting.Section4.4expandsour sample splatting to real-time motion blur, and Section 4.5describes howsplattingalsoimprovesZhangetal.’s[2024]depthoffield.
+GRISwithScatter
+Linetal.’s[2022]GRIStheoryrequiresdefininginputdomains without looking at the samples. Prior work worked around this by reusing based on pixel-center motion vectors. But exactly preserv-ingprior-framesamples’primaryhitsrequiresexaminingwhich samples contribute to which pixel, which is not allowed. To recon-cilethis,weconceptuallydefineallpriorsamplesascontributing toeverypixel,butensurezeroweightforthosenotsplattinginto
+
+currentpixel𝑗.2ThisallowsapplyingGRISfortemporalresampling assuming:
+ThetargetdomainΩisthecurrentframe’sfullpathspace.
+Thetargetfunctionforpixel𝑗is𝑝ˆ𝑗(𝑥¯)=ℎ𝑗(𝑥¯)𝑝ˆ(𝑥¯).3
+Thegeneralizedbalanceheuristic[Linetal.2022]thenreducesto
+,(11),(11)𝑐𝑖𝑝ˆprev(𝑋𝑖)|𝜕𝑇/𝜕𝑋𝑖|−1
+∗ˆˆprev−1∗ˆˆprev−1𝑚𝑖 (𝑌𝑖)=
+𝑐𝑝(𝑌𝑖)+𝑐𝑖𝑝(𝑋𝑖)|𝜕𝑇/𝜕𝑋𝑖|
+
+Inputsamples𝑋1,...,𝑋𝑁comefromallprior-framearea reservoirs, i.e., 𝑁is the screen size 𝐻×𝑊. Sample domains
+areΩ𝑖=Ωprev,theentirepriorframe’spathspace.
+givenconfidence weights𝑐𝑖for samples𝑋𝑖and𝑐∗for canonical sample𝑌∗.Thisisbecauseshifting𝑌𝑖intoanyprior-framedomain
+𝑖𝑖Ω𝑘resultsinthesamepath𝑇−1(𝑌𝑖)=𝑇−1(𝑌𝑖)=𝑋𝑖,whose pri-
+
+Prior-framecandidates𝑋𝑖usethesameshiftmap𝑇𝑖= 𝑇,
+maryhitbelongsonlytopixel𝑘’sboxfilter.Asaresult,thebalance
+
+where𝑇isforwardprojectionfollowedbythehybridshift.
+𝑗𝑗Input𝑋𝑁+1isacanonicalsample𝑌∗=𝑌∗forcurrentpixel𝑗. Itusesidentityshift𝑇𝑁+1,asitliesinthecurrentframe.
+For efficient computation, we first initialize a GRIS reservoir withacanonicalsampleforeachcurrent-framepixel.Wethenshiftall priorpaths𝑋𝑖tothecurrentframeas𝑌𝑖=𝑇(𝑋𝑖),identifyingthe
+pixelseachcontributesto,andstream𝑌𝑖tothesepixels’reservoirs
+heuristicinEquation6reducesfrom𝑁+1termsinthedenominator totwoinEquation11.Scatteringallowssimplyshiftingeachsample
+𝑋𝑖once,contributingshiftedsample𝑌𝑖to thepixelitfalls in. Theinitialsample𝑌𝑁+1=𝑌∗getsresamplingweight
+𝑤𝑁+1=𝑚𝑁+1(𝑌∗)𝑝ˆ(𝑌∗)𝑊𝑌∗,(12)
+with
+
+(whileavoidingraceconditions).
+Whileabalanceheuristic(Section4.1.2)forall-to-allreuseforall
+𝑚𝑁+1(𝑌∗)=
+
+𝑐∗𝑝ˆ(𝑌∗)+𝑐𝑟
+𝑐∗𝑝ˆ(𝑌∗)
+ˆprev−1∗−1∗ˆprev−1∗−1∗𝑝(𝑇(𝑌))1𝜕𝑇/𝜕𝑌1
+,(13)
+
+𝑁pixelsrequires𝑂(𝑁3)totalshifts,thesplatoperationimplicitly
+givenconfidenceweight𝑐
+atprior-framepixeldefinedbythere-
+
+zero-weightsmostprior-framesamplesforagivenpixel.Thisre-ducestotwoshiftsperpixel(forward-splattingthepriorreservoir
+versesplat
+𝑇−1
+(𝑌
+𝑟
+∗).Ifthereversesplatfailsduetoocclusionor
+
+andreverse-splattingtheinitialsample)totaling𝑂(𝑁)shifts.
+Reprojection ShiftMapping.Tosplatpath 𝑥¯intothecurrent frame,wefirsttransformitsprimaryhit𝑥1bykeepingitsobject spaceposition;givenmodel-to-worldtransform𝑀,weget𝑦1=
+𝑀(𝑀prev)−1𝑥1.Forstaticscenes,𝑦1=𝑥1.Wethenmaplensvertex
+𝑥0tothecurrentframe.Forpinholecameras,
+prevprev11𝑦0 is the new camera position. For other cameratypes,wecanretainlocallensco-ordinatesorapplythecross-framecamera
+lyingoutsidetheimage,thattermbecomeszero.Similarly,weonly
+shift the canonical sample to the prior frame once, and at most one prior-framepixelhaspositiveboxfiltervaluefor the splat𝑇−1(𝑌∗). Thus,weagainreducefrom𝑁+1termsinthedenominatortotwo.
+Jacobian.Renderersoftenparametrizeprimaryhitswithsub-pixel locations. Consider splatting changing a previous-frame sub-pixel location 𝑣to the current frame𝑢. In this parametrization, the Jacobiandeterminantfromthereprojection(Section4.1.1)is
+11111111(14)11111111(14)𝜕𝑢𝜕𝑢𝜕𝑦1𝜕𝑥1
+=,
+
+transform,i.e.,𝑦0=𝑀𝑣(𝑀𝑣)−𝑥0given
+1𝜕𝑣11𝜕𝑦111𝜕𝑥111𝜕𝑣1
+
+view-to-world matrix 𝑀𝑣. We test visibility between𝑦0and𝑦1;ifoccluded,theshiftfails
+andremainsundefined.Finally,weshiftpathsuffix[𝑥2𝑥3...𝑥𝑛]
+where |𝜕𝑦1/𝜕𝑥1| accounts for object scaling and |𝜕𝑦1/𝜕𝑢|accounts forprojectionfromworld-toscreen-space[Lehtinenetal.2013]:
+
+into[𝑦2𝑦3...𝑦𝑛]usinganygoodshift,e.g.,Linetal.’shybridshift.
+𝜕𝑦1𝜕𝑦1𝜕𝜔∥𝑦1−𝑦0∥2
+11=1111=
+·cos3
+𝜃𝑉,
+(15)
+
+ReprojectioninducesanadditionalJacobianwemustconsiderto
+1𝜕𝑢1
+1𝜕𝜔1 1𝜕𝑢1
+cos𝜃𝑁
+
+avoidbias;wediscussthisinSection4.1.3.
+GRIS Formulas.Section 4.1.1defined resampling for current pixel𝑗using 𝑁+1 inputs: 𝑁prior samples𝑋𝑖shifted to𝑌𝑖=𝑇(𝑋𝑖)
+inthecurrentframe,plusa canonical sample𝑌𝑁+1= 𝑌∗. Inthis
+givenangle𝜃𝑁between𝑦1’snormaland(𝑦0−𝑦1),andangle𝜃𝑉
+betweenthecamera’sforwardvectorand(𝑦1−𝑦0).ThefullJacobian
+|𝜕𝑇/𝜕𝑥¯|multipliesthesubpixelJacobian|𝜕𝑢/𝜕𝑣|andtheJacobian of the remaining path, e.g., from the hybrid shift:
+
+subsection,wediscusshowtheboxfilterreducesthebalanceheuris-
+1𝜕𝑇1
+cos𝜃𝑁
+cos3𝜃prev∥𝑥1−𝑥0∥2!
+1𝜕𝑦111′1
+
+𝑉𝑉==𝑁𝑁ticintosimpleexpressions;thesupplementaldocumentcontains derivationsofMISweightswithgeneralpixelfilters.
+1𝜕𝑥¯1
+cos𝜃prev
+cos3𝜃𝑉∥𝑦1−𝑦0∥2
+··𝑇,(16)
+1hybrid11hybrid11𝜕𝑥11
+
+Starting withpriorsample 𝑋𝑖mappedto𝑌𝑖=𝑇𝑖(𝑋𝑖),wesubsti-tute𝑝ˆ𝑗(𝑥¯)=ℎ𝑗(𝑥¯)𝑝ˆ(𝑥¯)intoEquation4.Usingaboxfilter,𝑤𝑖=0 if
+𝑌𝑖isnotinpixel𝑗.Otherwise,for𝑌𝑖insidepixel𝑗,ℎ𝑗(𝑌𝑖)=1,so we get
+where |𝜕𝑦1/𝜕𝑥1| = 1 for rigid transformations. For non-rigid body deformations,thisiscomputedastheratiobetweenthecorrespond-ingtriangle’scurrentandpriorarea.
+Wefirstscatterpriorsamplestothecurrent frame,
+
+𝑤𝑖=𝑚𝑖(𝑌𝑖)𝑝ˆ(𝑌𝑖)𝑊𝑋𝑖
+𝜕𝑇
+1111..1 𝜕𝑋𝑖1
+(10)
+Summary.
+using them for resampling where they land. Next, we reverse-splat canonical samples to the prior frame to evaluate MIS weights. Last, weupdateUCWsforeachpixels’chosensample.Reservoirsplatting
+
+
+2Similar formulations are used in light tracing, bidirectional path tracing, vertex con-nection and merging, and related techniques [Dutré et al.1993; Georgiev et al.2012;LafortuneandWillems1993;VeachandGuibas1995].
+3BuildingonideasfromAreaReSTIR[Zhangetal.2024],thetargetfunctionisthe
+measurementcontributionfunctiondefinedbyVeach[1997].
+remainsunbiasedasJacobianscompensateforanyscreen-space densitychange,andtheinitialsamplesensurewefullycoverthepath space. Efficiently implemented, reservoir splatting costs similartoZhangetal.’s[2024]fastreuseinAreaReSTIR.
+
+BackupSample
+Splatting projects to the current frame using the last frame’s for-ward motion vectors; this leaves holes where no prior-frame pixel contributes.Wecanoptionallyfillholeswithbackupsamples,e.g., backprojecting to the prior frame to find relevant samples.
+Toobtainabackup,wefollowtheroundedmotionvector𝛿at eachpixelcenterback toaprior-framepixel𝑏, whosesample𝑋𝑏wegiveasanadditionalinputtoourtemporalreuse.Wedirectly useZhangetal.’s[2024]proposedtemporalshift𝑇𝑏.
+Thissimplemethodimprovesrobustness,albeitatincreasedcost
+similar to Zhang et al.’s [2024] robustvariant. Like any shift moving the shading point, this works best for low frequency geometry and lighting.Inthesupplementarymaterial,weextendtheMISweights fromEquations11and13tocorrectlyaccountforbackupsamples.
+ConfidenceWeightUpdate
+Earliermethodssettheconfidenceweight𝑐𝑗to the capped sum oftheinputs(Section3.4).However,weconceptuallyhave𝐻×
+𝑊inputs,ofwhichonlyafewcontribute.Settingtheconfidence
+44weightbasedonlyoncontributing reservoirsproducesbias.Instead, wemodelconfidenceafterZhangetal.[2024],backprojectingthecurrentpixel-centerintothepriorframeandbilinearlyinterpolating theconfidence weights of the 2×2 overlapped pixels:
+ReferenceZhang+§4.4.1←−Splatting(Ours)−→
+
+Fig.3.ThisLandscapehas4.3billiontriangles.Forstaticcameras,Zhangetal.[2024]getgoodresults,butthequalityislostinmotion, evenwithnaïvemotionblur(Section4.4.1).Splattingimprovesqual-ity,lowerscost,andextendstomulti-splattingtoresamplepathsat multiple times during the exposure, further improving quality.
+
+
+pixel.Givenshift𝑇inSection4.1,ourmotionblurshiftmap𝑇ˆis:
+(𝑦¯,𝑡) = 𝑇ˆ(𝑥¯,𝑡prev) = (𝑇 (𝑥¯),𝑡prev+ Δ𝑡) ,(18)whichshouldbereadas“forwardproject𝑥¯totime𝑡prev+Δ𝑡”,with
+𝑇alsoimplicitlydependingon𝑡.
+
+
+𝑐𝑗=min
+
+𝑐𝑖+
+𝑘∑︁′=1
+𝛽𝑘′𝑐𝑘′,𝑐cap!
+.(17)
+
+′
+4.4.3Multi-SplattingforMotionBlur.Somemotionblurmethods
+[HaeberliandAkeley1990]renderrepeat-edlyandaccumulate.Similarly,splattingcan
+
+Here,𝛽𝑘′isthebilinearweightcorrespondingtohowmuchpixel𝑘
+overlaps with the backprojected pixel𝑗. With the backup, we also additsconfidencebeforeclamping.
+MotionBlurinReSTIR
+Nopriorspatiotemporalresamplingalgorithmshandlemotionblur, whichrequiresintegratingoverashuttertime[𝑡0,𝑡1)andassociat-
+repeatedlyshiftpriorsamplesandsplatinto the current frame at different times. This re-duces sample sparsity, improving reuse but atincreasedcost(seeFigures3and5).
+Todo this, we partition the shutter time𝜏=𝑡1−𝑡0into 𝐾intervals oflength𝜏/𝐾,andsplateachsampletoall𝐾intervalswithshifts
+
+ingaspecifictime𝑡witheachsample.
+NaïveAreaReSTIRExtension.Westartedbynaïvelyextending Zhangetal.[2024],augmentingpaths𝑥¯intopath-timepairs(𝑥¯,𝑡)
+(𝑦¯(𝑛),𝑡(𝑛))=𝑇ˆ𝑛(𝑥¯,𝑡prev)=
+
+𝑇𝑛(𝑥¯),𝑡0+
+𝑛𝜏
+𝐾
+prevprev
+𝑡−𝑡!𝑡−𝑡!+ 0
+𝐾
+,(19)
+
+and seeking a new shift between prior- and current-frame pairs. Shiftmappingsrelyoninvariants(e.g.,avertexorhalf-vector),and
+where𝑇𝑛reprojects𝑥¯from𝑡prevto𝑡(𝑁 ),and𝑛=0,...,𝐾−1. As
+ˆˆˆˆ𝑇𝑛squeezesthetimedimensionby1/𝐾,wehave1𝑇′1=1𝑇′1 /𝐾in
+
+asample’soffsetfromtheframestartisapossibleinvariant.Ashift mightpreservesuchanoffset;givenframedurationΔ𝑡,asample timeof𝑡mapsto𝑡±Δ𝑡infutureorpriorframes.
+resamplingweightandMISformulas.
+SplattingforDepthofField
+𝑛𝑛
+
+Backprojectingsample(𝑥¯𝑗,𝑡𝑗)fromcurrentpixel𝑗toprevioustime𝑡𝑗−Δ𝑡definesamotionvector.Butthisrepresentsonlymotion at𝑥¯𝑗,notallsurfacesinpixel𝑗.AreaReSTIRreusesfromreservoirs withfixedmotion.Evenwithanewtime-offsetshift,manypathsin thereservoirmaybeirrelevantforthecurrentpixelduetodiffering motion,sampletime,orsubpixeldetail.Thismakesfailedshiftsand losthistorymorelikely,degradingrenderingquality;seeFigure3.
+4.4.2SplattingforMotionBlur.Comparatively,usingscattering for motion blur is simple. Splatting forward-projects a single path, whereasbackprojectionseekscontributionsforanentirepixel.
+SplattingbyshiftingforwardintimeΔ𝑡simplyprojectstheprior primaryhittothecorrectpointonitsmotion,mappingtoaspecific
+Zhang et al.[2024] achieved real-time depth of field by reusing the subpixellocation𝑢.Shiftscouldthenbedefinedbyeitherreusingthe lens position𝑠(thelensvertexcopyshift),ortheprimaryhit 𝑥1(theprimaryhitreconnectionshift).Primaryhitreconnectionimproves reuse of bokeh samples for large apertures, but often leads to shift failures for small apertures. Neither shift produces acceptable results alone, so they must be combined via heuristic-based MIS weights.Incontrast,splattingexplicitlypreservestheprimaryhit𝑥1and also allows reuse of a fixed lens sample𝑠, while the image-space lo-cation𝑢issimplydefinedbysplattedsamplelocation.Thisachieves high-qualitybokehusingoursingleshiftmap.Thissavescompute
+timeandsimplifiesthecode.SeeFigure4foranillustration.
+
+
+
+Fig.4.Toremainrobust,AreaReSTIR[Zhangetal.2024]reusestemporallybyoneshiftthatpreserveslenscoordinatesandanotherthatpreservestheprimaryhit,andmergeswithMIS.Ourreservoirsplattingalonepreservesboth.Left:AreaReSTIRcomputesamotionvectorbytracingaprimaryhitthroughthecurrentlensandpixelcenters(1),thenreprojectingtowardsthepriorlenscenterontothepriorimageplane(2).Middle: Lensvertexcopyreusespriorpath’slenscoordinates(3),addsthemotionvectortotheimage-spacelocation(4),andtracesanewprimaryhit(5). Primary hit reconnection adds the motion vector (6) and reprojects the old primary hit onto the lens through the image-space vertex (7). Right: Our reservoir splatting copies the local lens coordinates (1) and reprojects the old primary hit onto the image-space towards the new lens coordinates (2).
+
+
+IMPLEMENTATIONDETAILS
+Weimplementourreservoirsplatting4inFalcor[Kallweitetal.2022].WeuseZhangetal.’s[2024]areareservoirstorageformat, addingtheexplicitobject-spaceprimaryhit,aswellasasample timewhenenablingmotionblur.Forcorrectnessandefficiency,a fewkeydetailsshouldbeconsidered.
+Multiplesplatscanlandinanypixel,requiringatomicstoavoid
+Reference1 Splat2 Splats4 Splats8 Splats
+
+race conditions, as in order-independent transparency algorithms [Maule et al.2011] such as real-time K-buffering [Bavoil et al.2007]. Motionbluristricky,asittracesraysatanytime𝑡.Thisrequires
+MAPEFLIP
+Time(ms)
+0.600
+0.330
+14.5
+0.444
+0.259
+18.0
+0.346
+0.211
+22.8
+0.290
+0.183
+31.9
+
+arbitrary-timeBVHqueries.Whilerecenthardwareacceleratessuch motion BVHs [NVIDIA2020,a], Falcor does not. Our prototype only handles blur from dynamic cameras in static scenes, allowing use of regular BVHs as geometry is time-invariant. Our algorithm should extend to dynamic scenes once we can trace rays at arbitrary times. The supplemental material discusses these topics in further detail.
+RESULTS
+Wegeneratedallresultsat1920×1080,withtimingscapturedonan NVIDIAGeForceRTX4090.WefollowmostsettingsfromZhangetal.[2024]andLinetal.[2022],e.g.,𝑐𝑐𝑎𝑝=20,spatialneighbors from a 30 pixel radius. We enable Russian roulette, so average path depthis <3inmostscenes.Unlessstated,motionblurresultsusea simulatedshutterof1/24seconds,regardlessofframetime.Weuse MAPE to measure numerical errors and FLIP for perceptual errors [Andersson et al.2021].
+Figure7showsacross-sectionofresults,comparingoursingle splatting,withandwithoutbackup(Sections4.4.2and4.4.3),to variousbaselinesintrickyscenes.
+The top three rows (Sheep In Forest, Hair, and Residential Lobby)comparewithZhangetal.’s[2024]AreaReSTIR,usingtheir fast and robust temporal methods. Our splatting consistently runs5-10% faster with 10-20% lower error than fast reuse, and splatting withabackupsimilarlyoutperformsrobustreuse.Intrickycases,splatting alone also beats robust reuse; in simpler cases, e.g., along flat surfaces, splatting only gives quality on par with Zhang et al.’s fastreuse,thoughitusuallyretainsaperformanceadvantage.
+Thebottomrows(BistroExteriorandEmeraldSqare)show motionblur,whichwasincompatiblewithReSTIRbeforeourwork.
+
+4Implementationavailableathttps://github.com/Jebbly/Reservoir-Splatting.
+Fig.5.TheLivingRoomusingmulti-splattingwithvaryingsplats per prior pixel, with camera rotation generally leftwards.
+
+ReferenceSplatSplat+Backup
+
+MAPE/Time(ms)0.980/7.10.717/9.0
+Fig.6.TheWoodenStaircasecapturedunderextremeforwardmo-tion.In suchcases,splatting priorreservoirsinto singlepixels leavesholesbetweensplats.Usingabackupsample(Section4.2)helpsfill these holes, improving reuse.
+
+
+Toavoidcomparingtoadhocpost-processblur,weuseabaselineof Zhang et al.[2024] augmented by our naïve, backprojected motion blurfromSection4.4.1.Inthiscase,splattingagainhas10-15% lowererrorandusuallylowercost.Fromaqualityperspective,Area ReSTIR’s robust reuse has quite noticeable 2 ×2 pixel correlations. Suchcorrelationsarenotpresentwithsplatting(alone),soeven iftherobustbaselinehaslowermetrics,splattingoftenhasless objectionableartifactsandrunstwiceasfast.
+Qualitatively,multi-splattingcouldimproveallourresultsin Figure7further(e.g.,asinFigure5),albeitatincreasedcost.
+
+InstantaneouspinholecameraCameramovesrightInstantaneouspinholecameraCameramovesrightOurSplat+BackupAreaFastAreaRobustOur SplattingSplat+BackupReference
+
+
+
+
+
+
+
+
+SheepInForestSheepInForestTime(ms)/MAPE/FLIP:63.2/1.013/0.664103/0.885/0.62761.9/0.860/0.53989.2/0.840/0.534
+
+
+
+
+
+
+
+
+
+InstantaneouspinholecameraCameramovesupInstantaneouspinholecameraCameramovesupHairHairTime(ms)/MAPE/FLIP:55.3/0.190/0.90573.4/0.173/0.90152.1/0.166/0.80178.3/0.166/0.827
+
+
+
+
+
+
+
+
+
+DepthoffieldCameramovesforwardDepthoffieldCameramovesforwardResidentialLobbyResidentialLobbyTime(ms)/MAPE/FLIP:28.5/1.197/0.78449.8/1.035/0.74526.1/1.024/0.68138.1/0.937/0.663
+Motionblur: 1sCameramovee11ss0leftMotionblur: 1sCameramovee11ss0leftOurSplat+BackupNaïveNaïve+RobustOur SplattingSplat+BackupReference
+
+
+
+
+
+
+
+
+BistroExteriorBistroExteriorTime(ms)/MAPE/FLIP:18.9/0.956/0.72429.3/0.748/0.67518.1/0.885/0.66032.7/0.717/0.614
+
+
+
+
+
+
+
+
+Motionblur: 1sCameramovee2ss4forwardMotionblur: 1sCameramovee2ss4forwardEmeraldSqareEmeraldSqareTime(ms)/MAPE/FLIP:26.0/1.088/0.63840.3/0.957/0.59923.0/0.973/0.57939.0/0.819/0.536
+Fig.7.Here,wecompareourworkwithvariousbaselines.ForSheepInForest,Hair,andResidentialLobby,wedirectlycomparewithZhangetal.’s[2024]fastandrobustvariants.Nopriorresamplingmethodquicklyhandlesmotionblur,soinBistroExteriorandEmeraldSquarewe compareagainstthenaïvebackprojectedapproachdescribedinSection4.4.1(alongwitharobustvariantsimilartoZhangetal.).
+
+ReferenceAreaReSTIR(Fast)Splat (Ours)
+
+MAPE/Time(ms)1.032/13.21.014/12.4
+Fig.8.TheZeroDayscenecapturedundermoderateupwardmotion.Splattingimproveshigh-frequencynormal-mappedglossymaterial compared to Area ReSTIR.
+
+DISCUSSION
+Belowwediscusssomekeytakeawaysfromourworkandresults.
+Resampledreusedeterioratesundermotion.WhileReSTIRcon-verges impressively for static cameras, more frequent mismatches between temporal samples degrades the history under motion (see Figure 2). This is particularly apparent near high frequencies.
+Gather versus scatter.This question repeatedly arises in graph-ics.Typically,similaralgorithmscanbedesignedwitheither.But asplat-basedscatterguaranteestestingeverypriorreservoirfor relevance to a current pixel. Especially under motion, gathering via backprojectedmotionvectorsmakesnosuchguarantee.Quality bumpsjustfromscatteringaresmallinwell-sampledscenes,butdif-ferences grow near high frequencies (e.g., high-frequency geometry inFigures1,3,9,7,andhigh-frequencymaterialinFigure8).
+Splattingperformanceisfastandstable.Splattingperformance dependsonatomiccontention.Evenwithfastmotion,weaveraged
+0.6to0.9validprior-framesplatsperpixel,withamaximumof around5.Variationswerewell-distributed,leadingtogoodGPUutilization.DespitetheadditionaloverheadsdiscussedinSection5, splatting only requires visibility queries; these are cheaper than the primaryraystracedbyothershiftsthatmustfindanewprimary hit.
+Backupsamplesareimportantforrobustness.Splattingintroduces holes,whichgrowwhensplats’relativemotiondiverges.Backupsampleshelpreducetheseholes,albeitatincreasedcostfromtheuse bothscatteringandgathering.Figure6showsextremelyfastmotion, wherethesehole-fillingbenefitsareclear.Interestingfutureworkincludesidentifyingbackupreusemethodswithsmalleroverheads. Even so, splatting with backup results in only six total shifts per pixel,whileZhangetal.’s[2024]robustreuseusestentotalshifts per pixel.
+Multi-splatting.Multi-splattinggivesanotherhole-reductionstrat-egy, where the performance cost is relatively small, but can signifi-cantly improve motion blur quality (see Figure 3and Figure 5). The SheepinForestandSubwayinFigure1use2×splatting.
+Improvingdepthoffield.Zhangetal.[2024]introducedthefirst resampling method for depth of field, improving quality significantly. However, they combined two shift maps with MIS, as neither shift handledsamplesinallcirclesofconfusion.Thisaddsvariance,as onechoiceisnearlyalwaysbetterthantheother.
+ReferenceAreaReSTIR(Fast)Splat (Ours)
+
+MAPE/Time(ms)1.404/33.60.981/31.1
+Fig.9.CapturedundermotionintheBistro.MotionincreasesArea ReSTIR’s[Zhangetal.2024]noiseduetolesstemporalreuse.Our splatting better preserves sample history, reducing noise, especially on foliage and specular highlights where correspondences between frames are more difficult to maintain.
+
+ReferenceAreaReSTIR(Robust)Splat +Backup (Ours)
+
+MAPE/Time(ms)0.288/16.00.430/16.4
+Fig.10.TheDiningRoomcapturedunderslowrightwardmovement.Due to simple geometry and linear movement, Area ReSTIR’s fractional reservoirsmapwelltothepriorframe.Zhangetal.’s[2024]robust variant reuses from the 2 ×2 neighborhood, thus providing more effective samples than splatting plus a single backup sample.
+
+Oursplatting-basedapproachusesasingleshiftvalidacross thedepthrange,reducingnoisenearthefocalplaneandonhigh-frequency geometry. Additionally, due to the reduced shift count, our approach is routinely up to 10% faster (e.g., Figure 9and Figure 7).
+LIMITATIONSANDFUTUREWORK
+Whilesplattingimprovesreuseforhigh-frequencydetailsthatre-main in image frame-to-frame, it does not improve quality for newly-disoccludedsurfaces;manyofourtrickysceneshavesuchpixels. While Zhang et al.’s [2024] and our backup samples can help fill suchholes,bettershiftsorpathmutationsarelikelyneededfor significant improvement (e.g., Kettunen et al.[2023]).
+Extremeforward-motionmaymaponepixeltomany.Backward-reprojectionreusesasampleformanypixelswithcorrelation;splat-ting reuses one-to-one, but may leave holes without backup samples.Insimplecaseswherebackprojectedpixelfootprintsmapwellto thepriorframe(e.g.,DiningRoominFigure10),splattingwith backupmaybeslightlynoisierthanAreaReSTIR’srobustreuse. Thisisbecauserobustreusepullsfroma2×2neighborhood,which providesmoresamplesbutinducesmorecorrelation.
+Whilemulti-splattingalsohelpsfillholes,itcanspreadfirefliespresent in reservoirs into multiple pixels along directions of move-ment (see Figure 3, far right). Such fireflies may cause problems for manymoderndenoisers,somitigatingthemrequiressomethought. Splatting followsaforwardmotion vector,soitinherits problems relatedtosuchmethods;pixelsrepresentinggeometryseenina mirrorwillbesplattedbasedonthemirrorgeometry,notthevirtual
+
+image. Our multi-splatting suggests we could follow multiple motionvectorsperpixeltofurtherimprovetherenderingofmirror-like surfaces,e.g.,theclear-coatedregionsinFigure8.Thisrequires careful theoretical development.
+CONCLUSION
+We present a new method of forward projecting, or splatting, reser-voirs between frames that improves reuse by reducing spuriously discarded sample histories. We show this works within Lin et al.’s [2022] generalized RIS theory, enabling splatting-based ReSTIR to remain unbiased.
+Our work naturally applies to motion blur by repeatedly splattingsamples for resampling. Furthermore, since we project exact primaryhits, we also render depth of field with a single shift map, improving qualityandperformanceoverZhangetal.[2024].
+We thus believe splatting is the future way to implement ReSTIR forallscenarios.Enablingresamplingforbothscatterandgather operations enlarges the algorithmic toolbox, allowing ReSTIR to apply to alarger variety of problems, perhaps includingbetter han-dling ofmismatchesbetweensampling densityandscreensize orcombining with more complex bidirectional rendering techniques.
+ACKNOWLEDGMENTS
+We thank Aaron Lefohn, Bill Dally, and Eric Shaffer for supporting this research. We also thank the anonymous reviewers for pointing outareasforimprovementandclarifications.
+The following environment maps were acquired from PolyHaven:Kloofendaal Skyfor Dining Room, Spruit Dawnfor Sheep in Forest, Shanghai Bundfor Hair, Misty Pinesfor Residential Lobby,andSignalHillSunriseforEmeraldSqare.TheDining RoomandWoodenStaircasesceneswereacquiredfromBitterli’s [2016] rendering resources.
+REFERENCES
+Stephen J Adelson and Larry F Hodges. 1995.Generating exact ray-traced animationframes by reprojection.IEEE Computer Graphics and Applications 15, 3 (1995), 43–52.PontusAndersson,JimNilsson,PeterShirley,andTomasAkenine-Möller.2021.Visual-izing Errors in Rendered High Dynamic Range Images. In Conference of the Euro-peanAssociationforComputerGraphics(Eurographics)ShortPapers.Eurographics-
+EuropeanAssociationforComputerGraphics.
+Steve Bako, Thijs Vogels, Brian McWilliams, Mark Meyer, Jan Novák, Alex Harvill,Pradeep Sen, Tony DeRose, and Fabrice Rousselle. 2017.Kernel-Predicting Convo-lutional Networks for Denoising Monte Carlo Renderings.ACM Transactions onGraphics (Proceedings of SIGGRAPH 2017) 36, 4, Article 97 (2017), 97:1–97:14 pages.https://doi.org/10.1145/3072959.3073708
+Pablo Bauszat, Victor Petitjean, and Elmar Eisemann. 2017.Gradient-Domain PathReusing.ACM Transactions on Graphics(TOG)36, 6(2017), 229:1–229:9.https:
+//doi.org/10.1145/3130800.3130886
+LouisBavoil,StevenCallahan, AaronLefohn,JoaoComba, andClaudioSilva.2007.Multi-fragmenteffectsontheGPUusingthek-buffer.InProceedingsoftheSympo-sium on Interactive 3D Graphics and Games. 97–104.
+Philippe Bekaert, Mateu Sbert, and John H Halton. 2002.Accelerating Path Tracing byRe-Using Paths. In Eurographics Workshop on Rendering. 125–134.https://doi.org/10.2312/EGWR.EGWR02.125-134
+LaurentBelcour,CyrilSoler,KarticSubr,NicolasHolzschuch,andFredoDurand.2013.5D Covariance tracing for efficient defocus and motion blur.ACM Trans. Graph. 32,3,Article31(July2013),18pages.https://doi.org/10.1145/2487228.2487239
+Gary Bishop, Henry Fuchs, Leonard McMillan, and Ellen J Scher Zagier. 1994.Framelessrendering:Doublebufferingconsidered harmful.InProceedingsof the21stannualconference on Computer graphics and interactive techniques. 175–176.
+BenediktBitterli.2016.Rendering resources.https://benedikt-bitterli.me/resources/.BenediktBitterli,ChrisWyman,MattPharr,PeterShirley,AaronE.Lefohn,andWoj-
+ciech Jarosz. 2020.Spatiotemporal reservoir resampling for real-time ray tracing
+
+with dynamic direct lighting.ACM Transactions on Graphics (TOG)39, 4, Article148(Jul2020),17pages.https://doi.org/10.1145/3386569.3392481
+Chakravarty R. Alla Chaitanya, Anton S. Kaplanyan, Christoph Schied, Marco Salvi,Aaron Lefohn, Derek Nowrouzezahrai, and Timo Aila. 2017.Interactive Recon-structionofMonteCarlo ImageSequencesUsinga RecurrentDenoisingAutoen-coder.ACMTransactionsonGraphics(TOG)36,4,Article98(jul2017),12pages.https://doi.org/10.1145/3072959.3073601
+Min-TeChao.1982.Ageneralpurposeunequalprobabilitysamplingplan.Biometrika
+69, 3(1982), 653–656.https://doi.org/10.2307/2336002
+Alessandro Dal Corso, Marco Salvi, Craig Kolb, Jeppe Revall Frisvad, Aaron Lefohn, andDavidLuebke.2017.Interactivestableraytracing.InProceedingsofHighPerformanceGraphics.Article1,10pages.https://doi.org/10.1145/3105762.3105769
+Abhinav Dayal, Cliff Woolley, Benjamin Watson, and David Luebke. 2005.Adaptiveframeless rendering.In ACM SIGGRAPH 2005 Courses. 24–es.
+Chao Dong, Chen Change Loy, KaimingHe, and XiaoouTang. 2015.Image Super-ResolutionUsingDeepConvolutionalNetworks.IEEETransactionsonPatternAnalysisandMachineIntelligence38,2(2015),295–307.https://doi.org/10.1109/TPAMI.2015.2439281
+Philip Dutré, Eric P. Lafortune, and Yves D. Willems. 1993.Monte Carlo light tracingwithdirectcomputationofpixelintensities.In3rdInternationalConferenceonComputational Graphics and Visualisation Techniques. 128–137.
+Kevin Egan, Yu-Ting Tseng, Nicolas Holzschuch, Frédo Durand, and Ravi Ramamoorthi.2009.Frequency analysis and sheared reconstruction for rendering motion blur. InACMSIGGRAPH2009Papers (SIGGRAPH’09).AssociationforComputingMachinery,NewYork,NY,USA, Article93,13pages.https://doi.org/10.1145/1576246.1531399IliyanGeorgiev,JaroslavKřivánek,TomášDavidovič,andPhilippSlusallek.2012.Lighttransportsimulationwithvertex connectionandmerging.ACMTrans.Graph.31, 6,
+Article192(Nov.2012),10pages.https://doi.org/10.1145/2366145.2366211
+CarlJohanGribel,MichaelDoggett,andTomasAkenine-Möller.2010.AnalyticalMotion Blur Rasterization withCompression. In High PerformanceGraphics. 163–
+172.https://doi.org//10.2312/EGGH/HPG10/163-172
+ToshiyaHachisuka,WojciechJarosz,RichardPeterWeistroffer,KevinDale,GregHumphreys, Matthias Zwicker, and Henrik Wann Jensen. 2008.Multidimensionaladaptivesamplingandreconstructionforraytracing.ACMTrans.Graph.27,3(Aug.2008), 1–10.https://doi.org/10.1145/1360612.1360632
+Paul Haeberli and Kurt Akeley. 1990.The accumulation buffer: hardware support forhigh-qualityrendering.InProceedingsofthe17thAnnualConferenceonComputerGraphics and Interactive Techniques. 309–318.https://doi.org/10.1145/97879.97913JonHasselgren,JacobMunkberg,MarcoSalvi,AnjulPatney,andAaronLefohn.2020.
+NeuralTemporalAdaptiveSamplingandDenoising.ComputerGraphicsForum
+(2020).https://doi.org/10.1111/cgf.13919
+Mustafa Işık, Krishna Mullia, Matthew Fisher, Jonathan Eisenmann, and Michaël Gharbi.2021.InteractiveMonteCarlodenoisingusingaffinityofneuralfeatures.ACMTransactionsonGraphics(TOG)40,4,Article37(July2021),13pages.https:
+//doi.org/10.1145/3450626.3459793
+JamesTKajiya.1986.Therenderingequation.InProceedingsofthe13thannualconference on Computer graphics and interactive techniques. 143–150.
+Simon Kallweit, Petrik Clarberg, Craig Kolb, Tomáš Davidovič, Kai-Hwa Yao, TheresaFoley,YongHe,LifanWu,LucyChen,TomasAkenine-Möller,ChrisWyman,CyrilCrassin,andNirBenty. 2022.TheFalcorRenderingFramework.https://github.com/NVIDIAGameWorks/Falcor[Online; accessed 22-August-2023].
+AlexanderKeller.1997.Instant radiosity.InProceedingsof the24thAnnualConferenceonComputerGraphicsandInteractiveTechniques.49–56.https://doi.org/10.1145/258734.258769
+Markus Kettunen, Daqi Lin, Ravi Ramamoorthi, Thomas Bashford-Rogers, and ChrisWyman. 2023.Conditional Resampled Importance Sampling and ReSTIR. In SIG-GRAPHAsia2023ConferencePapers.1–11.
+Markus Kettunen, Marco Manzi, Miika Aittala, Jaakko Lehtinen, Frédo Durand, andMatthiasZwicker.2015.Gradient-domainpathtracing.ACMTransactionsonGraphics (TOG) 34, 4 (2015), 1–13.https://doi.org/10.1145/2766997
+EmmettKilgariff,HenryMoreton,NickStam,andBrandonBell.2018.NVIDIATuringArchitectureIn-Depth.https://developer.nvidia.com/blog/nvidia-turing-architecture-in-depth/.[Online; accessed 9-December-2021].
+AlexandrKuznetsov,NimaKhademiKalantari,andRaviRamamoorthi.2018.DeepAdaptiveSamplingforLowSampleCountRendering.ComputerGraphicsForum 37,4(2018),35–44.https://doi.org/10.1111/cgf.13473
+EricP.LafortuneandYvesD.Willems.1993.Bi-DirectionalPathTracing.InProceedingsof Compugraphics. 145–153.https://graphics.cs.kuleuven.be/publications/BDPT/
+JaakkoLehtinen,TimoAila,JiawenChen,SamuliLaine,andFrédoDurand.2011.Temporal light field reconstruction for rendering distribution effects. In ACM SIG-GRAPH 2011 Papers (Vancouver, British Columbia, Canada) (SIGGRAPH ’11). As-sociationforComputingMachinery,NewYork,NY,USA,Article55,12pages.https://doi.org/10.1145/1964921.1964950
+JaakkoLehtinen,TimoAila,SamuliLaine,andFrédoDurand.2012.Reconstructingtheindirect light field for global illumination.ACM Trans. Graph. 31, 4, Article 51 (July2012),10pages.https://doi.org/10.1145/2185520.2185547
+
+
+Jaakko Lehtinen, Tero Karras, Samuli Laine, Miika Aittala, Frédo Durand, and Timo Aila.2013.Gradient-domainmetropolislighttransport.ACMTransactionsonGraphics(TOG) 32, 4 (2013), 1–12.
+Daqi Lin, Markus Kettunen, Benedikt Bitterli, Jacopo Pantaleoni, Cem Yuksel, andChris Wyman. 2022.Generalized Resampled Importance Sampling: FoundationsofReSTIR.ACMTransactionsonGraphics(TOG) 41,4(2022),75:1–75:23.https:
+//doi.org/10.1145/3528223.3530158
+EdwardLiu.2020.DLSS2.0-ImageReconstructionforReal-timeRenderingwithDeepLearning. GPU Technology Conference (GTC).https://developer.nvidia.com/gtc/2020/video/s22698-vid
+Marco Manzi, Markus Kettunen, Frédo Durand, Matthias Zwicker, and Jaakko Lehtinen.2016.Temporal gradient-domainpath tracing.ACM Transactions onGraphics (TOG)35, 6 (2016), 1–9.
+MarilenaMaule,JoãoL.D.Comba,RafaelP.Torchelsen,andRuiBastos.2011.Asurveyofraster-basedtransparency techniques.Comput.Graph.35, 6(Dec.2011),1023–1034.https://doi.org/10.1016/j.cag.2011.07.006
+MorganMcGuire,PadraicHennessy, MichaelBukowski,andBrian Osman.2012.Areconstructionfilterforplausiblemotionblur.InProceedingsoftheACMSIGGRAPHSymposiumonInteractive3DGraphicsandGames(CostaMesa,California)(I3D’12).AssociationforComputingMachinery,NewYork,NY,USA,135–142.https:
+//doi.org/10.1145/2159616.2159639
+DanielMeisterandToshiyaHachisuka.2022.LightweightMultidimensionalAdaptiveSamplingforGPURayTracing.JournalofComputerGraphicsTechniques(JCGT)11,3(15August2022),43–64.http://jcgt.org/published/0011/03/03/
+Jacob Munkberg, Karthik Vaidyanathan, Jon Hasselgren, Petrik Clarberg, and TomasAkenine-Möller. 2014.Layered Reconstruction for Defocus and Motion Blur.Com-puter Graphics Forum (2014).https://doi.org/10.1111/cgf.12415
+FernandoNavarro,FranciscoJ.Serón,andDiegoGutierrez.2011.MotionBlurRender-ing:StateoftheArt. ComputerGraphicsForum(2011).https://doi.org/10.1111/j.1467-8659.2010.01840.x
+Diego Nehab, Pedro V. Sander, Jason Lawrence, Natalya Tatarchuk, and John R. Isidoro.2007.Acceleratingreal-timeshadingwithreversereprojectioncaching.InPro-ceedingsoftheSymposiumonGraphicsHardware.25–35.https://doi.org/10.5555/1280094.1280098
+NVIDIA. 2020.GPU-Accelerated Motion Blur in Blender Cycles.https://www.nvidia.com/en-us/on-demand/session/gtcfall20-d22635/.[Online; accessed 19-January-2025].
+NVIDIA.2020a.NVIDIAAmpereGA102GPUArchitecture.https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf. [Online;accessed22-January-2025].
+NVIDIA. 2020b.NVIDIA Real-Time Denoisers (NRD).https://developer.nvidia.com/rtx/ray-tracing/rt-denoisers.[Online; accessed 20-December-2024].
+MaxOberberger,MatthäusG.Chajdas,andRüdigerWestermann.2022.SpatiotemporalVariance-GuidedFilteringforMotionBlur.Proc.ACMComput.Graph.Interact.Tech.5, 3, Article 22 (2022).https://doi.org/10.1145/3543871
+YaobinOuyang,ShiqiuLiu,MarkusKettunen,MattPharr,andJacopoPantaleoni.2021.ReSTIR GI: Path Resampling for Real-Time Path Tracing.Computer Graphics Forum40,8(2021),17–29.https://doi.org/10.1111/cgf.14378
+GilbertoRosado.2007.MotionBlurasaPost-ProcessingEffect.InGPUGems3,HubertNyugen (Ed.). Addison-Wesley Professional, 575–582.
+DanielScherzer,Stefan Jeschke,andMichael Wimmer.2007.Pixel-CorrectShadowMapswithTemporalReprojectionandShadowTestConfidence.InProceedingsoftheEurographics Symposium on Rendering.https://doi.org/10.2312/EGWR/EGSR07/045-050
+Christoph Schied, Anton Kaplanyan, Chris Wyman, Anjul Patney, Chakravarty R AllaChaitanya, John Burgess, Shiqiu Liu, Carsten Dachsbacher, Aaron Lefohn, and MarcoSalvi. 2017.Spatiotemporal variance-guided filtering: real-time reconstruction forpath-tracedglobalillumination.InProceedingsof HighPerformanceGraphics.1–12.https://doi.org/10.1145/3105762.3105770
+Christoph Schied, Christoph Peters, and Carsten Dachsbacher. 2018.Gradient Estima-tion for Real-Time Adaptive Temporal Filtering.Proc. ACM Comput. Graph. Interact.Tech. 1, 2, Article 24 (2018).https://doi.org/10.1145/3233301
+Justin Talbot, David Cline, and Parris Egbert. 2005.Importance Resampling for GlobalIllumination. In Eurographics Symposium on Rendering. 139–146.https://doi.org/10.2312/EGWR/EGSR05/139-146
+Natalya Tatarchuk, Chris Brennan, and John Isidoro. 2003.Motion Blur Using Geometryand Shading Distortion.In ShaderX2, Wolfgang Engel (Ed.). Charles River Media.
+EricVeach.1997.RobustMonteCarlomethodsforlighttransportsimulations.Ph.D.Dissertation. Stanford University.https://graphics.stanford.edu/papers/veach_thesis/
+Eric Veach and Leonidas Guibas. 1995.Bidirectional estimators for light transport.InPhotorealisticRenderingTechniques.Springer,145–167.https://doi.org/10.1007/978-3-642-87825-1_11
+Bruce Walter, George Drettakis, and Steven Parker. 1999.Interactive Rendering usingtheRenderCache.InRenderingTechniques’99.SpringerVienna,Vienna,19–30.
+
+TurnerWhitted.1979.Animprovedilluminationmodelforshadeddisplay.InProceed-ingsofthe6thAnnualConferenceonComputerGraphicsandInteractiveTechniques.
+14.https://doi.org/10.1145/800249.807419
+ChrisWyman,MarkusKettunen, DaqiLin,BenediktBitterli, CemYuksel,WojciechJarosz, Pawel Kozlowski, and Giovanni De Francesco. 2023.A Gentle Introductionto ReSTIR: Path Reuse in Real-time. In ACM SIGGRAPH 2023 Courses (Los Angeles,California).https://doi.org/10.1145/3587423.3595511
+LeiXiao,SalahNouri, MattChapman,AlexanderFix, DouglasLanman,andAntonKaplanyan. 2020.Neural supersampling for real-time rendering.ACM TransactionsonGraphics(TOG)39,4,Article142(Aug2020),12pages.https://doi.org/10.1145/
+3386569.3392376
+QingXuandMateuSbert.2007.ANewWaytoRe-usingPaths.InComputationalScience and Its Applications – ICCSA 2007, Osvaldo Gervasi and Marina L. Gavrilova(Eds.).741–750.
+LeiYang,ShiqiuLiu,andMarcoSalvi.2020.ASurveyofTemporalAntialiasingTechniques.ComputerGraphicsForum39,2(2020),607–621.https://doi.org/10.1111/cgf.14018
+Lei Yang, Diego Nehab, Pedro V. Sander, Pitchaya Sitthi-amorn, Jason Lawrence, andHuguesHoppe.2009.Amortizedsupersampling.ACMTransactionsonGraphics(TOG)28,5(Dec.2009),1–12.https://doi.org/10.1145/1618452.1618481
+Lei Yang, Yu-Chiu Tse, Pedro V. Sander, Jason Lawrence, Diego Nehab, Hugues Hoppe,andClaraL.Wilkins.2011.Image-basedbidirectionalscenereprojection.ACMTrans.Graph.(Dec.2011),1–10.https://doi.org/10.1145/2070781.2024184
+Song Zhang, Daqi Lin, Markus Kettunen, Cem Yuksel, and Chris Wyman. 2024.AreaReSTIR: Resampling for Real-Time Defocus and Antialiasing.ACM Transactions onGraphics (TOG) 43, 4 (2024), 1–13.

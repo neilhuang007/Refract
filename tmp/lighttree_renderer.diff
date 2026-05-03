@@ -1,0 +1,723 @@
+diff --git a/src/at/redi2go/photonic/client/rendering/opengl/rendering/renderers/LightTreeRenderer.java b/src/at/redi2go/photonic/client/rendering/opengl/rendering/renderers/LightTreeRenderer.java
+index 7bc59a4..2a37b60 100644
+--- a/src/at/redi2go/photonic/client/rendering/opengl/rendering/renderers/LightTreeRenderer.java
++++ b/src/at/redi2go/photonic/client/rendering/opengl/rendering/renderers/LightTreeRenderer.java
+@@ -124,12 +124,47 @@ public class LightTreeRenderer extends MainRenderer {
+    private static final int relaxAntiFireflyRegionIndex = 12;
+    private static final int relaxAtrousSmemRegionIndex = 13;
+    private static final int relaxAtrousRegionIndex = 14;
+-   private static final int restirGIRegionIndex = 15;
+-   private static final int indirectDenoiseRegionIndex = 16;
+-   private static final int lightingAccumulationRegionIndex = 17;
+-   private static final int indirectCompositeRegionIndex = 18;
++  private static final int restirGIRegionIndex = 15;
++  private static final int indirectDenoiseRegionIndex = 16;
++  private static final int lightingAccumulationRegionIndex = 17;
++  private static final int indirectCompositeRegionIndex = 18;
++   private static final int REGIR_BUILD_LOG_INTERVAL_FRAMES = 60;
++   private static final boolean ADAPTIVE_QUALITY_ENABLED = Boolean.parseBoolean(System.getProperty("photonics.adaptiveQuality", "true"));
++   private static final long ADAPTIVE_TARGET_GPU_NANOS = Long.getLong("photonics.adaptiveTargetGpuMicros", 28_000L) * 1_000L;
++   private static final long ADAPTIVE_RECOVER_GPU_NANOS = Long.getLong("photonics.adaptiveRecoverGpuMicros", 22_000L) * 1_000L;
++   private static final int ADAPTIVE_PRESSURE_FRAMES = Integer.getInteger("photonics.adaptivePressureFrames", 90);
++   private static final int ADAPTIVE_RECOVER_FRAMES = Integer.getInteger("photonics.adaptiveRecoverFrames", 180);
++   private static final int ADAPTIVE_DYNAMIC_BOOST_FRAMES = Integer.getInteger("photonics.adaptiveDynamicBoostFrames", 45);
+    private boolean loggedRegirPresampleFrameSeedOverride = false;
+    private boolean loggedRegirBuildFrameSeedOverride = false;
++   private record RegirBuildKey(
++      int centerCellX,
++      int centerCellY,
++      int centerCellZ,
++      long semanticLayoutHash,
++      long powerStateHash,
++      int lightCount,
++      int lightsPerCell,
++      int buildSamples,
++      int buildRegionCells,
++      int hashTableSize,
++      int hashCellSizeBits,
++      int effectiveBucketCount,
++      int buildJitterBits,
++      int lookupJitterBits,
++      int localLightSamplesBits,
++      int presampleFrameSeed,
++      int buildFrameSeed,
++      int pdfStateHash,
++      boolean collapsedNormalBuckets,
++      int lightListBufferId,
++      int cdfBufferId,
++      int risBufferId,
++      int compactBufferId,
++      int hashChecksumBufferId,
++      int hashKeyBufferId
++   ) {
++   }
+    @Nullable
+    private Function<List<PhotonicsShader>, CompositeRenderer> compositeRendererCreator;
+ 
+@@ -187,10 +222,9 @@ public class LightTreeRenderer extends MainRenderer {
+   private GlMemoryManager temporalScatterCurrentCellOffsetsMemoryManager;
+   private GlMemoryManager temporalScatterCurrentSortedReservoirsMemoryManager;
+   private GlMemoryManager temporalScatterMultiGlobalCountersMemoryManager;
+-  private GlMemoryManager temporalScatterMultiCellCountersMemoryManager;
++  private GlMemoryManager temporalScatterMultiCellDataMemoryManager;
+   private GlMemoryManager temporalScatterMultiReservoirIndicesMemoryManager;
+   private GlMemoryManager temporalScatterMultiScatteredReservoirsMemoryManager;
+-  private GlMemoryManager temporalScatterMultiCellOffsetsMemoryManager;
+   private GlMemoryManager temporalScatterMultiSortedReservoirsMemoryManager;
+   private final RoutingFramebuffer proposalFramebuffer;
+   private final RoutingFramebuffer proposalReservoirFramebuffer;
+@@ -312,7 +346,8 @@ public class LightTreeRenderer extends MainRenderer {
+   private int directAtrousIteration = 0;
+    private boolean compatDirectSoftDirty = true;
+    private boolean reservoirHistoryDirty = true;
+-   private boolean directTemporalReuseActiveThisFrame = false;
++   private boolean directTemporalReuseRequestedThisFrame = false;
++   private boolean directTemporalOutputValidThisFrame = false;
+    private boolean indirectTemporalSplattingActiveThisFrame = false;
+    private boolean disabledIndirectOutputsCleared = false;
+    private int renderFrameIndex = 0;
+@@ -336,6 +371,18 @@ public class LightTreeRenderer extends MainRenderer {
+   private float[] cachedRegirPdfPowers;
+   private int cachedRegirPdfLightCount = -1;
+   private long cachedRegirSemanticLayoutHash = Long.MIN_VALUE;
++  @Nullable
++  private RegirBuildKey cachedRegirBuildKey = null;
++  private int regirBuildLogCountdown = 0;
++  private long regirBuildDispatchCount = 0L;
++  private long regirBuildSkipCount = 0L;
++   private String lastRegirBuildDecision = "none";
++   private String lastRegirBuildReason = "uninitialized";
++  private int adaptiveQualityLevel = 0;
++  private int adaptivePressureFrames = 0;
++  private int adaptiveRecoverFrames = 0;
++  private int adaptiveDynamicBoostFrames = 0;
++  private int adaptiveLogCountdown = 0;
+   private long lastCpuReSTIRGINanos;
+   private long lastCpuIndirectDenoiseNanos;
+   private long lastCpuLightingAccumulationNanos;
+@@ -452,10 +499,9 @@ public class LightTreeRenderer extends MainRenderer {
+       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentCellOffsetsMemoryManager);
+       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterCurrentSortedReservoirsMemoryManager);
+       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiGlobalCountersMemoryManager);
+-      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiCellCountersMemoryManager);
++      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiCellDataMemoryManager);
+       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiReservoirIndicesMemoryManager);
+       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiScatteredReservoirsMemoryManager);
+-      this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiCellOffsetsMemoryManager);
+       this.addTemporalScatterMemoryManager(memoryCollection, () -> this.temporalScatterMultiSortedReservoirsMemoryManager);
+    }
+ 
+@@ -869,7 +915,8 @@ public class LightTreeRenderer extends MainRenderer {
+          // Keep runtime local-light candidates at the shader's one-NEE-sample-per-path default
+          // unless ReGIR is active and the ReGIR tuning panel requests nested candidates.
+          if (this.shouldUseRegirLocalLightSampling()) {
+-            return Math.max(1.0f, PhotonicsStorage.REGIR_LOCAL_LIGHT_SAMPLES.value);
++            float configured = Math.max(1.0f, PhotonicsStorage.REGIR_LOCAL_LIGHT_SAMPLES.value);
++            return Math.max(1.0f, configured - this.getEffectiveAdaptiveQualityLevel() * 2.0f);
+          }
+          return 0.0f;
+       });
+@@ -900,7 +947,10 @@ public class LightTreeRenderer extends MainRenderer {
+             }
+          }
+ 
+-         return 1.0f;
++         // Reservoir Splatting keeps proposal reservoirs alive and evaluates
++         // visibility during final shading, where zero visibility is stored
++         // without discarding the selected reservoir.
++         return -1.0f;
+       });
+       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_initial_brdf_cutoff", () -> 0.0001f);
+       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_local_light_sampling_mode", () -> {
+@@ -955,7 +1005,8 @@ public class LightTreeRenderer extends MainRenderer {
+       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_target_history", () -> this.properties.getRestirSpatialTargetHistory());
+       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_sample_count", () -> {
+          float override = PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value;
+-         return override >= 0 ? override : (float) this.properties.getRestirSpatialSampleCount();
++         float configured = override >= 0 ? override : (float) this.properties.getRestirSpatialSampleCount();
++         return Math.max(0.0f, configured - this.getEffectiveAdaptiveQualityLevel());
+       });
+       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_spatial_radius", () -> {
+          float override = PhotonicsStorage.RESTIR_SPATIAL_RADIUS.value;
+@@ -967,9 +1018,7 @@ public class LightTreeRenderer extends MainRenderer {
+          UniformUpdateFrequency.PER_FRAME,
+          "ph_restir_temporal_scatter_isolation_mode",
+          () -> {
+-            String isolationMode = PhotonicsStorage.normalizeRestirTemporalReuse(
+-               PhotonicsStorage.RESTIR_TEMPORAL_REUSE.value
+-            );
++            String isolationMode = this.getEffectiveDirectTemporalReuseMode();
+             return switch (isolationMode) {
+                case "scatter_only" -> 1.0f;
+                case "scatter_backup" -> 2.0f;
+@@ -1015,7 +1064,12 @@ public class LightTreeRenderer extends MainRenderer {
+       uniforms.uniform1f(
+          UniformUpdateFrequency.PER_FRAME,
+          "ph_debug_enable_direct_temporal_reuse",
+-         () -> this.isDirectTemporalReuseEnabled() ? 1.0f : 0.0f
++         () -> this.isDirectTemporalReuseRequestedThisFrame() ? 1.0f : 0.0f
++      );
++      uniforms.uniform1f(
++         UniformUpdateFrequency.PER_FRAME,
++         "ph_direct_temporal_output_valid",
++         () -> this.isDirectTemporalOutputValidThisFrame() ? 1.0f : 0.0f
+       );
+       uniforms.uniform1f(
+          UniformUpdateFrequency.PER_FRAME,
+@@ -1172,6 +1226,7 @@ public class LightTreeRenderer extends MainRenderer {
+       int giCurrentRecordBytes = this.temporalScatterPixelCapacity * 4 * Integer.BYTES;
+       int multiCounterBytes = this.getReservoirSplattingTimePartitionCount() * 2 * Integer.BYTES;
+       int multiCellBytes = this.temporalScatterContributorCapacity * Integer.BYTES;
++      int multiCellDataBytes = multiCellBytes * 2;
+       int multiContributorBytes = this.temporalScatterContributorCapacity * 2 * Integer.BYTES;
+ 
+       this.temporalScatterCurrentGlobalCountersMemoryManager = this.createTemporalScatterMemoryManager(
+@@ -1206,9 +1261,9 @@ public class LightTreeRenderer extends MainRenderer {
+          "ph_multi_reproject_temporal_samples_global_counters",
+          multiCounterBytes
+       );
+-      this.temporalScatterMultiCellCountersMemoryManager = this.createTemporalScatterMemoryManager(
+-         "ph_multi_reproject_temporal_samples_cell_counters",
+-         multiCellBytes
++      this.temporalScatterMultiCellDataMemoryManager = this.createTemporalScatterMemoryManager(
++         "ph_multi_temporal_cell_data",
++         multiCellDataBytes
+       );
+       this.temporalScatterMultiReservoirIndicesMemoryManager = this.createTemporalScatterMemoryManager(
+          "ph_multi_reproject_temporal_samples_reservoir_indices",
+@@ -1218,10 +1273,6 @@ public class LightTreeRenderer extends MainRenderer {
+          "ph_multi_reproject_temporal_samples_scattered_reservoirs",
+          multiContributorBytes
+       );
+-      this.temporalScatterMultiCellOffsetsMemoryManager = this.createTemporalScatterMemoryManager(
+-         "ph_multi_scatter_temporal_resampling_cell_offsets",
+-         multiCellBytes
+-      );
+       this.temporalScatterMultiSortedReservoirsMemoryManager = this.createTemporalScatterMemoryManager(
+          "ph_multi_scatter_temporal_resampling_sorted_reservoirs",
+          multiContributorBytes
+@@ -1272,7 +1323,7 @@ public class LightTreeRenderer extends MainRenderer {
+ 
+    private void clearMultiTemporalScatterBuffers() {
+       this.clearUintBuffer(this.temporalScatterMultiGlobalCountersMemoryManager, 0);
+-      this.clearUintBuffer(this.temporalScatterMultiCellCountersMemoryManager, 0);
++      this.clearUintBuffer(this.temporalScatterMultiCellDataMemoryManager, 0);
+       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
+    }
+ 
+@@ -1325,10 +1376,9 @@ public class LightTreeRenderer extends MainRenderer {
+       this.temporalScatterCurrentCellOffsetsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentCellOffsetsMemoryManager);
+       this.temporalScatterCurrentSortedReservoirsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterCurrentSortedReservoirsMemoryManager);
+       this.temporalScatterMultiGlobalCountersMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiGlobalCountersMemoryManager);
+-      this.temporalScatterMultiCellCountersMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiCellCountersMemoryManager);
++      this.temporalScatterMultiCellDataMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiCellDataMemoryManager);
+       this.temporalScatterMultiReservoirIndicesMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiReservoirIndicesMemoryManager);
+       this.temporalScatterMultiScatteredReservoirsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiScatteredReservoirsMemoryManager);
+-      this.temporalScatterMultiCellOffsetsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiCellOffsetsMemoryManager);
+       this.temporalScatterMultiSortedReservoirsMemoryManager = this.freeTemporalScatterMemoryManager(this.temporalScatterMultiSortedReservoirsMemoryManager);
+    }
+ 
+@@ -1377,10 +1427,12 @@ public class LightTreeRenderer extends MainRenderer {
+ 
+       this.renderFrameIndex++;
+       this.resolveGpuProfile();
++      this.updateAdaptiveQuality();
+       this.advanceGpuProfileFrame();
+       this.ensureCompatDirectSoftCleared();
+       boolean resetReservoirSplatting = this.shouldResetReservoirSplattingTemporal(this.ensureReservoirHistoryCleared());
+-      this.directTemporalReuseActiveThisFrame = this.shouldRunReservoirSplattingTemporalResampling(resetReservoirSplatting);
++      this.directTemporalReuseRequestedThisFrame = this.shouldRunReservoirSplattingTemporalResampling(resetReservoirSplatting);
++      this.directTemporalOutputValidThisFrame = false;
+       this.indirectTemporalSplattingActiveThisFrame = this.shouldRunIndirectTemporalSplatting(resetReservoirSplatting);
+       this.lightingBuffer.swap();
+       this.compatDirectSoftBuffer.swap();
+@@ -1402,7 +1454,7 @@ public class LightTreeRenderer extends MainRenderer {
+       long t1 = System.nanoTime();
+       this.renderDIInitialCandidatesProfiled();
+       long t2 = System.nanoTime();
+-      if (this.isDirectTemporalReuseEnabled()) {
++      if (this.isDirectTemporalReuseRequestedThisFrame()) {
+          this.renderDIScatterTemporalProfiled();
+       }
+       long t3 = System.nanoTime();
+@@ -1481,7 +1533,7 @@ public class LightTreeRenderer extends MainRenderer {
+          Map.entry("direct_anti_firefly", this.nrdDiffIllumPrevFb.getWriteAttachment("data")),
+          Map.entry("direct_denoised", this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data")),
+          Map.entry("direct_atrous", this.getResolvedDiffuseAtrousTexture()),
+-         Map.entry("direct_raw", this.lightingStageBuffer.getWriteAttachment("direct")),
++         Map.entry("direct_raw", this.lightingBuffer.getWriteAttachment("direct")),
+          Map.entry("spec_denoised", this.getResolvedSpecularAtrousTexture()),
+          Map.entry("spec_raw", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
+          Map.entry("direct_initial_debug", this.directInitialDebugBuffer.getWriteAttachment("data")),
+@@ -1490,8 +1542,10 @@ public class LightTreeRenderer extends MainRenderer {
+          Map.entry("indirect_raw", this.lightingBuffer.getWriteAttachment("indirect")),
+          Map.entry("indirect_reservoir", this.indirectReservoirBuffer.getWriteAttachment("radiance")),
+          Map.entry("lighting", this.nrdDiffIllumPingFb.getWriteAttachment("data")),
++         Map.entry("stage_lighting", this.lightingBuffer.getWriteAttachment("lighting")),
+          Map.entry("stage_albedo", this.lightingStageBuffer.getWriteAttachment("albedo")),
+-         Map.entry("stage_direct", this.lightingStageBuffer.getWriteAttachment("direct")),
++         Map.entry("stage_direct", this.lightingBuffer.getWriteAttachment("direct")),
++         Map.entry("stage_diffuse", this.lightingStageBuffer.getWriteAttachment("direct")),
+          Map.entry("stage_mapped_normal", this.lightingStageBuffer.getWriteAttachment("mapped_normal")),
+          Map.entry("stage_material", this.lightingStageBuffer.getWriteAttachment("material")),
+          Map.entry("stage_normal", this.lightingStageBuffer.getWriteAttachment("normal")),
+@@ -2285,7 +2339,11 @@ public class LightTreeRenderer extends MainRenderer {
+    }
+ 
+    private float getDirectSampleBudgetScale() {
+-      return 1.0f;
++      return switch (this.getEffectiveAdaptiveQualityLevel()) {
++         case 2 -> 0.75f;
++         case 1 -> 0.875f;
++         default -> 1.0f;
++      };
+    }
+ 
+    private int getCurrentDirectAtrousIsLastPass() {
+@@ -2346,6 +2404,25 @@ public class LightTreeRenderer extends MainRenderer {
+       return this.resolveRegirFrameSeed("photonics.regirBuildFrameSeed", "photonics.regirFrameSeed", "build");
+    }
+ 
++   private int regirBuildKeySeed(int presampleFrameSeed, int buildFrameSeed) {
++      boolean explicitSeed = this.hasRegirSeedOverride("photonics.regirPresampleFrameSeed")
++         || this.hasRegirSeedOverride("photonics.regirBuildFrameSeed")
++         || this.hasRegirSeedOverride("photonics.regirFrameSeed");
++      if (!explicitSeed && !PhotonicsStorage.REGIR_FIXED_FRAME_SEED.value) {
++         return 0;
++      }
++      int hash = PhotonicsStorage.REGIR_FIXED_FRAME_SEED.value ? 1 : 0;
++      hash = 31 * hash + presampleFrameSeed;
++      hash = 31 * hash + buildFrameSeed;
++      hash = 31 * hash + Float.floatToIntBits(PhotonicsStorage.REGIR_FRAME_SEED.value);
++      return hash;
++   }
++
++   private boolean hasRegirSeedOverride(String key) {
++      String value = System.getProperty(key);
++      return value != null && !value.isBlank();
++   }
++
+    private void dispatchRegirCompute() {
+       if (!this.shouldUseRegirLocalLightSampling()) {
+          return;
+@@ -2362,6 +2439,7 @@ public class LightTreeRenderer extends MainRenderer {
+          this.cachedRegirPdfPowers = null;
+          this.cachedRegirPdfLightCount = 0;
+          this.cachedRegirSemanticLayoutHash = Long.MIN_VALUE;
++         this.cachedRegirBuildKey = null;
+          return;
+       }
+ 
+@@ -2384,6 +2462,44 @@ public class LightTreeRenderer extends MainRenderer {
+       // hash(quantized_position, normal_bucket). The legacy gridCells/cellSize uniforms
+       // are still passed for diagnostic shaders that have not been migrated.
+       int gridRes = lightRegistry.getRegirGridResolution();
++      Vector3f gridCenter = lightRegistry.getRegirGridCenter();
++      int lightsPerCell = lightRegistry.getRegirLightsPerCell();
++      int presampleFrameSeed = this.resolveRegirPresampleFrameSeed();
++      int buildFrameSeed = this.resolveRegirBuildFrameSeed();
++      int buildSamples = this.getRegirBuildSampleCount();
++      float buildJitter = lightRegistry.getRegirSamplingJitter();
++      float lookupJitter = lightRegistry.getRegirLookupJitter();
++      int hashTableSize = lightRegistry.getRegirHashTableSize();
++      float hashCellSize = lightRegistry.getRegirHashCellSizeBlocks();
++      int effectiveBucketCount = lightRegistry.getEffectiveRegirHashNormalBuckets();
++      int buildRegionCells = lightRegistry.getRegirBuildRegionCells();
++      RegirBuildKey buildKey = this.createRegirBuildKey(
++         lightRegistry,
++         gridCenter,
++         semanticLayoutHash,
++         lightRegistry.getRegirPowerStateHash(),
++         lightCount,
++         lightsPerCell,
++         buildSamples,
++         buildRegionCells,
++         hashTableSize,
++         hashCellSize,
++         effectiveBucketCount,
++         buildJitter,
++         lookupJitter,
++         Math.max(1.0f, PhotonicsStorage.REGIR_LOCAL_LIGHT_SAMPLES.value),
++         this.regirBuildKeySeed(presampleFrameSeed, buildFrameSeed),
++         0
++      );
++      String rebuildReason = this.describeRegirRebuildReason(this.cachedRegirBuildKey, buildKey);
++      if ("unchanged".equals(rebuildReason)) {
++         this.regirBuildSkipCount++;
++         this.lastRegirBuildDecision = "skip";
++         this.lastRegirBuildReason = rebuildReason;
++         this.logRegirBuildDecisionIfNeeded(buildKey);
++         return;
++      }
++
+       this.regirComputeProgram.dispatch(
+          lightRegistry.getLightsMemoryManager(),
+          lightRegistry.getGlobalLightCdfMemoryManager(),
+@@ -2391,22 +2507,133 @@ public class LightTreeRenderer extends MainRenderer {
+          lightRegistry.getRegirCompactLightDataMemoryManager(),
+          lightRegistry.getRegirHashChecksumMemoryManager(),
+          lightRegistry.getRegirHashKeyMemoryManager(),
+-         lightRegistry.getRegirGridCenter(),
++         gridCenter,
+          new Vector3i(gridRes, gridRes, gridRes),
+-         lightRegistry.getRegirLightsPerCell(),
++         lightsPerCell,
+          32.0f,
+          lightCount,
+-         this.resolveRegirPresampleFrameSeed(),
+-         this.resolveRegirBuildFrameSeed(),
+-         this.getRegirBuildSampleCount(),
+-         lightRegistry.getRegirSamplingJitter(),
+-         lightRegistry.getRegirHashTableSize(),
+-         lightRegistry.getRegirHashCellSizeBlocks(),
+-         lightRegistry.getRegirHashNormalBuckets(),
+-         lightRegistry.getRegirBuildRegionCells(),
++         presampleFrameSeed,
++         buildFrameSeed,
++         buildSamples,
++         buildJitter,
++         hashTableSize,
++         hashCellSize,
++         effectiveBucketCount,
++         buildRegionCells,
+          this.lightingStageBuffer.getWriteAttachment("position"),
+          this.lightingStageBuffer.getWriteAttachment("mapped_normal")
+       );
++      this.cachedRegirBuildKey = buildKey;
++      this.regirBuildDispatchCount++;
++      this.lastRegirBuildDecision = "rebuild";
++      this.lastRegirBuildReason = rebuildReason;
++      this.logRegirBuildDecisionIfNeeded(buildKey);
++   }
++
++   private RegirBuildKey createRegirBuildKey(
++      LightRegistry lightRegistry,
++      Vector3f gridCenter,
++      long semanticLayoutHash,
++      long powerStateHash,
++      int lightCount,
++      int lightsPerCell,
++      int buildSamples,
++      int buildRegionCells,
++      int hashTableSize,
++      float hashCellSize,
++      int effectiveBucketCount,
++      float buildJitter,
++      float lookupJitter,
++      float localLightSamples,
++      int presampleFrameSeed,
++      int buildFrameSeed
++   ) {
++      float safeHashCellSize = Math.max(hashCellSize, 1.0e-6f);
++      return new RegirBuildKey(
++         (int)Math.floor(gridCenter.x / safeHashCellSize),
++         (int)Math.floor(gridCenter.y / safeHashCellSize),
++         (int)Math.floor(gridCenter.z / safeHashCellSize),
++         semanticLayoutHash,
++         powerStateHash,
++         lightCount,
++         lightsPerCell,
++         buildSamples,
++         buildRegionCells,
++         hashTableSize,
++         Float.floatToIntBits(hashCellSize),
++         effectiveBucketCount,
++         Float.floatToIntBits(buildJitter),
++         Float.floatToIntBits(lookupJitter),
++         Float.floatToIntBits(localLightSamples),
++         presampleFrameSeed,
++         buildFrameSeed,
++         this.regirComputeProgram == null ? 0 : this.regirComputeProgram.getPdfStateHash(),
++         PhotonicsStorage.REGIR_COLLAPSE_NORMAL_BUCKETS.value,
++         lightRegistry.getLightsMemoryManager().getId(),
++         lightRegistry.getGlobalLightCdfMemoryManager().getId(),
++         lightRegistry.getRegirLightIndexMemoryManager().getId(),
++         lightRegistry.getRegirCompactLightDataMemoryManager().getId(),
++         lightRegistry.getRegirHashChecksumMemoryManager().getId(),
++         lightRegistry.getRegirHashKeyMemoryManager().getId()
++      );
++   }
++
++   private String describeRegirRebuildReason(@Nullable RegirBuildKey previous, RegirBuildKey current) {
++      if (previous == null) return "cold";
++      if (previous.centerCellX != current.centerCellX
++         || previous.centerCellY != current.centerCellY
++         || previous.centerCellZ != current.centerCellZ) return "camera_cell";
++      if (previous.semanticLayoutHash != current.semanticLayoutHash) return "layout";
++      if (previous.powerStateHash != current.powerStateHash) return "powers";
++      if (previous.lightCount != current.lightCount) return "light_count";
++      if (previous.lightsPerCell != current.lightsPerCell) return "lights_per_cell";
++      if (previous.buildSamples != current.buildSamples) return "build_samples";
++      if (previous.buildRegionCells != current.buildRegionCells) return "build_region";
++      if (previous.hashTableSize != current.hashTableSize) return "hash_table";
++      if (previous.hashCellSizeBits != current.hashCellSizeBits) return "hash_cell_size";
++      if (previous.effectiveBucketCount != current.effectiveBucketCount) return "normal_buckets";
++      if (previous.buildJitterBits != current.buildJitterBits) return "build_jitter";
++      if (previous.lookupJitterBits != current.lookupJitterBits) return "lookup_jitter";
++      if (previous.localLightSamplesBits != current.localLightSamplesBits) return "local_samples";
++      if (previous.presampleFrameSeed != current.presampleFrameSeed) return "presample_seed";
++      if (previous.buildFrameSeed != current.buildFrameSeed) return "build_seed";
++      if (previous.pdfStateHash != current.pdfStateHash) return "pdf_state";
++      if (previous.collapsedNormalBuckets != current.collapsedNormalBuckets) return "bucket_collapse";
++      if (previous.lightListBufferId != current.lightListBufferId
++         || previous.cdfBufferId != current.cdfBufferId
++         || previous.risBufferId != current.risBufferId
++         || previous.compactBufferId != current.compactBufferId
++         || previous.hashChecksumBufferId != current.hashChecksumBufferId
++         || previous.hashKeyBufferId != current.hashKeyBufferId) return "gpu_buffers";
++      return "unchanged";
++   }
++
++   private void logRegirBuildDecisionIfNeeded(RegirBuildKey key) {
++      if (!PhotonicsStorage.PROFILER_ENABLED.value) {
++         return;
++      }
++      if (--this.regirBuildLogCountdown > 0) {
++         return;
++      }
++      this.regirBuildLogCountdown = REGIR_BUILD_LOG_INTERVAL_FRAMES;
++      Photonic.info(
++         "[Profiler] regirGpuBuild: decision={} reason={} rebuilds={} skips={} centerCell=({},{},{}) lights={} slots={} samples={} buckets={} collapsed={} buildRegion={} hashCell={} pdfState={}",
++         this.lastRegirBuildDecision,
++         this.lastRegirBuildReason,
++         this.regirBuildDispatchCount,
++         this.regirBuildSkipCount,
++         key.centerCellX,
++         key.centerCellY,
++         key.centerCellZ,
++         key.lightCount,
++         key.lightsPerCell,
++         key.buildSamples,
++         key.effectiveBucketCount,
++         key.collapsedNormalBuckets,
++         key.buildRegionCells,
++         Float.intBitsToFloat(key.hashCellSizeBits),
++         key.pdfStateHash
++      );
+    }
+ 
+    private int getRegirBuildSampleCount() {
+@@ -2418,7 +2645,8 @@ public class LightTreeRenderer extends MainRenderer {
+          }
+       }
+ 
+-      return Math.max(1, Math.round(PhotonicsStorage.REGIR_BUILD_SAMPLES.value));
++      int configured = Math.max(1, Math.round(PhotonicsStorage.REGIR_BUILD_SAMPLES.value));
++      return Math.max(1, configured - this.getEffectiveAdaptiveQualityLevel() * 2);
+    }
+ 
+    private boolean shouldRefreshRegirPdfTexture(float[] powers, int lightCount, long semanticLayoutHash) {
+@@ -2463,6 +2691,12 @@ public class LightTreeRenderer extends MainRenderer {
+       );
+    }
+ 
++   private String getEffectiveDirectTemporalReuseMode() {
++      return PhotonicsStorage.normalizeRestirTemporalReuse(
++         PhotonicsStorage.RESTIR_TEMPORAL_REUSE.value
++      );
++   }
++
+    private void renderDIInitialCandidatesProfiled() {
+       this.beginGpuRegion(initialCandidatesRegionIndex);
+       if (this.isDirectProposalReservoirEnabled()) {
+@@ -2479,14 +2713,15 @@ public class LightTreeRenderer extends MainRenderer {
+    private void renderDIScatterTemporalProfiled() {
+       this.beginGpuRegion(diTemporalResamplingRegionIndex);
+       this.setCurrentDiReconnectionSource(DiReconnectionSource.PROPOSAL);
+-      boolean scatterBackupTemporalBranch = false;
+-      boolean multiScatterTemporalBranch = false;
++      String temporalReuseMode = this.getEffectiveDirectTemporalReuseMode();
++      boolean scatterBackupTemporalBranch = "scatter_backup".equals(temporalReuseMode);
++      boolean multiScatterTemporalBranch = "multi_scatter".equals(temporalReuseMode);
+       boolean robustTemporalGather = "robust".equals(
+          PhotonicsStorage.normalizeRestirTemporalGatherMode(PhotonicsStorage.RESTIR_TEMPORAL_GATHER_MODE.value)
+       );
+-      boolean scatterOnlyTemporalBranch = false;
+-      boolean gatherTemporalBranch = true;
+-      boolean gatherTemporalResolveBranch = true;
++      boolean scatterOnlyTemporalBranch = "scatter_only".equals(temporalReuseMode);
++      boolean gatherTemporalBranch = "gather_only".equals(temporalReuseMode) || scatterBackupTemporalBranch;
++      boolean gatherTemporalResolveBranch = "gather_only".equals(temporalReuseMode);
+       boolean wroteTemporalOutput = false;
+       if (gatherTemporalBranch && robustTemporalGather) {
+          this.clearTemporalGatherBuffers();
+@@ -2580,6 +2815,7 @@ public class LightTreeRenderer extends MainRenderer {
+       if (wroteTemporalOutput) {
+          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+       }
++      this.directTemporalOutputValidThisFrame = wroteTemporalOutput;
+       this.endGpuRegion(diTemporalResamplingRegionIndex);
+    }
+ 
+@@ -2616,8 +2852,12 @@ public class LightTreeRenderer extends MainRenderer {
+       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
+    }
+ 
+-   private boolean isDirectTemporalReuseEnabled() {
+-      return this.directTemporalReuseActiveThisFrame;
++   private boolean isDirectTemporalReuseRequestedThisFrame() {
++      return this.directTemporalReuseRequestedThisFrame;
++   }
++
++   private boolean isDirectTemporalOutputValidThisFrame() {
++      return this.directTemporalOutputValidThisFrame;
+    }
+ 
+    private boolean isDirectTemporalReuseRequested() {
+@@ -2646,7 +2886,7 @@ public class LightTreeRenderer extends MainRenderer {
+    }
+ 
+    private DiReconnectionSource getSpatialResamplingInputReconnectionSource() {
+-      return this.isDirectTemporalReuseEnabled()
++      return this.isDirectTemporalOutputValidThisFrame()
+          ? DiReconnectionSource.TEMPORAL
+          : DiReconnectionSource.PROPOSAL;
+    }
+@@ -2851,7 +3091,8 @@ public class LightTreeRenderer extends MainRenderer {
+          case "final" -> this.lightingBuffer.getWriteAttachment("direct");
+          case "lighting_direct", "lighting_buffer_direct", "direct_buffer" -> this.lightingBuffer.getWriteAttachment("direct");
+          case "lighting", "stage_lighting", "lighting_buffer_lighting" -> this.lightingBuffer.getWriteAttachment("lighting");
+-         case "stage_direct", "direct_raw", "raw" -> this.lightingStageBuffer.getWriteAttachment("direct");
++         case "stage_direct", "direct_raw", "raw" -> this.lightingBuffer.getWriteAttachment("direct");
++         case "stage_diffuse", "direct_diffuse_raw", "raw_diffuse" -> this.lightingStageBuffer.getWriteAttachment("direct");
+          case "stage_specular", "spec_raw", "direct_specular" -> this.lightingStageBuffer.getWriteAttachment("direct_specular");
+          case "stage_indirect", "indirect_raw" -> this.lightingStageBuffer.getWriteAttachment("indirect");
+          // NRD fused pipeline intermediate buffers
+@@ -2878,9 +3119,6 @@ public class LightTreeRenderer extends MainRenderer {
+    }
+ 
+    private TextureObject getResolvedDirectTexture() {
+-      if (PhotonicsStorage.DEBUG_VIEW_MODE.value > 0.5f) {
+-         return this.lightingStageBuffer.getWriteAttachment("direct");
+-      }
+       TextureObject debugStageTexture = this.getDebugDirectStageTexture();
+       if (debugStageTexture != null) {
+          return debugStageTexture;
+@@ -3156,6 +3394,127 @@ public class LightTreeRenderer extends MainRenderer {
+       this.logGpuRenderProfile(gpuPassNanos);
+    }
+ 
++   private void updateAdaptiveQuality() {
++      if (!ADAPTIVE_QUALITY_ENABLED) {
++         return;
++      }
++
++      WorldRegistry worldRegistry = this.worldRegistry;
++      boolean dynamicScene = worldRegistry.fetchLightReload()
++         || worldRegistry.fetchLightBlendFactor() > 0.0f
++         || worldRegistry.getLightBlendRegionCount() > 0
++         || worldRegistry.hasPendingWork();
++      if (dynamicScene) {
++         this.adaptiveDynamicBoostFrames = ADAPTIVE_DYNAMIC_BOOST_FRAMES;
++         this.setAdaptiveQualityLevel(0, "dynamic_scene");
++         this.adaptivePressureFrames = 0;
++         this.adaptiveRecoverFrames = 0;
++         return;
++      }
++
++      long gpuTotalNanos = this.sumNanos(this.getGpuPassNanos());
++      if (gpuTotalNanos <= 0L) {
++         return;
++      }
++
++      if (this.adaptiveDynamicBoostFrames > 0) {
++         this.adaptiveDynamicBoostFrames--;
++         this.setAdaptiveQualityLevel(0, "dynamic_boost");
++         this.adaptivePressureFrames = 0;
++         this.adaptiveRecoverFrames = 0;
++         return;
++      }
++
++      if (gpuTotalNanos > ADAPTIVE_TARGET_GPU_NANOS) {
++         this.adaptivePressureFrames++;
++         this.adaptiveRecoverFrames = 0;
++      } else if (gpuTotalNanos < ADAPTIVE_RECOVER_GPU_NANOS) {
++         this.adaptiveRecoverFrames++;
++         this.adaptivePressureFrames = 0;
++      } else {
++         this.adaptivePressureFrames = 0;
++         this.adaptiveRecoverFrames = 0;
++      }
++
++      if (this.adaptivePressureFrames >= ADAPTIVE_PRESSURE_FRAMES && this.adaptiveQualityLevel < 2) {
++         this.adaptivePressureFrames = 0;
++         this.setAdaptiveQualityLevel(this.adaptiveQualityLevel + 1, "gpu_pressure");
++      } else if (this.adaptiveRecoverFrames >= ADAPTIVE_RECOVER_FRAMES && this.adaptiveQualityLevel > 0) {
++         this.adaptiveRecoverFrames = 0;
++         this.setAdaptiveQualityLevel(this.adaptiveQualityLevel - 1, "gpu_headroom");
++      }
++
++      this.logAdaptiveQualityIfNeeded(gpuTotalNanos);
++   }
++
++   private int getEffectiveAdaptiveQualityLevel() {
++      if (!ADAPTIVE_QUALITY_ENABLED || this.adaptiveDynamicBoostFrames > 0) {
++         return 0;
++      }
++      return this.adaptiveQualityLevel;
++   }
++
++   private void setAdaptiveQualityLevel(int level, String reason) {
++      int clampedLevel = Math.max(0, Math.min(2, level));
++      if (clampedLevel == this.adaptiveQualityLevel) {
++         return;
++      }
++
++      this.adaptiveQualityLevel = clampedLevel;
++      this.invalidateDirectReuseHistory();
++      this.invalidateReservoirHistory();
++      Photonic.info(
++         "[Profiler] adaptiveQuality: level={} effective={} reason={} directScale={} regirBuildSamples={} regirLocalSamples={} spatialSamples={}",
++         this.adaptiveQualityLevel,
++         this.getEffectiveAdaptiveQualityLevel(),
++         reason,
++         this.getDirectSampleBudgetScale(),
++         this.getRegirBuildSampleCount(),
++         this.getAdaptiveRegirLocalSampleCount(),
++         this.getAdaptiveSpatialSampleCount()
++      );
++   }
++
++   private void logAdaptiveQualityIfNeeded(long gpuTotalNanos) {
++      if (!PhotonicsStorage.PROFILER_ENABLED.value) {
++         return;
++      }
++      if (--this.adaptiveLogCountdown > 0) {
++         return;
++      }
++
++      this.adaptiveLogCountdown = profilerLogIntervalFrames;
++      Photonic.info(
++         "[Profiler] adaptiveQuality: level={} effective={} gpuTotal={}us target={}us recover={}us pressureFrames={} recoverFrames={} dynamicBoostFrames={} directScale={} regirBuildSamples={} regirLocalSamples={} spatialSamples={}",
++         this.adaptiveQualityLevel,
++         this.getEffectiveAdaptiveQualityLevel(),
++         this.toMicros(gpuTotalNanos),
++         this.toMicros(ADAPTIVE_TARGET_GPU_NANOS),
++         this.toMicros(ADAPTIVE_RECOVER_GPU_NANOS),
++         this.adaptivePressureFrames,
++         this.adaptiveRecoverFrames,
++         this.adaptiveDynamicBoostFrames,
++         this.getDirectSampleBudgetScale(),
++         this.getRegirBuildSampleCount(),
++         this.getAdaptiveRegirLocalSampleCount(),
++         this.getAdaptiveSpatialSampleCount()
++      );
++   }
++
++   private float getAdaptiveRegirLocalSampleCount() {
++      if (!this.shouldUseRegirLocalLightSampling()) {
++         return 0.0f;
++      }
++      float configured = Math.max(1.0f, PhotonicsStorage.REGIR_LOCAL_LIGHT_SAMPLES.value);
++      return Math.max(1.0f, configured - this.getEffectiveAdaptiveQualityLevel() * 2.0f);
++   }
++
++   private float getAdaptiveSpatialSampleCount() {
++      float override = PhotonicsStorage.RESTIR_SPATIAL_SAMPLES.value;
++      float configured = override >= 0 ? override : (float) this.properties.getRestirSpatialSampleCount();
++      return Math.max(0.0f, configured - this.getEffectiveAdaptiveQualityLevel());
++   }
++
+    private void logGpuRenderProfile(long[] gpuPassNanos) {
+       long diTotal = gpuPassNanos[lightTreeSamplingStageRegionIndex]
+          + gpuPassNanos[initialCandidatesRegionIndex]
