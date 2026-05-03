@@ -1684,42 +1684,8 @@ public class LightRegistry implements Destructable {
          }
 
          this.staticSectionRebuildCount++;
-         // BISECT NARROWING: removeMissingSectionLights call disabled to test if it's the cause of glass-light loss.
-         // this.removeMissingSectionLights(chunkPos, scannedCache.lightBlocks());
       } finally {
          this.lock.writeLock().unlock();
-      }
-   }
-
-   private void removeMissingSectionLights(PChunkPos sectionPos, List<BlockPos> currentLightBlocks) {
-      PBlockPos sectionMin = sectionPos.toBlockPos();
-      int maxX = sectionMin.x + 16;
-      int maxY = sectionMin.y + 16;
-      int maxZ = sectionMin.z + 16;
-      Set<BlockPos> current = currentLightBlocks.isEmpty() ? Set.of() : new HashSet<>(currentLightBlocks);
-      boolean removed = false;
-      Iterator<Entry<Vector3f, TracedLightPosition>> itr = this.tracedLightPositions.entrySet().iterator();
-      while (itr.hasNext()) {
-         Entry<Vector3f, TracedLightPosition> entry = itr.next();
-         Vector3f pos = entry.getKey();
-         if (pos.x < sectionMin.x || pos.x >= maxX || pos.y < sectionMin.y || pos.y >= maxY || pos.z < sectionMin.z || pos.z >= maxZ) {
-            continue;
-         }
-
-         BlockPos blockPos = lightBlockPos(pos);
-         if (current.contains(blockPos)) {
-            continue;
-         }
-
-         itr.remove();
-         this.residentMissingLightScans.remove(pos);
-         this.noteDirtyLightBlock(blockPos);
-         removed = true;
-      }
-
-      if (removed) {
-         this.tracedLightSetDirty = true;
-         this.pendingTracedLightMutations++;
       }
    }
 
@@ -2382,10 +2348,6 @@ public class LightRegistry implements Destructable {
 
    private static long sectionKey(BlockPos blockPos) {
       return sectionKey(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
-   }
-
-   private static BlockPos lightBlockPos(Vector3f position) {
-      return new BlockPos((int) position.x, (int) position.y, (int) position.z);
    }
 
    private boolean isTrackedChunkLoaded(BlockPos blockPos) {
