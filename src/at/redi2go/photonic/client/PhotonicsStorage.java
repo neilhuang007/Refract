@@ -80,6 +80,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Float> REGIR_BUILD_SAMPLES = floatParam("regir_build_samples", 8.0F);
    public static final Parameter<Float> REGIR_LOCAL_LIGHT_SAMPLES = floatParam("regir_local_light_samples", 8.0F);
    public static final Parameter<Float> REGIR_LIGHTS_PER_CELL = floatParam("regir_lights_per_cell", 64.0F);
+   public static final Parameter<Boolean> REGIR_COLLAPSE_NORMAL_BUCKETS = boolParam("regir_collapse_normal_buckets", true);
    public static final Parameter<Boolean> REGIR_FIXED_FRAME_SEED = boolParam("regir_fixed_frame_seed", true);
    public static final Parameter<Float> REGIR_FRAME_SEED = floatParam("regir_frame_seed", 0.0F);
    public static final Parameter<Boolean> DEBUG_CONSTANT_ALBEDO = boolParam("debug_constant_albedo", false);
@@ -158,6 +159,7 @@ public final class PhotonicsStorage {
       applyFloatSystemPropertyOverride("photonics.regirBuildSamples", REGIR_BUILD_SAMPLES);
       applyFloatSystemPropertyOverride("photonics.restirInitialLocalSamples", REGIR_LOCAL_LIGHT_SAMPLES);
       applyFloatSystemPropertyOverride("photonics.regirLightsPerCell", REGIR_LIGHTS_PER_CELL);
+      applyBooleanSystemPropertyOverride("photonics.regirCollapseNormalBuckets", REGIR_COLLAPSE_NORMAL_BUCKETS);
       applyBooleanSystemPropertyOverride("photonics.regirFixedFrameSeed", REGIR_FIXED_FRAME_SEED);
       applyFloatSystemPropertyOverride("photonics.regirFrameSeed", REGIR_FRAME_SEED);
    }
@@ -212,6 +214,8 @@ public final class PhotonicsStorage {
       return switch (stageView.trim().toLowerCase(Locale.ROOT)) {
          case "", "none", "resolved", "final" -> "final";
          case "stage_direct", "direct_raw", "raw", "rt", "rt_raw" -> "stage_direct";
+         case "stage_diffuse", "direct_diffuse_raw", "raw_diffuse", "rt_diffuse" -> "stage_diffuse";
+         case "stage_lighting", "lighting", "lighting_buffer_lighting" -> "stage_lighting";
          case "direct_noisy", "noisy", "temporal", "temporal_raw" -> "direct_noisy";
          case "direct_responsive", "responsive" -> "direct_responsive";
          case "direct_slow", "slow" -> "direct_slow";

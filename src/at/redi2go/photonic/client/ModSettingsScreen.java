@@ -136,9 +136,14 @@ public class ModSettingsScreen extends Screen {
          w.setMessage(Text.of("Local Light Sampling: " + formatRestirLocalLightSamplingMode(localLightSamplingMode.value)));
          this.reloadShaders();
       }, "Cycles the RTXDI/ReSTIR DI local-light proposal mode:\nUniform, Power RIS, ReGIR RIS, and Fast Random (diagnostic).", () -> true));
-      // [bisect-stub] RegirTuningScreen menu hook removed — class lives only in
-      // the splatting agent's WIP and needs PhotonicsStorage.REGIR_COLLAPSE_NORMAL_BUCKETS
-      // which doesn't exist at this commit. No effect on the lighting pipeline.
+      buttons.add(
+         new ModSettingsScreen.PButton(
+            "ReGIR Tuning",
+            w -> this.client.setScreen(new RegirTuningScreen(this)),
+            "Controls ReGIR lookup jitter, build jitter, build samples,\nlocal candidates, and slots per cell for near-light stability tuning.",
+            () -> true
+         )
+      );
       PhotonicsStorage.Parameter<String> spatialMisMode = PhotonicsStorage.RESTIR_SPATIAL_MIS_MODE;
       spatialMisMode.value = PhotonicsStorage.normalizeRestirSpatialMisMode(spatialMisMode.value);
       buttons.add(new ModSettingsScreen.PButton("Spatial MIS: " + formatRestirSpatialMisMode(spatialMisMode.value), w -> {

@@ -117,6 +117,15 @@ public class GlMemoryManager implements MemoryManager {
       return this.uploadQueue.isEmpty();
    }
 
+   public boolean uploadIfNeeded() {
+      if (this.uploadQueue.isEmpty()) {
+         this.lastUploadCount = 0;
+         this.lastUploadedBytes = 0L;
+         return true;
+      }
+      return this.upload();
+   }
+
    public void download(Consumer<ByteBuffer> downloadContext) {
       this.ensureAllocated();
       GL15.glBindBuffer(this.target.target, this.id);
