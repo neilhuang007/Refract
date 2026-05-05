@@ -97,6 +97,9 @@ bool InitialCandidates_finalizeSelectedReservoir(
     RTXDI_DIInitialSamplingParameters initialSamplingParams,
     ivec2 pixel,
     RAB_Surface surface,
+    RAB_LightSample selectedLightSample,
+    vec3 selectedIrradiance,
+    vec3 selectedEarlyThroughput,
     inout RTXDI_DIReservoir reservoir,
     out ReconnectionData reconnectionData)
 {
@@ -107,17 +110,6 @@ bool InitialCandidates_finalizeSelectedReservoir(
         return false;
     }
 
-    vec3 incidentRadiance;
-    vec3 earlyThroughput;
-    vec3 unshadowedIntegrand;
-    RAB_LightSample selectedLightSample = InitialCandidates_decodeSelectedLocalLight(
-        reservoir,
-        surface,
-        false,
-        incidentRadiance,
-        earlyThroughput,
-        unshadowedIntegrand
-    );
     if (selectedLightSample.index < 0)
     {
         reservoir = RTXDI_EmptyDIReservoir();
@@ -133,13 +125,7 @@ bool InitialCandidates_finalizeSelectedReservoir(
     if (initialSamplingParams.enableInitialVisibility != 0u)
     {
         RAB_LightSample lightSampleCopy = selectedLightSample;
-        float visibilityHitDistance = 0.0f;
-        transmittance = lt_trace_final_visibility_with_offset(
-            lightSampleCopy,
-            surface,
-            0.01f,
-            visibilityHitDistance
-        );
+        transmittance = lt_trace_final_visibility_transmittance(lightSampleCopy, surface, 0.001f);
         if (ph_luminance(transmittance) <= 0.0f)
         {
             RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0.0f), true);
@@ -155,8 +141,8 @@ bool InitialCandidates_finalizeSelectedReservoir(
         RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(1.0f), true);
     }
 
-    vec3 selectedIrradiance = max(incidentRadiance, vec3(0.0f));
-    vec3 selectedEarlyThroughput = max(earlyThroughput, vec3(0.0f));
+    selectedIrradiance = max(selectedIrradiance, vec3(0.0f));
+    selectedEarlyThroughput = max(selectedEarlyThroughput, vec3(0.0f));
     vec3 selectedIntegrand = max(selectedIrradiance * selectedEarlyThroughput * transmittance, vec3(0.0f));
     float selectedPHat = ph_luminance(selectedIntegrand);
     if (selectedPHat <= 0.0f)

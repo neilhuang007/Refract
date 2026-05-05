@@ -205,6 +205,37 @@ float nrd_ta_load_smb(
     return anyValid ? 1.0 : 0.0;
 }
 
+bool nrd_ta_history_sample_valid(vec3 historyRgb, vec3 currentRgb) {
+    if (any(isnan(historyRgb)) || any(isinf(historyRgb))) {
+        return false;
+    }
+    if (any(isnan(currentRgb)) || any(isinf(currentRgb))) {
+        return false;
+    }
+
+    historyRgb = max(historyRgb, vec3(0.0f));
+    currentRgb = max(currentRgb, vec3(0.0f));
+    float historyLuma = nrd_luminance(historyRgb);
+    float currentLuma = nrd_luminance(currentRgb);
+    if (!(historyLuma > 0.0f) || isnan(historyLuma) || isinf(historyLuma)) {
+        return false;
+    }
+
+    float maxAllowedLuma = max(currentLuma * 8.0f, currentLuma + 4.0f);
+    return historyLuma <= maxAllowedLuma;
+}
+
+bool nrd_ta_history_sample_valid(vec4 historySample, vec4 currentSample) {
+    if (historySample.a <= 0.0f || any(isnan(historySample)) || any(isinf(historySample))) {
+        return false;
+    }
+    if (any(isnan(currentSample)) || any(isinf(currentSample))) {
+        return false;
+    }
+
+    return nrd_ta_history_sample_valid(historySample.rgb, currentSample.rgb);
+}
+
 // -----------------------------------------------------------------------
 // VMB: Load virtual-motion-based previous specular data.
 // Reference: loadVirtualMotionBasedPrevData (RELAX_TemporalAccumulation.cs.hlsl:237-352)
@@ -391,6 +422,27 @@ void main() {
         prevDiffIllumSMB, prevDiffResponsiveSMB,
         prevSpecIllumSMB, prevSpecResponsiveSMB, prevReflHitTSMB);
 
+    if (smbReprojFound > 0.0) {
+        bool validSurfaceHistory =
+            nrd_ta_history_sample_valid(prevDiffIllumSMB, diffuseIllumination)
+            && nrd_ta_history_sample_valid(prevDiffResponsiveSMB, diffuseIllumination.rgb)
+            && nrd_ta_history_sample_valid(prevSpecIllumSMB, specularIllumination)
+            && nrd_ta_history_sample_valid(prevSpecResponsiveSMB, specularIllumination.rgb)
+            && historyLength > 0.0
+            && !isnan(historyLength)
+            && !isinf(historyLength);
+        if (!validSurfaceHistory) {
+            smbReprojFound = 0.0;
+            footprintQuality = 0.0;
+            historyLength = 0.0;
+            prevDiffIllumSMB = vec4(0.0);
+            prevDiffResponsiveSMB = vec3(0.0);
+            prevSpecIllumSMB = vec4(0.0);
+            prevSpecResponsiveSMB = vec3(0.0);
+            prevReflHitTSMB = 0.001;
+        }
+    }
+
     // History length adjustments (reference lines 554-585)
     historyLength = min(historyLength + 1.0, RELAX_MAX_ACCUM_FRAME_NUM);
 
@@ -522,6 +574,21 @@ void main() {
         ph_nrd_disocclusion_threshold,
         prevSpecIllumVMB, prevSpecResponsiveVMB,
         prevNormalVMB, prevRoughnessVMB, prevReflHitTVMB, prevUVVMB);
+
+    if (vmbReprojFound > 0.0) {
+        bool validVirtualHistory =
+            nrd_ta_history_sample_valid(prevSpecIllumVMB, specularIllumination)
+            && nrd_ta_history_sample_valid(prevSpecResponsiveVMB, specularIllumination.rgb);
+        if (!validVirtualHistory) {
+            vmbReprojFound = 0.0;
+            prevSpecIllumVMB = vec4(0.0);
+            prevSpecResponsiveVMB = vec4(0.0);
+            prevNormalVMB = currNormal;
+            prevRoughnessVMB = currRoughness;
+            prevReflHitTVMB = 0.001;
+            prevUVVMB = prevUVSMB;
+        }
+    }
 
     // Virtual history amount (reference lines 773-801)
     float dominantFactor      = nrd_specular_dominant_factor(currNormal, V, currentRoughnessModified);

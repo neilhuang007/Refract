@@ -58,53 +58,8 @@ vec3 ResolveReSTIR(
         * ResolveReSTIR_computeUCW(currReservoir);
 }
 
-vec3 ResolveReSTIR_apply_final_visibility(
-    inout RTXDI_DIReservoir currReservoir,
-    RAB_Surface surface,
-    RAB_LightSample lightSample,
-    vec3 resolvedRadiance)
-{
-    if (ph_debug_enable_direct_final_visibility < 0.5f
-        || ph_restir_enable_final_visibility < 0.5f
-        || ph_restir_initial_enable_visibility > -0.5f) {
-        return resolvedRadiance;
-    }
-
-    vec3 visibility = vec3(0.0f);
-    bool visibilityReused = false;
-    if (ph_restir_reuse_final_visibility >= 0.5f) {
-        RTXDI_VisibilityReuseParameters visibilityReuseParams = lt_build_visibility_reuse_parameters();
-        visibilityReused = RTXDI_GetDIReservoirVisibility(
-            currReservoir,
-            visibilityReuseParams,
-            visibility
-        );
-    }
-
-    if (!visibilityReused) {
-        RAB_LightSample lightSampleCopy = lightSample;
-        float visibilityHitDistance = 0.0f;
-        visibility = lt_trace_final_visibility_with_offset(
-            lightSampleCopy,
-            surface,
-            0.01f,
-            visibilityHitDistance
-        );
-        if (ph_debug_enable_direct_visibility_transmittance < 0.5f
-            && ph_luminance(visibility) > 0.0f) {
-            visibility = vec3(1.0f);
-        }
-
-        // Final visibility must not discard the reservoir; RTXDI documents that
-        // discarding invisible final samples introduces darkening bias.
-        RTXDI_StoreVisibilityInDIReservoir(currReservoir, visibility, false);
-    }
-
-    return resolvedRadiance * visibility;
-}
-
 bool ResolveReSTIR_shade(
-    inout RTXDI_DIReservoir currReservoir,
+    RTXDI_DIReservoir currReservoir,
     RAB_Surface surface,
     out ResolveReSTIRShading shading)
 {
@@ -133,16 +88,6 @@ bool ResolveReSTIR_shade(
     }
 
     vec3 resolvedRadiance = max(ResolveReSTIR(currReservoir), vec3(0.0f));
-    resolvedRadiance = max(ResolveReSTIR_apply_final_visibility(
-        currReservoir,
-        surface,
-        lightSample,
-        resolvedRadiance
-    ), vec3(0.0f));
-    if (!any(greaterThan(resolvedRadiance, vec3(0.0f)))) {
-        return false;
-    }
-
     LtSplitRadiance splitRadiance = lt_shade_surface_split(surface, lightSample);
     vec3 diffuseCombined = max(splitRadiance.diffuse * surface.material.diffuseAlbedo, vec3(0.0f));
     vec3 specularCombined = max(splitRadiance.specular, vec3(0.0f));

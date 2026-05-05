@@ -215,10 +215,9 @@ bool PathReservoir_add(
     float sampleMIS,
     RTXDI_DIReservoir candidateReservoir)
 {
-    // Reservoir.slang::PathReservoir::add: candidate totalWeight already
-    // contains the candidate pHat, and the selected path reservoir later divides
-    // by the selected integrand pHat in computeUCW().
-    float weight = sampleMIS * CandidateReservoir_getTotalWeight(candidateReservoir);
+    float candidateTotalWeight =
+        CandidateReservoir_getTotalWeight(candidateReservoir) * candidateReservoir.targetPdf;
+    float weight = sampleMIS * candidateTotalWeight;
     pathReservoir.M += max(candidateReservoir.M, 0.0f);
     PathReservoir_setTotalWeight(pathReservoir, PathReservoir_getTotalWeight(pathReservoir) + weight);
     float accumulatedConfidence = PathReservoir_getConfidence(pathReservoir) + 1.0f;
@@ -764,12 +763,10 @@ RTXDI_DIReservoir InitialCandidates_SampleLocalLightsAtTime(
             continue;
         }
 
-        vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
-        vec3 sampledPosition = lt_sample_light_position_from_uv(
-            lightInfo,
-            uv,
-            lt_surface_ray_origin(lt_surface_rt_pos(surface), surface.geoNormal)
-        );
+        // Minecraft block emitters are bridged as analytic point lights, so
+        // local-light UVs do not affect the sampled position.
+        vec2 uv = vec2(0.0f);
+        vec3 sampledPosition = lightInfo.position;
         vec3 incidentRadiance;
         vec3 earlyThroughput;
         vec3 unshadowedIntegrand;
@@ -1126,13 +1123,7 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
         // tinting reaches ResolveReSTIR. Pass a copy because the trace rewrites the
         // sample's dir/color/weight.
         RAB_LightSample lightSampleCopy = o_lightSample;
-        float visibilityHitDistance = 0.0f;
-        vec3 transmittance = lt_trace_final_visibility_with_offset(
-            lightSampleCopy,
-            surface,
-            0.001f,
-            visibilityHitDistance
-        );
+        vec3 transmittance = lt_trace_final_visibility_transmittance(lightSampleCopy, surface, 0.001f);
         if (ph_luminance(transmittance) <= 0.0f)
         {
             RTXDI_StoreVisibilityInDIReservoir(state, vec3(0.0f), true);
@@ -1180,39 +1171,51 @@ RTXDI_DIReservoir InitialCandidates_SampleLightsForSurface(
         localEarlyThroughput
     );
 
-    RAB_LightSample infiniteSample = lt_null_sample();
-    RTXDI_DIReservoir infiniteReservoir = RTXDI_SampleInfiniteLights(
-        surface,
-        int(initialSamplingParams.numInfiniteLightSamples)
-    );
-
-    RAB_LightSample environmentSample = lt_null_sample();
-    RTXDI_DIReservoir environmentReservoir = RTXDI_SampleEnvironmentMap(
-        surface,
-        int(initialSamplingParams.numEnvironmentSamples)
-    );
-
-    RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
-    RAB_LightSample brdfSample = lt_null_sample();
-    vec3 brdfIrradiance;
-    vec3 brdfEarlyThroughput;
-    RTXDI_DIReservoir brdfReservoir = InitialCandidates_SampleBrdf(
-        rng,
-        surface,
-        int(initialSamplingParams.numBrdfSamples),
-        misData,
-        initialSamplingParams.brdfCutoff,
-        pathTime,
-        brdfSample,
-        brdfIrradiance,
-        brdfEarlyThroughput
-    );
-
     RTXDI_DIReservoir selectedReservoir = RTXDI_EmptyDIReservoir();
     bool selectLocal = RTXDI_CombineDIReservoirs(selectedReservoir, localReservoir, 0.5f, localReservoir.targetPdf);
-    bool selectInfinite = RTXDI_CombineDIReservoirs(selectedReservoir, infiniteReservoir, RTXDI_GetNextRandom(rng), infiniteReservoir.targetPdf);
-    bool selectEnvironment = RTXDI_CombineDIReservoirs(selectedReservoir, environmentReservoir, RTXDI_GetNextRandom(rng), environmentReservoir.targetPdf);
-    bool selectBrdf = RTXDI_CombineDIReservoirs(selectedReservoir, brdfReservoir, RTXDI_GetNextRandom(rng), brdfReservoir.targetPdf);
+
+    RAB_LightSample infiniteSample = lt_null_sample();
+    bool selectInfinite = false;
+    if (initialSamplingParams.numInfiniteLightSamples > 0u)
+    {
+        RTXDI_DIReservoir infiniteReservoir = RTXDI_SampleInfiniteLights(
+            surface,
+            int(initialSamplingParams.numInfiniteLightSamples)
+        );
+        selectInfinite = RTXDI_CombineDIReservoirs(selectedReservoir, infiniteReservoir, RTXDI_GetNextRandom(rng), infiniteReservoir.targetPdf);
+    }
+
+    RAB_LightSample environmentSample = lt_null_sample();
+    bool selectEnvironment = false;
+    if (initialSamplingParams.numEnvironmentSamples > 0u)
+    {
+        RTXDI_DIReservoir environmentReservoir = RTXDI_SampleEnvironmentMap(
+            surface,
+            int(initialSamplingParams.numEnvironmentSamples)
+        );
+        selectEnvironment = RTXDI_CombineDIReservoirs(selectedReservoir, environmentReservoir, RTXDI_GetNextRandom(rng), environmentReservoir.targetPdf);
+    }
+
+    RAB_LightSample brdfSample = lt_null_sample();
+    vec3 brdfIrradiance = vec3(0.0f);
+    vec3 brdfEarlyThroughput = vec3(0.0f);
+    bool selectBrdf = false;
+    if (initialSamplingParams.numBrdfSamples > 0u)
+    {
+        RTXDI_InitialSamplingMisData misData = RTXDI_ComputeInitialSamplingMisData(initialSamplingParams);
+        RTXDI_DIReservoir brdfReservoir = InitialCandidates_SampleBrdf(
+            rng,
+            surface,
+            int(initialSamplingParams.numBrdfSamples),
+            misData,
+            initialSamplingParams.brdfCutoff,
+            pathTime,
+            brdfSample,
+            brdfIrradiance,
+            brdfEarlyThroughput
+        );
+        selectBrdf = RTXDI_CombineDIReservoirs(selectedReservoir, brdfReservoir, RTXDI_GetNextRandom(rng), brdfReservoir.targetPdf);
+    }
 
     RTXDI_FinalizeResampling(selectedReservoir, 1.0f, 1.0f);
     selectedReservoir.M = 1.0f;

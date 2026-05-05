@@ -10,6 +10,9 @@
 void InitialCandidates_tracePrimaryMiss(
     inout RTXDI_DIReservoir currReservoir,
     inout ReconnectionData currReconnectionData,
+    inout RAB_LightSample currSelectedLightSample,
+    inout vec3 currSelectedIrradiance,
+    inout vec3 currSelectedEarlyThroughput,
     inout PathState path)
 {
     path.reservoir = RTXDI_EmptyDIReservoir();
@@ -17,18 +20,35 @@ void InitialCandidates_tracePrimaryMiss(
     path.selectedLightSample = RAB_EmptyLightSample();
     path.selectedIrradiance = vec3(0.0f);
     path.selectedEarlyThroughput = vec3(0.0f);
-    InitialCandidates_addCandidateReservoir(currReservoir, currReconnectionData, path);
+    InitialCandidates_addCandidateReservoir(
+        currReservoir,
+        currReconnectionData,
+        currSelectedLightSample,
+        currSelectedIrradiance,
+        currSelectedEarlyThroughput,
+        path
+    );
 }
 
 void InitialCandidates_tracePath(
     const RTXDI_Parameters params,
     inout RTXDI_DIReservoir currReservoir,
     inout ReconnectionData currReconnectionData,
+    inout RAB_LightSample currSelectedLightSample,
+    inout vec3 currSelectedIrradiance,
+    inout vec3 currSelectedEarlyThroughput,
     inout PathState path)
 {
     if (!RAB_IsSurfaceValid(path.surface))
     {
-        InitialCandidates_tracePrimaryMiss(currReservoir, currReconnectionData, path);
+        InitialCandidates_tracePrimaryMiss(
+            currReservoir,
+            currReconnectionData,
+            currSelectedLightSample,
+            currSelectedIrradiance,
+            currSelectedEarlyThroughput,
+            path
+        );
         return;
     }
 
@@ -46,7 +66,14 @@ void InitialCandidates_tracePath(
 
     path.reconnection = ReconnectionData_init();
 
-    InitialCandidates_addCandidateReservoir(currReservoir, currReconnectionData, path);
+    InitialCandidates_addCandidateReservoir(
+        currReservoir,
+        currReconnectionData,
+        currSelectedLightSample,
+        currSelectedIrradiance,
+        currSelectedEarlyThroughput,
+        path
+    );
 }
 
 void InitialCandidates_run(ivec2 pixel)
@@ -70,18 +97,32 @@ void InitialCandidates_run(ivec2 pixel)
 
     RTXDI_DIReservoir currReservoir = RTXDI_EmptyDIReservoir();
     ReconnectionData currReconnectionData = ReconnectionData_init();
+    RAB_LightSample currSelectedLightSample = RAB_EmptyLightSample();
+    vec3 currSelectedIrradiance = vec3(0.0f);
+    vec3 currSelectedEarlyThroughput = vec3(0.0f);
 
     for (uint sampleIdx = 0u; sampleIdx < uint(kSamplesPerPixel); ++sampleIdx)
     {
         PathState path;
         InitialCandidates_generatePath(path, pixel, sampleIdx, surface);
-        InitialCandidates_tracePath(params, currReservoir, currReconnectionData, path);
+        InitialCandidates_tracePath(
+            params,
+            currReservoir,
+            currReconnectionData,
+            currSelectedLightSample,
+            currSelectedIrradiance,
+            currSelectedEarlyThroughput,
+            path
+        );
     }
 
     InitialCandidates_finalizeSelectedReservoir(
         params.initialSamplingParams,
         pixel,
         surface,
+        currSelectedLightSample,
+        currSelectedIrradiance,
+        currSelectedEarlyThroughput,
         currReservoir,
         currReconnectionData
     );

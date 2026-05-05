@@ -109,10 +109,6 @@ uniform float ph_debug_show_handheld;
 uniform float ph_debug_view_mode;
 
 vec3 sample_photonics_direct(vec2 tex_coord) {
-    if (ph_debug_view_mode > 0.5) {
-        // Debug overlay: return bright debug color so it survives albedo multiply
-        return texture(radiosity_direct, tex_coord).rgb * 10.0;
-    }
     if (ph_debug_show_direct < 0.5) return vec3(0.0);
     return texture(radiosity_direct, tex_coord).rgb;
 }

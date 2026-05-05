@@ -99,13 +99,11 @@ void main() {
     vec4 stageAlbedo = useDenoisedDirect
         ? lt_load_current_gbuffer_like(stage_radiosity_albedo, tex_coord)
         : lt_load_stage_gbuffer_like(stage_radiosity_albedo, tex_coord);
-
     vec2 uv = (vec2(shadingCoord) + vec2(0.5)) / vec2(viewWidth, viewHeight);
     vec4 stageMaterial = lt_extract_accumulation_material(uv);
     vec4 stageIdentity = useDenoisedDirect
         ? lt_load_current_gbuffer_like(stage_radiosity_identity, tex_coord)
         : lt_load_stage_gbuffer_like(stage_radiosity_identity, tex_coord);
-
     vec4 directDiffuse = lt_load_stage_direct_lobe(stage_radiosity_direct, tex_coord);
     vec4 directSpecular = lt_load_stage_direct_lobe(stage_radiosity_direct_specular, tex_coord);
     float directHitDistance = max(directDiffuse.a, directSpecular.a);

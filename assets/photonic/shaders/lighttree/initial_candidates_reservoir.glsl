@@ -4,6 +4,9 @@
 void InitialCandidates_addCandidateReservoir(
     inout RTXDI_DIReservoir currReservoir,
     inout ReconnectionData currReconnectionData,
+    inout RAB_LightSample currSelectedLightSample,
+    inout vec3 currSelectedIrradiance,
+    inout vec3 currSelectedEarlyThroughput,
     PathState path)
 {
     const bool isFirstSample = (PathState_getSampleIdx(path) == 0u);
@@ -18,6 +21,9 @@ void InitialCandidates_addCandidateReservoir(
     ivec2 pixel = PathState_getPixel(path);
     if (selected) {
         PathReservoir_setSubPixel(existingReservoir, pixel, PathReservoir_getSubPixel(path.reservoir, pixel));
+        currSelectedLightSample = path.selectedLightSample;
+        currSelectedIrradiance = path.selectedIrradiance;
+        currSelectedEarlyThroughput = path.selectedEarlyThroughput;
     }
     PathReservoir_setConfidence(existingReservoir, 1.0f);
 

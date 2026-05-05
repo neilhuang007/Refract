@@ -64,12 +64,6 @@ if (runtimeMaxLights == null || runtimeMaxLights.isBlank()) {
 def mainClasspathGroup = "${layout.buildDirectory.dir('classes/java/main').get().asFile.absolutePath}${File.pathSeparator}${layout.buildDirectory.dir('resources/main').get().asFile.absolutePath}"
 
 loom {
-    mods {
-        photonics {
-            sourceSet sourceSets.main
-        }
-    }
-
     runs {
         client {
             client()
@@ -167,18 +161,6 @@ sourceSets {
 
 tasks.withType(JavaCompile).configureEach {
     it.options.release = 21
-}
-
-def mainCompileJava = tasks.named("compileJava", JavaCompile)
-
-tasks.register("syncMainResourcesToClasses", Copy) {
-    dependsOn "processResources", mainCompileJava
-    from(tasks.named("processResources").map { it.destinationDir })
-    into(mainCompileJava.map { it.destinationDirectory.get().asFile })
-}
-
-tasks.named("classes") {
-    dependsOn "syncMainResourcesToClasses"
 }
 
 def java21Launcher = javaToolchains.launcherFor {

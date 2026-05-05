@@ -59,16 +59,33 @@ void trace_ray(inout RayJob job, bool transparency) {
     job.direction = normalize(ph_signed_nudge(job.direction));
 
     vec3 direction_inv = 1.0f / job.direction;
-    float t0 = ph_intersects_world(direction_inv, 16.0f * job.origin);
+    vec3 origin16 = 16.0f * job.origin;
+    float t0 = ph_intersects_world(direction_inv, origin16);
     if (t0 == -1.0f) {
         job.result_position = vec3(47823934.0f) - world_offset;
         return;
     }
 
-    vec3 position = job.origin * 16.0f + (t0 + 0.03f) * job.direction;
+    vec3 position = origin16 + (t0 + 0.03f) * job.direction;
     //    vec3 position = 16.0f * job.origin;
 
     vec3 ray_direction_sign = sign(job.direction);
+    ivec3 world_min_block = ivec3(world_min_voxel);
+    ivec3 world_max_block = ivec3(world_max_voxel);
+    ivec3 target_block = ray_target;
+    ivec3 constraint_block = ray_constraint;
+    bool hasRayTarget = target_block.x != -9999;
+    bool hasRayConstraint = constraint_block.x != -9999;
+    bool stopOnTarget = ray_stop_on_target;
+    bool boundedVisibilityRay = ray_max_trace_distance > 0.0f;
+    bool useShortRayAbort = RAY_ITERATION_COUNT <= 32;
+    float min_trace_sq = ray_min_trace_distance > 0.0f
+        ? ray_min_trace_distance * ray_min_trace_distance * 256.0f
+        : 0.0f;
+    float max_trace_sq = ray_max_trace_distance > 0.0f
+        ? ray_max_trace_distance * ray_max_trace_distance * 256.0f
+        : 0.0f;
+    bool needsTravelDistance = min_trace_sq > 0.0f || max_trace_sq > 0.0f || useShortRayAbort;
 
     int emission_ptr = -1;
     ivec3 intersection_index = ivec3(7.5f * ray_direction_sign + vec3(7.5f, 12.5f, 17.5f));
@@ -110,23 +127,24 @@ void trace_ray(inout RayJob job, bool transparency) {
         ivec3 w = ivec3(floor(position));
         ivec3 block_position = w >> 4;
 
-        if (!ph_is_inside(position)) // outside of world?
+        if (any(lessThan(w, world_min_block)) || any(greaterThanEqual(w, world_max_block))) // outside of world?
             return;
 
-        vec3 travel_delta = position - job.origin * 16.0f;
-        float travel_dist_sq = dot(travel_delta, travel_delta);
+        float travel_dist_sq = 0.0f;
+        if (needsTravelDistance) {
+            vec3 travel_delta = position - origin16;
+            travel_dist_sq = dot(travel_delta, travel_delta);
+        }
         bool before_min_trace_distance = false;
 
-        if (ray_min_trace_distance > 0.0f) {
-            float min_trace_sq = ray_min_trace_distance * ray_min_trace_distance * 256.0f;
+        if (min_trace_sq > 0.0f) {
             before_min_trace_distance = travel_dist_sq < min_trace_sq;
         }
 
         // Visibility rays emulate RTXDI's TMax with an explicit distance cap so
         // transparent segments stop at the sampled light instead of running through
         // geometry that lies beyond the RTXDI shadow-ray segment.
-        if (ray_max_trace_distance > 0.0f) {
-            float max_trace_sq = ray_max_trace_distance * ray_max_trace_distance * 256.0f;
+        if (max_trace_sq > 0.0f) {
             if (travel_dist_sq > max_trace_sq) {
                 ray_distance_limit_reached = true;
                 break;
@@ -135,21 +153,22 @@ void trace_ray(inout RayJob job, bool transparency) {
 
         // Early termination: secondary rays (GI/shadow) that travel too far
         // are unlikely to contribute useful lighting information
-        if (RAY_ITERATION_COUNT <= 32) {
+        if (useShortRayAbort) {
             if (travel_dist_sq > 4194304.0f) { // > 128 blocks (2048 voxels squared)
                 return;
             }
         }
 
         bool targetReached = !before_min_trace_distance
-            && all(equal(block_position, ray_target))
-            && (ray_max_trace_distance <= 0.0f || ray_stop_on_target);
+            && hasRayTarget
+            && all(equal(block_position, target_block))
+            && (max_trace_sq <= 0.0f || stopOnTarget);
         if (targetReached) { // ray target reached?
             job.result_hit = true;
             result_block_id = -1;
             break;
         }
-        if (ray_constraint != ivec3(-9999) && block_position != ray_constraint)
+        if (hasRayConstraint && any(notEqual(block_position, constraint_block)))
             return;
 
         int scale = 0;
@@ -290,12 +309,13 @@ void trace_ray(inout RayJob job, bool transparency) {
         // "push precision" into lower decimal values to fight rounding errors
         position[t_min] = (intersection[t_min] * 0.01f + skipDelta[t_min]) * 100.0f;
 
-        // Root-level empty space look-ahead: skip consecutive empty chunks
-        // without consuming main loop iterations
-        if (scale == 13 && entries.x >= 0) {  // scale 13 = root level (8+4+1)
+        // Root-level empty space look-ahead is useful for long unbounded rays,
+        // but bounded ReSTIR shadow rays are short enough that the extra branch
+        // and chunk probes usually cost more than they save.
+        if (!boundedVisibilityRay && scale == 13 && entries.x >= 0) {  // scale 13 = root level (8+4+1)
             for (int skip = 0; skip < 8; skip++) {
                 ivec3 skip_w = ivec3(floor(position));
-                if (!ph_is_inside(position)) break;
+                if (any(lessThan(skip_w, world_min_block)) || any(greaterThanEqual(skip_w, world_max_block))) break;
 
                 ivec3 skip_chunk = (skip_w >> 8) & 31;
                 int skip_idx = ph_get_world_index(skip_chunk);
@@ -321,12 +341,12 @@ void trace_ray(inout RayJob job, bool transparency) {
             }
         }
 
-        // Block-level empty space look-ahead: skip consecutive empty blocks
-        // within the same chunk without consuming main loop iterations
-        if (scale == 8 && entries.y >= 0 && entries.x < 0) {  // scale 8 = block level (4+4)
+        // Block-level empty space look-ahead has the same tradeoff as the root
+        // skip and is also bypassed for bounded visibility rays.
+        if (!boundedVisibilityRay && scale == 8 && entries.y >= 0 && entries.x < 0) {  // scale 8 = block level (4+4)
             for (int bskip = 0; bskip < 6; bskip++) {
                 ivec3 bskip_w = ivec3(floor(position));
-                if (!ph_is_inside(position)) break;
+                if (any(lessThan(bskip_w, world_min_block)) || any(greaterThanEqual(bskip_w, world_max_block))) break;
 
                 ivec3 bskip_chunk = (bskip_w >> 8) & 31;
                 int bskip_chunk_idx = ph_get_world_index(bskip_chunk);

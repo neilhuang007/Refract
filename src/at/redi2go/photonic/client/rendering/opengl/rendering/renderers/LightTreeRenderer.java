@@ -1047,7 +1047,7 @@ public class LightTreeRenderer extends MainRenderer {
       });
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_spatial_bias_mode", () -> PhotonicsStorage.RESTIR_GI_SPATIAL_BIAS_MODE.value);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_reuse_final_visibility", () -> 1.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 1.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 0.0f);
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_debug_view_mode",
@@ -1417,25 +1417,42 @@ public class LightTreeRenderer extends MainRenderer {
       long t5 = System.nanoTime();
       // NRD RELAX_DiffuseSpecular fused pipeline (contract §9, pipeline order §1).
       long t6 = System.nanoTime();
-      this.renderProfiled(nrdClassifyTilesRegionIndex, this.nrdClassifyTilesRenderer);
+      boolean runDirectDenoise = this.shouldRunDirectDenoise();
+      if (runDirectDenoise) {
+         this.renderProfiled(nrdClassifyTilesRegionIndex, this.nrdClassifyTilesRenderer);
+      }
       long t7 = System.nanoTime();
-      if (this.shouldRunHitDistReconstruction()) {
+      if (runDirectDenoise && this.shouldRunHitDistReconstruction()) {
          this.renderProfiled(nrdHitDistReconstructionRegionIndex, this.nrdHitDistReconstructionRenderer);
       }
       long t8 = System.nanoTime();
-      this.renderProfiled(nrdPrepassRegionIndex, this.nrdPrepassRenderer);
+      if (runDirectDenoise) {
+         this.renderProfiled(nrdPrepassRegionIndex, this.nrdPrepassRenderer);
+      }
       long t9 = System.nanoTime();
-      this.renderProfiled(relaxTemporalAccumulationRegionIndex, this.directTemporalRenderer);
+      if (runDirectDenoise) {
+         this.renderProfiled(relaxTemporalAccumulationRegionIndex, this.directTemporalRenderer);
+      }
       long t10 = System.nanoTime();
-      this.renderProfiled(relaxHistoryFixRegionIndex, this.directHistoryFixRenderer);
+      if (runDirectDenoise) {
+         this.renderProfiled(relaxHistoryFixRegionIndex, this.directHistoryFixRenderer);
+      }
       long t11 = System.nanoTime();
-      this.renderProfiled(relaxHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
+      if (runDirectDenoise) {
+         this.renderProfiled(relaxHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
+      }
       long t12 = System.nanoTime();
-      this.renderProfiled(nrdCopyRegionIndex, this.nrdCopyRenderer);
+      if (runDirectDenoise) {
+         this.renderProfiled(nrdCopyRegionIndex, this.nrdCopyRenderer);
+      }
       long t13 = System.nanoTime();
-      this.renderProfiled(relaxAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
+      if (runDirectDenoise) {
+         this.renderProfiled(relaxAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
+      }
       long t14 = System.nanoTime();
-      this.renderNrdAtrousProfiled();
+      if (runDirectDenoise) {
+         this.renderNrdAtrousProfiled();
+      }
       long t15 = System.nanoTime();
       long t16 = t15;
       boolean runReservoirSplattingIndirect = this.shouldRunReservoirSplattingIndirectPipeline();
@@ -2729,8 +2746,11 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private boolean shouldRunIndirectDenoise() {
-      return this.shouldRunReservoirSplattingIndirectPipeline()
-         && PhotonicsStorage.DEBUG_ENABLE_INDIRECT_DENOISE.value;
+      return false;
+   }
+
+   private boolean shouldRunDirectDenoise() {
+      return false;
    }
 
    private boolean shouldRunIndirectTemporalSplatting(boolean resetReservoirSplatting) {
@@ -2878,9 +2898,6 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private TextureObject getResolvedDirectTexture() {
-      if (PhotonicsStorage.DEBUG_VIEW_MODE.value > 0.5f) {
-         return this.lightingStageBuffer.getWriteAttachment("direct");
-      }
       TextureObject debugStageTexture = this.getDebugDirectStageTexture();
       if (debugStageTexture != null) {
          return debugStageTexture;
@@ -3347,7 +3364,10 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private String describeStageGeometryUsage() {
-      return "DIShadeSamples+NRDClassifyTiles+NRDHitDistReconstruction+NRDPrepass+RELAXTemporalAccumulation+RELAXHistoryFix+RELAXHistoryClamping+NRDCopy+RELAXAntiFirefly+RELAXAtrousSmem+RELAXAtrous+IndirectDenoise";
+      String direct = this.shouldRunDirectDenoise()
+         ? "DIShadeSamples+NRDClassifyTiles+NRDHitDistReconstruction+NRDPrepass+RELAXTemporalAccumulation+RELAXHistoryFix+RELAXHistoryClamping+NRDCopy+RELAXAntiFirefly+RELAXAtrousSmem+RELAXAtrous"
+         : "DIShadeSamples(raw)";
+      return this.shouldRunIndirectDenoise() ? direct + "+IndirectDenoise" : direct;
    }
 
    private long toMicros(long nanos) {

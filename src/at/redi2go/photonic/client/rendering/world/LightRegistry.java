@@ -328,14 +328,12 @@ public class LightRegistry implements Destructable {
   private short[] newLightIndices;
   private PBlockPos offset = new PBlockPos(0, 0, 0);
   private int lightCount = 0;
-   private LightInstance[] tracedLights = new LightInstance[0];
-   private final Map<Vector3f, TracedLightPosition> tracedLightPositions = new ConcurrentHashMap<>();
-   private final Set<Long> loadedLightChunks = ConcurrentHashMap.newKeySet();
-   private final Map<Long, Long> chunkLightHashes = new ConcurrentHashMap<>();
-   private final Map<Long, LightSectionCache> lightSectionCaches = new ConcurrentHashMap<>();
-   private final Set<Long> dirtyLightSections = ConcurrentHashMap.newKeySet();
-   private final Map<Vector3f, Integer> residentMissingLightScans = new ConcurrentHashMap<>();
-   private final Map<Vector3f, PendingLightActivityChange> pendingLightActivityChanges = new ConcurrentHashMap<>();
+  private LightInstance[] tracedLights = new LightInstance[0];
+  private final Map<Vector3f, TracedLightPosition> tracedLightPositions = new ConcurrentHashMap<>();
+  private final Set<Long> loadedLightChunks = ConcurrentHashMap.newKeySet();
+  private final Map<Long, Long> chunkLightHashes = new ConcurrentHashMap<>();
+  private final Map<Vector3f, Integer> residentMissingLightScans = new ConcurrentHashMap<>();
+  private final Map<Vector3f, PendingLightActivityChange> pendingLightActivityChanges = new ConcurrentHashMap<>();
   private final PhotonicsConfig.Observer<LightList> lightListObserver;
   private LightList lightList = new LightList();
   private final ReadWriteLock lock;
@@ -360,13 +358,8 @@ public class LightRegistry implements Destructable {
   private final Vector3f lastGlobalLightCdfCamera = new Vector3f();
   private boolean lastGlobalLightCdfCameraInitialized = false;
   private boolean loggedAutomationLightColors = false;
-   private int pendingTracedLightMutations = 0;
-   private long staticSectionRebuildCount = 0L;
-   private long dynamicRebuildCount = 0L;
-   private long lightUploadSkippedCount = 0L;
-   private long lightFullUploadCount = 0L;
-   private long lightDirtySectionCount = 0L;
-   private volatile boolean gpuRegirBuildEnabled = false;
+  private int pendingTracedLightMutations = 0;
+  private volatile boolean gpuRegirBuildEnabled = false;
   private float[] lightPowers = new float[0];
   private float[] regirLightPowers = new float[0];
    private int mutationDebugLogsRemaining = 96;
@@ -617,11 +610,6 @@ public class LightRegistry implements Destructable {
          }
          boolean bufferOnlyChanged = this.churnStats.lastFrameBufferOnly();
          boolean topologyChanged = lightsChanged && !bufferOnlyChanged;
-         if (topologyChanged) {
-            this.staticSectionRebuildCount++;
-         } else if (lightsChanged || bufferOnlyChanged) {
-            this.dynamicRebuildCount++;
-         }
          boolean rebuildSpatialGrid = topologyChanged || this.lightGrid == null;
          if (rebuildSpatialGrid) {
             this.buildSpatialGrid(this.tracedLights);
@@ -696,7 +684,7 @@ public class LightRegistry implements Destructable {
             long gridMs = (tGrid - tDiff) / 1_000_000L;
             long storeMs = (tStore - tGrid) / 1_000_000L;
             Photonic.info(
-               "[Profiler] lightRegistry: reason={} prevLights={} gatheredLights={} tracedLights={} changed={} offsetChanged={} gridCells={} gridAssignments={} churn={} uploads(lights={},mapping={},regir={},identity={}) counters(staticRebuilds={} dynamicRebuilds={} uploadSkipped={} fullUploads={} dirtySections={} cachedSections={}) timings: gather={}ms diff={}ms grid={}ms store={}ms total={}ms",
+               "[Profiler] lightRegistry: reason={} prevLights={} gatheredLights={} tracedLights={} changed={} offsetChanged={} gridCells={} gridAssignments={} churn={} uploads(lights={},mapping={},regir={},identity={}) timings: gather={}ms diff={}ms grid={}ms store={}ms total={}ms",
                rebuildReason,
                previousLightCount,
                lights.length,
@@ -710,12 +698,6 @@ public class LightRegistry implements Destructable {
                topologyChanged,
                regirDirty,
                identityQueued,
-               this.staticSectionRebuildCount,
-               this.dynamicRebuildCount,
-               this.lightUploadSkippedCount,
-               this.lightFullUploadCount,
-               this.lightDirtySectionCount,
-               this.lightSectionCaches.size(),
                gatherMs,
                diffMs,
                gridMs,
@@ -1400,21 +1382,6 @@ public class LightRegistry implements Destructable {
       return uploadDone;
    }
 
-   private void resetIdleUploadStats() {
-      this.lightsMemoryManager.uploadIfNeeded();
-      this.previousLightsMemoryManager.uploadIfNeeded();
-      this.lightMappingMemoryManager.uploadIfNeeded();
-      this.lightReverseMappingMemoryManager.uploadIfNeeded();
-      this.globalLightCdfMemoryManager.uploadIfNeeded();
-      this.regirCellCountMemoryManager.uploadIfNeeded();
-      if (!this.gpuRegirBuildEnabled) {
-         this.regirLightIndexMemoryManager.uploadIfNeeded();
-         this.regirLightPdfMemoryManager.uploadIfNeeded();
-         this.regirCompactLightDataMemoryManager.uploadIfNeeded();
-      }
-      this.neighborOffsetMemoryManager.uploadIfNeeded();
-   }
-
    public void registerBlockState(BlockState blockState, PBlock pBlock) {
       BlockLightInfo lightInfo = this.lightList.get(blockState);
       if (lightInfo != null) {
@@ -1427,9 +1394,6 @@ public class LightRegistry implements Destructable {
    }
 
    private void registerLightBlocks(LightList lights) {
-      this.lightSectionCaches.clear();
-      this.dirtyLightSections.clear();
-      this.chunkLightHashes.clear();
       Raytracer.INSTANCE.getBlockRegistry().getBlockSchematicCache().entrySet().stream()
          .map(e -> Pair.of(e.getValue(), lights.get(e.getKey())))
          .filter(e -> e.getValue() != null)
@@ -1549,11 +1513,7 @@ public class LightRegistry implements Destructable {
          }
          BlockPos blockPos = new BlockPos((int) position.x, (int) position.y, (int) position.z);
          this.chunkLightHashes.remove(chunkKey(blockPos));
-         this.markLightSectionDirty(blockPos);
-         BlockState blockState = level.getBlockState(blockPos);
-         BlockLightInfo lightInfo = this.resolveLightInfo(blockPos, blockState, level);
-         this.syncTracedLight(blockPos, blockState, lightInfo, true, SyncSource.BLOCK_LOAD);
-         this.updateLightSectionCacheForBlock(blockPos, blockState, lightInfo);
+         this.syncTracedLight(level, blockPos, level.getBlockState(blockPos), true, SyncSource.BLOCK_LOAD);
       } finally {
          this.lock.writeLock().unlock();
       }
@@ -1577,14 +1537,10 @@ public class LightRegistry implements Destructable {
             return;
          }
          this.chunkLightHashes.remove(chunkKey(blockPos));
-         this.markLightSectionDirty(blockPos);
          // A client block update carries the new block state now. Do not apply
          // the resident-chunk missing-light grace window here, or removed light
          // blocks keep contributing until a later full chunk scan happens.
-         BlockState blockState = level.getBlockState(blockPos);
-         BlockLightInfo lightInfo = this.resolveLightInfo(blockPos, blockState, level);
-         this.syncTracedLight(blockPos, blockState, lightInfo, false, SyncSource.BLOCK_UPDATE_LIVE);
-         this.updateLightSectionCacheForBlock(blockPos, blockState, lightInfo);
+         this.syncTracedLight(level, blockPos, level.getBlockState(blockPos), false, SyncSource.BLOCK_UPDATE_LIVE);
       } finally {
          this.lock.writeLock().unlock();
       }
@@ -1597,26 +1553,23 @@ public class LightRegistry implements Destructable {
       this.lock.writeLock().lock();
       try {
          this.chunkLightHashes.remove(chunkKey(blockPos));
-         this.markLightSectionDirty(blockPos);
          // Same as the live lookup overload: this snapshot is an authoritative
          // block update, not a speculative resident chunk rescan.
          this.syncTracedLight(blockPos, blockState, lightInfo, false, SyncSource.BLOCK_UPDATE_SNAPSHOT);
-         this.updateLightSectionCacheForBlock(blockPos, blockState, lightInfo);
       } finally {
          this.lock.writeLock().unlock();
       }
    }
 
-   private LightSectionCache scanLightSection(ClientWorld level, PChunkPos sectionPos, boolean syncLights) {
+   private long computeChunkLightHash(ClientWorld level, PChunkPos chunkPos) {
       long hash = CHUNK_LIGHT_HASH_OFFSET;
-      PBlockPos sectionMin = sectionPos.toBlockPos();
+      PBlockPos chunkMin = chunkPos.toBlockPos();
       BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
-      List<BlockPos> lightBlocks = new ArrayList<>();
 
       for (int x = 0; x < 16; x++) {
          for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
-               mutableBlockPos.set(sectionMin.x + x, sectionMin.y + y, sectionMin.z + z);
+               mutableBlockPos.set(chunkMin.x + x, chunkMin.y + y, chunkMin.z + z);
                if (level == null || !level.isChunkLoaded(mutableBlockPos)) {
                   hash = mixChunkLightHash(hash, 0x6d697373L);
                   continue;
@@ -1630,60 +1583,41 @@ public class LightRegistry implements Destructable {
                }
 
                BlockLightInfo lightInfo = this.resolveLightInfo(mutableBlockPos, blockState, level);
-               if (lightInfo == null && !this.hasTrackedLight(mutableBlockPos)) {
-                  continue;
-               }
-
-               BlockPos immutablePos = mutableBlockPos.toImmutable();
-               if (lightInfo == null) {
-                  if (syncLights) {
-                     this.syncTracedLight(immutablePos, blockState, null, true, SyncSource.CHUNK_SYNC);
-                  }
-                  continue;
-               }
-
-               lightBlocks.add(immutablePos);
-               hash = mixChunkLightHash(hash, Integer.toUnsignedLong(immutablePos.getX()));
-               hash = mixChunkLightHash(hash, Integer.toUnsignedLong(immutablePos.getY()));
-               hash = mixChunkLightHash(hash, Integer.toUnsignedLong(immutablePos.getZ()));
                hash = mixChunkLightHash(hash, Integer.toUnsignedLong(blockState.hashCode()));
                hash = mixChunkLightHash(hash, lightInfo == null ? 0L : 1L);
-               hash = mixChunkLightHash(hash, lightInfo == null ? 0L : Integer.toUnsignedLong(IrisUtil.getBlockId(blockState)));
-               hash = mixChunkLightHash(hash, lightInfo == null ? 0L : semanticLightDescriptorHash(lightInfo));
-               if (syncLights) {
-                  this.syncTracedLight(immutablePos, blockState, lightInfo, true, SyncSource.CHUNK_SYNC);
+               if (lightInfo != null) {
+                  hash = mixChunkLightHash(hash, Integer.toUnsignedLong(IrisUtil.getBlockId(blockState)));
+                  hash = mixChunkLightHash(hash, semanticLightDescriptorHash(lightInfo));
                }
             }
          }
       }
 
-      lightBlocks.sort(Comparator
-         .comparingInt(BlockPos::getX)
-         .thenComparingInt(BlockPos::getY)
-         .thenComparingInt(BlockPos::getZ));
-      return new LightSectionCache(hash, lightBlocks);
-   }
-
-   private long computeChunkLightHash(ClientWorld level, PChunkPos chunkPos) {
-      return this.scanLightSection(level, chunkPos, false).hash();
+      return hash;
    }
 
    public void synchronizeChunkLights(ClientWorld level, PChunkPos chunkPos) {
       this.lock.writeLock().lock();
       try {
          long key = chunkKey(chunkPos);
+         long chunkLightHash = this.computeChunkLightHash(level, chunkPos);
+         Long previousHash = this.chunkLightHashes.get(key);
          this.loadedLightChunks.add(key);
-         LightSectionCache previousCache = this.lightSectionCaches.get(key);
-         this.dirtyLightSections.remove(key);
-         LightSectionCache scannedCache = this.scanLightSection(level, chunkPos, true);
-         this.lightSectionCaches.put(key, scannedCache);
-         this.chunkLightHashes.put(key, scannedCache.hash());
-         if (previousCache != null && previousCache.hash() == scannedCache.hash() && previousCache.lightBlocks().equals(scannedCache.lightBlocks())) {
+         if (previousHash != null && previousHash == chunkLightHash) {
             this.churnStats.noteNoopSync();
             return;
          }
-
-         this.staticSectionRebuildCount++;
+         this.chunkLightHashes.put(key, chunkLightHash);
+         PBlockPos chunkMin = chunkPos.toBlockPos();
+         BlockPos.Mutable mutableBlockPos = new BlockPos.Mutable();
+         for (int x = 0; x < 16; x++) {
+            for (int y = 0; y < 16; y++) {
+               for (int z = 0; z < 16; z++) {
+                  mutableBlockPos.set(chunkMin.x + x, chunkMin.y + y, chunkMin.z + z);
+                  this.syncTracedLight(level, mutableBlockPos, level.getBlockState(mutableBlockPos), true, SyncSource.CHUNK_SYNC);
+               }
+            }
+         }
       } finally {
          this.lock.writeLock().unlock();
       }
@@ -1695,8 +1629,6 @@ public class LightRegistry implements Destructable {
          long key = chunkKey(chunkPos);
          this.loadedLightChunks.remove(key);
          this.chunkLightHashes.remove(key);
-         this.lightSectionCaches.remove(key);
-         this.dirtyLightSections.remove(key);
          PBlockPos chunkMin = chunkPos.toBlockPos();
          int maxX = chunkMin.x + 16;
          int maxY = chunkMin.y + 16;
@@ -1798,10 +1730,6 @@ public class LightRegistry implements Destructable {
 
    public int getRegirHashNormalBuckets() {
       return REGIR_HASH_NORMAL_BUCKETS;
-   }
-
-   public int getEffectiveRegirHashNormalBuckets() {
-      return PhotonicsStorage.REGIR_COLLAPSE_NORMAL_BUCKETS.value ? 1 : this.getRegirHashNormalBuckets();
    }
 
    public float getRegirHashCellSizeBlocks() {
@@ -1909,19 +1837,6 @@ public class LightRegistry implements Destructable {
          hash = hash * 1099511628211L + Float.floatToIntBits(light.position().y);
          hash = hash * 1099511628211L + Float.floatToIntBits(light.position().z);
          hash = hash * 1099511628211L + semanticLightTopologyHash(light.type());
-      }
-      return hash;
-   }
-
-   public long getRegirPowerStateHash() {
-      long hash = 1469598103934665603L;
-      hash = hash * 1099511628211L + this.regirLightPowers.length;
-      for (float power : this.regirLightPowers) {
-         hash = hash * 1099511628211L + Integer.toUnsignedLong(Float.floatToIntBits(power));
-      }
-      for (LightInstance light : this.tracedLights) {
-         hash = hash * 1099511628211L + (light.active() ? 1L : 0L);
-         hash = hash * 1099511628211L + semanticLightDescriptorHash(light.type());
       }
       return hash;
    }
@@ -2263,67 +2178,6 @@ public class LightRegistry implements Destructable {
       }
    }
 
-   private void markLightSectionDirty(BlockPos blockPos) {
-      if (blockPos == null) {
-         return;
-      }
-
-      int sectionX = blockPos.getX() >> 4;
-      int sectionY = blockPos.getY() >> 4;
-      int sectionZ = blockPos.getZ() >> 4;
-      for (int dx = -1; dx <= 1; dx++) {
-         for (int dy = -1; dy <= 1; dy++) {
-            for (int dz = -1; dz <= 1; dz++) {
-               if (this.dirtyLightSections.add(sectionKey(sectionX + dx, sectionY + dy, sectionZ + dz))) {
-                  this.lightDirtySectionCount++;
-               }
-            }
-         }
-      }
-   }
-
-   private void updateLightSectionCacheForBlock(BlockPos blockPos, BlockState blockState, BlockLightInfo lightInfo) {
-      if (blockPos == null) {
-         return;
-      }
-
-      long key = sectionKey(blockPos);
-      LightSectionCache cache = this.lightSectionCaches.get(key);
-      if (cache == null) {
-         return;
-      }
-
-      boolean trackedBefore = this.hasTrackedLight(blockPos);
-      List<BlockPos> lightBlocks = new ArrayList<>(cache.lightBlocks());
-      boolean hadEntry = lightBlocks.remove(blockPos);
-      boolean hasEntry = lightInfo != null;
-      if (hasEntry) {
-         lightBlocks.add(new BlockPos(blockPos.getX(), blockPos.getY(), blockPos.getZ()));
-      }
-      if (!hadEntry && !hasEntry && !trackedBefore) {
-         return;
-      }
-
-      lightBlocks.sort(Comparator
-         .comparingInt(BlockPos::getX)
-         .thenComparingInt(BlockPos::getY)
-         .thenComparingInt(BlockPos::getZ));
-      this.lightSectionCaches.put(key, new LightSectionCache(
-         mixLightBlockHash(cache.hash(), blockPos, blockState, lightInfo),
-         lightBlocks
-      ));
-   }
-
-   private static long mixLightBlockHash(long hash, BlockPos blockPos, BlockState blockState, BlockLightInfo lightInfo) {
-      hash = mixChunkLightHash(hash, Integer.toUnsignedLong(blockPos.getX()));
-      hash = mixChunkLightHash(hash, Integer.toUnsignedLong(blockPos.getY()));
-      hash = mixChunkLightHash(hash, Integer.toUnsignedLong(blockPos.getZ()));
-      hash = mixChunkLightHash(hash, Integer.toUnsignedLong(blockState == null ? 0 : blockState.hashCode()));
-      hash = mixChunkLightHash(hash, lightInfo == null ? 0L : 1L);
-      hash = mixChunkLightHash(hash, lightInfo == null || blockState == null ? 0L : Integer.toUnsignedLong(IrisUtil.getBlockId(blockState)));
-      return mixChunkLightHash(hash, lightInfo == null ? 0L : semanticLightDescriptorHash(lightInfo));
-   }
-
    private static long chunkKey(int chunkX, int chunkY, int chunkZ) {
       return (((long) chunkX) & 0x1FFFFFL)
          | ((((long) chunkY) & 0x1FFFFFL) << 21)
@@ -2336,18 +2190,6 @@ public class LightRegistry implements Destructable {
 
    private static long chunkKey(BlockPos blockPos) {
       return chunkKey(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
-   }
-
-   private static long sectionKey(int sectionX, int sectionY, int sectionZ) {
-      return chunkKey(sectionX, sectionY, sectionZ);
-   }
-
-   private static long sectionKey(PChunkPos chunkPos) {
-      return sectionKey(chunkPos.x, chunkPos.y, chunkPos.z);
-   }
-
-   private static long sectionKey(BlockPos blockPos) {
-      return sectionKey(blockPos.getX() >> 4, blockPos.getY() >> 4, blockPos.getZ() >> 4);
    }
 
    private boolean isTrackedChunkLoaded(BlockPos blockPos) {
@@ -2399,9 +2241,6 @@ public class LightRegistry implements Destructable {
       PendingLightActivityChange withObservations(int observations) {
          return new PendingLightActivityChange(this.active, this.blockId, this.semanticHash, observations);
       }
-   }
-
-   private record LightSectionCache(long hash, List<BlockPos> lightBlocks) {
    }
 
    private enum DirtyReason {

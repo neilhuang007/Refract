@@ -214,8 +214,6 @@ public final class PhotonicsStorage {
       return switch (stageView.trim().toLowerCase(Locale.ROOT)) {
          case "", "none", "resolved", "final" -> "final";
          case "stage_direct", "direct_raw", "raw", "rt", "rt_raw" -> "stage_direct";
-         case "stage_diffuse", "direct_diffuse_raw", "raw_diffuse", "rt_diffuse" -> "stage_diffuse";
-         case "stage_lighting", "lighting", "lighting_buffer_lighting" -> "stage_lighting";
          case "direct_noisy", "noisy", "temporal", "temporal_raw" -> "direct_noisy";
          case "direct_responsive", "responsive" -> "direct_responsive";
          case "direct_slow", "slow" -> "direct_slow";

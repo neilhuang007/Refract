@@ -13,51 +13,19 @@
 #define PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_SORT_BUFFERS 1
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE)
+#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE)
 #define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS 1
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE)
-#define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CELL_BUFFERS 1
-#endif
-
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE) || (defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE) && defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORTING))
+#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE)
 #define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS 1
 #endif
 
-#if (defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE) && defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORTING)) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE)
+#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_STAGE) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE)
 #define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS 1
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE)
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_COORD_BUFFERS 1
-#endif
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFERS 1
-#endif
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_COORD_BUFFERS) && !defined(PH_LIGHTTREE_GATHER_MOTION_HELPERS_DECLARED)
-#define PH_LIGHTTREE_GATHER_MOTION_HELPERS_DECLARED
-vec2 GatherData_getMotionVectors(ivec2 pixel)
-{
-    return texelFetch(radiosity_motion, pixel, 0).xy;
-}
-
-vec2 GatherData_getMotionVector(ivec2 pixel)
-{
-    vec4 motionSample = texelFetch(radiosity_motion, pixel, 0);
-    vec2 motionVector = motionSample.xy;
-    if (length(motionVector) < 1e-06f)
-    {
-        return vec2(0.0f);
-    }
-
-    return motionVector / vec2(max(viewWidth, 1.0f), max(viewHeight, 1.0f));
-}
-#endif
-
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_COORD_BUFFERS) && !defined(PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED)
+#ifndef PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED
 #define PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED
 layout(std430) restrict buffer floatingCoords {
     vec2 floatingCoordsData[];
@@ -88,6 +56,23 @@ vec2 lt_load_floating_coords(ivec2 pixel)
 int GatherData_getGatherOption()
 {
     return lt_restir_temporal_gather_mode();
+}
+
+vec2 GatherData_getMotionVectors(ivec2 pixel)
+{
+    return texelFetch(radiosity_motion, pixel, 0).xy;
+}
+
+vec2 GatherData_getMotionVector(ivec2 pixel)
+{
+    vec4 motionSample = texelFetch(radiosity_motion, pixel, 0);
+    vec2 motionVector = motionSample.xy;
+    if (length(motionVector) < 1e-06f)
+    {
+        return vec2(0.0f);
+    }
+
+    return motionVector / vec2(max(viewWidth, 1.0f), max(viewHeight, 1.0f));
 }
 
 vec2 GatherData_getFloatingCoords(ivec2 pixel)
@@ -125,7 +110,7 @@ vec2 GatherHelper_getFloatingCoords(GatherHelper gatherHelper)
 }
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFERS) && !defined(PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED)
+#if (defined(PH_LIGHTTREE_ENABLE_TEMPORAL_COLLECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_ROBUST_REUSE_STAGE)) && !defined(PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED)
 #define PH_LIGHTTREE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFER_DECLARED
 // RobustReuseOptimization writes exactly 8 shifted paths per previous-frame
 // reservoir, ordered by the 3x3 neighborhood without the center sample.
@@ -154,9 +139,7 @@ uint lt_temporal_gather_shifted_path_record_index(ivec2 pixel, int offsetIndex)
 }
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_SORT_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CELL_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORT_STAGE)
-float ScatterTemporalResampling_load_previous_reservoir_confidence(ivec2 neighborPixel);
-
+#if defined(PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_SORT_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORT_STAGE)
 float lt_ScatterTemporalResampling_load_previous_reservoir_confidence(
     ivec2 neighborPixel)
 {
@@ -168,11 +151,8 @@ void lt_temporal_scatter_append_contributor(ivec2 targetPixel, ivec2 sourceReser
 void lt_multi_temporal_scatter_append_contributor(uint partitionIndex, ivec2 targetPixel, ivec2 sourceReservoirPos);
 #endif
 
-#ifndef PH_LIGHTTREE_TEMPORAL_SCATTER_COUNTER_CONSTANTS_DECLARED
-#define PH_LIGHTTREE_TEMPORAL_SCATTER_COUNTER_CONSTANTS_DECLARED
 const uint LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT = 0u;
 const uint LT_TEMPORAL_SCATTER_COUNTER_INDEX_PREFIX_SUM = 1u;
-#endif
 
 #if defined(PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_COUNTER_BUFFERS)
 layout(std430) restrict buffer ph_reproject_temporal_samples_global_counters {
@@ -204,23 +184,19 @@ layout(std430) restrict buffer ph_scatter_temporal_resampling_sorted_reservoirs 
 };
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CELL_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)
+#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)
 uniform int ph_reservoir_splatting_time_partition_count;
 
 const uint LT_MULTI_TEMPORAL_COUNTER_INDEX_DATA_COUNT = 0u;
 const uint LT_MULTI_TEMPORAL_COUNTER_INDEX_PREFIX_SUM = 1u;
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS)
 layout(std430) restrict buffer ph_multi_reproject_temporal_samples_global_counters {
     uint ph_multi_reproject_temporal_samples_global_counters_data[];
 };
-#endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CELL_BUFFERS)
-layout(std430) restrict buffer ph_multi_temporal_cell_data {
-    uvec2 ph_multi_temporal_cell_data_values[];
+layout(std430) restrict buffer ph_multi_reproject_temporal_samples_cell_counters {
+    uint ph_multi_reproject_temporal_samples_cell_counters_data[];
 };
-#endif
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS)
@@ -234,12 +210,16 @@ layout(std430) restrict buffer ph_multi_reproject_temporal_samples_scattered_res
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)
+layout(std430) restrict buffer ph_multi_scatter_temporal_resampling_cell_offsets {
+    uint ph_multi_scatter_temporal_resampling_cell_offsets_data[];
+};
+
 layout(std430) restrict buffer ph_multi_scatter_temporal_resampling_sorted_reservoirs {
     uvec2 ph_multi_scatter_temporal_resampling_sorted_reservoirs_data[];
 };
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CELL_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)
+#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)
 uint lt_multi_temporal_partition_count()
 {
     return uint(max(ph_reservoir_splatting_time_partition_count, 1));
@@ -247,7 +227,9 @@ uint lt_multi_temporal_partition_count()
 
 uint lt_multi_temporal_partition_cell_capacity()
 {
-    return uint(max(int(viewWidth), 1) * max(int(viewHeight), 1));
+    uint reservoirWidth = uint(max(int(ceil(viewWidth * ((ph_restir_active_checkerboard_field == 0) ? 1.0f : 0.5f))), 1));
+    uint reservoirHeight = uint(max(int(viewHeight), 1));
+    return reservoirWidth * reservoirHeight;
 }
 
 uint lt_multi_temporal_partition_contributor_capacity()
@@ -280,22 +262,20 @@ uint lt_temporal_partitioned_counter_index(uint partitionIndex, uint counterInde
     return lt_multi_temporal_scatter_counter_index(partitionIndex, counterIndex);
 }
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_REPROJECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE)
 float lt_multi_temporal_partition_duration()
 {
-    return max(ph_reservoir_splatting_shutter_speed, 1e-6f) / float(lt_multi_temporal_partition_count());
+    return ph_reservoir_splatting_shutter_speed / float(lt_multi_temporal_partition_count());
 }
 
 float lt_multi_temporal_partition_fraction(float time)
 {
-    return time / max(ph_reservoir_splatting_shutter_speed, 1e-6f);
+    return time / ph_reservoir_splatting_shutter_speed;
 }
 
 float lt_multi_temporal_partition_time(float fractionalTime, uint partitionIndex)
 {
     return (fractionalTime + float(partitionIndex)) * lt_multi_temporal_partition_duration();
 }
-#endif
 #endif
 
 #if defined(PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_COUNTER_BUFFERS)
@@ -381,22 +361,20 @@ uint lt_multi_reproject_temporal_samples_global_counter_atomic_add(uint partitio
         value
     );
 }
-#endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CELL_BUFFERS)
 uint lt_multi_reproject_temporal_samples_cell_counter_value(uint partitionIndex, uint cellIndex)
 {
-    return ph_multi_temporal_cell_data_values[
+    return ph_multi_reproject_temporal_samples_cell_counters_data[
         lt_temporal_partitioned_cell_index(partitionIndex, cellIndex)
-    ].x;
+    ];
 }
 
 uint lt_multi_reproject_temporal_samples_cell_counter_atomic_add(uint partitionIndex, uint cellIndex, uint value)
 {
     return atomicAdd(
-        ph_multi_temporal_cell_data_values[
+        ph_multi_reproject_temporal_samples_cell_counters_data[
             lt_temporal_partitioned_cell_index(partitionIndex, cellIndex)
-        ].x,
+        ],
         value
     );
 }
@@ -432,23 +410,21 @@ uvec2 lt_multi_reproject_temporal_samples_load_scattered_reservoir(uint partitio
 }
 #endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CELL_BUFFERS)
+#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)
 uint lt_multi_scatter_temporal_resampling_cell_offset_value(uint partitionIndex, uint cellIndex)
 {
-    return ph_multi_temporal_cell_data_values[
+    return ph_multi_scatter_temporal_resampling_cell_offsets_data[
         lt_temporal_partitioned_cell_index(partitionIndex, cellIndex)
-    ].y;
+    ];
 }
 
 void lt_multi_scatter_temporal_resampling_store_cell_offset(uint partitionIndex, uint cellIndex, uint value)
 {
-    ph_multi_temporal_cell_data_values[
+    ph_multi_scatter_temporal_resampling_cell_offsets_data[
         lt_temporal_partitioned_cell_index(partitionIndex, cellIndex)
-    ].y = value;
+    ] = value;
 }
-#endif
 
-#if defined(PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS)
 void lt_multi_scatter_temporal_resampling_store_sorted_reservoir(uint partitionIndex, uint contributorIndex, uvec2 sortedReservoir)
 {
     ph_multi_scatter_temporal_resampling_sorted_reservoirs_data[
@@ -470,10 +446,7 @@ uvec2 lt_multi_scatter_temporal_resampling_load_sorted_reservoir(uint partitionI
 #undef PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_CONTRIBUTOR_BUFFERS
 #undef PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_SORT_BUFFERS
 #undef PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_COUNTER_BUFFERS
-#undef PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CELL_BUFFERS
 #undef PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_CONTRIBUTOR_BUFFERS
 #undef PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SORT_BUFFERS
-#undef PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_COORD_BUFFERS
-#undef PH_LIGHTTREE_ENABLE_TEMPORAL_GATHER_SHIFTED_PATH_BUFFERS
 
 #endif

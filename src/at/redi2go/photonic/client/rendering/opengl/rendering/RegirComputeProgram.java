@@ -322,17 +322,6 @@ public class RegirComputeProgram {
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
     }
 
-    public int getPdfStateHash() {
-        int hash = 17;
-        hash = 31 * hash + this.programId;
-        hash = 31 * hash + this.presampleProgramId;
-        hash = 31 * hash + this.pdfTextureId;
-        hash = 31 * hash + this.pdfTextureWidth;
-        hash = 31 * hash + this.pdfTextureHeight;
-        hash = 31 * hash + this.pdfTextureMipLevels;
-        return hash;
-    }
-
     // -----------------------------------------------------------------------
     // Dispatch — runs presample tiles then ReGIR build
     // -----------------------------------------------------------------------

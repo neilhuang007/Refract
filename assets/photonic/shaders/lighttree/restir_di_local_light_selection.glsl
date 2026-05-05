@@ -65,14 +65,9 @@ void RTXDI_RandomlySelectLightDataFromRISTile(
     tileData = uvec2(0u);
     risBufferPtr = 0u;
 
-#if defined(PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS) && !PH_LIGHTTREE_ENABLE_LOCAL_LIGHT_SAMPLING_BUFFERS
-    rnd = rnd;
-    bufferInfo = bufferInfo;
-#else
     uint risSample = min(uint(floor(rnd * float(bufferInfo.risTileSize))), bufferInfo.risTileSize - 1u);
     risBufferPtr = risSample + bufferInfo.risTileOffset;
     tileData = ph_ris_data[risBufferPtr];
-#endif
 }
 
 RTXDI_RISTileInfo RTXDI_RandomlySelectRISTile(

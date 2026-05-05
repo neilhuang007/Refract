@@ -1,19 +1,16 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_SORT_COMMON_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_SORT_COMMON_GLSL
 
-// Slot indices into the per-partition global counters buffer. The reproject
-// pass bumps DATA_COUNT as it appends contributors; the offsets pass bumps
-// PREFIX_SUM while building cell offsets; the sorting pass reads DATA_COUNT
-// to bound iteration. Keep these values locked to the reference buffer layout.
-#ifndef PH_LIGHTTREE_TEMPORAL_SCATTER_COUNTER_CONSTANTS_DECLARED
-#define PH_LIGHTTREE_TEMPORAL_SCATTER_COUNTER_CONSTANTS_DECLARED
+// SLOT INDICES INTO THE PER-PARTITION GLOBAL_COUNTERS BUFFER. THE REPROJECT
+// PASS BUMPS DATA_COUNT AS IT APPENDS CONTRIBUTORS; THE OFFSETS PASS BUMPS
+// PREFIX_SUM WHILE BUILDING CELL OFFSETS; THE SORTING PASS READS DATA_COUNT
+// TO BOUND ITERATION. KEEP THESE VALUES LOCKED TO THE REFERENCE BUFFER LAYOUT.
 const uint LT_TEMPORAL_SCATTER_COUNTER_INDEX_DATA_COUNT = 0u;
 const uint LT_TEMPORAL_SCATTER_COUNTER_INDEX_PREFIX_SUM = 1u;
-#endif
 
-// Number of slots per partition in global counters. Must equal the number of
-// LT_TEMPORAL_SCATTER_COUNTER_INDEX_* constants above; it is the stride the
-// multi-partition indexer multiplies by.
+// NUMBER OF SLOTS PER PARTITION IN GLOBAL_COUNTERS. MUST EQUAL THE NUMBER OF
+// LT_TEMPORAL_SCATTER_COUNTER_INDEX_* CONSTANTS ABOVE -- IT IS THE STRIDE THE
+// MULTI-PARTITION INDEXER MULTIPLIES BY.
 const uint LT_TEMPORAL_SCATTER_COUNTER_COUNT = 2u;
 
 bool lt_is_viewport_uv_in_bounds(ivec2 uv)

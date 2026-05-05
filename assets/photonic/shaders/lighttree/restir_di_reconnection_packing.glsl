@@ -1,6 +1,3 @@
-#ifndef PHOTONICS_RESTIR_DI_RECONNECTION_PACKING_GLSL
-#define PHOTONICS_RESTIR_DI_RECONNECTION_PACKING_GLSL
-
 float scatter_pack_reconnection_proposal_pdf(float proposalPdf) {
     return proposalPdf;
 }
@@ -177,27 +174,8 @@ void scatter_pack_reconnection_data(
     );
 }
 
-void scatter_pack_reconnection_fields(
-    ReconnectionData reconnectionData,
-    out float transportAux0,
-    out float transportAux1,
-    out vec4 data0,
-    out vec4 data1,
-    out vec4 data2,
-    out vec4 data3,
-    out vec4 data4)
-{
-    scatter_pack_reconnection_data(
-        reconnectionData,
-        transportAux0,
-        transportAux1,
-        data0,
-        data1,
-        data2,
-        data3,
-        data4
-    );
-}
+#define scatter_pack_reconnection_fields(reconnectionData, transportAux0, transportAux1, data0, data1, data2, data3, data4) \
+    scatter_pack_reconnection_data(reconnectionData, transportAux0, transportAux1, data0, data1, data2, data3, data4)
 
 void scatter_unpack_reconnection(
     vec4 data0,
@@ -261,5 +239,3 @@ void scatter_load_prev_reconnection(ivec2 uv, out ReconnectionData reconnection)
         reconnection
     );
 }
-
-#endif
