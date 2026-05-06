@@ -1862,6 +1862,8 @@ public final class ShaderAutomation {
          TextureObject directDenoisedTexture = textures.get("direct_denoised");
          TextureObject directAtrousTexture = textures.get("direct_atrous");
          TextureObject directRawTexture = textures.get("direct_raw");
+         TextureObject prepassDiffTexture = textures.get("prepass_diff");
+         TextureObject tilesTexture = textures.get("tiles");
          TextureObject specDenoisedTexture = textures.get("spec_denoised");
          TextureObject specRawTexture = textures.get("spec_raw");
          TextureObject directInitialDebugTexture = textures.get("direct_initial_debug");
@@ -1893,6 +1895,8 @@ public final class ShaderAutomation {
          BufferedImage directValidationImage = directAtrousImage != null ? directAtrousImage : directDenoisedImage;
          BufferedImage directTemporalAndRepeatImage = directValidationImage != null ? directValidationImage : directImage;
          BufferedImage directRawImage = this.captureTexture("direct_raw", directRawTexture, captureIndex);
+         this.captureTexture("prepass_diff", prepassDiffTexture, captureIndex);
+         this.captureTexture("tiles", tilesTexture, captureIndex);
          this.captureTexture("spec_denoised", specDenoisedTexture, captureIndex);
          this.captureTexture("spec_raw", specRawTexture, captureIndex);
          this.captureTexture("direct_initial_debug", directInitialDebugTexture, captureIndex);
@@ -3770,7 +3774,6 @@ public final class ShaderAutomation {
 
    private boolean isStableSceneNow() {
       return !this.latestGlobalLightReload
-         && !this.latestWorldBuildWorkPending
          && this.latestLightBlendRegionCount <= this.stableSceneBlendRegionThreshold
          && this.latestLightBlendFactor <= this.stableSceneBlendFactorThreshold;
    }

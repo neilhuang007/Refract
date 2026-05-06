@@ -61,6 +61,15 @@ if (runtimeMaxLights == null || runtimeMaxLights.isBlank()) {
     runtimeMaxLights = "4096"
 }
 
+def forwardPhotonicsDebugVmArgs = { runConfig ->
+    System.properties.each { key, value ->
+        String propertyName = key.toString()
+        if (propertyName.startsWith("photonics.debug")) {
+            runConfig.vmArg "-D${propertyName}=${value}"
+        }
+    }
+}
+
 def mainClasspathGroup = "${layout.buildDirectory.dir('classes/java/main').get().asFile.absolutePath}${File.pathSeparator}${layout.buildDirectory.dir('resources/main').get().asFile.absolutePath}"
 
 loom {
@@ -72,6 +81,7 @@ loom {
             vmArg "-Xmx8G"
             vmArg "-Dfabric.classPathGroups=${mainClasspathGroup}"
             vmArg "-Dphotonics.maxLights=${runtimeMaxLights}"
+            forwardPhotonicsDebugVmArgs(delegate)
         }
         shaderGameTestClient {
             client()
@@ -80,6 +90,7 @@ loom {
             vmArg "-Xmx8G"
             vmArg "-Dfabric.classPathGroups=${mainClasspathGroup}"
             vmArg "-Dphotonics.maxLights=${runtimeMaxLights}"
+            forwardPhotonicsDebugVmArgs(delegate)
             programArg "--quickPlaySingleplayer"
             programArg "backup"
             programArg "--quickPlayPath"

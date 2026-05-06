@@ -121,6 +121,16 @@ bool InitialCandidates_finalizeSelectedReservoir(
     // single `integrand * UCW`. We must therefore bake the traced visibility
     // into the candidate integrand here instead of carrying it as a separate
     // packedVisibility multiplier at resolve time.
+    selectedIrradiance = max(selectedIrradiance, vec3(0.0f));
+    selectedEarlyThroughput = max(selectedEarlyThroughput, vec3(0.0f));
+    vec3 selectedUnshadowedIntegrand = max(selectedIrradiance * selectedEarlyThroughput, vec3(0.0f));
+    if (ph_luminance(selectedUnshadowedIntegrand) <= 0.0f)
+    {
+        reservoir = RTXDI_EmptyDIReservoir();
+        reconnectionData = ReconnectionData_init();
+        return false;
+    }
+
     vec3 transmittance = vec3(1.0f);
     if (initialSamplingParams.enableInitialVisibility != 0u)
     {
@@ -141,9 +151,7 @@ bool InitialCandidates_finalizeSelectedReservoir(
         RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(1.0f), true);
     }
 
-    selectedIrradiance = max(selectedIrradiance, vec3(0.0f));
-    selectedEarlyThroughput = max(selectedEarlyThroughput, vec3(0.0f));
-    vec3 selectedIntegrand = max(selectedIrradiance * selectedEarlyThroughput * transmittance, vec3(0.0f));
+    vec3 selectedIntegrand = max(selectedUnshadowedIntegrand * transmittance, vec3(0.0f));
     float selectedPHat = ph_luminance(selectedIntegrand);
     if (selectedPHat <= 0.0f)
     {
@@ -152,6 +160,15 @@ bool InitialCandidates_finalizeSelectedReservoir(
         return false;
     }
 
+    float previousPHat = reservoir.targetPdf;
+    if (previousPHat > 0.0f) {
+        reservoir.weightSum *= selectedPHat / previousPHat;
+    } else {
+        reservoir.weightSum = 0.0f;
+    }
+
+    // Keep the stored reservoir payload self-consistent with the finalized
+    // visibility-baked selection that will be reused by later stages.
     PathReservoir_setIntegrand(reservoir, selectedIntegrand);
     reservoir.targetPdf = selectedPHat;
 

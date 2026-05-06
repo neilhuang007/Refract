@@ -7,6 +7,7 @@ layout(location = 1) out vec4 direct_specular_frag_out;
 layout(location = 2) out vec4 reservoir_frag_out;
 layout(location = 3) out vec4 reservoir_sample_frag_out;
 layout(location = 4) out vec4 reservoir_meta_frag_out;
+layout(location = 5) out vec4 direct_combined_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
@@ -279,6 +280,7 @@ vec3 lt_debug_color_selected_brdf_response(ivec2 reservoirPos, RAB_Surface surfa
 void storeEmptyShadeOutputs() {
     direct_diffuse_frag_out = vec4(0.0f);
     direct_specular_frag_out = vec4(0.0f);
+    direct_combined_frag_out = vec4(0.0f);
 }
 
 void storeDIReservoir(RTXDI_DIReservoir reservoir) {
@@ -366,6 +368,7 @@ void main() {
 
         direct_diffuse_frag_out = vec4(debugColor, 1.0f);
         direct_specular_frag_out = vec4(0.0f);
+        direct_combined_frag_out = vec4(debugColor, 1.0f);
         storeDIReservoir(RTXDI_EmptyDIReservoir());
         return;
     }
@@ -390,8 +393,15 @@ void main() {
     vec3 demodulatedSpecular = shading.specular / max(lt_surface_f0(surface), vec3(0.01f));
     demodulatedSpecular = ph_clamp_specular_for_relax(demodulatedSpecular);
 
-    direct_diffuse_frag_out = nrd_pack_direct_signal(shading.diffuse, shading.hitDistance);
-    direct_specular_frag_out = nrd_pack_direct_signal(demodulatedSpecular, shading.hitDistance);
+    vec3 diffuseSignal = nrd_clamp_direct_firefly(shading.diffuse);
+    vec3 specularSignal = nrd_clamp_direct_firefly(demodulatedSpecular);
+    vec3 combinedDirect =
+        nrd_safe_remodulate(diffuseSignal, nrd_compute_diffuse_demodulation(surface.material.diffuseAlbedo)) +
+        nrd_safe_remodulate(specularSignal, max(lt_surface_f0(surface), vec3(0.01f)));
+
+    direct_diffuse_frag_out = nrd_pack_direct_signal(diffuseSignal, shading.hitDistance);
+    direct_specular_frag_out = nrd_pack_direct_signal(specularSignal, shading.hitDistance);
+    direct_combined_frag_out = vec4(clamp(combinedDirect, vec3(0.0f), vec3(NRD_FP16_MAX)), shading.hitDistance);
 
     storeDIReservoir(currReservoir);
 }

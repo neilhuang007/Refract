@@ -6,6 +6,7 @@ in vec4 direction_vert_out;
 
 layout(location = 0) out vec4 direct_diffuse_frag_out;
 layout(location = 1) out vec4 direct_specular_frag_out;
+layout(location = 2) out vec4 direct_combined_frag_out;
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/light_tree.glsl"
@@ -27,6 +28,7 @@ void storeEmptyResolveReSTIROutputs()
 {
     direct_diffuse_frag_out = vec4(0.0f);
     direct_specular_frag_out = vec4(0.0f);
+    direct_combined_frag_out = vec4(0.0f);
 }
 
 void main()
@@ -64,6 +66,13 @@ void main()
     vec3 demodulatedSpecular = shading.specular / max(lt_surface_f0(surface), vec3(0.01f));
     demodulatedSpecular = ph_clamp_specular_for_relax(demodulatedSpecular);
 
-    direct_diffuse_frag_out = nrd_pack_direct_signal(shading.diffuse, shading.hitDistance);
-    direct_specular_frag_out = nrd_pack_direct_signal(demodulatedSpecular, shading.hitDistance);
+    vec3 diffuseSignal = nrd_clamp_direct_firefly(shading.diffuse);
+    vec3 specularSignal = nrd_clamp_direct_firefly(demodulatedSpecular);
+    vec3 combinedDirect =
+        nrd_safe_remodulate(diffuseSignal, nrd_compute_diffuse_demodulation(surface.material.diffuseAlbedo)) +
+        nrd_safe_remodulate(specularSignal, max(lt_surface_f0(surface), vec3(0.01f)));
+
+    direct_diffuse_frag_out = nrd_pack_direct_signal(diffuseSignal, shading.hitDistance);
+    direct_specular_frag_out = nrd_pack_direct_signal(specularSignal, shading.hitDistance);
+    direct_combined_frag_out = vec4(clamp(combinedDirect, vec3(0.0f), vec3(NRD_FP16_MAX)), shading.hitDistance);
 }

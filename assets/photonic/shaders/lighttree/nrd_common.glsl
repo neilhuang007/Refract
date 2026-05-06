@@ -32,11 +32,13 @@ uniform float ph_nrd_diff_prepass_blur_radius;  // gDiffuseBlurRadius (default 3
 uniform float ph_nrd_spec_prepass_blur_radius;  // gSpecularBlurRadius (default 50)
 uniform float ph_nrd_reset_history;             // gResetHistory (1.0 = reset all history this frame)
 uniform float ph_nrd_roughness_edge_stopping_relaxation; // gRoughnessEdgeStoppingRelaxation (default 0.3)
+uniform float ph_nrd_debug_bypass_temporal_accumulation; // 1.0 bypass temporal accumulation, 0.0 run normally
 
 const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;
 const float NRD_EPS = 1e-6;
+const float NRD_DIRECT_FIREFLY_LUMA = 16.0;
 
 bool nrd_is_active_checkerboard_pixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField) {
     if (activeCheckerboardField == 0) {
@@ -79,6 +81,15 @@ vec4 nrd_reconstruct_checkerboard_signal(sampler2D signalTex, ivec2 coord, sampl
 
 float nrd_luminance(vec3 value) {
     return dot(value, PH_NRD_LUMA_COEFF);
+}
+
+vec3 nrd_clamp_direct_firefly(vec3 radiance) {
+    radiance = max(radiance, vec3(0.0));
+    float luma = nrd_luminance(radiance);
+    if (luma > NRD_DIRECT_FIREFLY_LUMA) {
+        radiance *= NRD_DIRECT_FIREFLY_LUMA / max(luma, NRD_EPS);
+    }
+    return radiance;
 }
 
 // NRD Common.hlsli:244 UnpackViewZ -- compute linear view-space depth from world position

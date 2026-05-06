@@ -31,12 +31,16 @@ public class IncludeGraphMixin {
    )
    private void afterInitArrayList(Path root, ImmutableList<Path> startingPaths, boolean isZip, CallbackInfo ci, @Local List<AbsolutePackPath> queue) {
       try {
-         Path path = Path.of(Objects.requireNonNull(this.getClass().getClassLoader().getResource("assets/photonic/shaders")).toURI());
+         Path shaderRoot = Raytracer.resolveDevShaderRoot();
+         if (shaderRoot == null) {
+            shaderRoot = Path.of(Objects.requireNonNull(this.getClass().getClassLoader().getResource("assets/photonic/shaders")).toURI());
+         }
 
-         try (Stream<Path> pathStream = Files.walk(path)) {
+         Path finalShaderRoot = shaderRoot;
+         try (Stream<Path> pathStream = Files.walk(finalShaderRoot)) {
             pathStream.forEach(file -> {
                if (Files.isRegularFile(file)) {
-                  Path relativePath = path.relativize(file);
+                  Path relativePath = finalShaderRoot.relativize(file);
                   if (!relativePath.subpath(0, 1).toString().equals("patches")) {
                      queue.add(AbsolutePackPath.fromAbsolutePath("/photonics").resolve(relativePath.toString().replace("\\", "/")));
                   }

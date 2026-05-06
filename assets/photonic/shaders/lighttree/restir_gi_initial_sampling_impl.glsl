@@ -1127,9 +1127,20 @@ RTXDI_DIReservoir RTXDI_SampleLightsForSurface(
         if (ph_luminance(transmittance) <= 0.0f)
         {
             RTXDI_StoreVisibilityInDIReservoir(state, vec3(0.0f), true);
+            state.weightSum = 0.0f;
         }
         else
         {
+            float previousPHat = state.targetPdf;
+            vec3 selectedIntegrand = PathReservoir_getIntegrand(state) * transmittance;
+            float selectedPHat = ph_luminance(max(selectedIntegrand, vec3(0.0f)));
+            if (previousPHat > 0.0f) {
+                state.weightSum *= selectedPHat / previousPHat;
+            } else {
+                state.weightSum = 0.0f;
+            }
+            PathReservoir_setIntegrand(state, selectedIntegrand);
+            state.targetPdf = selectedPHat;
             RTXDI_StoreVisibilityInDIReservoir(state, transmittance, true);
         }
     }

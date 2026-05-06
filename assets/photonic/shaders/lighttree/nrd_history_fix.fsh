@@ -31,7 +31,9 @@ void main() {
     // RELAX_HistoryFix.cs.hlsl:32-34 -- tile-based early out
     // Tile texture is at 1/16 resolution; shift coord right by 4 to index it.
     if (texelFetch(nrd_in_tiles, tex_coord >> 4, 0).r > 0.5) {
-        discard;
+        nrd_diff_pong_fixed_out = vec4(0.0);
+        nrd_spec_pong_fixed_out = vec4(0.0);
+        return;
     }
 
     // RELAX_HistoryFix.cs.hlsl:38-41 -- per-pixel early out.

@@ -116,9 +116,11 @@ void runRCRS(
 
 void main() {
     // RELAX_AntiFirefly.cs.hlsl:177, 180-182 -- tile early-out
-    // Contract section 11.7: if tile flag > 0.5, this pixel is sky; discard.
+    // Contract section 11.7: if tile flag > 0.5, this pixel is sky; write zero.
     if (texelFetch(nrd_in_tiles, tex_coord >> 4, 0).r > 0.5) {
-        discard;
+        nrd_diff_illum_prev_firefly_out = vec4(0.0);
+        nrd_spec_illum_prev_firefly_out = vec4(0.0);
+        return;
     }
 
     // RELAX_AntiFirefly.cs.hlsl:184-187 -- viewZ early-out

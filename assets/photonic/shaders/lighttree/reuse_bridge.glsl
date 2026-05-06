@@ -1416,6 +1416,74 @@ vec3 lt_trace_visibility_transmittance() {
     return clamp(result_tint_color, vec3(0.0f), vec3(1.0f));
 }
 
+bool lt_visibility_can_bypass_face_neighbor_trace(
+    RAB_Surface surface,
+    vec3 targetPosition,
+    vec3 rayDirection
+) {
+    vec3 geoNormal = surface.geoNormal;
+    float normalLengthSq = dot(geoNormal, geoNormal);
+    if (normalLengthSq <= 1.0e-8f) {
+        return false;
+    }
+
+    vec3 faceNormal = geoNormal * inversesqrt(normalLengthSq);
+    vec3 absNormal = abs(faceNormal);
+    int axis = (absNormal.x > absNormal.y) ? 0 : 1;
+    axis = (absNormal.z > absNormal[axis]) ? 2 : axis;
+    if (absNormal[axis] < 0.98f) {
+        return false;
+    }
+
+    int signStep = faceNormal[axis] >= 0.0f ? 1 : -1;
+    ivec3 faceStep = axis == 0
+        ? ivec3(signStep, 0, 0)
+        : (axis == 1 ? ivec3(0, signStep, 0) : ivec3(0, 0, signStep));
+    vec3 faceStepF = vec3(faceStep);
+
+    if (dot(rayDirection, faceStepF) <= 0.0f) {
+        return false;
+    }
+
+    vec3 surfaceRtPos = lt_surface_rt_pos(surface);
+    ivec3 surfaceCell = ivec3(floor(surfaceRtPos - faceStepF * 1.0e-4f));
+    float facePlane = float(surfaceCell[axis] + (signStep > 0 ? 1 : 0));
+    if (abs(surfaceRtPos[axis] - facePlane) > 0.02f) {
+        return false;
+    }
+
+    ivec3 targetCell = ivec3(floor(targetPosition));
+    return all(equal(targetCell, surfaceCell + faceStep));
+}
+
+vec3 lt_finalize_visible_light_sample(
+    Light light,
+    inout RAB_LightSample smple,
+    RAB_Surface surface,
+    vec3 targetPosition,
+    bool writeSampleData,
+    out float hitDistance,
+    vec3 visibilityTransmittance
+) {
+    if (!writeSampleData) {
+        return visibilityTransmittance;
+    }
+
+    vec3 surfaceToLight = targetPosition - lt_surface_rt_pos(surface);
+    float lightDistanceSq = dot(surfaceToLight, surfaceToLight);
+    if (lightDistanceSq <= 1e-6f) {
+        smple = lt_null_sample();
+        return vec3(0.0f);
+    }
+
+    smple.dir = surfaceToLight * inversesqrt(lightDistanceSq);
+    smple.solidAnglePdf = lt_light_sample_solid_angle_pdf(surface, targetPosition);
+    smple.color = lt_light_sample_radiance(light, surfaceToLight);
+    light_sample_compute_weight(smple, surface);
+    hitDistance = sqrt(lightDistanceSq);
+    return visibilityTransmittance;
+}
+
 // Match RTXDI's conservative visibility semantics: trace a bounded shadow segment and treat
 // any committed hit before TMax as occlusion. Minecraft local lights are bridged as analytic
 // point lights at block centers, so the selected light's own host block must be ignored when
@@ -1437,6 +1505,10 @@ bool lt_trace_conservative_visibility(inout RAB_LightSample smple, RAB_Surface s
 
     smple.sample_pos = rayOrigin;
     smple.position = targetPosition;
+    if (lt_visibility_can_bypass_face_neighbor_trace(surface, targetPosition, rayDirection)) {
+        return true;
+    }
+
     ray.origin = smple.sample_pos;
     ray.direction = rayDirection;
     ray_target = ivec3(floor(smple.position));
@@ -1484,6 +1556,18 @@ vec3 lt_trace_final_visibility_transmittance_core(
     smple.sample_pos = rayOrigin;
     smple.position = targetPosition;
 
+    if (lt_visibility_can_bypass_face_neighbor_trace(surface, targetPosition, rayDirection)) {
+        return lt_finalize_visible_light_sample(
+            light,
+            smple,
+            surface,
+            targetPosition,
+            writeSampleData,
+            hitDistance,
+            vec3(1.0f)
+        );
+    }
+
     ray.origin = smple.sample_pos;
     ray.direction = rayDirection;
     ray_target = ivec3(floor(smple.position));
@@ -1507,19 +1591,15 @@ vec3 lt_trace_final_visibility_transmittance_core(
         return lt_trace_visibility_transmittance();
     }
 
-    vec3 surfaceToLight = targetPosition - lt_surface_rt_pos(surface);
-    float lightDistanceSq = dot(surfaceToLight, surfaceToLight);
-    if (lightDistanceSq <= 1e-6f) {
-        smple = lt_null_sample();
-        return vec3(0.0f);
-    }
-
-    smple.dir = surfaceToLight * inversesqrt(lightDistanceSq);
-    smple.solidAnglePdf = lt_light_sample_solid_angle_pdf(surface, targetPosition);
-    smple.color = lt_light_sample_radiance(light, surfaceToLight);
-    light_sample_compute_weight(smple, surface);
-    hitDistance = sqrt(lightDistanceSq);
-    return lt_trace_visibility_transmittance();
+    return lt_finalize_visible_light_sample(
+        light,
+        smple,
+        surface,
+        targetPosition,
+        writeSampleData,
+        hitDistance,
+        lt_trace_visibility_transmittance()
+    );
 }
 
 vec3 lt_trace_final_visibility_with_offset(

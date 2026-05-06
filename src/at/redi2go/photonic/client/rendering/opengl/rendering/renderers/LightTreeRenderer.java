@@ -1047,7 +1047,7 @@ public class LightTreeRenderer extends MainRenderer {
       });
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_spatial_bias_mode", () -> PhotonicsStorage.RESTIR_GI_SPATIAL_BIAS_MODE.value);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_reuse_final_visibility", () -> 1.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 0.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_enable_denoiser_packing", () -> 1.0f);
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_debug_view_mode",
@@ -1080,6 +1080,11 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_hitdist_reconstruction", () -> 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_reset_history", () -> this.shouldResetNrdHistory() ? 1.0f : 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_roughness_edge_stopping_relaxation", () -> 0.3f);
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_nrd_debug_bypass_temporal_accumulation",
+         () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_ACCUMULATION.value ? 0.0f : 1.0f
+      );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_scatter_temporal_enabled",
@@ -1417,42 +1422,25 @@ public class LightTreeRenderer extends MainRenderer {
       long t5 = System.nanoTime();
       // NRD RELAX_DiffuseSpecular fused pipeline (contract §9, pipeline order §1).
       long t6 = System.nanoTime();
-      boolean runDirectDenoise = this.shouldRunDirectDenoise();
-      if (runDirectDenoise) {
-         this.renderProfiled(nrdClassifyTilesRegionIndex, this.nrdClassifyTilesRenderer);
-      }
+      this.renderProfiled(nrdClassifyTilesRegionIndex, this.nrdClassifyTilesRenderer);
       long t7 = System.nanoTime();
-      if (runDirectDenoise && this.shouldRunHitDistReconstruction()) {
+      if (this.shouldRunHitDistReconstruction()) {
          this.renderProfiled(nrdHitDistReconstructionRegionIndex, this.nrdHitDistReconstructionRenderer);
       }
       long t8 = System.nanoTime();
-      if (runDirectDenoise) {
-         this.renderProfiled(nrdPrepassRegionIndex, this.nrdPrepassRenderer);
-      }
+      this.renderProfiled(nrdPrepassRegionIndex, this.nrdPrepassRenderer);
       long t9 = System.nanoTime();
-      if (runDirectDenoise) {
-         this.renderProfiled(relaxTemporalAccumulationRegionIndex, this.directTemporalRenderer);
-      }
+      this.renderProfiled(relaxTemporalAccumulationRegionIndex, this.directTemporalRenderer);
       long t10 = System.nanoTime();
-      if (runDirectDenoise) {
-         this.renderProfiled(relaxHistoryFixRegionIndex, this.directHistoryFixRenderer);
-      }
+      this.renderProfiled(relaxHistoryFixRegionIndex, this.directHistoryFixRenderer);
       long t11 = System.nanoTime();
-      if (runDirectDenoise) {
-         this.renderProfiled(relaxHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
-      }
+      this.renderProfiled(relaxHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
       long t12 = System.nanoTime();
-      if (runDirectDenoise) {
-         this.renderProfiled(nrdCopyRegionIndex, this.nrdCopyRenderer);
-      }
+      this.renderProfiled(nrdCopyRegionIndex, this.nrdCopyRenderer);
       long t13 = System.nanoTime();
-      if (runDirectDenoise) {
-         this.renderProfiled(relaxAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
-      }
+      this.renderProfiled(relaxAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
       long t14 = System.nanoTime();
-      if (runDirectDenoise) {
-         this.renderNrdAtrousProfiled();
-      }
+      this.renderNrdAtrousProfiled();
       long t15 = System.nanoTime();
       long t16 = t15;
       boolean runReservoirSplattingIndirect = this.shouldRunReservoirSplattingIndirectPipeline();
@@ -1489,6 +1477,7 @@ public class LightTreeRenderer extends MainRenderer {
          Map.entry("direct_soft_prev", this.getPreviousCompatDirectSoftTexture()),
          // NRD-pipeline mapped names (contract §8 Task 8).
          Map.entry("nrd_in_diff", this.lightingStageBuffer.getWriteAttachment("direct")),
+         Map.entry("nrd_in_spec", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
          Map.entry("tiles", this.nrdTilesFb.getWriteAttachment("data")),
          Map.entry("prepass_diff", this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data")),
          Map.entry("direct_slow", this.nrdDiffIllumPingFb.getWriteAttachment("data")),
@@ -1498,7 +1487,9 @@ public class LightTreeRenderer extends MainRenderer {
          Map.entry("direct_anti_firefly", this.nrdDiffIllumPrevFb.getWriteAttachment("data")),
          Map.entry("direct_denoised", this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data")),
          Map.entry("direct_atrous", this.getResolvedDiffuseAtrousTexture()),
-         Map.entry("direct_raw", this.lightingStageBuffer.getWriteAttachment("direct")),
+         Map.entry("direct_raw", this.lightingStageBuffer.getWriteAttachment("direct_combined")),
+         Map.entry("direct_raw_diffuse", this.lightingStageBuffer.getWriteAttachment("direct")),
+         Map.entry("direct_raw_specular", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
          Map.entry("spec_denoised", this.getResolvedSpecularAtrousTexture()),
          Map.entry("spec_raw", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
          Map.entry("direct_initial_debug", this.directInitialDebugBuffer.getWriteAttachment("data")),
@@ -1508,7 +1499,9 @@ public class LightTreeRenderer extends MainRenderer {
          Map.entry("indirect_reservoir", this.indirectReservoirBuffer.getWriteAttachment("radiance")),
          Map.entry("lighting", this.nrdDiffIllumPingFb.getWriteAttachment("data")),
          Map.entry("stage_albedo", this.lightingStageBuffer.getWriteAttachment("albedo")),
-         Map.entry("stage_direct", this.lightingStageBuffer.getWriteAttachment("direct")),
+         Map.entry("stage_direct", this.lightingStageBuffer.getWriteAttachment("direct_combined")),
+         Map.entry("stage_direct_diffuse", this.lightingStageBuffer.getWriteAttachment("direct")),
+         Map.entry("stage_direct_specular", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
          Map.entry("stage_mapped_normal", this.lightingStageBuffer.getWriteAttachment("mapped_normal")),
          Map.entry("stage_material", this.lightingStageBuffer.getWriteAttachment("material")),
          Map.entry("stage_normal", this.lightingStageBuffer.getWriteAttachment("normal")),
@@ -1983,6 +1976,7 @@ public class LightTreeRenderer extends MainRenderer {
       framebuffer.createAttachment("identity", "RGBA16F", false);
       framebuffer.createAttachment("direct", "RGBA16F", false);
       framebuffer.createAttachment("direct_specular", "RGBA16F", false);
+      framebuffer.createAttachment("direct_combined", "RGBA16F", false);
       framebuffer.createAttachment("handheld", "RGBA16F", false);
       framebuffer.createAttachment("indirect", "RGBA16F", false);
    }
@@ -2042,7 +2036,8 @@ public class LightTreeRenderer extends MainRenderer {
    private RoutingFramebuffer createShadeSamplesLightingFramebuffer() {
       return this.createRoutingFramebuffer(
          () -> this.lightingStageBuffer.getWriteAttachment("direct"),
-         () -> this.lightingStageBuffer.getWriteAttachment("direct_specular")
+         () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"),
+         () -> this.lightingStageBuffer.getWriteAttachment("direct_combined")
       );
    }
 
@@ -2101,7 +2096,8 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"),
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
-         () -> this.directReservoirBuffer.getWriteAttachment("meta")
+         () -> this.directReservoirBuffer.getWriteAttachment("meta"),
+         () -> this.lightingStageBuffer.getWriteAttachment("direct_combined")
       );
    }
 
@@ -2746,11 +2742,8 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private boolean shouldRunIndirectDenoise() {
-      return false;
-   }
-
-   private boolean shouldRunDirectDenoise() {
-      return false;
+      return this.shouldRunReservoirSplattingIndirectPipeline()
+         && PhotonicsStorage.DEBUG_ENABLE_INDIRECT_DENOISE.value;
    }
 
    private boolean shouldRunIndirectTemporalSplatting(boolean resetReservoirSplatting) {
@@ -2871,7 +2864,8 @@ public class LightTreeRenderer extends MainRenderer {
          case "final" -> this.lightingBuffer.getWriteAttachment("direct");
          case "lighting_direct", "lighting_buffer_direct", "direct_buffer" -> this.lightingBuffer.getWriteAttachment("direct");
          case "lighting", "stage_lighting", "lighting_buffer_lighting" -> this.lightingBuffer.getWriteAttachment("lighting");
-         case "stage_direct", "direct_raw", "raw" -> this.lightingStageBuffer.getWriteAttachment("direct");
+         case "stage_direct", "direct_raw", "raw" -> this.lightingStageBuffer.getWriteAttachment("direct_combined");
+         case "stage_diffuse", "direct_diffuse", "nrd_in_diff" -> this.lightingStageBuffer.getWriteAttachment("direct");
          case "stage_specular", "spec_raw", "direct_specular" -> this.lightingStageBuffer.getWriteAttachment("direct_specular");
          case "stage_indirect", "indirect_raw" -> this.lightingStageBuffer.getWriteAttachment("indirect");
          // NRD fused pipeline intermediate buffers
@@ -3364,10 +3358,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private String describeStageGeometryUsage() {
-      String direct = this.shouldRunDirectDenoise()
-         ? "DIShadeSamples+NRDClassifyTiles+NRDHitDistReconstruction+NRDPrepass+RELAXTemporalAccumulation+RELAXHistoryFix+RELAXHistoryClamping+NRDCopy+RELAXAntiFirefly+RELAXAtrousSmem+RELAXAtrous"
-         : "DIShadeSamples(raw)";
-      return this.shouldRunIndirectDenoise() ? direct + "+IndirectDenoise" : direct;
+      return "DIShadeSamples+NRDClassifyTiles+NRDHitDistReconstruction+NRDPrepass+RELAXTemporalAccumulation+RELAXHistoryFix+RELAXHistoryClamping+NRDCopy+RELAXAntiFirefly+RELAXAtrousSmem+RELAXAtrous+IndirectDenoise";
    }
 
    private long toMicros(long nanos) {

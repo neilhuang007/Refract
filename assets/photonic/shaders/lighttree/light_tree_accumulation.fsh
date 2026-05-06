@@ -117,13 +117,17 @@ void main() {
         if (useDenoisedDirect) {
             vec3 denoisedDiffuseDemodulated = texelFetch(denoised_direct_diffuse, tex_coord, 0).rgb;
             vec3 denoisedSpecularDemodulated = texelFetch(denoised_direct_specular, tex_coord, 0).rgb;
-            vec3 diffuseRemodulation = max(stageAlbedo.rgb, vec3(0.02f));
+            vec3 diffuseRemodulation = nrd_compute_diffuse_demodulation(stageAlbedo.rgb);
             vec3 specularRemodulation = nrd_compute_specular_demodulation(stageAlbedo.rgb, stageMaterial.g);
             vec3 denoisedDiffuse = nrd_safe_remodulate(denoisedDiffuseDemodulated, diffuseRemodulation);
             vec3 denoisedSpecular = nrd_safe_remodulate(denoisedSpecularDemodulated, specularRemodulation);
             directCombined = denoisedDiffuse + denoisedSpecular;
         } else {
-            directCombined = directDiffuse.rgb + directSpecular.rgb;
+            vec3 diffuseRemodulation = nrd_compute_diffuse_demodulation(stageAlbedo.rgb);
+            vec3 specularRemodulation = nrd_compute_specular_demodulation(stageAlbedo.rgb, stageMaterial.g);
+            directCombined =
+                nrd_safe_remodulate(directDiffuse.rgb, diffuseRemodulation) +
+                nrd_safe_remodulate(directSpecular.rgb, specularRemodulation);
         }
         accumulatedDirect = directCombined;
     }

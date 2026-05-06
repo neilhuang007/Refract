@@ -205,16 +205,16 @@ float nrd_ta_load_smb(
     return anyValid ? 1.0 : 0.0;
 }
 
-bool nrd_ta_history_sample_valid(vec3 historyRgb, vec3 currentRgb) {
-    if (any(isnan(historyRgb)) || any(isinf(historyRgb))) {
+bool nrd_ta_history_sample_valid(vec4 historySample, vec4 currentSample) {
+    if (historySample.a <= 0.0f || any(isnan(historySample)) || any(isinf(historySample))) {
         return false;
     }
-    if (any(isnan(currentRgb)) || any(isinf(currentRgb))) {
+    if (any(isnan(currentSample)) || any(isinf(currentSample))) {
         return false;
     }
 
-    historyRgb = max(historyRgb, vec3(0.0f));
-    currentRgb = max(currentRgb, vec3(0.0f));
+    vec3 historyRgb = max(historySample.rgb, vec3(0.0f));
+    vec3 currentRgb = max(currentSample.rgb, vec3(0.0f));
     float historyLuma = nrd_luminance(historyRgb);
     float currentLuma = nrd_luminance(currentRgb);
     if (!(historyLuma > 0.0f) || isnan(historyLuma) || isinf(historyLuma)) {
@@ -225,15 +225,14 @@ bool nrd_ta_history_sample_valid(vec3 historyRgb, vec3 currentRgb) {
     return historyLuma <= maxAllowedLuma;
 }
 
-bool nrd_ta_history_sample_valid(vec4 historySample, vec4 currentSample) {
-    if (historySample.a <= 0.0f || any(isnan(historySample)) || any(isinf(historySample))) {
-        return false;
-    }
-    if (any(isnan(currentSample)) || any(isinf(currentSample))) {
-        return false;
-    }
-
-    return nrd_ta_history_sample_valid(historySample.rgb, currentSample.rgb);
+void nrd_ta_write_zero() {
+    nrd_history_length_out = vec4(0.0);
+    nrd_diff_illum_ping_out = vec4(0.0);
+    nrd_spec_illum_ping_out = vec4(0.0);
+    nrd_diff_illum_pong_out = vec4(0.0);
+    nrd_spec_illum_pong_out = vec4(0.0);
+    nrd_reflection_hit_t_curr_out = vec4(0.0);
+    nrd_spec_reproj_confidence_out = vec4(0.0);
 }
 
 // -----------------------------------------------------------------------
@@ -321,7 +320,10 @@ float nrd_ta_load_vmb(
 // -----------------------------------------------------------------------
 void main() {
     // Tile early-out (contract section 7; reference line 376)
-    if (texelFetch(nrd_in_tiles, tex_coord >> 4, 0).r > 0.5) discard;
+    if (texelFetch(nrd_in_tiles, tex_coord >> 4, 0).r > 0.5) {
+        nrd_ta_write_zero();
+        return;
+    }
 
     vec2 rectSize = vec2(viewWidth, viewHeight);
     vec2 pixelUV  = nrd_ta_px_to_uv(tex_coord);
@@ -329,7 +331,10 @@ void main() {
     // Current G-buffer (reference lines 391-400)
     vec3 currWorldPos  = texelFetch(radiosity_position, tex_coord, 0).xyz;
     float currLinearZ  = nrd_compute_view_z(currWorldPos);
-    if (currLinearZ >= ph_nrd_denoising_range) discard;
+    if (currLinearZ >= ph_nrd_denoising_range) {
+        nrd_ta_write_zero();
+        return;
+    }
 
     ivec2 ownerPx = nrd_get_current_checkerboard_owner_pixel(tex_coord, ivec2(viewWidth, viewHeight));
     vec4 currMaterial   = texelFetch(radiosity_material, ownerPx, 0);
@@ -423,11 +428,35 @@ void main() {
         prevSpecIllumSMB, prevSpecResponsiveSMB, prevReflHitTSMB);
 
     if (smbReprojFound > 0.0) {
+        vec4 prevDiffResponsiveSample = vec4(
+            prevDiffResponsiveSMB.x,
+            prevDiffResponsiveSMB.y,
+            prevDiffResponsiveSMB.z,
+            1.0
+        );
+        vec4 prevSpecResponsiveSample = vec4(
+            prevSpecResponsiveSMB.x,
+            prevSpecResponsiveSMB.y,
+            prevSpecResponsiveSMB.z,
+            1.0
+        );
+        vec4 currDiffResponsiveSample = vec4(
+            diffuseIllumination.r,
+            diffuseIllumination.g,
+            diffuseIllumination.b,
+            1.0
+        );
+        vec4 currSpecResponsiveSample = vec4(
+            specularIllumination.r,
+            specularIllumination.g,
+            specularIllumination.b,
+            1.0
+        );
         bool validSurfaceHistory =
             nrd_ta_history_sample_valid(prevDiffIllumSMB, diffuseIllumination)
-            && nrd_ta_history_sample_valid(prevDiffResponsiveSMB, diffuseIllumination.rgb)
+            && nrd_ta_history_sample_valid(prevDiffResponsiveSample, currDiffResponsiveSample)
             && nrd_ta_history_sample_valid(prevSpecIllumSMB, specularIllumination)
-            && nrd_ta_history_sample_valid(prevSpecResponsiveSMB, specularIllumination.rgb)
+            && nrd_ta_history_sample_valid(prevSpecResponsiveSample, currSpecResponsiveSample)
             && historyLength > 0.0
             && !isnan(historyLength)
             && !isinf(historyLength);
@@ -483,6 +512,17 @@ void main() {
     float specHistoryFastFrms = min(ph_nrd_max_fast_accumulated_frame_num, historyLength);
 
     float hitDist = minHitDist3x3 == NRD_INF ? 0.0 : minHitDist3x3;
+
+    if (ph_nrd_debug_bypass_temporal_accumulation > 0.5f) {
+        nrd_history_length_out         = vec4(1.0f / 255.0f, 0.0f, 0.0f, 0.0f);
+        nrd_diff_illum_ping_out        = vec4(diffuseIllumination.rgb, diffuse2ndMoment);
+        nrd_spec_illum_ping_out        = vec4(specularIllumination.rgb, specular2ndMoment);
+        nrd_diff_illum_pong_out        = vec4(diffuseIllumination.rgb, 0.0f);
+        nrd_spec_illum_pong_out        = vec4(specularIllumination.rgb, hitDist);
+        nrd_reflection_hit_t_curr_out  = vec4(hitDist, 0.0f, 0.0f, 0.0f);
+        nrd_spec_reproj_confidence_out = vec4(1.0f, 0.0f, 0.0f, 0.0f);
+        return;
+    }
 
     // Curvature estimation (reference lines 652-736)
     float curvature = 0.0;
@@ -576,9 +616,15 @@ void main() {
         prevNormalVMB, prevRoughnessVMB, prevReflHitTVMB, prevUVVMB);
 
     if (vmbReprojFound > 0.0) {
+        vec4 currSpecResponsiveSample = vec4(
+            specularIllumination.r,
+            specularIllumination.g,
+            specularIllumination.b,
+            1.0
+        );
         bool validVirtualHistory =
             nrd_ta_history_sample_valid(prevSpecIllumVMB, specularIllumination)
-            && nrd_ta_history_sample_valid(prevSpecResponsiveVMB, specularIllumination.rgb);
+            && nrd_ta_history_sample_valid(prevSpecResponsiveVMB, currSpecResponsiveSample);
         if (!validVirtualHistory) {
             vmbReprojFound = 0.0;
             prevSpecIllumVMB = vec4(0.0);

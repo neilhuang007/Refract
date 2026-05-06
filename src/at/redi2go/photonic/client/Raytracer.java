@@ -40,7 +40,8 @@ public class Raytracer implements Destructable {
     public static final Object LOCK = new Object();
     public static Raytracer INSTANCE;
     public static final Path SHADER_PATCHES_PATH = Path.of("./shader-patches");
-    public static final Path DEV_ENV_SHADERS_PATH = Path.of("../src/main/resources/assets/photonic/shaders");
+    public static final Path DEV_ENV_SHADERS_PATH = Path.of("assets/photonic/shaders");
+    private static final Path LEGACY_DEV_ENV_SHADERS_PATH = Path.of("src/main/resources/assets/photonic/shaders");
     private static final Set<String> AUTO_REPLACED_FILES = Set.of("photonics.glsl", "ph_samplers.glsl");
     public static Map<String, String> SHADERPACK_CHANGED_OPTIONS = null;
     public static Properties SHADERPACK_PROPERTIES = null;
@@ -303,17 +304,17 @@ public class Raytracer implements Destructable {
 
                 String relativeToPhotonics = path.getRelativeToPhotonics();
 
-                if (patch == null && !AUTO_REPLACED_FILES.contains(relativeToPhotonics)) {
-                    Optional<String> content = tryReadFile(path);
-                    if (content.isPresent()) {
-                        source = content.get();
+                if (source == null) {
+                    Path devEnvShaderPath = resolveDevShaderPath(relativeToPhotonics);
+                    if (devEnvShaderPath != null) {
+                        source = new ShaderPackPath(devEnvShaderPath).readFile();
                     }
                 }
 
-                if (source == null) {
-                    Path devEnvShaderPath = DEV_ENV_SHADERS_PATH.resolve(relativeToPhotonics);
-                    if (Files.exists(devEnvShaderPath)) {
-                        source = new ShaderPackPath(devEnvShaderPath).readFile();
+                if (source == null && patch == null && !AUTO_REPLACED_FILES.contains(relativeToPhotonics)) {
+                    Optional<String> content = tryReadFile(path);
+                    if (content.isPresent()) {
+                        source = content.get();
                     }
                 }
 
@@ -338,6 +339,25 @@ public class Raytracer implements Destructable {
             source = applyShaderSourceFixes(path, source);
             return ShaderUtil.preprocessForward(source);
         }
+    }
+
+    public static @Nullable Path resolveDevShaderRoot() {
+        if (Files.exists(DEV_ENV_SHADERS_PATH)) {
+            return DEV_ENV_SHADERS_PATH;
+        }
+        if (Files.exists(LEGACY_DEV_ENV_SHADERS_PATH)) {
+            return LEGACY_DEV_ENV_SHADERS_PATH;
+        }
+        return null;
+    }
+
+    public static @Nullable Path resolveDevShaderPath(String relativePath) {
+        Path devRoot = resolveDevShaderRoot();
+        if (devRoot == null) {
+            return null;
+        }
+        Path shaderPath = devRoot.resolve(relativePath);
+        return Files.exists(shaderPath) ? shaderPath : null;
     }
 
     private static String applyShaderSourceFixes(ShaderPackPath path, String source) {

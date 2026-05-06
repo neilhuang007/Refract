@@ -64,6 +64,11 @@ uint nrd_pcg_hash(uint x) {
     return x;
 }
 
+void nrd_atrous_write_zero() {
+    nrd_diff_atrous_out = vec4(0.0);
+    nrd_spec_atrous_out = vec4(0.0);
+}
+
 void main() {
     // ---------------------------------------------------------------------------
     // Tile-based early out.
@@ -71,14 +76,16 @@ void main() {
     // ---------------------------------------------------------------------------
     float isSky = texelFetch(nrd_in_tiles, tex_coord >> 4, 0).r;
     if (isSky > 0.5) {
-        discard;
+        nrd_atrous_write_zero();
+        return;
     }
 
     // Reference: RELAX_Atrous.cs.hlsl:32-34
     vec3  centerPosition = texelFetch(radiosity_position, tex_coord, 0).xyz;
     float centerViewZ    = nrd_compute_view_z(centerPosition);
     if (centerViewZ > ph_nrd_denoising_range) {
-        discard;
+        nrd_atrous_write_zero();
+        return;
     }
 
     ivec2 texSize = textureSize(nrd_diff_atrous_input, 0);
