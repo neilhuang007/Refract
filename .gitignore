@@ -3,6 +3,7 @@ build/
 
 # Gradle
 .gradle/
+.gradle-user/
 
 # IDE
 .idea/
@@ -24,6 +25,7 @@ Insane-Shaders-master/
 
 # Reference repos and papers (local only)
 reference/repos/
+paper.pdf
 
 # Tools (binary jars)
 tools/
