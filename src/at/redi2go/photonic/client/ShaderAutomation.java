@@ -235,7 +235,6 @@ public final class ShaderAutomation {
    private boolean latestWorldBuildWorkPending = false;
    private long latestResetRequestsTotal = 0L;
    private long latestResetRequestsWorldOffset = 0L;
-   private long latestResetRequestsCameraJump = 0L;
    private long latestResetRequestsTopology = 0L;
    private long latestResetRequestsOther = 0L;
    private long latestBlendFullActivations = 0L;
@@ -3079,7 +3078,6 @@ public final class ShaderAutomation {
       this.latestWorldBuildWorkPending = worldRegistry.hasPendingWork();
       this.latestResetRequestsTotal = worldRegistry.getAutomationResetRequestsTotal();
       this.latestResetRequestsWorldOffset = worldRegistry.getAutomationResetRequestsWorldOffset();
-      this.latestResetRequestsCameraJump = worldRegistry.getAutomationResetRequestsCameraJump();
       this.latestResetRequestsTopology = worldRegistry.getAutomationResetRequestsTopology();
       this.latestResetRequestsOther = worldRegistry.getAutomationResetRequestsOther();
       this.latestBlendFullActivations = worldRegistry.getAutomationBlendFullActivations();
@@ -3649,7 +3647,6 @@ public final class ShaderAutomation {
          props.setProperty("latestWorldBuildWorkPending", Boolean.toString(this.latestWorldBuildWorkPending));
          props.setProperty("latestResetRequestsTotal", Long.toString(this.latestResetRequestsTotal));
          props.setProperty("latestResetRequestsWorldOffset", Long.toString(this.latestResetRequestsWorldOffset));
-         props.setProperty("latestResetRequestsCameraJump", Long.toString(this.latestResetRequestsCameraJump));
          props.setProperty("latestResetRequestsTopology", Long.toString(this.latestResetRequestsTopology));
          props.setProperty("latestResetRequestsOther", Long.toString(this.latestResetRequestsOther));
          props.setProperty("latestBlendFullActivations", Long.toString(this.latestBlendFullActivations));

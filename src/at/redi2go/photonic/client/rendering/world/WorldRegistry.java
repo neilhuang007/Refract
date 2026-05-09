@@ -79,9 +79,6 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private boolean closeChunkUpdate = false;
    private int lightBlendAge = 0;
    private int lastLightBlendFrame = -1;
-   private Vector3f previousCameraPosition = new Vector3f();
-   private boolean previousCameraPositionValid = false;
-   private boolean forceTemporalReset = false;
    private String pendingFullLightBlendResetReason = "initial";
    private int lastLoggedPendingBlendCount = -1;
    private long lastLoggedPendingBlendVolume = -1L;
@@ -126,7 +123,6 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    private static final int CHUNK_LOAD_BUDGET = 256;
    private long automationResetRequestsTotal = 0L;
    private long automationResetRequestsWorldOffset = 0L;
-   private long automationResetRequestsCameraJump = 0L;
    private long automationResetRequestsTopology = 0L;
    private long automationResetRequestsOther = 0L;
    private long automationBlendFullActivations = 0L;
@@ -270,7 +266,6 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          }
          long t1 = profiling ? System.nanoTime() : 0;
 
-         this.checkCameraJump(new Vector3f(MinecraftAccessor.getCameraPosition()));
          ClientWorld level = MinecraftAccessor.getLevel();
          int currentRenderFrame = SystemTimeUniforms.COUNTER.getAsInt();
          long currentWorldTick = level != null ? level.getTime() : Long.MIN_VALUE;
@@ -325,15 +320,6 @@ public class WorldRegistry implements MemoryOwner, Destructable {
         if (shouldForceTemporalResetForWorldOffset(previousBlockOffset.toChunkPos(), this.rtToWorldChunkOffset, this.worldChunkSize)) {
             pendingResetReason = pendingResetReason == null ? "world_offset" : pendingResetReason + "+world_offset";
             this.requestFullLightBlendReset("world_offset");
-        }
-        if (this.forceTemporalReset) {
-            if (pendingResetReason == null) {
-                pendingResetReason = "camera_jump";
-            } else if (!pendingResetReason.contains("camera_jump")) {
-                pendingResetReason = pendingResetReason + "+camera_jump";
-            }
-            this.requestFullLightBlendReset("camera_jump");
-            this.forceTemporalReset = false;
         }
 
         long t3 = profiling ? System.nanoTime() : 0;
@@ -636,7 +622,6 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       this.pendingSemanticChunkMutations++;
       this.onChunkLoad(chunkPos);
       this.markRootEntryDirty(chunkPos);
-      this.markLightBlendChunk(chunkPos);
       this.chunkContentHashes.put(chunkPos, this.populateChunkContents(level, chunkPos, chunk));
       if (this.blockLightEnabled) {
          this.lightRegistry.synchronizeChunkLights(level, chunkPos);
@@ -778,7 +763,6 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    public void unloadChunk(PChunkPos chunkPos) {
       this.ensureWorldThread();
       this.pendingSemanticChunkMutations++;
-      this.markLightBlendChunk(chunkPos);
       this.chunkContentHashes.remove(chunkPos);
       if (this.blockLightEnabled) {
          this.lightRegistry.clearChunkLights(chunkPos);
@@ -1547,32 +1531,6 @@ public class WorldRegistry implements MemoryOwner, Destructable {
       return lightBlendAge > 0 && fullLightBlendActive;
    }
 
-   public void checkCameraJump(Vector3f currentCameraPosition) {
-      if (!this.previousCameraPositionValid) {
-         this.previousCameraPosition.set(currentCameraPosition);
-         this.previousCameraPositionValid = true;
-         return;
-      }
-      float dx = currentCameraPosition.x - this.previousCameraPosition.x;
-      float dy = currentCameraPosition.y - this.previousCameraPosition.y;
-      float dz = currentCameraPosition.z - this.previousCameraPosition.z;
-      float distSq = dx * dx + dy * dy + dz * dz;
-      if (distSq > 32.0f * 32.0f) {
-         if (PhotonicsStorage.PROFILER_ENABLED.value) {
-            Photonic.info("[Profiler] temporalReset queued: reason=camera_jump distance={} previous=({},{},{}) current=({},{},{})",
-               Math.sqrt(distSq),
-               this.previousCameraPosition.x,
-               this.previousCameraPosition.y,
-               this.previousCameraPosition.z,
-               currentCameraPosition.x,
-               currentCameraPosition.y,
-               currentCameraPosition.z);
-         }
-         this.forceTemporalReset = true;
-      }
-      this.previousCameraPosition.set(currentCameraPosition);
-   }
-
    public int getLightBlendRegionCount() {
       return this.lightBlendAge > 0 ? this.liveLightBlendRegionCount : 0;
    }
@@ -1600,11 +1558,14 @@ public class WorldRegistry implements MemoryOwner, Destructable {
    }
 
    static boolean shouldForceTemporalResetForLightMutation(boolean chunkTopologyChanged, int pendingTracedLightMutations) {
-      // Local light edits should preserve the surrounding temporal history and rely on
-      // localized blend regions for fast visible convergence. Full-scene resets remain
-      // reserved for topology/world-offset/camera-jump class events that invalidate the
-      // broader sampling domain.
-      return chunkTopologyChanged;
+      // Chunk topology changes happen continuously while the player walks at the
+      // render-distance edge. Forcing a full NRD history reset on every load/unload
+      // wipes the entire denoised image once or twice a second, which the user sees
+      // as the world being constantly re-converged. Newly loaded chunks begin with
+      // empty NRD history naturally, and unloaded chunks become invisible — neither
+      // case needs a global flush. World-offset re-centering still triggers a reset
+      // separately (shouldForceTemporalResetForWorldOffset).
+      return false;
    }
 
    static boolean shouldForceTemporalResetForWorldOffset(PChunkPos previousOffset, PChunkPos currentOffset, int worldChunkSize) {
@@ -1643,13 +1604,10 @@ public class WorldRegistry implements MemoryOwner, Destructable {
          if (resolvedReason.contains("world_offset")) {
             this.automationResetRequestsWorldOffset++;
          }
-         if (resolvedReason.contains("camera_jump")) {
-            this.automationResetRequestsCameraJump++;
-         }
          if (resolvedReason.contains("topology")) {
             this.automationResetRequestsTopology++;
          }
-         if (!resolvedReason.contains("world_offset") && !resolvedReason.contains("camera_jump") && !resolvedReason.contains("topology")) {
+         if (!resolvedReason.contains("world_offset") && !resolvedReason.contains("topology")) {
             this.automationResetRequestsOther++;
          }
       }
@@ -1876,10 +1834,6 @@ public class WorldRegistry implements MemoryOwner, Destructable {
 
    public long getAutomationResetRequestsWorldOffset() {
       return this.automationResetRequestsWorldOffset;
-   }
-
-   public long getAutomationResetRequestsCameraJump() {
-      return this.automationResetRequestsCameraJump;
    }
 
    public long getAutomationResetRequestsTopology() {

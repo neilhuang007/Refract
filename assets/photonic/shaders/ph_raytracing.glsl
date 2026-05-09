@@ -30,6 +30,12 @@ float ray_min_trace_distance = 0.0f;
 float ray_max_trace_distance = -1.0f;
 int ray_ignore_block_id = -1;
 bool ray_stop_on_target = false;
+// When true, ray_max_trace_distance applies as a far-but-not-short cap:
+// the per-voxel-transparency switch and empty-space-skip optimizations
+// stay in their unbounded-mode defaults (cheaper per-block transparency,
+// chunk/block skips enabled). Used by long bounded rays such as ReSTIR GI
+// secondary traces where the cap is much larger than a DI shadow ray.
+bool ray_long_bounded_traversal = false;
 
 vec3 lightEmittance = vec3(0.0f);
 
@@ -77,7 +83,7 @@ void trace_ray(inout RayJob job, bool transparency) {
     bool hasRayTarget = target_block.x != -9999;
     bool hasRayConstraint = constraint_block.x != -9999;
     bool stopOnTarget = ray_stop_on_target;
-    bool boundedVisibilityRay = ray_max_trace_distance > 0.0f;
+    bool boundedVisibilityRay = ray_max_trace_distance > 0.0f && !ray_long_bounded_traversal;
     bool useShortRayAbort = RAY_ITERATION_COUNT <= 32;
     float min_trace_sq = ray_min_trace_distance > 0.0f
         ? ray_min_trace_distance * ray_min_trace_distance * 256.0f
@@ -118,7 +124,7 @@ void trace_ray(inout RayJob job, bool transparency) {
     // scene, even if the shaderpack's global transparency mode is the cheaper
     // per-block variant. Restrict the more exact stepping to bounded rays so
     // long-path GI/secondary traces keep the pack's intended performance mode.
-    bool usePerVoxelTransparency = transparency && ray_max_trace_distance > 0.0f;
+    bool usePerVoxelTransparency = transparency && ray_max_trace_distance > 0.0f && !ray_long_bounded_traversal;
     #endif
 
     for (int i = RAY_ITERATION_COUNT; !(ray_iteration_bound_reached = i < 0); i--) {
@@ -393,6 +399,7 @@ void trace_ray(inout RayJob job, bool transparency) {
     ray_target = ivec3(-1);
     ray_ignore_block_id = -1;
     ray_stop_on_target = false;
+    ray_long_bounded_traversal = false;
 }
 
 void trace_ray(inout RayJob job) { trace_ray(job, false); }

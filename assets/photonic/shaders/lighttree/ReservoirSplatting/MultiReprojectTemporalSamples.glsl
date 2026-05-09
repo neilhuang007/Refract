@@ -96,15 +96,25 @@ void MultiReprojectTemporalSamples_run(
         return;
     }
 
+    // Prev-frame reservoir lives on the previous frame's active checkerboard lane,
+    // which is the parity-flipped mate of this frame's active lane. Snap before load
+    // so we read the actual stored reservoir instead of the empty inactive partner.
+    // Reference: RTXDI Libraries/Rtxdi/Include/Rtxdi/DI/TemporalResampling.hlsli line 90.
+    ivec2 prevPixel = pixel;
+    RTXDI_ActivateCheckerboardPixel(
+        prevPixel,
+        true,
+        int(lt_build_runtime_parameters().activeCheckerboardField));
+
     RTXDI_DIReservoir prevReservoir = RTXDI_LoadPreviousDIReservoir(
         lt_build_restir_di_parameters().reservoirBufferParams,
-        uvec2(pixel)
+        uvec2(prevPixel)
     );
     if (all(equal(PathReservoir_getIntegrand(prevReservoir), vec3(0.0f)))) {
         return;
     }
 
-    ReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(pixel);
+    ReconnectionData prevReconnection = RestirDI_loadPreviousFrameReconnection(prevPixel);
     for (uint partitionIndex = 0u; partitionIndex < lt_multi_temporal_partition_count(); ++partitionIndex) {
         float newTime;
         vec2 newFractionalPixel;

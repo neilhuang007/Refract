@@ -113,6 +113,11 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
         return;
     }
 
+    // Snap prev-frame load addresses to the active checkerboard field so we read
+    // populated reservoirs rather than empty inactive lanes. See RTXDI
+    // Rtxdi/Include/Rtxdi/Utils/Checkerboard.hlsli lines 27-43.
+    int activeField = int(lt_build_runtime_parameters().activeCheckerboardField);
+
     RTXDI_RandomSamplerState rng = lt_init_random_sampler(uvec2(currPixel), uint(frameCounter), 2u);
 
     ivec2 prevPixelTopLeft = ivec2(floor(prevPixel));
@@ -137,9 +142,12 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                     continue;
                 }
 
+                ivec2 prevNeighborPixel = neighborPixel;
+                RTXDI_ActivateCheckerboardPixel(prevNeighborPixel, true, activeField);
+
                 RTXDI_DIReservoir neighborReservoir = RTXDI_LoadPreviousDIReservoir(
                     lt_build_restir_di_parameters().reservoirBufferParams,
-                    uvec2(neighborPixel)
+                    uvec2(prevNeighborPixel)
                 );
                 vec2 relativeSubPixel = vec2(offset)
                     + PathReservoir_getSubPixel(neighborReservoir, neighborPixel)
@@ -173,7 +181,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                 );
                 if (selected)
                 {
-                    dstReconnectionData = RestirDI_loadPreviousFrameReconnection(neighborPixel);
+                    dstReconnectionData = RestirDI_loadPreviousFrameReconnection(prevNeighborPixel);
                 }
             }
         }
@@ -191,11 +199,14 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
             break;
         }
 
+        ivec2 prevRoundedPrevPixel = roundedPrevPixel;
+        RTXDI_ActivateCheckerboardPixel(prevRoundedPrevPixel, true, activeField);
+
         dstReservoir = RTXDI_LoadPreviousDIReservoir(
             lt_build_restir_di_parameters().reservoirBufferParams,
-            uvec2(roundedPrevPixel)
+            uvec2(prevRoundedPrevPixel)
         );
-        dstReconnectionData = RestirDI_loadPreviousFrameReconnection(roundedPrevPixel);
+        dstReconnectionData = RestirDI_loadPreviousFrameReconnection(prevRoundedPrevPixel);
         break;
     }
     default:
@@ -214,12 +225,15 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                     continue;
                 }
 
+                ivec2 prevNeighborPixel = neighborPixel;
+                RTXDI_ActivateCheckerboardPixel(prevNeighborPixel, true, activeField);
+
                 RTXDI_DIReservoir neighborReservoir = RTXDI_LoadPreviousDIReservoir(
                     lt_build_restir_di_parameters().reservoirBufferParams,
-                    uvec2(neighborPixel)
+                    uvec2(prevNeighborPixel)
                 );
                 ReconnectionData neighborReconnectionData =
-                    RestirDI_loadPreviousFrameReconnection(neighborPixel);
+                    RestirDI_loadPreviousFrameReconnection(prevNeighborPixel);
                 vec2 relativeSubPixel = vec2(offset)
                     + PathReservoir_getSubPixel(neighborReservoir, neighborPixel)
                     - fractionalCoord;
@@ -247,7 +261,7 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                         neighborReservoir,
                         neighborReconnectionData
                     )
-                    : lt_temporal_load_shifted_path(neighborPixel, offsetIndex);
+                    : lt_temporal_load_shifted_path(prevNeighborPixel, offsetIndex);
                 float shiftedJacobian = noShiftNeeded
                     ? 1.0f
                     : (shiftedPath.secondaryPathJacobian
@@ -277,6 +291,9 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                             continue;
                         }
 
+                        ivec2 prevTempOffsetPixel = tempOffsetPixel;
+                        RTXDI_ActivateCheckerboardPixel(prevTempOffsetPixel, true, activeField);
+
                         float tempBilinearWeight =
                             CollectTemporalSamples_bilinear_weight(fractionalCoord, tempX, tempY);
                         ivec2 temp = diff + ivec2(1);
@@ -284,14 +301,14 @@ void CollectTemporalSamples_execute(ivec2 currPixel)
                         tempIndex = (tempIndex > 4) ? (tempIndex - 1) : tempIndex;
 
                         ShiftedPathData tempPath =
-                            lt_temporal_load_shifted_path(neighborPixel, tempIndex);
+                            lt_temporal_load_shifted_path(prevNeighborPixel, tempIndex);
                         float tempPHat = lt_scatter_radiance_phat(tempPath.radiance);
                         float tempJacobian = tempPath.secondaryPathJacobian
                             / neighborReconnectionData.secondaryPathJacobian;
                         float tempConfidence = CollectTemporalSamples_reservoir_confidence(
                             RTXDI_LoadPreviousDIReservoir(
                                 lt_build_restir_di_parameters().reservoirBufferParams,
-                                uvec2(tempOffsetPixel)
+                                uvec2(prevTempOffsetPixel)
                             )
                         );
 

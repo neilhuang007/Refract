@@ -14,7 +14,9 @@
 //   7. No gCheckerboardResolveAccumSpeed: use 0.5.
 //   8. No gStrandMaterialID / gCameraAttachedReflectionMaterialID: omitted.
 //   9. gSpecMinMaterial / gDiffMinMaterial: use NRD_DEFAULT_MIN_MATERIAL (0.0).
-//  10. gHasHistoryConfidence, gHasDisocclusionThresholdMix: not available, assumed false.
+//  10. gHasHistoryConfidence: implemented via ph_nrd_has_history_confidence uniform; gradient
+//      confidence applied after dirty-block mask via min() on historyLength (lines 527-538).
+//      gHasDisocclusionThresholdMix: not available, assumed false.
 //  11. gResolutionScalePrev: assumed 1.0 (no DLSS scaling).
 //  12. ComputeParallaxInPixels: implemented inline from reference Common.hlsli.
 
@@ -221,7 +223,12 @@ bool nrd_ta_history_sample_valid(vec4 historySample, vec4 currentSample) {
         return false;
     }
 
-    float maxAllowedLuma = max(currentLuma * 8.0f, currentLuma + 4.0f);
+    // Per-pixel anti-lag: reject history when its luminance is far above the
+    // current sample. Tightened from 8x/+4 to 4x/+2 so block-shadow and
+    // lamp-off events (typical luma ratios 4-10x) are caught before they
+    // exponentially decay over RELAX_MAX_ACCUM_FRAME_NUM frames. This is a
+    // local check; pixels whose lighting did not change are unaffected.
+    float maxAllowedLuma = max(currentLuma * 4.0f, currentLuma + 2.0f);
     return historyLuma <= maxAllowedLuma;
 }
 
@@ -493,6 +500,46 @@ void main() {
 
     // Clamp history to max (reference lines 578-585; diff==spec max here)
     historyLength = min(historyLength, 1.0 + ph_nrd_max_accumulated_frame_num);
+
+    // Localized history-length attenuation from world-space dirty-block mask.
+    // Matches the NRD RELAX formula `historyLength = min(historyLength,
+    // maxAccumulatedFrameNum * confidence)` where confidence is derived
+    // per-pixel from distance to the nearest recently-changed block:
+    //   confidence = 0 at the change center  -> historyLength clamped to floor
+    //   confidence = 1 at the radius edge    -> no clamp (full accumulation)
+    // This is a coarse approximation of NRD's per-pixel gradient confidence
+    // pass. It catches block-driven lighting events; pixels whose radiance
+    // changes from indirect causes (sun rotation, distant light edits) fall
+    // back to the regular anti-lag clamping pass.
+    {
+        float minDistSq = 1.0e30;
+        for (int i = 0; i < 32; i++) {
+            vec4 db = ph_nrd_dirty_blocks[i];
+            vec3 d = currWorldPos - db.xyz;
+            float distSq = dot(d, d);
+            distSq = (db.w < 0.0) ? 1.0e30 : distSq;
+            minDistSq = min(minDistSq, distSq);
+        }
+        float confidence = clamp(sqrt(minDistSq) / max(ph_nrd_dirty_block_radius, 1e-3), 0.0, 1.0);
+        float localCap = max(ph_nrd_max_accumulated_frame_num * confidence,
+                             ph_nrd_dirty_block_history_cap);
+        historyLength = min(historyLength, localCap);
+    }
+
+    // Gradient-driven confidence cap (NRD reference: RELAX_TemporalAccumulation.cs.hlsl
+    // lines 595-599).  The confidence texture was produced at end of the PREVIOUS frame
+    // by the nrd_confidence_gradient + nrd_confidence_blur cascade.  We sample it using
+    // prevUVSMB (the surface-motion reprojection UV) matching the reference exactly.
+    // Guard: ph_nrd_has_history_confidence == 0.0 on the first frame (texture uninitialised).
+    // Keep the dirty-block mask applied above -- it provides instant frame-1 reset on block
+    // placement which the gradient cascade cannot (1-frame latency by design).
+    if (ph_nrd_has_history_confidence > 0.5) {
+        float gradientConfidence = texture(ph_nrd_diff_confidence, prevUVSMB).r;
+        gradientConfidence = clamp(gradientConfidence, 0.0, 1.0);
+        float gradientCap = ph_nrd_max_accumulated_frame_num * gradientConfidence;
+        // Floor of 1 prevents divide-by-zero in diffuseAlpha calculation below.
+        historyLength = min(historyLength, max(gradientCap, 1.0));
+    }
 
     // Diffuse temporal accumulation (reference lines 590-631)
     float diffuseAlpha = (smbReprojFound > 0.0)

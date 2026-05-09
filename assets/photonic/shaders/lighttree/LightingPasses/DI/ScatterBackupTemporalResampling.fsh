@@ -44,8 +44,12 @@ void ScatterBackupTemporalResampling_storeEmptyResult()
 
 void main()
 {
-    ivec2 pixel = ivec2(gl_FragCoord.xy);
-    if (!RTXDI_IsActiveCheckerboardPixel(pixel, false, int(ph_restir_active_checkerboard_field))) {
+    ivec2 reservoirPos = ivec2(gl_FragCoord.xy);
+    int activeField = int(ph_restir_active_checkerboard_field);
+    ivec2 pixel = (activeField == 0)
+        ? reservoirPos
+        : RTXDI_ReservoirPosToPixelPos(reservoirPos, activeField);
+    if (!RTXDI_IsActiveCheckerboardPixel(pixel, false, activeField)) {
         ScatterBackupTemporalResampling_storeEmptyResult();
         return;
     }

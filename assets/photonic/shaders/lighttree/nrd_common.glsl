@@ -33,12 +33,37 @@ uniform float ph_nrd_spec_prepass_blur_radius;  // gSpecularBlurRadius (default 
 uniform float ph_nrd_reset_history;             // gResetHistory (1.0 = reset all history this frame)
 uniform float ph_nrd_roughness_edge_stopping_relaxation; // gRoughnessEdgeStoppingRelaxation (default 0.3)
 uniform float ph_nrd_debug_bypass_temporal_accumulation; // 1.0 bypass temporal accumulation, 0.0 run normally
+// Dirty-block mask for localized history reset.
+uniform vec4  ph_nrd_dirty_blocks[32];       // xyz = block centre (world), w = age_frames or -1 if inactive
+uniform float ph_nrd_dirty_block_radius;     // voxel radius around changed block that gets history-capped
+uniform float ph_nrd_dirty_block_history_cap;// historyLength ceiling applied to pixels within radius
+
+// ---------------------------------------------------------------------------
+// NRD history-confidence cascade (gradient + 5-pass blur).
+// ph_nrd_diff_confidence: the final RELAX diffuse confidence texture produced
+//   at end of frame N and sampled by TemporalAccumulation at frame N+1.
+//   Format RGBA16F (.r = confidence in [0,1], .gba reserved).
+//   Reference: RELAX_TemporalAccumulation.cs.hlsl lines 595-599.
+// nrd_diff_confidence_gradient: intermediate ping-pong texture for the blur
+//   cascade.  Sampled within the same frame; not sampled across frames.
+//   Format RGBA16F (.r=gradient, .g=normalOctX, .b=normalOctY, .a=viewZ_packed).
+// ph_nrd_has_history_confidence: 0.0 = first frame (confidence not ready),
+//   1.0 = valid to sample.  Prevents sampling uninitialized texture on F0.
+// ---------------------------------------------------------------------------
+uniform sampler2D ph_nrd_diff_confidence;
+uniform sampler2D nrd_diff_confidence_gradient;
+uniform float     ph_nrd_has_history_confidence;
 
 const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;
 const float NRD_EPS = 1e-6;
 const float NRD_DIRECT_FIREFLY_LUMA = 16.0;
+
+// NRD Shared.hlsli: FP16_VIEWZ_SCALE used to pack viewZ into FP16 channel.
+// Value 0.125 keeps viewZ up to 524032 in FP16 range (65504 / 0.125).
+// Reference: NRD-Sample/Shaders/ConfidenceBlur.cs.hlsl lines 39, 73.
+const float NRD_FP16_VIEWZ_SCALE = 0.125;
 
 bool nrd_is_active_checkerboard_pixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField) {
     if (activeCheckerboardField == 0) {
@@ -605,6 +630,36 @@ const vec3 nrd_poisson8[8] = vec3[8](
     vec3( 0.7836658, -0.4208784, 0.8895339),
     vec3( 0.1564120, -0.8198990, 0.8346850)
 );
+
+// ---------------------------------------------------------------------------
+// Octahedral unit-vector encode / decode.
+// Reference: Packing::EncodeUnitVector / Packing::DecodeUnitVector used in
+// NRD-Sample/Shaders/ConfidenceBlur.cs.hlsl lines 49, 79 for normal packing
+// in the gradient/confidence textures.
+//
+// Encode: project unit sphere onto octahedron, fold the lower hemisphere.
+// Output: vec2 in [-1, +1].
+// ---------------------------------------------------------------------------
+vec2 nrd_oct_encode_normal(vec3 n) {
+    // Project onto L1 unit octahedron (Snyder et al. 2012)
+    float l1 = abs(n.x) + abs(n.y) + abs(n.z);
+    vec2 p   = n.xy / max(l1, 1e-6);
+    // Fold lower hemisphere (n.z < 0)
+    if (n.z < 0.0) {
+        p = (1.0 - abs(p.yx)) * sign(p);
+    }
+    return p;  // in [-1, 1]
+}
+
+// Inverse of nrd_oct_encode_normal.
+// Reference: Packing::DecodeUnitVector (NRD STL).
+vec3 nrd_oct_decode_normal(vec2 p) {
+    vec3 n = vec3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
+    if (n.z < 0.0) {
+        n.xy = (1.0 - abs(n.yx)) * sign(n.xy);
+    }
+    return normalize(n);
+}
 
 // Rotate a 2D offset using a vec4 rotator (cos, sin, -sin, cos packed as .xyzw).
 // Reference: Geometry::RotateVector from ml.hlsli.

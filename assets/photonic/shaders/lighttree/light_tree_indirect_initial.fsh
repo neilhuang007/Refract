@@ -18,6 +18,13 @@ void lt_emit_gi_initial_store(RTXDI_GIReservoirStore store) {
 }
 
 void main() {
+    RTXDI_GIReservoirStore emptyStore = gi_make_invalid_reservoir_store();
+    ivec2 reservoirPos = lt_current_reservoir_pos();
+    if (!lt_is_active_reservoir_lane(reservoirPos)) {
+        lt_emit_gi_initial_store(emptyStore);
+        return;
+    }
+
     // Reference parity: InitialCandidates::run always produces a reservoir per pixel,
     // including the primary-miss path (handlePrimaryMiss + addCandidateReservoir).
     RAB_Surface currentSurface = lt_load_surface(tex_coord);

@@ -53,7 +53,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_INDIRECT_GI = boolParam("debug_enable_indirect_gi", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_INDIRECT_DENOISE = boolParam("debug_enable_indirect_denoise", false);
-   public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
+   public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "black");
    public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "power_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
    public static final Parameter<String> RESTIR_TEMPORAL_REUSE = stringParam("restir_temporal_reuse", "gather_only");
@@ -75,6 +75,7 @@ public final class PhotonicsStorage {
    public static final Parameter<Float> RESTIR_GI_SPATIAL_BIAS_MODE = floatParam("restir_gi_spatial_bias_mode", -1.0F);
    public static final Parameter<Float> RESTIR_GI_BOILING_FILTER_STRENGTH = floatParam("restir_gi_boiling_filter_strength", 0.0F);
    public static final Parameter<Boolean> RESTIR_GI_TEMPORAL_REUSE = boolParam("restir_gi_temporal_reuse", true);
+   public static final Parameter<Float> RESTIR_GI_MAX_RAY_DISTANCE = floatParam("restir_gi_max_ray_distance", 32.0F);
    public static final Parameter<Float> REGIR_LOOKUP_JITTER = floatParam("regir_lookup_jitter", 1.0F);
    public static final Parameter<Float> REGIR_BUILD_JITTER = floatParam("regir_build_jitter", 1.0F);
    public static final Parameter<Float> REGIR_BUILD_SAMPLES = floatParam("regir_build_samples", 8.0F);
@@ -150,6 +151,7 @@ public final class PhotonicsStorage {
       applyFloatSystemPropertyOverride("photonics.restirGIInitialSamples", RESTIR_GI_INITIAL_SAMPLES);
       applyFloatSystemPropertyOverride("photonics.restirGISpatialSamples", RESTIR_GI_SPATIAL_SAMPLES);
       applyFloatSystemPropertyOverride("photonics.restirGITemporalMaxSplats", RESTIR_GI_TEMPORAL_MAX_SPLATS);
+      applyFloatSystemPropertyOverride("photonics.restirGIMaxRayDistance", RESTIR_GI_MAX_RAY_DISTANCE);
       applyStringSystemPropertyOverride("photonics.restirLocalLightSamplingMode", RESTIR_LOCAL_LIGHT_SAMPLING_MODE);
       applyStringSystemPropertyOverride("photonics.temporalReuse", RESTIR_TEMPORAL_REUSE);
       applyStringSystemPropertyOverride("photonics.temporalGatherMode", RESTIR_TEMPORAL_GATHER_MODE);

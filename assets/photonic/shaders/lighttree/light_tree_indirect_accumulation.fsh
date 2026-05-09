@@ -24,19 +24,22 @@ void main() {
     indirect_reservoir_meta_frag_out = outputStore.metaData;
 
     int activeCheckerboardField = int(ph_restir_active_checkerboard_field);
-    ivec2 currentReservoirPos = lt_current_reservoir_pos();
-    if (!lt_is_active_reservoir_lane(currentReservoirPos)) {
-        indirect_frag_out = vec4(0.0f);
-        indirect_variance_frag_out = vec4(0.0f);
-        return;
-    }
-
-    ivec2 pixelPosition = RTXDI_ReservoirPosToPixelPos(currentReservoirPos, activeCheckerboardField);
+    // This FBO dispatches at full-res (attachment[0] is lightingBuffer).
+    // gl_FragCoord is a pixel position; compute reservoirPos for half-width reservoir lookups.
+    ivec2 pixelPosition = ivec2(gl_FragCoord.xy);
     if (!lt_is_viewport_uv_in_bounds(pixelPosition)) {
         indirect_frag_out = vec4(0.0f);
         indirect_variance_frag_out = vec4(0.0f);
         return;
     }
+
+    if (!RTXDI_IsActiveCheckerboardPixel(pixelPosition, false, activeCheckerboardField)) {
+        indirect_frag_out = vec4(0.0f);
+        indirect_variance_frag_out = vec4(0.0f);
+        return;
+    }
+
+    ivec2 currentReservoirPos = RTXDI_PixelPosToReservoirPos(pixelPosition, activeCheckerboardField);
 
     handheld_frag_out = lt_build_handheld_stage();
 

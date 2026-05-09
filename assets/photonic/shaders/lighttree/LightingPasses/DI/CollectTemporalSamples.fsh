@@ -20,10 +20,21 @@ layout(location = 7) out vec4 intermediate_reconnection4_frag_out;
 
 void main()
 {
-    ivec2 currPixel = ivec2(gl_FragCoord.xy);
+    ivec2 reservoirPos = ivec2(gl_FragCoord.xy);
+    int activeField = int(ph_restir_active_checkerboard_field);
+    ivec2 currPixel = (activeField == 0)
+        ? reservoirPos
+        : RTXDI_ReservoirPosToPixelPos(reservoirPos, activeField);
     CollectTemporalSamples_store_empty_result();
 
     if (!lt_is_viewport_uv_in_bounds(currPixel))
+    {
+        return;
+    }
+
+    const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
+    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(currPixel, int(runtimeParameters.activeCheckerboardField));
+    if (!lt_is_active_reservoir_lane(reservoirPosition))
     {
         return;
     }

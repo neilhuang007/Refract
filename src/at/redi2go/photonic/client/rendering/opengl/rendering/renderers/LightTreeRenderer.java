@@ -59,8 +59,14 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String nrdPrepassFragment = "lighttree/nrd_prepass.fsh";
    private static final String nrdCopyFragment = "lighttree/nrd_copy.fsh";
    private static final String nrdAtrousSmemFragment = "lighttree/nrd_atrous_smem.fsh";
+   // NRD history-confidence cascade (diffuse only, incremental first validation).
+   // Reference: NRD-Sample/Shaders/ConfidenceBlur.cs.hlsl, NRD/Shaders/RELAX_TemporalAccumulation.cs.hlsl
+   private static final String nrdConfidenceGradientFragment = "lighttree/nrd_confidence_gradient.fsh";
+   private static final String nrdConfidenceBlurFragment     = "lighttree/nrd_confidence_blur.fsh";
    private static final String indirectBoilingFragment = "lighttree/light_tree_indirect_boiling_filter.fsh";
    private static final String indirectAccumulationFragment = "lighttree/light_tree_indirect_accumulation.fsh";
+   private static final String indirectAccumulationLightingFragment = "lighttree/light_tree_indirect_accumulation_lighting.fsh";
+   private static final String indirectAccumulationReservoirFragment = "lighttree/light_tree_indirect_accumulation_reservoir.fsh";
    private static final String indirectInitialFragment = "lighttree/light_tree_indirect_initial.fsh";
    private static final String indirectDenoisingFragment = "lighttree/light_tree_indirect_denoising.fsh";
    private static final String indirectTemporalReprojectionFragment = "lighttree/ReservoirSplatting/GIReprojectTemporalSamples.fsh";
@@ -100,14 +106,16 @@ public class LightTreeRenderer extends MainRenderer {
       "NRDClassifyTiles", "NRDHitDistReconstruction", "NRDPrepass",
       "RELAXTemporalAccumulation", "RELAXHistoryFix", "RELAXHistoryClamping",
       "NRDCopy", "RELAXAntiFirefly", "RELAXAtrousSmem", "RELAXAtrous",
-      "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
+      "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite",
+      "NRDConfidenceCascade"
    };
    private static final String[] profilerPassNames = new String[]{
       "LightTreeSamplingStage", "InitialCandidates", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples",
       "NRDClassifyTiles", "NRDHitDistReconstruction", "NRDPrepass",
       "RELAXTemporalAccumulation", "RELAXHistoryFix", "RELAXHistoryClamping",
       "NRDCopy", "RELAXAntiFirefly", "RELAXAtrousSmem", "RELAXAtrous",
-      "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite"
+      "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite",
+      "NRDConfidenceCascade"
    };
    private static final int lightTreeSamplingStageRegionIndex = 0;
    private static final int initialCandidatesRegionIndex = 1;
@@ -128,6 +136,8 @@ public class LightTreeRenderer extends MainRenderer {
    private static final int indirectDenoiseRegionIndex = 16;
    private static final int lightingAccumulationRegionIndex = 17;
    private static final int indirectCompositeRegionIndex = 18;
+   // NRD history-confidence cascade region (gradient pass + 5-pass blur loop).
+   private static final int nrdConfidenceCascadeRegionIndex = 19;
    private boolean loggedRegirPresampleFrameSeedOverride = false;
    private boolean loggedRegirBuildFrameSeedOverride = false;
    @Nullable
@@ -165,6 +175,15 @@ public class LightTreeRenderer extends MainRenderer {
    // Additional transient FBOs for hit-distance reconstruction (optional pass)
    private final ColorFramebuffer nrdDiffHitDistReconFb;          // RGBA16F
    private final ColorFramebuffer nrdSpecHitDistReconFb;          // RGBA16F
+   // NRD history-confidence cascade FBOs.
+   // nrdConfidenceGradientFb: gradient pass output, ping-pong src for first blur pass.
+   // nrdConfidenceBlurPingFb / nrdConfidenceBlurPongFb: ping-pong pair for 5-pass blur.
+   // The final blur output (in whichever side was last written) is the confidence texture
+   // sampled next frame.  We use nrdConfidenceBlurPingFb as the "current confidence" read
+   // after the cascade by registering it as ph_nrd_diff_confidence.
+   private final ColorFramebuffer nrdConfidenceGradientFb;        // RGBA16F
+   private final ColorFramebuffer nrdConfidenceBlurPingFb;        // RGBA16F (confidence read-side)
+   private final ColorFramebuffer nrdConfidenceBlurPongFb;        // RGBA16F (intermediate)
   private final ColorFramebuffer indirectInitialReservoirBuffer;
   private final ColorFramebuffer indirectReservoirBuffer;
   private final ColorFramebuffer indirectDenoisedBuffer;
@@ -206,9 +225,16 @@ public class LightTreeRenderer extends MainRenderer {
   private final RoutingFramebuffer directAntiFireflyFramebuffer;
   private final RoutingFramebuffer nrdAtrousSmemFramebuffer;
   private final RoutingFramebuffer directAtrousFramebuffer;
+  // Confidence cascade routing framebuffers.
+  // The blur framebuffer uses a dynamic supplier so each pass writes to the
+  // appropriate ping or pong buffer (set via confidenceBlurIteration before renderAll).
+  private final RoutingFramebuffer nrdConfidenceGradientFramebuffer;
+  private final RoutingFramebuffer nrdConfidenceBlurFramebuffer;       // dynamic output
   private final RoutingFramebuffer indirectInitialFramebuffer;
   private final RoutingFramebuffer indirectBoilingFramebuffer;
   private final RoutingFramebuffer indirectAccumulationFramebuffer;
+  private final RoutingFramebuffer indirectAccumulationLightingFramebuffer;
+  private final RoutingFramebuffer indirectAccumulationReservoirFramebuffer;
   private final RoutingFramebuffer indirectDenoisingFramebuffer;
   private final RoutingFramebuffer positionWriteFramebuffer;
   private final RoutingFramebuffer shadeSamplesMonolithicFramebuffer;
@@ -246,6 +272,11 @@ public class LightTreeRenderer extends MainRenderer {
   private CompositeRenderer nrdAtrousSmemRenderer;
   @Nullable
   private CompositeRenderer directAtrousRenderer;
+  // NRD history-confidence cascade renderers (gradient pass + blur cascade).
+  @Nullable
+  private CompositeRenderer nrdConfidenceGradientRenderer;
+  @Nullable
+  private CompositeRenderer nrdConfidenceBlurRenderer;
   @Nullable
   private CompositeRenderer indirectInitialRenderer;
   @Nullable
@@ -260,6 +291,10 @@ public class LightTreeRenderer extends MainRenderer {
   private CompositeRenderer indirectScatterTemporalRenderer;
   @Nullable
   private CompositeRenderer indirectAccumulationRenderer;
+  @Nullable
+  private CompositeRenderer indirectAccumulationLightingRenderer;
+  @Nullable
+  private CompositeRenderer indirectAccumulationReservoirRenderer;
   @Nullable
   private CompositeRenderer indirectDenoisingRenderer;
   @Nullable
@@ -304,6 +339,15 @@ public class LightTreeRenderer extends MainRenderer {
   // Hard-coded 5-pass atrous cascade per contract §1: SMEM(stride=1) + 4 passes (strides 2,4,8,16).
   // directAtrousIteration 0 = SMEM pass (nrdAtrousSmemRenderer), 1-4 = regular atrous passes.
   private static final int[] NRD_ATROUS_STRIDES = {1, 2, 4, 8, 16};
+  // Confidence blur cascade: 5 passes with step sizes matching NRD-Sample reference.
+  // Reference: NRD-Sample/Shaders/ConfidenceBlur.cs.hlsl — step 1..5 in HLSL maps to
+  // texel offsets 1,2,4,8,16 in our GLSL port.
+  private static final int[] NRD_CONFIDENCE_BLUR_STEPS = {1, 2, 4, 8, 16};
+  // Current blur step size uniform value (updated by renderConfidenceCascade each pass).
+  private int currentConfidenceBlurStep = 1;
+  // Whether the confidence cascade has completed at least one full frame.
+  // Set to true after the first full cascade run; controls ph_nrd_has_history_confidence.
+  private boolean hasHistoryConfidence = false;
   private final Consumer<String> localLightSamplingModeObserver;
   private final Consumer<String> temporalScatterIsolationModeObserver;
   private final Consumer<Boolean> indirectTemporalReuseObserver;
@@ -316,6 +360,20 @@ public class LightTreeRenderer extends MainRenderer {
    private boolean indirectTemporalSplattingActiveThisFrame = false;
    private boolean disabledIndirectOutputsCleared = false;
    private int renderFrameIndex = 0;
+   // Ring buffer of recently-changed block world-space centres, used to locally cap
+   // NRD historyLength near dirty pixels so new lighting converges fast.
+   private static final int dirtyBlockCapacity = 32;
+   private static final int dirtyBlockTtl = 24;
+   private final float[] dirtyBlockCentres = new float[dirtyBlockCapacity]; // x per slot
+   private final float[] dirtyBlockCentresY = new float[dirtyBlockCapacity];
+   private final float[] dirtyBlockCentresZ = new float[dirtyBlockCapacity];
+   private final int[] dirtyBlockFrameSeen = new int[dirtyBlockCapacity];
+   // Flat float[128] buffer shipped to the shader as uniform vec4 ph_nrd_dirty_blocks[32].
+   private final float[] dirtyBlockBuffer = new float[dirtyBlockCapacity * 4];
+   private int dirtyBlockWriteHead = 0;
+   {
+      java.util.Arrays.fill(this.dirtyBlockFrameSeen, Integer.MIN_VALUE);
+   }
   private int profilerFrameCounter = 0;
   private long lastCpuLightTreeSamplingStageNanos;
   private long lastCpuInitialCandidatesNanos;
@@ -340,6 +398,7 @@ public class LightTreeRenderer extends MainRenderer {
   private long lastCpuIndirectDenoiseNanos;
   private long lastCpuLightingAccumulationNanos;
   private long lastCpuIndirectCompositeNanos;
+  private long lastCpuNRDConfidenceCascadeNanos;
    public LightTreeRenderer(WorldRegistry worldRegistry, float renderScale, PhotonicsProperties properties) {
       super(worldRegistry, renderScale);
       this.properties = properties;
@@ -386,6 +445,10 @@ public class LightTreeRenderer extends MainRenderer {
       this.nrdOutSpecRadianceHitDistFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.nrdDiffHitDistReconFb        = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.nrdSpecHitDistReconFb        = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      // Confidence cascade FBOs (RGBA16F; full render resolution)
+      this.nrdConfidenceGradientFb      = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdConfidenceBlurPingFb      = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
+      this.nrdConfidenceBlurPongFb      = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.indirectInitialReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
       this.indirectReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
       this.indirectDenoisedBuffer = new ColorFramebuffer(renderScale);
@@ -403,9 +466,13 @@ public class LightTreeRenderer extends MainRenderer {
       this.directAntiFireflyFramebuffer     = this.createDirectAntiFireflyFramebuffer();
       this.nrdAtrousSmemFramebuffer         = this.createNrdAtrousSmemFramebuffer();
       this.directAtrousFramebuffer          = this.createDirectAtrousFramebuffer();
+      this.nrdConfidenceGradientFramebuffer = this.createNrdConfidenceGradientFramebuffer();
+      this.nrdConfidenceBlurFramebuffer     = this.createNrdConfidenceBlurFramebuffer();
       this.indirectInitialFramebuffer = this.createIndirectInitialFramebuffer();
       this.indirectBoilingFramebuffer = this.createIndirectBoilingFramebuffer();
       this.indirectAccumulationFramebuffer = this.createIndirectAccumulationFramebuffer();
+      this.indirectAccumulationLightingFramebuffer = this.createIndirectAccumulationLightingFramebuffer();
+      this.indirectAccumulationReservoirFramebuffer = this.createIndirectAccumulationReservoirFramebuffer();
       this.indirectDenoisingFramebuffer = this.createIndirectDenoisingFramebuffer();
       this.positionWriteFramebuffer = this.createPositionWriteFramebuffer();
       this.shadeSamplesMonolithicFramebuffer = this.createShadeSamplesMonolithicFramebuffer();
@@ -518,6 +585,16 @@ public class LightTreeRenderer extends MainRenderer {
       this.directAtrousRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(relaxAtrousFragment, "common/screen.vsh", this.memoryCollection, this.directAtrousFramebuffer))
       );
+      // Confidence cascade renderers (gradient pass + reusable blur pass).
+      this.nrdConfidenceGradientRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(nrdConfidenceGradientFragment, "common/screen.vsh", this.memoryCollection, this.nrdConfidenceGradientFramebuffer))
+      );
+      // Blur renderer uses nrdConfidenceBlurFramebuffer whose attachment supplier is dynamic
+      // (getCurrentConfidenceBlurOutputTexture), so the same renderer can be rendered 5 times
+      // with different output destinations per renderConfidenceCascade().
+      this.nrdConfidenceBlurRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(nrdConfidenceBlurFragment, "common/screen.vsh", this.memoryCollection, this.nrdConfidenceBlurFramebuffer))
+      );
       this.indirectInitialRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(indirectInitialFragment, "common/screen.vsh", this.memoryCollection, this.indirectInitialFramebuffer))
       );
@@ -528,8 +605,17 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectTemporalBinningOffsetsRenderer = null;
       this.indirectTemporalBinningRenderer = null;
       this.indirectScatterTemporalRenderer = null;
-      this.indirectAccumulationRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(indirectAccumulationFragment, "common/screen.vsh", this.memoryCollection, this.indirectAccumulationFramebuffer))
+      // Split GI accumulation: lighting writes full-res lightingBuffer attachments
+      // (indirect, indirect_variance, handheld); reservoir writes half-res
+      // indirectReservoirBuffer attachments (position, normal, radiance, meta).
+      // OpenGL FBO attachments must share resolution; checkerboard makes the
+      // reservoir buffer half-width. The monolithic renderer is set to null.
+      this.indirectAccumulationRenderer = null;
+      this.indirectAccumulationLightingRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(indirectAccumulationLightingFragment, "common/screen.vsh", this.memoryCollection, this.indirectAccumulationLightingFramebuffer))
+      );
+      this.indirectAccumulationReservoirRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(indirectAccumulationReservoirFragment, "common/screen.vsh", this.memoryCollection, this.indirectAccumulationReservoirFramebuffer))
       );
       this.indirectDenoisingRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(indirectDenoisingFragment, "common/screen.vsh", this.memoryCollection, this.indirectDenoisingFramebuffer))
@@ -540,11 +626,18 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader("common/indirect.fsh", "common/screen.vsh", this.memoryCollection, null))
       );
-      this.shadeSamplesMonolithicRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diShadeSamplesFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesMonolithicFramebuffer))
+      // Split shading path: lighting writes to full-res lightingStageBuffer, reservoir
+      // writes to half-res directReservoirBuffer (when checkerboard active). Monolithic
+      // path can't be used with checkerboard because it mixes full-res lighting with
+      // half-res reservoir attachments in one framebuffer (RoutingFramebuffer.bind sets
+      // viewport from attachment[0]; mixed-size attachments produce undefined writes).
+      this.shadeSamplesMonolithicRenderer = null;
+      this.shadeSamplesRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diShadeSamplesLightingFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesFramebuffer))
       );
-      this.shadeSamplesReservoirRenderer = null;
-      this.shadeSamplesRenderer = null;
+      this.shadeSamplesReservoirRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diShadeSamplesReservoirFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesReservoirFramebuffer))
+      );
       this.shadeSamplesReconnectionRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader(diPromoteReconnectionFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesReconnectionFramebuffer))
       );
@@ -801,6 +894,11 @@ public class LightTreeRenderer extends MainRenderer {
       // A-trous ping-pong inputs (Java rebinds per-pass to the correct ping or pong buffer)
       this.addTextureSampler(samplers, "nrd_diff_atrous_input", this::getCurrentDiffAtrousInputTexture);
       this.addTextureSampler(samplers, "nrd_spec_atrous_input", this::getCurrentSpecAtrousInputTexture);
+      // NRD history-confidence cascade samplers.
+      // ph_nrd_diff_confidence: last frame's final confidence output, sampled by TA next frame.
+      // nrd_diff_confidence_gradient: gradient pass output / blur cascade input this frame.
+      this.addTextureSampler(samplers, "ph_nrd_diff_confidence", () -> this.nrdConfidenceBlurPingFb.getWriteAttachment("data"));
+      this.addTextureSampler(samplers, "nrd_diff_confidence_gradient", this::getCurrentConfidenceBlurInputTexture);
       this.addTextureSampler(samplers, "denoised_direct_diffuse", this::getResolvedDirectDiffuseTexture);
       this.addTextureSampler(samplers, "denoised_direct_specular", this::getResolvedSpecularAtrousTexture);
    }
@@ -848,6 +946,8 @@ public class LightTreeRenderer extends MainRenderer {
    public void registerCustomUniforms(DynamicUniformHolder uniforms) {
       uniforms.uniform1i("direct_atrous_step_size", this::getCurrentDirectAtrousStepSize, listener -> {});
       uniforms.uniform1i("direct_atrous_is_last_pass", this::getCurrentDirectAtrousIsLastPass, listener -> {});
+      // Confidence blur step size: updated per-pass by renderConfidenceCascade().
+      uniforms.uniform1i("confidence_blur_step", this::getCurrentConfidenceBlurStep, listener -> {});
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_active_checkerboard_field", this::getActiveCheckerboardField);
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_restir_frame_index", this::getRestirFrameIndex);
       uniforms.uniform1i(UniformUpdateFrequency.PER_FRAME, "ph_reservoir_splatting_time_partition_count", this::getReservoirSplattingTimePartitionCount);
@@ -1041,6 +1141,7 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_temporal_splatting_active", () -> this.indirectTemporalSplattingActiveThisFrame ? 1.0f : 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_initial_sample_count", () -> Math.max(1.0f, PhotonicsStorage.RESTIR_GI_INITIAL_SAMPLES.value));
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_temporal_max_splats", () -> Math.max(1.0f, PhotonicsStorage.RESTIR_GI_TEMPORAL_MAX_SPLATS.value));
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_max_ray_distance", () -> Math.max(1.0f, PhotonicsStorage.RESTIR_GI_MAX_RAY_DISTANCE.value));
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_restir_gi_spatial_sample_count", () -> {
          float configuredSamples = PhotonicsStorage.RESTIR_GI_SPATIAL_SAMPLES.value;
          return configuredSamples >= 0.0f ? configuredSamples : 0.0f;
@@ -1055,35 +1156,61 @@ public class LightTreeRenderer extends MainRenderer {
       );
       // NRD RELAX_DiffuseSpecular uniforms (contract §6). All registered here so
       // LightTreeRenderer is the single source of truth for default values.
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_accumulated_frame_num", () -> 30.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_fast_accumulated_frame_num", () -> 6.0f);
+      // Tuned for Minecraft voxel scenes: short accumulation windows so block
+      // placements / redstone-lamp toggles surface in <0.3s, plus aggressive
+      // anti-lag (clamping sigma + reset amount) so radiance-only changes
+      // (newly-cast shadow with unchanged geometry) decay fast.
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_accumulated_frame_num", () -> 16.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_fast_accumulated_frame_num", () -> 4.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_depth_threshold", () -> 0.003f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_denoising_range", () -> 500.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_disocclusion_threshold", () -> 0.005f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_disocclusion_threshold_alt", () -> 0.05f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_phi_luminance_diff", () -> 1.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_phi_luminance_spec", () -> 1.5f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_lobe_angle_fraction", () -> 0.5f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_roughness_fraction", () -> 0.15f);
+      // Tighter phi-luminance / lobe / roughness fractions: voxel block faces are
+      // planar and quantized, so atrous edge-stopping can be sharper without
+      // smearing detail across material boundaries.
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_phi_luminance_diff", () -> 0.4f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_phi_luminance_spec", () -> 0.6f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_lobe_angle_fraction", () -> 0.4f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_roughness_fraction", () -> 0.1f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_spec_lobe_angle_slack", () -> 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_frame_num", () -> 3.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_base_stride", () -> 14.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_normal_power", () -> 8.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_clamping_color_box_sigma_scale", () -> 2.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_acceleration_amount", () -> 0.3f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_temporal_sigma_scale", () -> 0.5f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_spatial_sigma_scale", () -> 4.5f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_amount", () -> 0.5f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_diff_prepass_blur_radius", () -> 30.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_spec_prepass_blur_radius", () -> 50.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_acceleration_amount", () -> 0.6f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_temporal_sigma_scale", () -> 0.25f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_spatial_sigma_scale", () -> 2.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_amount", () -> 0.8f);
+      // Smaller prepass radii: voxel surfaces have no fine geometric detail to
+      // preserve and are pre-blurred by their bilinear filter texture sampling.
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_diff_prepass_blur_radius", () -> 15.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_spec_prepass_blur_radius", () -> 20.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_anti_firefly", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_hitdist_reconstruction", () -> 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_reset_history", () -> this.shouldResetNrdHistory() ? 1.0f : 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_roughness_edge_stopping_relaxation", () -> 0.3f);
+      // Dirty-block mask: cap historyLength near recently-changed blocks so new
+      // lighting (toggled lamp, placed block) converges without a global NRD flush.
+      uniforms.uniform4fArray(UniformUpdateFrequency.PER_FRAME, "ph_nrd_dirty_blocks", () -> this.dirtyBlockBuffer);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_dirty_block_radius", () -> 24.0f);
+      // Cap of 1 = instant reset at the dirty block center. historyLength<3
+      // trips nrd_history_fix into wide spatial filtering, masking the raw
+      // noisy frame while the temporal signal re-converges over ~3 frames.
+      // Linear falloff out to ph_nrd_dirty_block_radius prevents a hard ring.
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_dirty_block_history_cap", () -> 1.0f);
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
          "ph_nrd_debug_bypass_temporal_accumulation",
          () -> PhotonicsStorage.DEBUG_ENABLE_DIRECT_TEMPORAL_ACCUMULATION.value ? 0.0f : 1.0f
+      );
+      // History-confidence availability flag.  0.0 = first frame (texture uninitialised);
+      // 1.0 = valid confidence texture produced by the cascade last frame.
+      // Reset to 0.0 on world reload (shouldResetNrdHistory() fires same frame as reset).
+      uniforms.uniform1f(
+         UniformUpdateFrequency.PER_FRAME,
+         "ph_nrd_has_history_confidence",
+         () -> this.hasHistoryConfidence ? 1.0f : 0.0f
       );
       uniforms.uniform1f(
          UniformUpdateFrequency.PER_FRAME,
@@ -1381,6 +1508,7 @@ public class LightTreeRenderer extends MainRenderer {
       }
 
       this.renderFrameIndex++;
+      this.drainDirtyBlocksIntoRingBuffer();
       this.resolveGpuProfile();
       this.advanceGpuProfileFrame();
       this.ensureCompatDirectSoftCleared();
@@ -1432,6 +1560,10 @@ public class LightTreeRenderer extends MainRenderer {
       long t9 = System.nanoTime();
       this.renderProfiled(relaxTemporalAccumulationRegionIndex, this.directTemporalRenderer);
       long t10 = System.nanoTime();
+      // Confidence cascade runs AFTER TA so the new noisy input is available.
+      // The produced confidence texture is consumed by TA in the NEXT frame.
+      // Reference placement: NRD-Sample dispatches ConfidenceBlur after TemporalAccumulation.
+      this.renderConfidenceCascade();
       this.renderProfiled(relaxHistoryFixRegionIndex, this.directHistoryFixRenderer);
       long t11 = System.nanoTime();
       this.renderProfiled(relaxHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
@@ -1574,6 +1706,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.recalculateRenderer(this.indirectTemporalBinningRenderer);
       this.recalculateRenderer(this.indirectScatterTemporalRenderer);
       this.recalculateRenderer(this.indirectAccumulationRenderer);
+      this.recalculateRenderer(this.indirectAccumulationLightingRenderer);
+      this.recalculateRenderer(this.indirectAccumulationReservoirRenderer);
       this.recalculateRenderer(this.indirectDenoisingRenderer);
       this.recalculateRenderer(this.accumulationRenderer);
       this.recalculateRenderer(this.indirectRenderer);
@@ -1605,6 +1739,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.indirectInitialFramebuffer.destroy();
       this.indirectBoilingFramebuffer.destroy();
       this.indirectAccumulationFramebuffer.destroy();
+      this.indirectAccumulationLightingFramebuffer.destroy();
+      this.indirectAccumulationReservoirFramebuffer.destroy();
       this.indirectDenoisingFramebuffer.destroy();
       this.positionWriteFramebuffer.destroy();
       this.shadeSamplesMonolithicFramebuffer.destroy();
@@ -1675,6 +1811,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.destroyRenderer(this.indirectTemporalBinningRenderer);
       this.destroyRenderer(this.indirectScatterTemporalRenderer);
       this.destroyRenderer(this.indirectAccumulationRenderer);
+      this.destroyRenderer(this.indirectAccumulationLightingRenderer);
+      this.destroyRenderer(this.indirectAccumulationReservoirRenderer);
       this.destroyRenderer(this.indirectDenoisingRenderer);
       this.destroyRenderer(this.accumulationRenderer);
       this.destroyRenderer(this.indirectRenderer);
@@ -1810,11 +1948,14 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private Vector2f getDirectReservoirResolution() {
-      Vector2f framebufferSize = new Vector2f(
-         MinecraftClient.getInstance().getWindow().getFramebufferWidth(),
-         MinecraftClient.getInstance().getWindow().getFramebufferHeight()
-      );
-      return framebufferSize;
+      int fbWidth = MinecraftClient.getInstance().getWindow().getFramebufferWidth();
+      int fbHeight = MinecraftClient.getInstance().getWindow().getFramebufferHeight();
+      if (this.getActiveCheckerboardField() != 0) {
+         // RTXDI checkerboard: reservoir buffer is half-width (ceil) when active.
+         // Reference: RTXDI Libraries/Rtxdi/Include/Rtxdi/Utils/ReservoirAddressing.hlsli
+         fbWidth = (fbWidth + 1) >> 1;
+      }
+      return new Vector2f(fbWidth, fbHeight);
    }
 
    // ---------------------------------------------------------------------------
@@ -2066,6 +2207,23 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.lightingBuffer.getWriteAttachment("indirect"),
          () -> this.lightingBuffer.getWriteAttachment("indirect_variance"),
          () -> this.lightingBuffer.getWriteAttachment("handheld"),
+         () -> this.indirectReservoirBuffer.getWriteAttachment("position"),
+         () -> this.indirectReservoirBuffer.getWriteAttachment("normal"),
+         () -> this.indirectReservoirBuffer.getWriteAttachment("radiance"),
+         () -> this.indirectReservoirBuffer.getWriteAttachment("meta")
+      );
+   }
+
+   private RoutingFramebuffer createIndirectAccumulationLightingFramebuffer() {
+      return this.createRoutingFramebuffer(
+         () -> this.lightingBuffer.getWriteAttachment("indirect"),
+         () -> this.lightingBuffer.getWriteAttachment("indirect_variance"),
+         () -> this.lightingBuffer.getWriteAttachment("handheld")
+      );
+   }
+
+   private RoutingFramebuffer createIndirectAccumulationReservoirFramebuffer() {
+      return this.createDirectPackedRoutingFramebuffer(
          () -> this.indirectReservoirBuffer.getWriteAttachment("position"),
          () -> this.indirectReservoirBuffer.getWriteAttachment("normal"),
          () -> this.indirectReservoirBuffer.getWriteAttachment("radiance"),
@@ -2629,6 +2787,28 @@ public class LightTreeRenderer extends MainRenderer {
       GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
    }
 
+   private void drainDirtyBlocksIntoRingBuffer() {
+      java.util.List<net.minecraft.util.math.BlockPos> consumed =
+         this.worldRegistry.getLightRegistry().consumeDirtyLightBlocks();
+      for (net.minecraft.util.math.BlockPos pos : consumed) {
+         int slot = this.dirtyBlockWriteHead % dirtyBlockCapacity;
+         this.dirtyBlockCentres[slot] = pos.getX() + 0.5f;
+         this.dirtyBlockCentresY[slot] = pos.getY() + 0.5f;
+         this.dirtyBlockCentresZ[slot] = pos.getZ() + 0.5f;
+         this.dirtyBlockFrameSeen[slot] = this.renderFrameIndex;
+         this.dirtyBlockWriteHead++;
+      }
+      // Rebuild the flat shader buffer; expired slots encoded as w=-1.
+      for (int i = 0; i < dirtyBlockCapacity; i++) {
+         int age = this.renderFrameIndex - this.dirtyBlockFrameSeen[i];
+         boolean active = this.dirtyBlockFrameSeen[i] != Integer.MIN_VALUE && age <= dirtyBlockTtl;
+         this.dirtyBlockBuffer[i * 4    ] = active ? this.dirtyBlockCentres[i]  : 0.0f;
+         this.dirtyBlockBuffer[i * 4 + 1] = active ? this.dirtyBlockCentresY[i] : 0.0f;
+         this.dirtyBlockBuffer[i * 4 + 2] = active ? this.dirtyBlockCentresZ[i] : 0.0f;
+         this.dirtyBlockBuffer[i * 4 + 3] = active ? (float) age : -1.0f;
+      }
+   }
+
    private boolean isDirectTemporalReuseEnabled() {
       return this.directTemporalReuseActiveThisFrame;
    }
@@ -2644,9 +2824,120 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private boolean shouldResetNrdHistory() {
+      // Regional blends are emitted for ordinary block edits. Resetting RELAX for
+      // those local updates drops the whole frame to young-history spatial blur.
+      // Only full reloads need the global NRD history reset.
       return !PhotonicsStorage.DEBUG_DISABLE_TEMPORAL_RESET.value
-         && this.worldRegistry.hasActiveLightBlend()
+         && this.worldRegistry.fetchLightReload()
          && this.worldRegistry.fetchLightBlendFactor() >= 0.999f;
+   }
+
+   // -------------------------------------------------------------------------
+   // NRD history-confidence cascade helpers
+   // -------------------------------------------------------------------------
+
+   private int getCurrentConfidenceBlurStep() {
+      return this.currentConfidenceBlurStep;
+   }
+
+   // The gradient pass outputs to nrdConfidenceGradientFb.
+   // The first blur pass reads nrdConfidenceGradientFb; subsequent passes ping-pong
+   // between nrdConfidenceBlurPingFb and nrdConfidenceBlurPongFb.
+   // After 5 passes the final result lives in nrdConfidenceBlurPingFb (write-side)
+   // which is bound as ph_nrd_diff_confidence for the next frame's TA.
+   //
+   // Ping-pong schedule (output of pass i -> input of pass i+1):
+   //   pass 0 (gradient): -> gradientFb
+   //   pass 1 (step=1):   gradientFb -> pingFb
+   //   pass 2 (step=2):   pingFb     -> pongFb
+   //   pass 3 (step=4):   pongFb     -> pingFb
+   //   pass 4 (step=8):   pingFb     -> pongFb
+   //   pass 5 (step=16):  pongFb     -> pingFb   <-- final result in pingFb
+   //
+   // nrd_diff_confidence_gradient sampler is rebound per-pass via getCurrentConfidenceBlurInputTexture.
+
+   private int confidenceBlurIteration = 0;
+
+   // Returns the texture that the current blur pass should sample as input.
+   // Used by the nrd_diff_confidence_gradient sampler binding.
+   //
+   // Ping-pong schedule: each pass reads the previous pass's output.
+   //   Output of pass i (even) -> pingFb
+   //   Output of pass i (odd)  -> pongFb
+   //   => Input of pass j (even j>0) -> pongFb  (output of pass j-1, which was odd)
+   //   => Input of pass j (odd  j>0) -> pingFb  (output of pass j-1, which was even)
+   //   => Input of pass 0 -> gradientFb (gradient pass output)
+   private TextureObject getCurrentConfidenceBlurInputTexture() {
+      if (this.confidenceBlurIteration == 0) {
+         return this.nrdConfidenceGradientFb.getWriteAttachment("data");
+      }
+      // pass j reads: ping if j is odd (prev was even -> wrote ping)
+      //                pong if j is even (prev was odd -> wrote pong)
+      return ((this.confidenceBlurIteration % 2) == 1)
+         ? this.nrdConfidenceBlurPingFb.getWriteAttachment("data")
+         : this.nrdConfidenceBlurPongFb.getWriteAttachment("data");
+   }
+
+   // Returns the texture that the current blur pass should write to.
+   // Used by the nrdConfidenceBlurFramebuffer attachment supplier.
+   //   Pass 0 (step=1):  writes ping  (even)
+   //   Pass 1 (step=2):  writes pong  (odd)
+   //   Pass 2 (step=4):  writes ping  (even)
+   //   Pass 3 (step=8):  writes pong  (odd)
+   //   Pass 4 (step=16): writes ping  (even) <- final confidence in pingFb
+   private TextureObject getCurrentConfidenceBlurOutputTexture() {
+      return ((this.confidenceBlurIteration % 2) == 0)
+         ? this.nrdConfidenceBlurPingFb.getWriteAttachment("data")
+         : this.nrdConfidenceBlurPongFb.getWriteAttachment("data");
+   }
+
+   private RoutingFramebuffer createNrdConfidenceGradientFramebuffer() {
+      return this.createRoutingFramebuffer(
+         () -> this.nrdConfidenceGradientFb.getWriteAttachment("data")
+      );
+   }
+
+   // Single dynamic blur framebuffer: attachment supplier evaluates getCurrentConfidenceBlurOutputTexture()
+   // at bind-time so each renderAll() call routes to the correct ping or pong buffer.
+   private RoutingFramebuffer createNrdConfidenceBlurFramebuffer() {
+      return this.createRoutingFramebuffer(
+         this::getCurrentConfidenceBlurOutputTexture
+      );
+   }
+
+   // Dispatch the gradient pass then the 5-pass blur cascade.
+   // Must run after RELAXTemporalAccumulation each frame.
+   // Reference: NRD-Sample dispatches ConfidenceBlur passes after TemporalAccumulation.
+   private void renderConfidenceCascade() {
+      if (this.nrdConfidenceGradientRenderer == null || this.nrdConfidenceBlurRenderer == null) {
+         return;
+      }
+
+      // On world reload, invalidate so TA doesn't sample stale confidence.
+      if (this.shouldResetNrdHistory()) {
+         this.hasHistoryConfidence = false;
+      }
+
+      this.beginGpuRegion(nrdConfidenceCascadeRegionIndex);
+
+      // Pass 0: gradient
+      this.nrdConfidenceGradientRenderer.renderAll();
+      GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+
+      // Passes 1-5: blur cascade with step sizes 1, 2, 4, 8, 16.
+      // confidenceBlurIteration drives both the input sampler (getCurrentConfidenceBlurInputTexture)
+      // and the output framebuffer (getCurrentConfidenceBlurOutputTexture) via supplier lambdas.
+      for (int passIndex = 0; passIndex < NRD_CONFIDENCE_BLUR_STEPS.length; passIndex++) {
+         this.confidenceBlurIteration = passIndex;
+         this.currentConfidenceBlurStep = NRD_CONFIDENCE_BLUR_STEPS[passIndex];
+         this.nrdConfidenceBlurRenderer.renderAll();
+         GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
+      }
+
+      this.endGpuRegion(nrdConfidenceCascadeRegionIndex);
+
+      // After the first complete cascade the confidence texture is valid.
+      this.hasHistoryConfidence = true;
    }
 
    private boolean shouldResetReservoirSplattingTemporal(boolean reservoirHistoryReset) {
@@ -2687,7 +2978,8 @@ public class LightTreeRenderer extends MainRenderer {
       if (!this.shouldRunReservoirSplattingIndirectPipeline()) {
          return;
       }
-      if (this.indirectInitialRenderer == null && this.indirectBoilingRenderer == null && this.indirectAccumulationRenderer == null) {
+      if (this.indirectInitialRenderer == null && this.indirectBoilingRenderer == null && this.indirectAccumulationRenderer == null
+            && this.indirectAccumulationLightingRenderer == null && this.indirectAccumulationReservoirRenderer == null) {
          return;
       }
       this.beginGpuRegion(restirGIRegionIndex);
@@ -2708,6 +3000,12 @@ public class LightTreeRenderer extends MainRenderer {
       }
       if (this.indirectAccumulationRenderer != null) {
          this.indirectAccumulationRenderer.renderAll();
+      }
+      if (this.indirectAccumulationLightingRenderer != null) {
+         this.indirectAccumulationLightingRenderer.renderAll();
+      }
+      if (this.indirectAccumulationReservoirRenderer != null) {
+         this.indirectAccumulationReservoirRenderer.renderAll();
       }
       this.endGpuRegion(restirGIRegionIndex);
    }
@@ -2790,15 +3088,19 @@ public class LightTreeRenderer extends MainRenderer {
 
    private void renderShadeSamplesProfiled() {
       this.setCurrentDiReconnectionSource(this.getShadingInputReconnectionSource());
-      if (this.shadeSamplesMonolithicRenderer == null) {
+      if (this.shadeSamplesRenderer == null || this.shadeSamplesReservoirRenderer == null) {
          return;
       }
       this.beginGpuRegion(diShadeSamplesRegionIndex);
       if (this.isDirectShadeSamplesEnabled()) {
          this.promoteShadingReconnectionHistory();
-         this.shadeSamplesMonolithicRenderer.renderAll();
+         // Lighting first (full-res FBO), then reservoir promotion (half-res FBO when
+         // checkerboard is on). Order matters because the reservoir pass reads the
+         // post-spatial reservoir that was finalized within the same frame.
+         this.shadeSamplesRenderer.renderAll();
+         this.shadeSamplesReservoirRenderer.renderAll();
       } else {
-         this.clearShadeSamplesMonolithicOutputs();
+         this.clearShadeSamplesSplitOutputs();
          this.clearFrameFinalReconnectionOutputs();
       }
       this.endGpuRegion(diShadeSamplesRegionIndex);
@@ -3100,6 +3402,9 @@ public class LightTreeRenderer extends MainRenderer {
       this.lastCpuLightingAccumulationNanos = t18 - t17;
       this.lastCpuIndirectDenoiseNanos = t19 - t18;
       this.lastCpuIndirectCompositeNanos = t20 - t19;
+      // Confidence cascade CPU time is absorbed into TA (t10-t9) as it runs inline.
+      // GPU time is accurately tracked via nrdConfidenceCascadeRegionIndex GPU timer query.
+      this.lastCpuNRDConfidenceCascadeNanos = 0;
    }
 
    private void logRenderProfileIfNeeded(long totalCpuNanos) {
@@ -3295,7 +3600,8 @@ public class LightTreeRenderer extends MainRenderer {
          this.lastCpuReSTIRGINanos,                     // index 15
          this.lastCpuIndirectDenoiseNanos,              // index 16
          this.lastCpuLightingAccumulationNanos,         // index 17
-         this.lastCpuIndirectCompositeNanos             // index 18
+         this.lastCpuIndirectCompositeNanos,            // index 18
+         this.lastCpuNRDConfidenceCascadeNanos          // index 19
       };
    }
 
@@ -3319,7 +3625,8 @@ public class LightTreeRenderer extends MainRenderer {
          this.gpuTimerQuery.getTimeNanos(restirGIRegionIndex),                    // 15
          this.gpuTimerQuery.getTimeNanos(indirectDenoiseRegionIndex),             // 16
          this.gpuTimerQuery.getTimeNanos(lightingAccumulationRegionIndex),        // 17
-         this.gpuTimerQuery.getTimeNanos(indirectCompositeRegionIndex)            // 18
+         this.gpuTimerQuery.getTimeNanos(indirectCompositeRegionIndex),           // 18
+         this.gpuTimerQuery.getTimeNanos(nrdConfidenceCascadeRegionIndex)         // 19
       };
    }
 

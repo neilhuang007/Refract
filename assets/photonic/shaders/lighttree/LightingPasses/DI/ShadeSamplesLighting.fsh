@@ -40,13 +40,12 @@ void main()
         return;
     }
 
-    bool isActiveCheckerboardPixel = RTXDI_IsActiveCheckerboardPixel(
-        pixel, false, int(runtimeParameters.activeCheckerboardField));
-    if (!isActiveCheckerboardPixel) {
-        storeEmptyResolveReSTIROutputs();
-        return;
-    }
-
+    // Lighting writes to a full-res FBO; the reservoir buffer is half-width when
+    // checkerboard is active. RTXDI's reference dispatches over the half-res reservoir
+    // grid (one thread per reservoir => one shaded pixel per pair), but we dispatch at
+    // full-res via gl_FragCoord. So both checkerboard mates load the shared reservoir
+    // at (x>>1, y) and shade against their own gbuffer surface. Zeroing inactive pixels
+    // here would leave half the screen black because there is no reconstruction pass.
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(surface)) {
         storeEmptyResolveReSTIROutputs();

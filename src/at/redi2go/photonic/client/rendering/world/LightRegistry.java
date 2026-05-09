@@ -87,7 +87,7 @@ public class LightRegistry implements Destructable {
    // 6 axis-aligned normal buckets (+X,-X,+Y,-Y,+Z,-Z). Photonics keeps the
    // bucket in the hash key for lookup binding; the current build target is
    // volumetric and fills buckets identically.
-   private static final int REGIR_HASH_NORMAL_BUCKETS = 6;
+   private static final int REGIR_HASH_NORMAL_BUCKETS = 1;
    // Hash table capacity. The active build set is REGIR_BUILD_REGION_CELLS^3
    // * REGIR_HASH_NORMAL_BUCKETS keys; keep the table comfortably below 50%
    // load so linear-probe clusters do not make world cells vanish as the
@@ -100,7 +100,11 @@ public class LightRegistry implements Destructable {
    // without going back to a screen-bound build.
    private static final int REGIR_BUILD_REGION_CELLS = 24;
    private static final int RESIDENT_LIGHT_REMOVAL_CONFIRMATION_SCANS = 64;
-   private static final int LIGHT_ACTIVITY_CONFIRMATION_SCANS = 32;
+   // Authoritative block updates bypass this gate (see updateTracedLightActivity).
+   // What remains are chunk-rescan/block-load observations, which RTXDI/RTX Remix
+   // treat as absence-scans needing only ~2-4 frames of confirmation. 32 was wrong
+   // by an order of magnitude and held real state changes for entire seconds.
+   private static final int LIGHT_ACTIVITY_CONFIRMATION_SCANS = 4;
    private static final int INCREMENTAL_PARALLEL_THRESHOLD = 32;
    private static final float POSITION_MATCH_EPSILON = 1.0e-4F;
    private static final long CHUNK_LIGHT_HASH_OFFSET = 1469598103934665603L;
@@ -1554,8 +1558,17 @@ public class LightRegistry implements Destructable {
       try {
          this.chunkLightHashes.remove(chunkKey(blockPos));
          // Same as the live lookup overload: this snapshot is an authoritative
-         // block update, not a speculative resident chunk rescan.
-         this.syncTracedLight(blockPos, blockState, lightInfo, false, SyncSource.BLOCK_UPDATE_SNAPSHOT);
+         // block update, not a speculative resident chunk rescan. Re-resolve
+         // from the live world state at apply time when possible — captured
+         // snapshots can be stale if the chunk briefly unloaded between queue
+         // and flush, which would otherwise flip activity between null and
+         // the lit info on every replay.
+         ClientWorld level = MinecraftAccessor.getLevel();
+         if (level != null && level.isChunkLoaded(blockPos)) {
+            this.syncTracedLight(level, blockPos, level.getBlockState(blockPos), false, SyncSource.BLOCK_UPDATE_SNAPSHOT);
+         } else {
+            this.syncTracedLight(blockPos, blockState, lightInfo, false, SyncSource.BLOCK_UPDATE_SNAPSHOT);
+         }
       } finally {
          this.lock.writeLock().unlock();
       }
@@ -2084,7 +2097,12 @@ public class LightRegistry implements Destructable {
       }
 
       Vector3f lightPos = new Vector3f(blockPos.getX() + 0.5F, blockPos.getY() + 0.5F, blockPos.getZ() + 0.5F);
-      if (!this.shouldApplyConfirmedActivityChange(lightPos, updated)) {
+      // Authoritative block updates carry a real state transition (e.g. redstone
+      // lamp lit=true -> lit=false). The confirmation-scan gate exists to debounce
+      // enclosure-culling churn during camera motion, not real state changes —
+      // applying it here leaves the toggled lamp active until 32 chunk re-syncs
+      // accumulate, which never happens once the chunk light hash stabilises.
+      if (!isAuthoritativeBlockUpdate(source) && !this.shouldApplyConfirmedActivityChange(lightPos, updated)) {
          this.churnStats.noteNoopSync();
          return;
       }
@@ -2093,6 +2111,10 @@ public class LightRegistry implements Destructable {
          this.logLightActivityMutation(source, blockPos, blockState, previous, updated);
          this.noteTracedLightActivityMutation(source, blockPos, previous, updated);
       }
+   }
+
+   private static boolean isAuthoritativeBlockUpdate(SyncSource source) {
+      return source == SyncSource.BLOCK_UPDATE_LIVE || source == SyncSource.BLOCK_UPDATE_SNAPSHOT;
    }
 
    private boolean shouldApplyConfirmedActivityChange(Vector3f lightPos, TracedLightPosition updated) {

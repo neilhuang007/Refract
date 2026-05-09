@@ -22,7 +22,17 @@ void main()
 {
     SortReprojectedReservoirs_storeEmptyComputeCellOffsetsResult();
 
-    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    ivec2 reservoirPos = ivec2(gl_FragCoord.xy);
+    int activeField = ph_restir_active_checkerboard_field;
+    ivec2 pixel;
+    if (activeField == 0) {
+        pixel = reservoirPos;
+    } else {
+        // RTXDI_ReservoirPosToPixelPos: expand half-width reservoir coord to full-res pixel.
+        // Reference: RTXDI Libraries/Rtxdi/Include/Rtxdi/Utils/ReservoirAddressing.hlsli
+        pixel = ivec2(reservoirPos.x << 1, reservoirPos.y);
+        pixel.x += ((pixel.y + activeField) & 1);
+    }
     if (!lt_is_viewport_uv_in_bounds(pixel)) {
         return;
     }

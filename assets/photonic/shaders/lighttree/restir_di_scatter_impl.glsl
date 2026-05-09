@@ -959,11 +959,16 @@ RTXDI_DIReservoir lt_ScatterTemporalResampling_load_current_reservoir(
     ivec2 pixel)
 {
     RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
+    // The proposal reservoir textures are half-width when checkerboard is active.
+    // Callers pass a full-res pixel; convert to the half-width address before
+    // texelFetch or the right half of the screen reads OOB and gets an empty
+    // reservoir. Reference: RTXDI Rtxdi/Include/Rtxdi/Utils/ReservoirAddressing.hlsli.
+    ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixel, ph_restir_active_checkerboard_field);
     rtxdi_unpack_reservoir_at_surface(
         reservoir,
-        texelFetch(radiosity_proposal_reservoirs, pixel, 0),
-        texelFetch(radiosity_proposal_reservoir_samples, pixel, 0),
-        texelFetch(radiosity_proposal_reservoir_meta, pixel, 0),
+        texelFetch(radiosity_proposal_reservoirs, reservoirPos, 0),
+        texelFetch(radiosity_proposal_reservoir_samples, reservoirPos, 0),
+        texelFetch(radiosity_proposal_reservoir_meta, reservoirPos, 0),
         RAB_EmptySurface(),
         false
     );
@@ -1019,11 +1024,13 @@ LtScatterCurrentSample lt_ScatterTemporalResampling_load_current_sample(
     // that was published by the Java pipeline before Stage 2c. This mirrors the
     // structured-buffer read of currReconnectionData[reservoirIdx] exactly.
     reservoirIdx = reservoirIdx;
-    vec4 reconnection0 = texelFetch(scatter_reconnection0, pixel, 0);
-    vec4 reconnection1 = texelFetch(scatter_reconnection1, pixel, 0);
-    vec4 reconnection2 = texelFetch(scatter_reconnection2, pixel, 0);
-    vec4 reconnection3 = texelFetch(scatter_reconnection3, pixel, 0);
-    vec4 reconnection4 = texelFetch(scatter_reconnection4, pixel, 0);
+    // scatter_reconnection* are half-width when checkerboard is active; halve x.
+    ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixel, ph_restir_active_checkerboard_field);
+    vec4 reconnection0 = texelFetch(scatter_reconnection0, reservoirPos, 0);
+    vec4 reconnection1 = texelFetch(scatter_reconnection1, reservoirPos, 0);
+    vec4 reconnection2 = texelFetch(scatter_reconnection2, reservoirPos, 0);
+    vec4 reconnection3 = texelFetch(scatter_reconnection3, reservoirPos, 0);
+    vec4 reconnection4 = texelFetch(scatter_reconnection4, reservoirPos, 0);
     ReconnectionData storedReconnection;
     scatter_unpack_reconnection(
         reconnection0,

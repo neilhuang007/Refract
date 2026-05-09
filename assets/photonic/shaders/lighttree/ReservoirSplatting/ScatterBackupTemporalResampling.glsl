@@ -15,11 +15,13 @@ RTXDI_DIReservoir lt_di_load_gather_intermediate_reservoir(
     ivec2 pixel)
 {
     RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
+    // temporal_gather_intermediate_reservoir_* are half-width when checkerboard is active; halve x.
+    ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixel, ph_restir_active_checkerboard_field);
     rtxdi_unpack_reservoir_at_surface(
         reservoir,
-        texelFetch(temporal_gather_intermediate_reservoir_data, pixel, 0),
-        texelFetch(temporal_gather_intermediate_reservoir_sample, pixel, 0),
-        texelFetch(temporal_gather_intermediate_reservoir_meta, pixel, 0),
+        texelFetch(temporal_gather_intermediate_reservoir_data, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reservoir_sample, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reservoir_meta, reservoirPos, 0),
         RAB_EmptySurface(),
         false
     );

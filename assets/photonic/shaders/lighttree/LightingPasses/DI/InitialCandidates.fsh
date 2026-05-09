@@ -16,5 +16,10 @@ layout(location = 7) out vec4 reconnection4_frag_out;
 
 void main()
 {
-    InitialCandidates_run(ivec2(gl_FragCoord.xy));
+    ivec2 reservoirPos = ivec2(gl_FragCoord.xy);
+    int activeField = int(ph_restir_active_checkerboard_field);
+    ivec2 pixel = (activeField == 0)
+        ? reservoirPos
+        : RTXDI_ReservoirPosToPixelPos(reservoirPos, activeField);
+    InitialCandidates_run(pixel);
 }

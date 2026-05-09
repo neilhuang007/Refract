@@ -524,6 +524,7 @@ uniform float ph_restir_gi_initial_sample_count;
 uniform float ph_restir_gi_temporal_max_splats;
 uniform float ph_restir_gi_spatial_sample_count;
 uniform float ph_restir_gi_spatial_bias_mode;
+uniform float ph_restir_gi_max_ray_distance;
 
 const int gi_buffer_index_initial = 0;
 const int gi_buffer_index_spatial = 1;
@@ -668,9 +669,11 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 samplePosition) {
 bool gi_shade_secondary_surface(
     RAB_Surface currentSurface,
     RAB_Surface secondarySurface,
+    int secondarySkyLight,
     inout RTXDI_RandomSamplerState rng,
     inout vec3 shadedRadiance
 ) {
+    bool screenLookupValid = false;
     ivec2 secondaryPixelPosition = ivec2(0);
     float secondaryViewDepth = 0.0f;
     if (gi_project_secondary_surface(secondarySurface, secondaryPixelPosition, secondaryViewDepth)) {
@@ -688,7 +691,22 @@ bool gi_shade_secondary_surface(
                 nrd_compute_specular_demodulation(secondarySurface.material.diffuseAlbedo, gi_surface_metalness(secondarySurface))
             );
             shadedRadiance += max(directDiffuse + directSpecular, vec3(0.0f));
+            screenLookupValid = true;
         }
+    }
+
+    if (!screenLookupValid && secondarySkyLight > 0) {
+        // Fallback: use vanilla per-face sky-light propagation as the direct
+        // lighting estimate at the secondary hit. The screen-space NEE only
+        // works for hits whose projection falls on a matching visible pixel;
+        // off-screen / occluded secondary surfaces would otherwise contribute
+        // only emission. Block-light from emitters is not in cb_array (the
+        // discrete light list / ReGIR carries those) and is intentionally
+        // omitted here.
+        float skyAccess = float(secondarySkyLight) / 15.0f;
+        vec3 skyTint = max(indirect_light_color, vec3(0.0f));
+        vec3 secondaryAlbedoSafe = max(secondarySurface.material.diffuseAlbedo, vec3(0.0f));
+        shadedRadiance += skyAccess * skyTint * secondaryAlbedoSafe;
     }
 
     shadedRadiance = gi_clamp_secondary_radiance(shadedRadiance);
@@ -776,17 +794,49 @@ void gi_trace_initial_candidate(
     }
 
     const float brdfRayMinT = 0.001f;
+    // GI secondary rays attenuate fast in voxelized scenes; bound the trace so
+    // misses fall through to the sky/dark fallback fast instead of running the
+    // full DDA budget. The cap is configurable via ph_restir_gi_max_ray_distance
+    // (PhotonicsStorage.RESTIR_GI_MAX_RAY_DISTANCE), defaulting to 32 blocks
+    // when unbound.
+    float maxTraceBlocks = ph_restir_gi_max_ray_distance > 0.0f
+        ? ph_restir_gi_max_ray_distance
+        : 32.0f;
     lightEmittance = vec3(0.0f);
     breakOnEmpty = true;
     ray.origin = lt_surface_rt_pos(currentSurface) + sampleDir * brdfRayMinT;
     ray.direction = sampleDir;
+    // ray.origin already offsets by brdfRayMinT, so leave the min-distance
+    // cutoff at 0 instead of double-buffering the self-intersection epsilon.
+    ray_min_trace_distance = 0.0f;
+    ray_max_trace_distance = maxTraceBlocks;
+    // Long-but-bounded trace: keep root/block empty-space skip optimizations
+    // and per-block transparency mode that the unbounded path uses. Without
+    // this flag the bounded ray would silently disable both, and the ~67x perf
+    // win we measured would be smaller than it could be.
+    ray_long_bounded_traversal = true;
     trace_ray(ray, true);
+    int secondarySkyLight = 0;
+    if (ray.result_hit && !ray_iteration_bound_reached) {
+        secondarySkyLight = get_result_sky_light(normalize(ray.result_normal));
+    }
+    ray_long_bounded_traversal = false;
+    ray_min_trace_distance = 0.0f;
+    ray_max_trace_distance = -1.0f;
     breakOnEmpty = false;
 
     vec3 secondaryThroughput = clamp(result_tint_color, vec3(0.0f), vec3(1.0f));
     bool hitSceneSurface = ray.result_hit && !ray_iteration_bound_reached;
 
     if (!hitSceneSurface) {
+        // If the ray exhausted the GI distance cap AND the last traversed
+        // block had no sky access (deep cave / sealed tunnel), the surface
+        // beyond the cap is dark; faking sky here would over-brighten caves.
+        // ph_result_sky_brightness is set by trace_ray when blocks are
+        // traversed (ph_raytracing.glsl) and resets to 0 each trace.
+        if (ray_distance_limit_reached && ph_result_sky_brightness <= 0) {
+            return;
+        }
         vec3 skyRadiance = max(get_sky_color(pixelPosition, currentSurface.worldPos, sampleDir), vec3(0.0f));
         if (ph_luminance(skyRadiance) <= 1e-6f) {
             skyRadiance = max(indirect_light_color, vec3(0.0f));
@@ -815,6 +865,20 @@ void gi_trace_initial_candidate(
         return;
     }
 
+    // Russian roulette: probabilistically kill low-throughput paths to skip
+    // the secondary direct-lighting fetch and reservoir update. Survivors are
+    // boosted by 1/p so the estimator stays unbiased. Only the post-trace work
+    // is saved -- the trace already ran. The 0.1 floor caps boost variance for
+    // near-zero-throughput hits (e.g. black voxels), where divide-by-tiny would
+    // amplify noise more than it helps.
+    const float gi_rr_min_survival = 0.1f;
+    float gi_rr_max_throughput = max(secondaryThroughput.r, max(secondaryThroughput.g, secondaryThroughput.b));
+    float gi_rr_survival = clamp(gi_rr_max_throughput, gi_rr_min_survival, 1.0f);
+    if (RTXDI_GetNextRandom(rng) > gi_rr_survival) {
+        return;
+    }
+    secondaryThroughput /= gi_rr_survival;
+
     vec3 secondaryPos = ray.result_position;
     vec3 secondaryNormal = normalize(ray.result_normal);
     vec3 secondaryAlbedo = max(ray.result_color, vec3(0.0f));
@@ -836,7 +900,7 @@ void gi_trace_initial_candidate(
         ph_linear_view_depth(modelview_projection, secondaryPos + world_offset)
     );
 
-    if (!gi_shade_secondary_surface(currentSurface, secondarySurface, rng, secondaryRadiance)) {
+    if (!gi_shade_secondary_surface(currentSurface, secondarySurface, secondarySkyLight, rng, secondaryRadiance)) {
         return;
     }
 

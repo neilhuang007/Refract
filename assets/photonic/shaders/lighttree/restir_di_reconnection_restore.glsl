@@ -146,12 +146,14 @@ ReconnectionData RestirDI_loadPreviousFrameReconnection(ivec2 pixelPosition)
         uvec2(pixelPosition)
     );
     ReconnectionData reconnection;
+    // prev_scatter_reconnection* are half-width when checkerboard is active; halve x.
+    ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixelPosition, ph_restir_active_checkerboard_field);
     scatter_unpack_reconnection(
-        texelFetch(prev_scatter_reconnection0, pixelPosition, 0),
-        texelFetch(prev_scatter_reconnection1, pixelPosition, 0),
-        texelFetch(prev_scatter_reconnection2, pixelPosition, 0),
-        texelFetch(prev_scatter_reconnection3, pixelPosition, 0),
-        texelFetch(prev_scatter_reconnection4, pixelPosition, 0),
+        texelFetch(prev_scatter_reconnection0, reservoirPos, 0),
+        texelFetch(prev_scatter_reconnection1, reservoirPos, 0),
+        texelFetch(prev_scatter_reconnection2, reservoirPos, 0),
+        texelFetch(prev_scatter_reconnection3, reservoirPos, 0),
+        texelFetch(prev_scatter_reconnection4, reservoirPos, 0),
         0.0f,
         0.0f,
         reconnection
@@ -204,22 +206,24 @@ bool RestirDI_restoreTemporalIntermediateReconnection(
 ReconnectionData RestirDI_loadPreviousTemporalReconnection(ivec2 pixelPosition)
 {
     RTXDI_DIReservoir temporalReservoir = RTXDI_EmptyDIReservoir();
+    // temporal_gather_intermediate_* are half-width when checkerboard is active; halve x.
+    ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixelPosition, ph_restir_active_checkerboard_field);
     rtxdi_unpack_reservoir_at_surface(
         temporalReservoir,
-        texelFetch(temporal_gather_intermediate_reservoir_data, pixelPosition, 0),
-        texelFetch(temporal_gather_intermediate_reservoir_sample, pixelPosition, 0),
-        texelFetch(temporal_gather_intermediate_reservoir_meta, pixelPosition, 0),
+        texelFetch(temporal_gather_intermediate_reservoir_data, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reservoir_sample, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reservoir_meta, reservoirPos, 0),
         RAB_EmptySurface(),
         false
     );
 
     ReconnectionData reconnection;
     scatter_unpack_reconnection(
-        texelFetch(temporal_gather_intermediate_reconnection0, pixelPosition, 0),
-        texelFetch(temporal_gather_intermediate_reconnection1, pixelPosition, 0),
-        texelFetch(temporal_gather_intermediate_reconnection2, pixelPosition, 0),
-        texelFetch(temporal_gather_intermediate_reconnection3, pixelPosition, 0),
-        texelFetch(temporal_gather_intermediate_reconnection4, pixelPosition, 0),
+        texelFetch(temporal_gather_intermediate_reconnection0, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reconnection1, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reconnection2, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reconnection3, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reconnection4, reservoirPos, 0),
         0.0f,
         0.0f,
         reconnection

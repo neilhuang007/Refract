@@ -353,4 +353,26 @@ bool regir_pick_light(
     return true;
 }
 
+// Cell occupancy probe. Returns true if at least one slot in the resolved cell
+// holds a non-empty proposal. Empty slots (slotData.y == 0) are produced by
+// regir_build.glsl when its RIS proposals all evaluate to zero target pdf for
+// the cell volume (RAB_GetLightTargetPdfForVolume == 0 for every candidate light
+// considered). When every slot is empty, the lookup-time RIS draws from the same
+// pool the build sampled and would itself produce only zero-weight candidates,
+// so the candidate-generation pipeline at any surface inside this cell collapses
+// to an empty reservoir.
+bool regir_cell_has_any_light(int hashSlot) {
+    if (hashSlot < 0 || ph_regir_lights_per_cell <= 0) {
+        return false;
+    }
+    uint baseIndex = uint(ph_regir_ris_buffer_offset)
+                   + uint(hashSlot) * uint(ph_regir_lights_per_cell);
+    for (int slot = 0; slot < ph_regir_lights_per_cell; slot++) {
+        if (ph_ris_data[baseIndex + uint(slot)].y != 0u) {
+            return true;
+        }
+    }
+    return false;
+}
+
 #endif
