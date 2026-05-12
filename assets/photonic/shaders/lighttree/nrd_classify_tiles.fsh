@@ -32,8 +32,13 @@ void main() {
             float viewZ = nrd_compute_view_z(worldPos);
             float depthVal = texelFetch(depthtex0, pixelPos, 0).x;
 
+            // depthVal < 0.56 = first-person hand item (Iris convention, see common/impl/is_hand.glsl).
+            // Hand-only tiles get the same skip flag as sky tiles; downstream NRD a-trous/history-fix
+            // passes branch on `nrd_in_tiles.r > 0.5` and skip the entire 16x16 tile. RTXDI parity:
+            // RELAX classifies hand tiles as kBackgroundTile in the same way.
             bool isSkyPixel = (viewZ >= ph_nrd_denoising_range) || (depthVal > 0.99999);
-            if (isSkyPixel) {
+            bool isHandPixel = depthVal < 0.56;
+            if (isSkyPixel || isHandPixel) {
                 skyCount++;
             }
         }

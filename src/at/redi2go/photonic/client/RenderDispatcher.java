@@ -303,7 +303,10 @@ public class RenderDispatcher implements IRenderDispatcher, Destructable {
 
    @Override
    public Vector3f getHandheldColor() {
-      return getHandheld();
+      // Force zero so the GLSL handheld trace gates skip trace_ray entirely:
+      //   restir_gi_bridge.glsl:25 (lt_build_handheld_stage) and lighting.glsl:9
+      //   both early-out on `handheld_color == vec3(0)`.
+      return new Vector3f();
    }
 
    private static Vector3f getHandheld() {

@@ -84,6 +84,16 @@ void InitialCandidates_run(ivec2 pixel)
         return;
     }
 
+    // Skip first-person hand item pixels (depthtex0 < 0.56, Iris convention).
+    // The host shaderpack lights the held item natively in gbuffers_hand;
+    // running ReSTIR DI initial sampling here would burn shadow rays and
+    // ReGIR cell lookups on ~1-2% of screen with no visible benefit.
+    if (texelFetch(depthtex0, pixel, 0).x < 0.56)
+    {
+        InitialCandidates_storeEmptyReservoir();
+        return;
+    }
+
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
     ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
     if (!lt_is_active_reservoir_lane(reservoirPosition))

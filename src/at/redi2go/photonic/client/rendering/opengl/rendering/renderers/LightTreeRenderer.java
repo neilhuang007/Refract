@@ -394,6 +394,11 @@ public class LightTreeRenderer extends MainRenderer {
   private float[] cachedRegirPdfPowers;
   private int cachedRegirPdfLightCount = -1;
   private long cachedRegirSemanticLayoutHash = Long.MIN_VALUE;
+  private long cachedRegirBuildSemanticHash = Long.MIN_VALUE;
+  private int cachedRegirBuildCamCellX = Integer.MIN_VALUE;
+  private int cachedRegirBuildCamCellY = Integer.MIN_VALUE;
+  private int cachedRegirBuildCamCellZ = Integer.MIN_VALUE;
+  private boolean hasValidRegirBuild = false;
   private long lastCpuReSTIRGINanos;
   private long lastCpuIndirectDenoiseNanos;
   private long lastCpuLightingAccumulationNanos;
@@ -1160,8 +1165,8 @@ public class LightTreeRenderer extends MainRenderer {
       // placements / redstone-lamp toggles surface in <0.3s, plus aggressive
       // anti-lag (clamping sigma + reset amount) so radiance-only changes
       // (newly-cast shadow with unchanged geometry) decay fast.
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_accumulated_frame_num", () -> 16.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_fast_accumulated_frame_num", () -> 4.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_accumulated_frame_num", () -> 32.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_max_fast_accumulated_frame_num", () -> 8.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_depth_threshold", () -> 0.003f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_denoising_range", () -> 500.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_disocclusion_threshold", () -> 0.005f);
@@ -1174,8 +1179,8 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_lobe_angle_fraction", () -> 0.4f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_roughness_fraction", () -> 0.1f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_spec_lobe_angle_slack", () -> 0.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_frame_num", () -> 3.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_base_stride", () -> 14.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_frame_num", () -> 2.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_base_stride", () -> 8.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_fix_normal_power", () -> 8.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_clamping_color_box_sigma_scale", () -> 2.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_acceleration_amount", () -> 0.6f);
@@ -1184,8 +1189,8 @@ public class LightTreeRenderer extends MainRenderer {
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_history_reset_amount", () -> 0.8f);
       // Smaller prepass radii: voxel surfaces have no fine geometric detail to
       // preserve and are pre-blurred by their bilinear filter texture sampling.
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_diff_prepass_blur_radius", () -> 15.0f);
-      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_spec_prepass_blur_radius", () -> 20.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_diff_prepass_blur_radius", () -> 0.0f);
+      uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_spec_prepass_blur_radius", () -> 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_anti_firefly", () -> 1.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_hitdist_reconstruction", () -> 0.0f);
       uniforms.uniform1f(UniformUpdateFrequency.PER_FRAME, "ph_nrd_reset_history", () -> this.shouldResetNrdHistory() ? 1.0f : 0.0f);
@@ -2533,6 +2538,22 @@ public class LightTreeRenderer extends MainRenderer {
          this.cachedRegirPdfPowers = null;
          this.cachedRegirPdfLightCount = 0;
          this.cachedRegirSemanticLayoutHash = Long.MIN_VALUE;
+         this.hasValidRegirBuild = false;
+         return;
+      }
+
+      long currentSemanticHash = lightRegistry.getSemanticLayoutHash();
+      Vector3f gridCenter = lightRegistry.getRegirGridCenter();
+      float cellSize = lightRegistry.getRegirHashCellSizeBlocks();
+      int camCellX = (int) Math.floor(gridCenter.x / cellSize);
+      int camCellY = (int) Math.floor(gridCenter.y / cellSize);
+      int camCellZ = (int) Math.floor(gridCenter.z / cellSize);
+
+      if (this.hasValidRegirBuild
+            && currentSemanticHash == this.cachedRegirBuildSemanticHash
+            && camCellX == this.cachedRegirBuildCamCellX
+            && camCellY == this.cachedRegirBuildCamCellY
+            && camCellZ == this.cachedRegirBuildCamCellZ) {
          return;
       }
 
@@ -2555,6 +2576,7 @@ public class LightTreeRenderer extends MainRenderer {
       // hash(quantized_position, normal_bucket). The legacy gridCells/cellSize uniforms
       // are still passed for diagnostic shaders that have not been migrated.
       int gridRes = lightRegistry.getRegirGridResolution();
+      lightRegistry.refreshActiveRegirCells(lightRegistry.getRegirGridCenter());
       this.regirComputeProgram.dispatch(
          lightRegistry.getLightsMemoryManager(),
          lightRegistry.getGlobalLightCdfMemoryManager(),
@@ -2576,8 +2598,16 @@ public class LightTreeRenderer extends MainRenderer {
          lightRegistry.getRegirHashNormalBuckets(),
          lightRegistry.getRegirBuildRegionCells(),
          this.lightingStageBuffer.getWriteAttachment("position"),
-         this.lightingStageBuffer.getWriteAttachment("mapped_normal")
+         this.lightingStageBuffer.getWriteAttachment("mapped_normal"),
+         lightRegistry.getActiveRegirCellCount(),
+         lightRegistry.getActiveRegirCellsBuffer()
       );
+
+      this.cachedRegirBuildSemanticHash = currentSemanticHash;
+      this.cachedRegirBuildCamCellX = camCellX;
+      this.cachedRegirBuildCamCellY = camCellY;
+      this.cachedRegirBuildCamCellZ = camCellZ;
+      this.hasValidRegirBuild = true;
    }
 
    private int getRegirBuildSampleCount() {

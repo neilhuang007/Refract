@@ -15,6 +15,7 @@ import org.lwjgl.opengl.GL43;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 
 public class RegirComputeProgram {
 
@@ -45,6 +46,10 @@ public class RegirComputeProgram {
     private int locGeometryBuildEnabled = -1;
     private int locStagePosition = -1;
     private int locStageMappedNormal = -1;
+    private int locActiveCellCount = -1;
+
+    // Raw GL buffer for active-cell list (ivec4 per cell, binding 9).
+    private int activeCellsBufferId = 0;
 
     // -----------------------------------------------------------------------
     // Presample tiles program (regir_presample_tiles.glsl)
@@ -84,13 +89,14 @@ public class RegirComputeProgram {
     // Hash-grid auxiliary buffers
     private static final int bindHashChecksum       = 7;  // uint per slot, atomic claim word
     private static final int bindHashKey            = 8;  // ivec4 per slot, (cellX, cellY, cellZ, normalBucket)
+    private static final int bindActiveCells        = 9;  // ivec4[] active cell list for indexed dispatch
 
     // -----------------------------------------------------------------------
     // RIS tile buffer parameters
     // RTXDI defaults: tileSize = 1024, tileCount = 128.
     // -----------------------------------------------------------------------
     public static final int tileSize  = 1024;
-    public static final int tileCount = 128;
+    public static final int tileCount = 96;
 
 
     // -----------------------------------------------------------------------
@@ -151,6 +157,7 @@ public class RegirComputeProgram {
         this.locGeometryBuildEnabled  = GL20.glGetUniformLocation(this.programId, "ph_regir_geometry_build_enabled");
         this.locStagePosition         = GL20.glGetUniformLocation(this.programId, "stage_radiosity_position");
         this.locStageMappedNormal     = GL20.glGetUniformLocation(this.programId, "stage_radiosity_mapped_normal");
+        this.locActiveCellCount       = GL20.glGetUniformLocation(this.programId, "ph_regir_active_cell_count");
     }
 
     // -----------------------------------------------------------------------
@@ -355,7 +362,9 @@ public class RegirComputeProgram {
             int hashNormalBuckets,
             int buildRegionCells,
             TextureObject stagePositionTexture,
-            TextureObject stageMappedNormalTexture) {
+            TextureObject stageMappedNormalTexture,
+            int activeCellCount,
+            IntBuffer activeCellsData) {
 
         if (!this.compiled) return;
 
@@ -424,8 +433,11 @@ public class RegirComputeProgram {
 
         this.setUniforms(gridCenter, gridCells, lightsPerCell, cellSize, lightCount, buildFrameCounter,
                 numBuildSamples, samplingJitter, risTileBufferOffset, regirRisBufferOffset,
-                hashTableSize, hashCellSize, hashNormalBuckets, buildRegionCells);
+                hashTableSize, hashCellSize, hashNormalBuckets, buildRegionCells, activeCellCount);
         this.bindBuildSsbos(lightList, lightCdf, risBuffer, compactLightData, hashChecksum, hashKey);
+
+        // Upload active-cell list and bind at binding 9 before dispatch.
+        this.uploadAndBindActiveCells(activeCellsData, activeCellCount);
 
         boolean geometryBuildEnabled = this.bindGeometryBuildTextures(stagePositionTexture, stageMappedNormalTexture);
 
@@ -439,20 +451,43 @@ public class RegirComputeProgram {
             int height = dimensions.length > 1 ? Math.max(dimensions[1], 1) : 1;
             totalCellSlots = (long) width * height * Math.max(lightsPerCell, 1);
         } else {
-            int cellsPerSide = Math.max(buildRegionCells, 1);
+            // Active-cell indexed dispatch: thread count scales with active cells, not the full build cube.
             int bucketCount = Math.max(hashNormalBuckets, 1);
-            totalCellSlots = (long) cellsPerSide * cellsPerSide * cellsPerSide * bucketCount * Math.max(lightsPerCell, 1);
+            totalCellSlots = (long) Math.max(activeCellCount, 0) * bucketCount * Math.max(lightsPerCell, 1);
         }
 
         int totalSlots = (int) Math.min(totalCellSlots, Integer.MAX_VALUE);
-        int workGroupSize = 256; // matches layout(local_size_x = 256) in regir_build.glsl
-        int numGroups     = (totalSlots + workGroupSize - 1) / workGroupSize;
-        GL43.glDispatchCompute(numGroups, 1, 1);
+        if (totalSlots > 0) {
+            int workGroupSize = 256; // matches layout(local_size_x = 256) in regir_build.glsl
+            int numGroups = (totalSlots + workGroupSize - 1) / workGroupSize;
+            GL43.glDispatchCompute(numGroups, 1, 1);
+        }
 
         GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
         this.unbindGeometryBuildTextures(geometryBuildEnabled);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindActiveCells, 0);
 
         GL20.glUseProgram(0);
+    }
+
+    private void uploadAndBindActiveCells(IntBuffer data, int cellCount) {
+        if (this.activeCellsBufferId == 0) {
+            this.activeCellsBufferId = GL15.glGenBuffers();
+            // Pre-allocate worst-case storage: REGIR_BUILD_REGION_CELLS^3 * ivec4 = 4096 * 16 bytes
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, this.activeCellsBufferId);
+            GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, 4096L * 4 * Integer.BYTES, GL15.GL_DYNAMIC_DRAW);
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        }
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, this.activeCellsBufferId);
+        if (cellCount > 0 && data != null) {
+            int prevLimit = data.limit();
+            int prevPos = data.position();
+            data.position(0).limit(cellCount * 4);
+            GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0L, data);
+            data.position(prevPos).limit(prevLimit);
+        }
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindActiveCells, this.activeCellsBufferId);
     }
 
     private boolean bindGeometryBuildTextures(TextureObject stagePositionTexture, TextureObject stageMappedNormalTexture) {
@@ -497,7 +532,7 @@ public class RegirComputeProgram {
                               int numBuildSamples, float samplingJitter,
                               int risTileBufferOffset, int regirRisBufferOffset,
                               int hashTableSize, float hashCellSize, int hashNormalBuckets,
-                              int buildRegionCells) {
+                              int buildRegionCells, int activeCellCount) {
         GL20.glUniform3f(this.locGridCenter,              gridCenter.x, gridCenter.y, gridCenter.z);
         GL20.glUniform3i(this.locGridCells,               gridCells.x, gridCells.y, gridCells.z);
         GL20.glUniform1i(this.locLightsPerCell,           lightsPerCell);
@@ -515,6 +550,7 @@ public class RegirComputeProgram {
         if (this.locHashCellSize      >= 0) GL20.glUniform1f(this.locHashCellSize,      hashCellSize);
         if (this.locHashNormalBuckets >= 0) GL20.glUniform1i(this.locHashNormalBuckets, hashNormalBuckets);
         if (this.locBuildRegionCells  >= 0) GL20.glUniform1i(this.locBuildRegionCells,  buildRegionCells);
+        if (this.locActiveCellCount   >= 0) GL30.glUniform1ui(this.locActiveCellCount,  activeCellCount);
     }
 
     private void bindBuildSsbos(
@@ -589,6 +625,10 @@ public class RegirComputeProgram {
         }
         if (this.pdfTextureId != 0) {
             GL11.glDeleteTextures(this.pdfTextureId);
+        }
+        if (this.activeCellsBufferId != 0) {
+            GL15.glDeleteBuffers(this.activeCellsBufferId);
+            this.activeCellsBufferId = 0;
         }
         this.releasePdfUploadBuffer();
 

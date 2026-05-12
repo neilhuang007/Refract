@@ -67,6 +67,11 @@ layout(std430, binding = 8) coherent restrict buffer ph_regir_cell_keys {
     ivec4 ph_regir_cell_key[];
 };
 
+layout(std430, binding = 9) readonly buffer RegirActiveCellsBuffer {
+    ivec4 ph_regir_active_cells[];
+};
+uniform uint ph_regir_active_cell_count;
+
 uniform sampler2D stage_radiosity_position;
 uniform sampler2D stage_radiosity_mapped_normal;
 uniform int ph_regir_geometry_build_enabled;
@@ -659,24 +664,20 @@ void main() {
 
         rngThreadId = regir_rng_cell_key(cellCoord) * lightsPerCell + lightInCell;
     } else {
-        int buildRegionCells = max(ph_regir_build_region_cells, 1);
         int bucketCount = max(ph_regir_hash_normal_buckets, 1);
-        uint cellsPerSide = uint(buildRegionCells);
-        uint worldCellCount = cellsPerSide * cellsPerSide * cellsPerSide;
-        uint totalThreads = worldCellCount * uint(bucketCount) * lightsPerCell;
+        uint activeCount = ph_regir_active_cell_count;
+        uint totalThreads = activeCount * uint(bucketCount) * lightsPerCell;
         if (threadId >= totalThreads) return;
 
         lightInCell = threadId % lightsPerCell;
         uint cellKeyIndex = threadId / lightsPerCell;
 
-        uint cellLinearIndex = cellKeyIndex / uint(bucketCount);
-        bucket = regir_clamp_normal_bucket(int(cellKeyIndex - cellLinearIndex * uint(bucketCount)));
-        ivec3 localCell = ivec3(
-            int(cellLinearIndex % cellsPerSide),
-            int((cellLinearIndex / cellsPerSide) % cellsPerSide),
-            int(cellLinearIndex / (cellsPerSide * cellsPerSide))
-        );
-        cellCoord = regir_build_region_min_cell() + localCell;
+        uint activeIndex = cellKeyIndex / uint(bucketCount);
+        bucket = regir_clamp_normal_bucket(int(cellKeyIndex - activeIndex * uint(bucketCount)));
+
+        cellCoord = ph_regir_active_cells[activeIndex].xyz;
+        if (!regir_cell_in_build_region(cellCoord)) return;
+
         rngThreadId = regir_rng_cell_key(cellCoord) * lightsPerCell + lightInCell;
     }
 
@@ -709,15 +710,15 @@ void main() {
     float invNumSamples = 1.0 / float(numBuildSamples);
 
     // Match RTXDI PresampleReGIR.hlsl RNGs:
-    // rng         = RTXDI_InitRandomSampler(uint2(GlobalIndex & 0xfff, GlobalIndex >> 12), frameIndex, 1)
-    // coherentRng = RTXDI_InitRandomSampler(uint2(GlobalIndex >> 8, 0), frameIndex, 1)
+    // rng         seeded from rngThreadId (cell-key * lightsPerCell + lightInCell) for per-light variation within a cell
+    // coherentRng seeded from threadId (gl_GlobalInvocationID.x) >> 8 so all 256 threads in a workgroup share the same RIS tile
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(
         uvec2(rngThreadId & 0xfffu, rngThreadId >> 12),
         ph_ris_frame_index,
         1u
     );
     RTXDI_RandomSamplerState coherentRng = RTXDI_InitRandomSampler(
-        uvec2(rngThreadId >> 8, 0u),
+        uvec2(threadId >> 8, 0u),
         ph_ris_frame_index,
         1u
     );
@@ -756,6 +757,14 @@ void main() {
             lightInfo,
             representativePos,
             cellRadius);
+
+        if (ph_regir_geometry_build_enabled == 0) {
+            vec3 bucketNormal = regir_bucket_to_normal(bucket);
+            vec3 toLight = lightInfo.position - representativePos;
+            float toLightLen = max(length(toLight), 1e-4);
+            vec3 lightDir = toLight / toLightLen;
+            targetPdf *= max(0.0, dot(bucketNormal, lightDir));
+        }
 
         float risRnd = RTXDI_GetNextRandom(rng);
         float risWeight = targetPdf * invSourcePdf;

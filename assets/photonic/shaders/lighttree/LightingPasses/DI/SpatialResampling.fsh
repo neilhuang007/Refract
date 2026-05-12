@@ -60,6 +60,14 @@ void main()
         return;
     }
 
+    // Skip first-person hand item pixels: spatial reuse would issue shadow
+    // rays per neighbor sample and the host shaderpack already lights the
+    // held item natively. Empty reservoir already written above.
+    if (texelFetch(depthtex0, pixel, 0).x < 0.56)
+    {
+        return;
+    }
+
     const RTXDI_RuntimeParameters runtimeParameters = lt_build_runtime_parameters();
     ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(runtimeParameters.activeCheckerboardField));
     if (!lt_is_active_reservoir_lane(reservoirPosition))

@@ -114,12 +114,12 @@ RTXDI_RandomSamplerState RTXDI_InitRandomSampler(uvec2 pixelPos, uint frameIndex
     return state;
 }
 
-// Photonics intentionally de-correlates ReGIR lookup jitter per pixel. RTXDI
-// seeds this stream from pixel / RTXDI_TILE_SIZE_IN_PIXELS, but that can make
-// an entire 16x16 tile jump to a neighboring high-energy cell together.
+// 16x16 tile-coherent jitter, matching RTXDI: all pixels in a tile share the
+// same cell-jitter offset so ReGIR lookups inside the tile resolve to the same
+// jittered cell. Tile size is RTXDI_TILE_SIZE_IN_PIXELS = 16 (>> 4).
 RTXDI_RandomSamplerState RTXDI_InitReGIRLookupRandomSampler(uvec2 pixelPos, uint frameIndex) {
     return RTXDI_InitRandomSampler(
-        pixelPos,
+        uvec2(pixelPos >> 4u),
         frameIndex,
         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
     );

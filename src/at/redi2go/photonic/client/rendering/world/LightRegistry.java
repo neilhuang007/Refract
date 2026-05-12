@@ -21,9 +21,11 @@ import at.redi2go.photonic.client.rendering.world.buffer.SimpleMemoryOwner;
 import at.redi2go.photonic.client.rendering.world.buffer.MemoryRegion;
 import at.redi2go.photonic.client.rendering.world.position.PBlockPos;
 import at.redi2go.photonic.client.rendering.world.position.PChunkPos;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
+import org.lwjgl.system.MemoryUtil;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -70,7 +72,7 @@ public class LightRegistry implements Destructable {
    // slots leaves each cell dominated by a handful of colored lights.
    private static final int REGIR_DEFAULT_LIGHTS_PER_CELL = 64;
    // RTXDI default from ReGIR.h:141 = 8 build samples per cell slot
-   private static final int REGIR_BUILD_SAMPLES = 8;
+   private static final int REGIR_BUILD_SAMPLES = 6;
    // ---------------------------------------------------------------------
    // Hash-grid ReGIR (per Tom Clabault's REGIR blog post):
    //   - Cells are world-fixed, addressed by (quantized_position, quantized_normal).
@@ -98,7 +100,7 @@ public class LightRegistry implements Destructable {
    // ReGIR cell existence is not tied to the current screen's visible pixels.
    // Covers a 72-block cube around the camera, leaving room for lookup jitter
    // without going back to a screen-bound build.
-   private static final int REGIR_BUILD_REGION_CELLS = 24;
+   private static final int REGIR_BUILD_REGION_CELLS = 20;
    private static final int RESIDENT_LIGHT_REMOVAL_CONFIRMATION_SCANS = 64;
    // Authoritative block updates bypass this gate (see updateTracedLightActivity).
    // What remains are chunk-rescan/block-load observations, which RTXDI/RTX Remix
@@ -337,6 +339,7 @@ public class LightRegistry implements Destructable {
   private final Set<Long> loadedLightChunks = ConcurrentHashMap.newKeySet();
   private final Map<Long, Long> chunkLightHashes = new ConcurrentHashMap<>();
   private final Map<Vector3f, Integer> residentMissingLightScans = new ConcurrentHashMap<>();
+  private final Map<Vector3f, Integer> tracedVisibilityMissScans = new ConcurrentHashMap<>();
   private final Map<Vector3f, PendingLightActivityChange> pendingLightActivityChanges = new ConcurrentHashMap<>();
   private final PhotonicsConfig.Observer<LightList> lightListObserver;
   private LightList lightList = new LightList();
@@ -353,6 +356,11 @@ public class LightRegistry implements Destructable {
   private boolean identityLightMappingPending = false;
   private int regirActiveCellCount = 0;
   private int regirActiveLightSlotCount = 0;
+  // Flyweight buffer for active ReGIR cell coords uploaded to the GPU each frame.
+  // Capacity is capped at REGIR_BUILD_REGION_CELLS^3 ivec4 entries (4 ints each).
+  private static final int REGIR_ACTIVE_CELLS_MAX = REGIR_BUILD_REGION_CELLS * REGIR_BUILD_REGION_CELLS * REGIR_BUILD_REGION_CELLS;
+  private IntBuffer regirActiveCellsBuffer = MemoryUtil.memAllocInt(REGIR_ACTIVE_CELLS_MAX * 4);
+  private int regirActiveCellsCount = 0;
   // Stores the most recently resolved ReGIR build center.
   private final Vector3f regirGridCenter = new Vector3f();
   private final Vector3f frozenLightSelectionCamera = new Vector3f();
@@ -1654,6 +1662,7 @@ public class LightRegistry implements Destructable {
             if (pos.x >= chunkMin.x && pos.x < maxX && pos.y >= chunkMin.y && pos.y < maxY && pos.z >= chunkMin.z && pos.z < maxZ) {
                itr.remove();
                this.residentMissingLightScans.remove(pos);
+               this.tracedVisibilityMissScans.remove(pos);
                removed = true;
             }
          }
@@ -1904,6 +1913,8 @@ public class LightRegistry implements Destructable {
       if (this.lightsProvider != null) {
          PhotonicsConfig.removeLightProvider(this.lightsProvider);
       }
+      MemoryUtil.memFree(this.regirActiveCellsBuffer);
+      this.regirActiveCellsBuffer = null;
    }
 
    private static void store(Vector3f vector3f, FloatBuffer buffer) {
@@ -2038,14 +2049,23 @@ public class LightRegistry implements Destructable {
       // churns the light buffer and ReGIR state during pure camera motion.
       boolean tracedVisible = lightInfo.isTraced();
       if (!tracedVisible) {
+         if (previous != null && this.isTrackedChunkLoaded(blockPos)) {
+            int missingScans = this.tracedVisibilityMissScans.merge(lightPos, 1, Integer::sum);
+            if (missingScans < RESIDENT_LIGHT_REMOVAL_CONFIRMATION_SCANS) {
+               this.churnStats.noteNoopSync();
+               return;
+            }
+         }
          if (previous != null && this.tracedLightPositions.remove(lightPos, previous)) {
             this.residentMissingLightScans.remove(lightPos);
+            this.tracedVisibilityMissScans.remove(lightPos);
             DirtyReason reason = lightInfo.isTraced() ? DirtyReason.CULLED : DirtyReason.REMOVED_NO_LIGHT;
             this.logLightMutation(source, reason, blockPos, blockState, previous, null);
             this.noteTracedLightMutation(source, reason, blockPos, previous, null);
          }
          return;
       }
+      this.tracedVisibilityMissScans.remove(lightPos);
 
       int blockId = this.stableTracedLightBlockId(blockState);
       TracedLightPosition updated = new TracedLightPosition(blockId, lightInfo, true);
@@ -2246,6 +2266,53 @@ public class LightRegistry implements Destructable {
             }
          }
       }
+   }
+
+   public void refreshActiveRegirCells(Vector3f cameraPos) {
+      LightInstance[] lights = this.tracedLights;
+      if (lights == null || lights.length == 0) {
+         this.regirActiveCellsBuffer.clear();
+         this.regirActiveCellsBuffer.flip();
+         this.regirActiveCellsCount = 0;
+         return;
+      }
+      final int halfExtent = REGIR_BUILD_REGION_CELLS / 2;
+      final int camCellX = regirHashCellCoord(cameraPos.x);
+      final int camCellY = regirHashCellCoord(cameraPos.y);
+      final int camCellZ = regirHashCellCoord(cameraPos.z);
+
+      LongOpenHashSet seenKeys = new LongOpenHashSet(Math.min(lights.length * 2, REGIR_ACTIVE_CELLS_MAX));
+      this.regirActiveCellsBuffer.clear();
+      int count = 0;
+      for (LightInstance light : lights) {
+         Vector3f pos = light.position();
+         int cx = regirHashCellCoord(pos.x);
+         int cy = regirHashCellCoord(pos.y);
+         int cz = regirHashCellCoord(pos.z);
+         if (Math.abs(cx - camCellX) > halfExtent
+               || Math.abs(cy - camCellY) > halfExtent
+               || Math.abs(cz - camCellZ) > halfExtent) {
+            continue;
+         }
+         long key = (cx & 0xFFFFL) | ((cy & 0xFFFFL) << 16) | ((long)(cz & 0xFFFF) << 32);
+         if (!seenKeys.add(key)) continue;
+         if (count >= REGIR_ACTIVE_CELLS_MAX) break;
+         this.regirActiveCellsBuffer.put(cx);
+         this.regirActiveCellsBuffer.put(cy);
+         this.regirActiveCellsBuffer.put(cz);
+         this.regirActiveCellsBuffer.put(0);
+         count++;
+      }
+      this.regirActiveCellsBuffer.flip();
+      this.regirActiveCellsCount = count;
+   }
+
+   public int getActiveRegirCellCount() {
+      return this.regirActiveCellsCount;
+   }
+
+   public IntBuffer getActiveRegirCellsBuffer() {
+      return this.regirActiveCellsBuffer;
    }
 
    private static boolean shouldCull(ClientWorld level, BlockPos blockPos) {
