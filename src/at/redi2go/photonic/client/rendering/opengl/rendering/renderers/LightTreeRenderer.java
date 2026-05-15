@@ -2680,14 +2680,15 @@ public class LightTreeRenderer extends MainRenderer {
    private void renderDIScatterTemporalProfiled() {
       this.beginGpuRegion(diTemporalResamplingRegionIndex);
       this.setCurrentDiReconnectionSource(DiReconnectionSource.PROPOSAL);
-      boolean scatterBackupTemporalBranch = false;
-      boolean multiScatterTemporalBranch = false;
+      String resolvedTemporalReuse = PhotonicsStorage.normalizeRestirTemporalReuse(PhotonicsStorage.RESTIR_TEMPORAL_REUSE.value);
+      boolean scatterBackupTemporalBranch = "scatter_backup".equals(resolvedTemporalReuse);
+      boolean multiScatterTemporalBranch = "multi_scatter".equals(resolvedTemporalReuse);
       boolean robustTemporalGather = "robust".equals(
          PhotonicsStorage.normalizeRestirTemporalGatherMode(PhotonicsStorage.RESTIR_TEMPORAL_GATHER_MODE.value)
       );
-      boolean scatterOnlyTemporalBranch = false;
-      boolean gatherTemporalBranch = true;
-      boolean gatherTemporalResolveBranch = true;
+      boolean scatterOnlyTemporalBranch = "scatter_only".equals(resolvedTemporalReuse);
+      boolean gatherTemporalBranch = "gather_only".equals(resolvedTemporalReuse);
+      boolean gatherTemporalResolveBranch = gatherTemporalBranch;
       boolean wroteTemporalOutput = false;
       if (gatherTemporalBranch && robustTemporalGather) {
          this.clearTemporalGatherBuffers();
@@ -2698,7 +2699,7 @@ public class LightTreeRenderer extends MainRenderer {
       if (multiScatterTemporalBranch) {
          this.clearMultiTemporalScatterBuffers();
       }
-      if (gatherTemporalBranch) {
+      if (gatherTemporalBranch || scatterBackupTemporalBranch) {
          this.ensureTemporalGatherRenderers();
       }
       if (scatterOnlyTemporalBranch || scatterBackupTemporalBranch) {
@@ -2714,7 +2715,7 @@ public class LightTreeRenderer extends MainRenderer {
          this.robustReuseOptimizationRenderer.renderAll();
          GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
       }
-      if (gatherTemporalBranch && this.temporalCollectRenderer != null) {
+      if ((gatherTemporalBranch || scatterBackupTemporalBranch) && this.temporalCollectRenderer != null) {
          this.temporalCollectRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
@@ -2785,7 +2786,9 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void barrierTemporalScatterOwnershipWrites() {
-      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
+      // Consumer (BinningOffsets / SortReprojectedReservoirs_computeCellOffsets) reads only SSBOs
+      // (cell counters, global counters, cell offsets) — no FBO attachment reads needed.
+      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT);
    }
 
    private void ensureScatterBackupTemporalRenderer() {
@@ -2814,7 +2817,9 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void barrierTemporalScatterResolveInputs() {
-      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
+      // Consumer (ScatterBackupTemporalResampling) reads binning outputs via texelFetch on
+      // uniform sampler2D — TEXTURE_FETCH_BARRIER_BIT covers this; no FBO attachment reads needed.
+      GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
    }
 
    private void drainDirtyBlocksIntoRingBuffer() {

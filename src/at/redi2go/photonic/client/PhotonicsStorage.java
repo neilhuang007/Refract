@@ -56,7 +56,7 @@ public final class PhotonicsStorage {
    public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "black");
    public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "power_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
-   public static final Parameter<String> RESTIR_TEMPORAL_REUSE = stringParam("restir_temporal_reuse", "gather_only");
+   public static final Parameter<String> RESTIR_TEMPORAL_REUSE = stringParam("restir_temporal_reuse", "scatter_backup");
    public static final Parameter<String> RESTIR_TEMPORAL_GATHER_MODE = stringParam("restir_temporal_gather_mode", "fast");
    public static final Parameter<String> RESTIR_SCATTER_BACKUP_MIS_OPTION = stringParam("restir_scatter_backup_mis_option", "balance");
    // Performance tuning — individual per-parameter overrides.

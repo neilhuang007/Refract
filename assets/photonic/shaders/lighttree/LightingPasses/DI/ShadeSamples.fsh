@@ -383,8 +383,15 @@ void main() {
     ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixel, int(params.activeCheckerboardField));
 
     RTXDI_DIReservoir currReservoir;
+    ResolveReSTIR_load_curr_reservoir(reservoirPosition, currReservoir);
+    if (!RTXDI_IsValidDIReservoir(currReservoir)) {
+        storeEmptyShadeOutputs();
+        storeDIReservoir(currReservoir);
+        return;
+    }
+
     ResolveReSTIRShading shading;
-    if (!ResolveReSTIR_execute(reservoirPosition, surface, currReservoir, shading)) {
+    if (!ResolveReSTIR_shade(currReservoir, surface, shading)) {
         storeEmptyShadeOutputs();
         storeDIReservoir(currReservoir);
         return;

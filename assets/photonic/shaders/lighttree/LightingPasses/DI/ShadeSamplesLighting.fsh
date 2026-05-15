@@ -46,18 +46,24 @@ void main()
     // full-res via gl_FragCoord. So both checkerboard mates load the shared reservoir
     // at (x>>1, y) and shade against their own gbuffer surface. Zeroing inactive pixels
     // here would leave half the screen black because there is no reconstruction pass.
+    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(
+        pixel, int(runtimeParameters.activeCheckerboardField));
+
+    RTXDI_DIReservoir currReservoir;
+    ResolveReSTIR_load_curr_reservoir(reservoirPosition, currReservoir);
+    if (!RTXDI_IsValidDIReservoir(currReservoir)) {
+        storeEmptyResolveReSTIROutputs();
+        return;
+    }
+
     RAB_Surface surface = RAB_GetGBufferSurface(pixel, false);
     if (!RAB_IsSurfaceValid(surface)) {
         storeEmptyResolveReSTIROutputs();
         return;
     }
 
-    ivec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(
-        pixel, int(runtimeParameters.activeCheckerboardField));
-
-    RTXDI_DIReservoir currReservoir;
     ResolveReSTIRShading shading;
-    if (!ResolveReSTIR_execute(reservoirPosition, surface, currReservoir, shading)) {
+    if (!ResolveReSTIR_shade(currReservoir, surface, shading)) {
         storeEmptyResolveReSTIROutputs();
         return;
     }
