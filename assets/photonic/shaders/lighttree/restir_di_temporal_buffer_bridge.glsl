@@ -27,9 +27,16 @@
 
 #ifndef PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED
 #define PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED
+#ifndef PH_LIGHTTREE_OMIT_FLOATING_COORDS_BUFFER
 layout(std430) restrict buffer floatingCoords {
     vec2 floatingCoordsData[];
 };
+#else
+// Stub: passes that don't perform robust gather skip the floating-coords SSBO
+// binding. Consumer helpers below remain compilable but are unreachable from
+// the gated entry point.
+vec2 floatingCoordsData[1] = vec2[1](vec2(0.0));
+#endif
 
 int lt_restir_temporal_gather_mode();
 

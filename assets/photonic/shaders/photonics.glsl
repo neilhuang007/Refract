@@ -34,6 +34,7 @@ bool ph_is_data_entry(int entry) {
 
 const int light_size = 4; // 4 vec4s per light
 
+#ifndef PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
 layout (std140) restrict readonly buffer ph_light_list {
     // vec 1: position (xyz) + block_id (w)
     // vec 2: color (xyz) + intensity (w)
@@ -45,6 +46,14 @@ layout (std140) restrict readonly buffer ph_light_list {
 layout (std430) restrict readonly buffer ph_light_list_mapping {
     int ph_lights_array_mapping[];
 };
+#else
+// Buffer stubs for passes that don't sample lights. Same names so consumer
+// functions (load_light, RTXDI light-id mapping helpers) still compile; those
+// functions are not reachable from the reprojection entry point so the stub
+// contents are never read at runtime.
+const vec4 ph_lights_array[1] = vec4[1](vec4(0.0));
+const int  ph_lights_array_mapping[1] = int[1](-1);
+#endif
 
 /*
     -- UNIFORM VARIABLES --

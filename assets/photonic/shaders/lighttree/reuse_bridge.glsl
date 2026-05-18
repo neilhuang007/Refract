@@ -61,9 +61,16 @@ float lt_next_random(inout RTXDI_RandomSamplerState rng)
     return float(rng.seed & 0x00ffffffu) / float(0x01000000u);
 }
 
+#ifndef PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
 layout(std430) restrict readonly buffer ph_global_light_cdf {
     float ph_global_light_cdf_data[];
 };
+#else
+// Stub: passes that don't sample lights skip the SSBO binding. Consumer
+// helpers (lt_pick_power_light_stratified, restir_di_reservoir_core CDF lookup)
+// remain compilable but are not reachable from the reprojection entry point.
+const float ph_global_light_cdf_data[1] = float[1](0.0);
+#endif
 
 // RTXDI: RTXDI_RIS_BUFFER -- declared in light_tree.glsl (included above).
 // Unified buffer containing presample tiles and ReGIR output.
@@ -76,6 +83,7 @@ uniform int  ph_ris_tile_buffer_offset;   // RTXDI: risBufferSegmentParams.buffe
 // Reverse light mapping: current-frame index -> previous-frame index.
 // Inverse of ph_light_list_mapping (previous->current). Built in LightRegistry.java.
 // Returns -1 when no previous-frame equivalent exists for the current-frame light.
+#ifndef PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
 layout(std430) restrict readonly buffer ph_light_reverse_mapping_buf {
     int ph_light_reverse_mapping[];
 };
@@ -86,6 +94,13 @@ layout(std430) restrict readonly buffer ph_light_reverse_mapping_buf {
 layout(std140) restrict readonly buffer ph_light_list_previous {
     vec4 ph_lights_array_previous[];
 };
+#else
+// Stubs for passes that don't sample lights. Consumer helpers
+// (map_light_index_to_previous_frame, load_previous_light) remain compilable
+// but are unreachable from the reprojection entry point.
+const int  ph_light_reverse_mapping[1] = int[1](-1);
+const vec4 ph_lights_array_previous[1] = vec4[1](vec4(0.0));
+#endif
 
 Light lt_invalid_light() {
     return Light(
@@ -312,9 +327,16 @@ uvec2 lt_temporal_scatter_decode_linear_index(uint linearIndex) {
 // Populated once at init by LightRegistry.fillNeighborOffsets(); never written per-frame.
 // neighborOffsetMask = lt_neighbor_offset_count - 1 = 8191.
 // SDK default: NeighborOffsetCount = 8192 (ReSTIRDI.h line 45).
+#ifndef PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
 layout(std430) restrict readonly buffer ph_neighbor_offsets {
     uint ph_neighbor_offsets_data[];
 };
+#else
+// Stub: passes that don't perform spatial resampling skip the offset table.
+// lt_unpack_neighbor_offset_byte / lt_load_neighbor_offset remain compilable
+// but are unreachable from the reprojection entry point.
+const uint ph_neighbor_offsets_data[1] = uint[1](0u);
+#endif
 
 const int lt_neighbor_offset_count = 8192;
 

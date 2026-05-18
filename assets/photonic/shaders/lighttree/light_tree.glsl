@@ -13,6 +13,7 @@
 const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
 const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
 
+#ifndef PH_LIGHTTREE_OMIT_REGIR_BUFFERS
 layout(std430, binding = 5) restrict buffer ph_ris_buffer {
     uvec2 ph_ris_data[];
 };
@@ -23,6 +24,13 @@ layout(std430, binding = 5) restrict buffer ph_ris_buffer {
 layout(std430, binding = 6) restrict readonly buffer ph_ris_compact_light_data {
     uvec4 ph_compact_light_data[];
 };
+#else
+// Stubs: passes that don't sample ReGIR/RIS (e.g. temporal resampling) skip the
+// SSBO bindings. Consumer helpers (load_compact_light, regir_unpack_slot, etc.)
+// remain compilable but are unreachable from the gated entry point.
+const uvec2 ph_ris_data[1] = uvec2[1](uvec2(0u));
+const uvec4 ph_compact_light_data[1] = uvec4[1](uvec4(0u));
+#endif
 
 const uint ph_compact_light_stride = 4u;
 
@@ -62,6 +70,7 @@ uniform int   ph_regir_hash_normal_buckets;    // currently 6 (axis-aligned)
 uniform int   ph_regir_build_region_cells;     // build cube side (cells)
 
 // Hash-grid auxiliary buffers (read-only at lookup time; written by regir_build.glsl).
+#ifndef PH_LIGHTTREE_OMIT_REGIR_BUFFERS
 layout(std430, binding = 7) restrict readonly buffer ph_regir_cell_checksums {
     uint ph_regir_cell_checksum[];
 };
@@ -69,6 +78,11 @@ layout(std430, binding = 7) restrict readonly buffer ph_regir_cell_checksums {
 layout(std430, binding = 8) restrict readonly buffer ph_regir_cell_keys {
     ivec4 ph_regir_cell_key[];
 };
+#else
+// Stubs: regir_hash_lookup is unreachable from the gated entry point.
+const uint ph_regir_cell_checksum[1] = uint[1](0u);
+const ivec4 ph_regir_cell_key[1] = ivec4[1](ivec4(0));
+#endif
 
 const uint RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED = 1u;
 const uint RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED = 2u;

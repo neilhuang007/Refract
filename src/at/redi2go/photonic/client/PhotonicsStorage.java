@@ -53,7 +53,16 @@ public final class PhotonicsStorage {
    public static final Parameter<Boolean> DEBUG_ENABLE_DIRECT_ATROUS = boolParam("debug_enable_direct_atrous", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_INDIRECT_GI = boolParam("debug_enable_indirect_gi", true);
    public static final Parameter<Boolean> DEBUG_ENABLE_INDIRECT_DENOISE = boolParam("debug_enable_indirect_denoise", false);
-   public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "black");
+   // Liu et al. 2025 (Reservoir Splatting) and the underlying ReSTIR
+   // formulation assume one reservoir per pixel: temporal merge is a
+   // GRIS step on the canonical + each prior path that splatted into this
+   // exact pixel (paper §4.1.2 Eq. 11/13). Checkerboard rendering aliases
+   // two adjacent pixels onto a single half-width reservoir slot, with
+   // ownership alternating each frame. That collapses the per-pixel
+   // history the paper relies on — confidence cannot saturate and the
+   // bilinear Eq. 17 sum reads the wrong neighbour half the time. We
+   // default to "off" so the pipeline is paper-faithful out of the box.
+   public static final Parameter<String> RESTIR_CHECKERBOARD_MODE = stringParam("restir_checkerboard_mode", "off");
    public static final Parameter<String> RESTIR_LOCAL_LIGHT_SAMPLING_MODE = stringParam("restir_local_light_sampling_mode", "power_ris");
    public static final Parameter<String> RESTIR_SPATIAL_MIS_MODE = stringParam("restir_spatial_mis_mode", "pairwise");
    public static final Parameter<String> RESTIR_TEMPORAL_REUSE = stringParam("restir_temporal_reuse", "scatter_backup");
