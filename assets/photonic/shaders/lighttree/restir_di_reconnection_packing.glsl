@@ -216,11 +216,11 @@ void scatter_unpack_reconnection(
 
 void scatter_load_gather_intermediate_reconnection(ivec2 uv, out ReconnectionData reconnection) {
     scatter_unpack_reconnection(
-        texelFetch(temporal_gather_intermediate_reconnection0, uv, 0),
-        texelFetch(temporal_gather_intermediate_reconnection1, uv, 0),
-        texelFetch(temporal_gather_intermediate_reconnection2, uv, 0),
-        texelFetch(temporal_gather_intermediate_reconnection3, uv, 0),
-        texelFetch(temporal_gather_intermediate_reconnection4, uv, 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(uv, 0), 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(uv, 1), 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(uv, 2), 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(uv, 3), 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(uv, 4), 0),
         0.0f,
         0.0f,
         reconnection
@@ -229,11 +229,11 @@ void scatter_load_gather_intermediate_reconnection(ivec2 uv, out ReconnectionDat
 
 void scatter_load_prev_reconnection(ivec2 uv, out ReconnectionData reconnection) {
     scatter_unpack_reconnection(
-        texelFetch(prev_scatter_reconnection0, uv, 0),
-        texelFetch(prev_scatter_reconnection1, uv, 0),
-        texelFetch(prev_scatter_reconnection2, uv, 0),
-        texelFetch(prev_scatter_reconnection3, uv, 0),
-        texelFetch(prev_scatter_reconnection4, uv, 0),
+        texelFetch(prev_scatter_reconnections, ivec3(uv, 0), 0),
+        texelFetch(prev_scatter_reconnections, ivec3(uv, 1), 0),
+        texelFetch(prev_scatter_reconnections, ivec3(uv, 2), 0),
+        texelFetch(prev_scatter_reconnections, ivec3(uv, 3), 0),
+        texelFetch(prev_scatter_reconnections, ivec3(uv, 4), 0),
         0.0f,
         0.0f,
         reconnection

@@ -3,9 +3,11 @@ package at.redi2go.photonic.client.rendering.opengl.rendering;
 import at.redi2go.photonic.client.rendering.opengl.GL;
 import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.util.BufferUtils;
+import com.mojang.blaze3d.platform.GlStateManager;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import net.minecraft.client.MinecraftClient;
 import org.lwjgl.opengl.GL11;
@@ -39,7 +41,7 @@ public class RoutingFramebuffer extends ColorFramebuffer {
    @Override
    public void bind() {
       this.previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-      GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, this.getId());
+      GlStateManager._glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, this.getId());
 
       int width = 0;
       int height = 0;
@@ -59,19 +61,30 @@ public class RoutingFramebuffer extends ColorFramebuffer {
             }
          }
 
-         GL30.glFramebufferTexture2D(
-            GL30.GL_DRAW_FRAMEBUFFER,
-            GL30.GL_COLOR_ATTACHMENT0 + attachmentIndex,
-            attachment.getTarget(),
-            attachment.getTextureId(),
-            0
-         );
-         GL.logGlError("RoutingFramebuffer.glFramebufferTexture2D(index=" + attachmentIndex + ", target=" + attachment.getTarget() + ")");
+         if (attachment instanceof ColorFramebuffer.FramebufferAttachment fba && fba.isLayered()) {
+            GL30.glFramebufferTextureLayer(
+               GL30.GL_DRAW_FRAMEBUFFER,
+               GL30.GL_COLOR_ATTACHMENT0 + attachmentIndex,
+               attachment.getTextureId(),
+               0,
+               fba.getArrayLayer()
+            );
+            GL.logGlError("RoutingFramebuffer.glFramebufferTextureLayer(index=" + attachmentIndex + ", layer=" + fba.getArrayLayer() + ")");
+         } else {
+            GL30.glFramebufferTexture2D(
+               GL30.GL_DRAW_FRAMEBUFFER,
+               GL30.GL_COLOR_ATTACHMENT0 + attachmentIndex,
+               attachment.getTarget(),
+               attachment.getTextureId(),
+               0
+            );
+            GL.logGlError("RoutingFramebuffer.glFramebufferTexture2D(index=" + attachmentIndex + ", target=" + attachment.getTarget() + ")");
+         }
          attachmentIndex++;
       }
 
       int viewportWidth = this.resolveViewportWidth(width);
-      GL11.glViewport(0, 0, viewportWidth, height);
+      GlStateManager._viewport(0, 0, viewportWidth, height);
       int[] resolvedDrawBuffers = ColorFramebuffer.resolveDrawBuffers(this.routingDrawBuffers, attachmentIndex);
       IntBuffer buffer = BufferUtils.createIntBuffer(resolvedDrawBuffers.length);
       for (int drawBuffer : resolvedDrawBuffers) {
@@ -90,18 +103,18 @@ public class RoutingFramebuffer extends ColorFramebuffer {
 
    @Override
    public void unbind() {
-      GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, this.previousDrawFramebuffer);
+      GlStateManager._glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, this.previousDrawFramebuffer);
       int width = MinecraftClient.getInstance().getWindow().getFramebufferWidth();
       int height = MinecraftClient.getInstance().getWindow().getFramebufferHeight();
-      GL11.glViewport(0, 0, width, height);
+      GlStateManager._viewport(0, 0, width, height);
       this.previousDrawFramebuffer = 0;
    }
 
    @Override
    public void clear(org.joml.Vector4f clearColor) {
       this.bind();
-      GL11.glClearColor(clearColor.x, clearColor.y, clearColor.z, clearColor.w);
-      GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+      GlStateManager._clearColor(clearColor.x, clearColor.y, clearColor.z, clearColor.w);
+      GlStateManager._clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, false);
       this.unbind();
    }
 
@@ -128,5 +141,44 @@ public class RoutingFramebuffer extends ColorFramebuffer {
 
    @Override
    public void swap() {
+   }
+
+   // -------------------------------------------------------------------------
+   // Canonical static factory helpers — shared by all LightTree resource classes
+   // -------------------------------------------------------------------------
+
+   /**
+    * Creates a {@link RoutingFramebuffer} with a fixed viewport width override.
+    * Used for checkerboard/direct-packed passes whose viewport width differs from
+    * the framebuffer texture width.
+    *
+    * @param viewportWidth supplier for the overridden viewport width (e.g. directPackedViewportWidth)
+    * @param attachments   zero or more lazy attachment suppliers, added in order
+    */
+   @SafeVarargs
+   public static RoutingFramebuffer create(
+      IntSupplier viewportWidth,
+      Supplier<TextureObject>... attachments
+   ) {
+      RoutingFramebuffer fb = new RoutingFramebuffer(viewportWidth::getAsInt);
+      for (Supplier<TextureObject> attachment : attachments) {
+         fb.addAttachment(attachment);
+      }
+      return fb;
+   }
+
+   /**
+    * Creates a plain {@link RoutingFramebuffer} whose viewport width is derived
+    * from the first attachment at bind time (no fixed-width override).
+    *
+    * @param attachments zero or more lazy attachment suppliers, added in order
+    */
+   @SafeVarargs
+   public static RoutingFramebuffer create(Supplier<TextureObject>... attachments) {
+      RoutingFramebuffer fb = new RoutingFramebuffer();
+      for (Supplier<TextureObject> attachment : attachments) {
+         fb.addAttachment(attachment);
+      }
+      return fb;
    }
 }

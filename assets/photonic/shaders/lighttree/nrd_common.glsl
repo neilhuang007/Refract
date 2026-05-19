@@ -2,6 +2,7 @@
 #define PHOTONICS_NRD_COMMON_GLSL
 
 #include "/photonics/lighttree/nrd_material_id.glsl"
+#include "/photonics/lighttree/nrd_parameters.glsl"
 
 // ---------------------------------------------------------------------------
 // Uniforms declared by the NRD pipeline -- registered by LightTreeRenderer.
@@ -58,12 +59,6 @@ const float PH_NRD_HISTORY_SCALE = 255.0;
 const vec3 PH_NRD_LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
 const float NRD_FP16_MAX = 65504.0;
 const float NRD_EPS = 1e-6;
-const float NRD_DIRECT_FIREFLY_LUMA = 16.0;
-
-// NRD Shared.hlsli: FP16_VIEWZ_SCALE used to pack viewZ into FP16 channel.
-// Value 0.125 keeps viewZ up to 524032 in FP16 range (65504 / 0.125).
-// Reference: NRD-Sample/Shaders/ConfidenceBlur.cs.hlsl lines 39, 73.
-const float NRD_FP16_VIEWZ_SCALE = 0.125;
 
 bool nrd_is_active_checkerboard_pixel(ivec2 pixelPosition, bool previousFrame, int activeCheckerboardField) {
     if (activeCheckerboardField == 0) {
@@ -219,9 +214,6 @@ float nrd_normal_weight_atrous(vec3 centerNormal, vec3 sampleNormal, float norma
     float angle = acos(cosAngle);
     return nrd_compute_weight(angle, normalWeightParam, 0.0);
 }
-
-// NRD Common.hlsli:499 GetRoughnessWeightParams
-const float NRD_ROUGHNESS_SENSITIVITY = 0.01;
 
 vec2 nrd_roughness_weight_params(float roughness, float fraction) {
     float a = 1.0 / mix(NRD_ROUGHNESS_SENSITIVITY, 1.0, clamp(roughness * fraction, 0.0, 1.0));
@@ -384,13 +376,6 @@ const float RELAX_NORMAL_ULP = 1.5 / 255.0;
 const float NRD_INF = 1e30;
 const float RELAX_MAX_ACCUM_FRAME_NUM = 255.0;
 
-// NRD Common.hlsli:87 NRD_MAX_ALLOWED_VIRTUAL_MOTION_ACCELERATION
-const float NRD_MAX_ALLOWED_VIRTUAL_MOTION_ACCELERATION = 5.0;
-// NRD Common.hlsli:86 NRD_CURVATURE_HIGH_PARALLAX_DISOCCLUSION_THRESHOLD (normalized %)
-const float NRD_CURVATURE_HIGH_PARALLAX_DISOCCLUSION_THRESHOLD = 0.04;
-// NRD RELAX TemporalAccumulation: variance boost when 2nd moment is 0 and confidence is low
-const float NRD_SPEC_VARIANCE_BOOST = 1.0;
-
 // Area-ReSTIR / PathTracer reference writes materialID = 0.f in NRD-facing guide buffers.
 const float NRD_DEFAULT_MIN_MATERIAL = 0.0;
 
@@ -459,9 +444,6 @@ vec3 nrd_environment_term_rtg(vec3 Rf0, float NoV, float roughness) {
 }
 
 // NRD.hlsli:733 NRD_MaterialFactors -- view-dependent demodulation/remodulation
-// NRD.hlsli:101,105 -- NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02, NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1
-const float NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02;
-const float NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1;
 
 void nrd_material_factors(vec3 N, vec3 V, vec3 albedo, vec3 Rf0, float roughness, out vec3 diffFactor, out vec3 specFactor) {
     float NoV = abs(dot(N, V));

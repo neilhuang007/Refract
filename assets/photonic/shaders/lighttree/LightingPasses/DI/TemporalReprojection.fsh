@@ -1,13 +1,9 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE 1
-// The reprojection pass only writes the four scatter buffers and reads texture
-// samplers + camera uniforms. Drop the six light-data SSBOs that the shared
-// includes pull in to stay under the bindable storage buffer limit (error
-// C5058). Consumer helpers that reference these symbols are unreachable from
-// ReprojectTemporalSamples_run; the stubs in photonics.glsl / reuse_bridge.glsl
-// keep them compilable without consuming SSBO slots.
-#define PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
+// SSBO/sampler inclusion is driven by lt_buffer_features.glsl based on the
+// PH_LIGHTTREE_ENABLE_*_STAGE flag above. Reprojection opts in to REGIR +
+// FLOATING_COORDS centrally — no per-shader overrides.
 
 in vec4 direction_vert_out;
 

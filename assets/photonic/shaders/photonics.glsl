@@ -34,7 +34,12 @@ bool ph_is_data_entry(int entry) {
 
 const int light_size = 4; // 4 vec4s per light
 
-#ifndef PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
+// Resolve PH_LIGHTTREE_USES_* feature flags from the calling .fsh's pass
+// identity flags. The manifest is idempotent so multiple SSBO sites can
+// include it safely.
+#include "/photonics/lighttree/lt_buffer_features.glsl"
+
+#ifdef PH_LIGHTTREE_USES_LIGHT_DATA
 layout (std140) restrict readonly buffer ph_light_list {
     // vec 1: position (xyz) + block_id (w)
     // vec 2: color (xyz) + intensity (w)

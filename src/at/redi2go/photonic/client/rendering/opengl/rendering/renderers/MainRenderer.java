@@ -43,6 +43,14 @@ public abstract class MainRenderer implements Destructable {
       }, new String[]{name});
    }
 
+   protected void addTextureSampler(SamplerHolder samplers, Supplier<TextureObject> textureObjectSupplier, String... names) {
+      samplers.addDynamicSampler(() -> {
+         TextureObject textureObject = textureObjectSupplier.get();
+         textureObject.updatePerFrame();
+         return textureObject.getTextureId();
+      }, names);
+   }
+
    public abstract void registerCustomTextures(SamplerHolder samplers);
 
    public abstract void registerCustomUniforms(DynamicUniformHolder uniforms);

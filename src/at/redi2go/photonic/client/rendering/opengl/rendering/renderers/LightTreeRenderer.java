@@ -3,7 +3,6 @@ package at.redi2go.photonic.client.rendering.opengl.rendering.renderers;
 import at.redi2go.photonic.client.Photonic;
 import at.redi2go.photonic.client.PhotonicsStorage;
 import at.redi2go.photonic.client.api.PhotonicsProperties;
-import at.redi2go.photonic.client.rendering.opengl.GpuTimerQuery;
 import at.redi2go.photonic.client.rendering.opengl.objects.GLMemoryCollection;
 import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
 import at.redi2go.photonic.client.rendering.opengl.rendering.ColorFramebuffer;
@@ -54,15 +53,8 @@ public class LightTreeRenderer extends MainRenderer {
    private static final String relaxAntiFireflyFragment = "lighttree/nrd_anti_firefly.fsh";
    private static final String relaxAtrousFragment = "lighttree/nrd_atrous.fsh";
    private static final String relaxHistoryClampingFragment = "lighttree/nrd_history_clamping.fsh";
-   private static final String nrdClassifyTilesFragment = "lighttree/nrd_classify_tiles.fsh";
-   private static final String nrdHitDistReconstructionFragment = "lighttree/nrd_hitdist_reconstruction.fsh";
-   private static final String nrdPrepassFragment = "lighttree/nrd_prepass.fsh";
-   private static final String nrdCopyFragment = "lighttree/nrd_copy.fsh";
-   private static final String nrdAtrousSmemFragment = "lighttree/nrd_atrous_smem.fsh";
    // NRD history-confidence cascade (diffuse only, incremental first validation).
    // Reference: NRD-Sample/Shaders/ConfidenceBlur.cs.hlsl, NRD/Shaders/RELAX_TemporalAccumulation.cs.hlsl
-   private static final String nrdConfidenceGradientFragment = "lighttree/nrd_confidence_gradient.fsh";
-   private static final String nrdConfidenceBlurFragment     = "lighttree/nrd_confidence_blur.fsh";
    private static final String indirectBoilingFragment = "lighttree/light_tree_indirect_boiling_filter.fsh";
    private static final String indirectAccumulationFragment = "lighttree/light_tree_indirect_accumulation.fsh";
    private static final String indirectAccumulationLightingFragment = "lighttree/light_tree_indirect_accumulation_lighting.fsh";
@@ -94,50 +86,11 @@ public class LightTreeRenderer extends MainRenderer {
    private static final int[] proposalReservoirDrawBuffers = new int[]{-1, -1, -1, -1, -1, 0, 1, 2};
    private static final int[] shadeSamplesLightingDrawBuffers = new int[]{0, 1, -1, -1, -1};
    private static final int[] shadeSamplesReservoirDrawBuffers = new int[]{-1, -1, 0, 1, 2};
-   private static final int profilerLogIntervalFrames = 60;
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_COUNT = 8;
    // Matches one std430 ShiftedPathStorageRecord in restir_di_temporal_buffer_bridge.glsl.
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_RECORD_VEC4_COUNT = 5;
    private static final int TEMPORAL_GATHER_SHIFTED_PATH_STRIDE_BYTES =
       TEMPORAL_GATHER_SHIFTED_PATH_RECORD_VEC4_COUNT * 4 * Float.BYTES;
-   // GPU profiler region names match the new fused NRD pipeline (contract §9).
-   private static final String[] gpuProfilerRegionNames = new String[]{
-      "LightTreeSamplingStage", "InitialCandidates", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples",
-      "NRDClassifyTiles", "NRDHitDistReconstruction", "NRDPrepass",
-      "RELAXTemporalAccumulation", "RELAXHistoryFix", "RELAXHistoryClamping",
-      "NRDCopy", "RELAXAntiFirefly", "RELAXAtrousSmem", "RELAXAtrous",
-      "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite",
-      "NRDConfidenceCascade"
-   };
-   private static final String[] profilerPassNames = new String[]{
-      "LightTreeSamplingStage", "InitialCandidates", "DITemporalResampling", "DISpatialResampling", "DIShadeSamples",
-      "NRDClassifyTiles", "NRDHitDistReconstruction", "NRDPrepass",
-      "RELAXTemporalAccumulation", "RELAXHistoryFix", "RELAXHistoryClamping",
-      "NRDCopy", "RELAXAntiFirefly", "RELAXAtrousSmem", "RELAXAtrous",
-      "ReSTIRGI", "IndirectDenoise", "LightingAccumulation", "IndirectComposite",
-      "NRDConfidenceCascade"
-   };
-   private static final int lightTreeSamplingStageRegionIndex = 0;
-   private static final int initialCandidatesRegionIndex = 1;
-   private static final int diTemporalResamplingRegionIndex = 2;
-   private static final int diSpatialResamplingRegionIndex = 3;
-   private static final int diShadeSamplesRegionIndex = 4;
-   private static final int nrdClassifyTilesRegionIndex = 5;
-   private static final int nrdHitDistReconstructionRegionIndex = 6;
-   private static final int nrdPrepassRegionIndex = 7;
-   private static final int relaxTemporalAccumulationRegionIndex = 8;
-   private static final int relaxHistoryFixRegionIndex = 9;
-   private static final int relaxHistoryClampingRegionIndex = 10;
-   private static final int nrdCopyRegionIndex = 11;
-   private static final int relaxAntiFireflyRegionIndex = 12;
-   private static final int relaxAtrousSmemRegionIndex = 13;
-   private static final int relaxAtrousRegionIndex = 14;
-   private static final int restirGIRegionIndex = 15;
-   private static final int indirectDenoiseRegionIndex = 16;
-   private static final int lightingAccumulationRegionIndex = 17;
-   private static final int indirectCompositeRegionIndex = 18;
-   // NRD history-confidence cascade region (gradient pass + 5-pass blur loop).
-   private static final int nrdConfidenceCascadeRegionIndex = 19;
    private boolean loggedRegirPresampleFrameSeedOverride = false;
    private boolean loggedRegirBuildFrameSeedOverride = false;
    @Nullable
@@ -150,51 +103,15 @@ public class LightTreeRenderer extends MainRenderer {
   private final ColorFramebuffer directReservoirBuffer;
   private final ColorFramebuffer directSpatialReservoirBuffer;
   private final ColorFramebuffer directConfidenceBuffer;
-  private final ColorFramebuffer directInitialDebugBuffer;
+  // directInitialDebugBuffer — moved to directRes
   private final ColorFramebuffer compatDirectSoftBuffer;
-   // NRD RELAX_DiffuseSpecular permanent (swap-buffered) FBOs (contract §8).
-   // These survive across frames; .read = prev frame, .write = current frame.
-   private final ColorFramebuffer nrdDiffIllumPrevFb;             // RGBA16F
-   private final ColorFramebuffer nrdDiffIllumResponsivePrevFb;   // RGBA16F
-   private final ColorFramebuffer nrdSpecIllumPrevFb;             // RGBA16F
-   private final ColorFramebuffer nrdSpecIllumResponsivePrevFb;   // RGBA16F
-   private final ColorFramebuffer nrdHistoryLengthPrevFb;         // R8
-   private final ColorFramebuffer nrdReflectionHitTPrevFb;        // R16F
-   // NRD RELAX_DiffuseSpecular transient (single-buffered) FBOs (contract §8).
-   // Written and consumed within the same frame.
-   private final ColorFramebuffer nrdTilesFb;                     // R8 at ceil(w/16)xceil(h/16)
-   private final ColorFramebuffer nrdDiffIllumPingFb;             // RGBA16F
-   private final ColorFramebuffer nrdDiffIllumPongFb;             // RGBA16F
-   private final ColorFramebuffer nrdSpecIllumPingFb;             // RGBA16F
-   private final ColorFramebuffer nrdSpecIllumPongFb;             // RGBA16F
-   private final ColorFramebuffer nrdHistoryLengthFb;             // R8
-   private final ColorFramebuffer nrdSpecReprojectionConfidenceFb;// R8
-   private final ColorFramebuffer nrdReflectionHitTCurrFb;        // R16F
-   private final ColorFramebuffer nrdOutDiffRadianceHitDistFb;    // RGBA16F
-   private final ColorFramebuffer nrdOutSpecRadianceHitDistFb;    // RGBA16F
-   // Additional transient FBOs for hit-distance reconstruction (optional pass)
-   private final ColorFramebuffer nrdDiffHitDistReconFb;          // RGBA16F
-   private final ColorFramebuffer nrdSpecHitDistReconFb;          // RGBA16F
-   // NRD history-confidence cascade FBOs.
-   // nrdConfidenceGradientFb: gradient pass output, ping-pong src for first blur pass.
-   // nrdConfidenceBlurPingFb / nrdConfidenceBlurPongFb: ping-pong pair for 5-pass blur.
-   // The final blur output (in whichever side was last written) is the confidence texture
-   // sampled next frame.  We use nrdConfidenceBlurPingFb as the "current confidence" read
-   // after the cascade by registering it as ph_nrd_diff_confidence.
-   private final ColorFramebuffer nrdConfidenceGradientFb;        // RGBA16F
-   private final ColorFramebuffer nrdConfidenceBlurPingFb;        // RGBA16F (confidence read-side)
-   private final ColorFramebuffer nrdConfidenceBlurPongFb;        // RGBA16F (intermediate)
-  private final ColorFramebuffer indirectInitialReservoirBuffer;
-  private final ColorFramebuffer indirectReservoirBuffer;
-  private final ColorFramebuffer indirectDenoisedBuffer;
   // -- DI reconnection payloads --
   // Proposal and temporal reconnection outputs stay stage-local. Only the
   // frame-final spatial output is double-buffered as previous-frame history.
-  private final ColorFramebuffer proposalReconnectionBuffer;
-  private final ColorFramebuffer temporalReconnectionBuffer;
-  private final ColorFramebuffer scatterReconnectionBuffer;
-  private final ColorFramebuffer temporalReservoirBuffer;
-  private final ColorFramebuffer temporalGatherBuffer;
+  // (moved to directRes: proposalReconnectionBuffer, temporalReconnectionBuffer,
+  //  scatterReconnectionBuffer, temporalReservoirBuffer, temporalGatherBuffer)
+  // (moved to indirectRes: indirectInitialReservoirBuffer, indirectReservoirBuffer,
+  //  indirectDenoisedBuffer, all indirect routing framebuffers and renderers)
   private DiReconnectionSource currentDiReconnectionSource = DiReconnectionSource.PROPOSAL;
   private GlMemoryManager temporalGatherFloatingCoordsMemoryManager;
   private GlMemoryManager temporalGatherShiftedPathsMemoryManager;
@@ -211,129 +128,30 @@ public class LightTreeRenderer extends MainRenderer {
   private GlMemoryManager temporalScatterMultiScatteredReservoirsMemoryManager;
   private GlMemoryManager temporalScatterMultiCellOffsetsMemoryManager;
   private GlMemoryManager temporalScatterMultiSortedReservoirsMemoryManager;
-  private final RoutingFramebuffer proposalFramebuffer;
-  private final RoutingFramebuffer proposalReservoirFramebuffer;
-  private final RoutingFramebuffer reuseResolveFramebuffer;
-  // NRD RELAX_DiffuseSpecular fused pipeline routing framebuffers (contract §9).
-  private final RoutingFramebuffer nrdClassifyTilesFramebuffer;
-  private final RoutingFramebuffer nrdHitDistReconstructionFramebuffer;
-  private final RoutingFramebuffer nrdPrepassFramebuffer;
-  private final RoutingFramebuffer directTemporalFramebuffer;
-  private final RoutingFramebuffer directHistoryFixFramebuffer;
-  private final RoutingFramebuffer directHistoryClampingFramebuffer;
-  private final RoutingFramebuffer nrdCopyFramebuffer;
-  private final RoutingFramebuffer directAntiFireflyFramebuffer;
-  private final RoutingFramebuffer nrdAtrousSmemFramebuffer;
-  private final RoutingFramebuffer directAtrousFramebuffer;
-  // Confidence cascade routing framebuffers.
-  // The blur framebuffer uses a dynamic supplier so each pass writes to the
-  // appropriate ping or pong buffer (set via confidenceBlurIteration before renderAll).
-  private final RoutingFramebuffer nrdConfidenceGradientFramebuffer;
-  private final RoutingFramebuffer nrdConfidenceBlurFramebuffer;       // dynamic output
-  private final RoutingFramebuffer indirectInitialFramebuffer;
-  private final RoutingFramebuffer indirectBoilingFramebuffer;
-  private final RoutingFramebuffer indirectAccumulationFramebuffer;
-  private final RoutingFramebuffer indirectAccumulationLightingFramebuffer;
-  private final RoutingFramebuffer indirectAccumulationReservoirFramebuffer;
-  private final RoutingFramebuffer indirectDenoisingFramebuffer;
-  private final RoutingFramebuffer positionWriteFramebuffer;
-  private final RoutingFramebuffer shadeSamplesMonolithicFramebuffer;
-  private final RoutingFramebuffer shadeSamplesFramebuffer;
-  private final RoutingFramebuffer shadeSamplesReservoirFramebuffer;
-  private final RoutingFramebuffer shadeSamplesReconnectionFramebuffer;
-  private final RoutingFramebuffer temporalCollectFramebuffer;
-  private final RoutingFramebuffer robustReuseOptimizationFramebuffer;
-  private final RoutingFramebuffer temporalScatterStageFramebuffer;
-  private final RoutingFramebuffer temporalReservoirFramebuffer;
-  @Nullable
-  private CompositeRenderer proposalStageRenderer;
-  @Nullable
-  private CompositeRenderer proposalReservoirRenderer;
-  @Nullable
-  private CompositeRenderer reuseResolveRenderer;
-  // NRD RELAX_DiffuseSpecular fused pipeline renderers (contract §9).
-  @Nullable
-  private CompositeRenderer nrdClassifyTilesRenderer;
-  @Nullable
-  private CompositeRenderer nrdHitDistReconstructionRenderer;
-  @Nullable
-  private CompositeRenderer nrdPrepassRenderer;
-  @Nullable
-  private CompositeRenderer directTemporalRenderer;
-  @Nullable
-  private CompositeRenderer directHistoryFixRenderer;
-  @Nullable
-  private CompositeRenderer directHistoryClampingRenderer;
-  @Nullable
-  private CompositeRenderer nrdCopyRenderer;
-  @Nullable
-  private CompositeRenderer directAntiFireflyRenderer;
-  @Nullable
-  private CompositeRenderer nrdAtrousSmemRenderer;
-  @Nullable
-  private CompositeRenderer directAtrousRenderer;
-  // NRD history-confidence cascade renderers (gradient pass + blur cascade).
-  @Nullable
-  private CompositeRenderer nrdConfidenceGradientRenderer;
-  @Nullable
-  private CompositeRenderer nrdConfidenceBlurRenderer;
-  @Nullable
-  private CompositeRenderer indirectInitialRenderer;
-  @Nullable
-  private CompositeRenderer indirectBoilingRenderer;
-  @Nullable
-  private CompositeRenderer indirectTemporalReprojectionRenderer;
-  @Nullable
-  private CompositeRenderer indirectTemporalBinningOffsetsRenderer;
-  @Nullable
-  private CompositeRenderer indirectTemporalBinningRenderer;
-  @Nullable
-  private CompositeRenderer indirectScatterTemporalRenderer;
-  @Nullable
-  private CompositeRenderer indirectAccumulationRenderer;
-  @Nullable
-  private CompositeRenderer indirectAccumulationLightingRenderer;
-  @Nullable
-  private CompositeRenderer indirectAccumulationReservoirRenderer;
-  @Nullable
-  private CompositeRenderer indirectDenoisingRenderer;
-  @Nullable
-  private CompositeRenderer accumulationRenderer;
-  @Nullable
-  private CompositeRenderer indirectRenderer;
-  @Nullable
-  private CompositeRenderer shadeSamplesMonolithicRenderer;
-  @Nullable
-  private CompositeRenderer shadeSamplesReservoirRenderer;
-  @Nullable
-  private CompositeRenderer shadeSamplesRenderer;
-  @Nullable
-  private CompositeRenderer shadeSamplesReconnectionRenderer;
-  @Nullable
-  private CompositeRenderer temporalCollectRenderer;
-  @Nullable
-  private CompositeRenderer robustReuseOptimizationRenderer;
-  @Nullable
-  private CompositeRenderer temporalGatherRenderer;
-  @Nullable
-  private CompositeRenderer temporalScatterReprojectionRenderer;
-  @Nullable
-  private CompositeRenderer temporalMultiScatterReprojectionRenderer;
-  @Nullable
-  private CompositeRenderer temporalScatterBinningOffsetsRenderer;
-  @Nullable
-  private CompositeRenderer temporalMultiScatterBinningOffsetsRenderer;
-  @Nullable
-  private CompositeRenderer temporalScatterBinningRenderer;
-  @Nullable
-  private CompositeRenderer temporalMultiScatterBinningRenderer;
-  @Nullable
-  private CompositeRenderer scatterTemporalRenderer;
-  @Nullable
-  private CompositeRenderer scatterBackupTemporalRenderer;
-  @Nullable
-  private CompositeRenderer multiScatterTemporalRenderer;
-  private final GpuTimerQuery gpuTimerQuery;
+  // proposalFramebuffer, proposalReservoirFramebuffer, reuseResolveFramebuffer,
+  // indirectInitialFramebuffer, indirectBoilingFramebuffer, indirectAccumulationFramebuffer,
+  // indirectAccumulationLightingFramebuffer, indirectAccumulationReservoirFramebuffer,
+  // indirectDenoisingFramebuffer, positionWriteFramebuffer, shadeSamplesMonolithicFramebuffer,
+  // shadeSamplesFramebuffer, shadeSamplesReservoirFramebuffer, shadeSamplesReconnectionFramebuffer
+  // — moved to indirectRes
+  // directTemporalFramebuffer, directHistoryFixFramebuffer,
+  // directHistoryClampingFramebuffer, directAntiFireflyFramebuffer,
+  // directAtrousFramebuffer — moved to directRes
+  // temporalCollectFramebuffer, robustReuseOptimizationFramebuffer,
+  // temporalScatterStageFramebuffer, temporalReservoirFramebuffer — moved to directRes
+  // All indirect/proposal/shadeSamples renderers — moved to indirectRes
+  // directTemporalRenderer, directHistoryFixRenderer, directHistoryClampingRenderer,
+  // directAntiFireflyRenderer, directAtrousRenderer — moved to directRes
+  // temporalCollectRenderer, robustReuseOptimizationRenderer, temporalGatherRenderer,
+  // temporalScatterReprojectionRenderer, temporalMultiScatterReprojectionRenderer,
+  // temporalScatterBinningOffsetsRenderer, temporalMultiScatterBinningOffsetsRenderer,
+  // temporalScatterBinningRenderer, temporalMultiScatterBinningRenderer,
+  // scatterTemporalRenderer, scatterBackupTemporalRenderer, multiScatterTemporalRenderer
+  // — moved to directRes
+  private final LightTreePipelineProfiler profiler = new LightTreePipelineProfiler();
+  private final LightTreeNrdResources nrdRes;
+  private final LightTreeDirectResources directRes;
+  private final LightTreeIndirectResources indirectRes;
   @Nullable
   private RegirComputeProgram regirComputeProgram;
   // Hard-coded 5-pass atrous cascade per contract §1: SMEM(stride=1) + 4 passes (strides 2,4,8,16).
@@ -351,6 +169,11 @@ public class LightTreeRenderer extends MainRenderer {
   private final Consumer<String> localLightSamplingModeObserver;
   private final Consumer<String> temporalScatterIsolationModeObserver;
   private final Consumer<Boolean> indirectTemporalReuseObserver;
+  // Centralized texture-sampler binding table. Each entry binds one TextureObject
+  // supplier to one or more shader uniform sampler names. Multiple names map to a
+  // single texture unit (shader aliases — see Iris ProgramSamplers$Builder), which
+  // keeps live unit consumption under the GL_MAX_TEXTURE_IMAGE_UNITS cap.
+  private final java.util.List<java.util.Map.Entry<Supplier<TextureObject>, String[]>> samplerBindings;
    private int temporalScatterPixelCapacity;
   private int temporalScatterContributorCapacity;
   private int directAtrousIteration = 0;
@@ -374,7 +197,6 @@ public class LightTreeRenderer extends MainRenderer {
    {
       java.util.Arrays.fill(this.dirtyBlockFrameSeen, Integer.MIN_VALUE);
    }
-  private int profilerFrameCounter = 0;
   private long lastCpuLightTreeSamplingStageNanos;
   private long lastCpuInitialCandidatesNanos;
   private long lastCpuDITemporalResamplingNanos;
@@ -416,77 +238,40 @@ public class LightTreeRenderer extends MainRenderer {
       this.motionVectorBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
       this.directReservoirBuffer = this.createDirectReservoirFramebuffer(renderScale);
       this.directSpatialReservoirBuffer = this.createDirectReservoirFramebuffer(renderScale);
-      this.proposalReconnectionBuffer = this.createReconnectionFramebuffer(renderScale);
-      this.temporalReconnectionBuffer = this.createReconnectionFramebuffer(renderScale);
-      this.scatterReconnectionBuffer = this.createReconnectionFramebuffer(renderScale);
-      this.temporalReservoirBuffer = this.createTemporalReservoirFramebuffer(renderScale);
-      this.temporalGatherBuffer = this.createTemporalGatherFramebuffer(renderScale);
-      this.temporalCollectFramebuffer = this.createTemporalCollectFramebuffer();
-      this.robustReuseOptimizationFramebuffer = this.createRobustReuseOptimizationFramebuffer();
       this.temporalScatterPixelCapacity = this.getTemporalScatterPixelCapacity();
       this.temporalScatterContributorCapacity = this.getTemporalScatterContributorCapacity();
       this.allocateTemporalScatterMemoryManagers();
       this.directConfidenceBuffer = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.directInitialDebugBuffer = this.createDirectPackedDebugFramebuffer(renderScale);
       this.compatDirectSoftBuffer = new ColorFramebuffer(renderScale);
       this.compatDirectSoftBuffer.createAttachment("direct_soft_compat", "RGBA16F", false);
-      // NRD permanent (swap-buffered) FBOs
-      this.nrdDiffIllumPrevFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdDiffIllumResponsivePrevFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdSpecIllumPrevFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdSpecIllumResponsivePrevFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdHistoryLengthPrevFb       = this.createDirectSignalFramebuffer(renderScale, "R8");
-      this.nrdReflectionHitTPrevFb      = this.createDirectSignalFramebuffer(renderScale, "R16F");
-      // NRD transient (single-buffered) FBOs
-      this.nrdTilesFb                   = this.createNrdTileFramebuffer(renderScale);
-      this.nrdDiffIllumPingFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdDiffIllumPongFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdSpecIllumPingFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdSpecIllumPongFb           = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdHistoryLengthFb           = this.createDirectSignalFramebuffer(renderScale, "R8");
-      this.nrdSpecReprojectionConfidenceFb = this.createDirectSignalFramebuffer(renderScale, "R8");
-      this.nrdReflectionHitTCurrFb      = this.createDirectSignalFramebuffer(renderScale, "R16F");
-      this.nrdOutDiffRadianceHitDistFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdOutSpecRadianceHitDistFb  = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdDiffHitDistReconFb        = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdSpecHitDistReconFb        = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      // Confidence cascade FBOs (RGBA16F; full render resolution)
-      this.nrdConfidenceGradientFb      = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdConfidenceBlurPingFb      = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.nrdConfidenceBlurPongFb      = this.createDirectSignalFramebuffer(renderScale, "RGBA16F");
-      this.indirectInitialReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
-      this.indirectReservoirBuffer = this.createIndirectReservoirFramebuffer(renderScale);
-      this.indirectDenoisedBuffer = new ColorFramebuffer(renderScale);
-      this.indirectDenoisedBuffer.createAttachment("data", "RGBA16F", false);
-      this.proposalFramebuffer = this.createProposalGeometryFramebuffer();
-      this.proposalReservoirFramebuffer = this.createProposalReservoirFramebuffer();
-      this.reuseResolveFramebuffer = this.createReuseResolveFramebuffer();
-      this.nrdClassifyTilesFramebuffer      = this.createNrdClassifyTilesFramebuffer();
-      this.nrdHitDistReconstructionFramebuffer = this.createNrdHitDistReconstructionFramebuffer();
-      this.nrdPrepassFramebuffer            = this.createNrdPrepassFramebuffer();
-      this.directTemporalFramebuffer        = this.createDirectTemporalFramebuffer();
-      this.directHistoryFixFramebuffer      = this.createDirectHistoryFixFramebuffer();
-      this.directHistoryClampingFramebuffer = this.createDirectHistoryClampingFramebuffer();
-      this.nrdCopyFramebuffer               = this.createNrdCopyFramebuffer();
-      this.directAntiFireflyFramebuffer     = this.createDirectAntiFireflyFramebuffer();
-      this.nrdAtrousSmemFramebuffer         = this.createNrdAtrousSmemFramebuffer();
-      this.directAtrousFramebuffer          = this.createDirectAtrousFramebuffer();
-      this.nrdConfidenceGradientFramebuffer = this.createNrdConfidenceGradientFramebuffer();
-      this.nrdConfidenceBlurFramebuffer     = this.createNrdConfidenceBlurFramebuffer();
-      this.indirectInitialFramebuffer = this.createIndirectInitialFramebuffer();
-      this.indirectBoilingFramebuffer = this.createIndirectBoilingFramebuffer();
-      this.indirectAccumulationFramebuffer = this.createIndirectAccumulationFramebuffer();
-      this.indirectAccumulationLightingFramebuffer = this.createIndirectAccumulationLightingFramebuffer();
-      this.indirectAccumulationReservoirFramebuffer = this.createIndirectAccumulationReservoirFramebuffer();
-      this.indirectDenoisingFramebuffer = this.createIndirectDenoisingFramebuffer();
-      this.positionWriteFramebuffer = this.createPositionWriteFramebuffer();
-      this.shadeSamplesMonolithicFramebuffer = this.createShadeSamplesMonolithicFramebuffer();
-      this.shadeSamplesFramebuffer = this.createShadeSamplesLightingFramebuffer();
-      this.shadeSamplesReservoirFramebuffer = this.createShadeSamplesReservoirFramebuffer();
-      this.shadeSamplesReconnectionFramebuffer = this.createShadeSamplesReconnectionFramebuffer();
-      this.temporalScatterStageFramebuffer = this.createTemporalScatterStageFramebuffer();
-      this.temporalReservoirFramebuffer = this.createTemporalReservoirRoutingFramebuffer();
-      this.gpuTimerQuery = this.createGpuTimerQuery();
+      // NRD denoiser resources (framebuffers + routing framebuffers)
+      this.nrdRes = new LightTreeNrdResources(
+         renderScale,
+         this::getDirectReservoirResolution,
+         this::getCurrentConfidenceBlurOutputTexture
+      );
+      // DI direct resources (framebuffers + routing framebuffers)
+      this.directRes = new LightTreeDirectResources(
+         renderScale,
+         this::getDirectReservoirResolution,
+         this::getDirectPackedViewportWidth,
+         this.nrdRes,
+         this::getCurrentDiffAtrousOutputTexture,
+         this::getCurrentSpecAtrousOutputTexture
+      );
+      // Indirect / ReSTIR-GI resources (framebuffers + routing framebuffers)
+      this.indirectRes = new LightTreeIndirectResources(
+         renderScale,
+         this::getDirectReservoirResolution,
+         this::getDirectPackedViewportWidth,
+         this.lightingBuffer,
+         this.lightingStageBuffer,
+         this.motionVectorBuffer,
+         this.directReservoirBuffer,
+         this.directSpatialReservoirBuffer,
+         this.compatDirectSoftBuffer,
+         this.directRes
+      );
       this.regirComputeProgram = new RegirComputeProgram();
       this.localLightSamplingModeObserver = ignored -> this.invalidateDirectReuseHistory();
       this.temporalScatterIsolationModeObserver = ignored -> this.invalidateDirectReuseHistory();
@@ -494,6 +279,7 @@ public class LightTreeRenderer extends MainRenderer {
       PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.addObserver(this.localLightSamplingModeObserver);
       PhotonicsStorage.RESTIR_TEMPORAL_REUSE.addObserver(this.temporalScatterIsolationModeObserver);
       PhotonicsStorage.RESTIR_GI_TEMPORAL_REUSE.addObserver(this.indirectTemporalReuseObserver);
+      this.samplerBindings = this.buildSamplerBindings();
    }
 
    @Override
@@ -538,97 +324,97 @@ public class LightTreeRenderer extends MainRenderer {
    @Override
    public void createCompositeRenderer(Function<List<PhotonicsShader>, CompositeRenderer> rendererCreator) {
       this.compositeRendererCreator = rendererCreator;
-      this.proposalStageRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader("lighttree/light_tree_sampling_stage.fsh", "common/screen.vsh", this.memoryCollection, this.proposalFramebuffer))
+      this.indirectRes.proposalStageRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader("lighttree/light_tree_sampling_stage.fsh", "common/screen.vsh", this.memoryCollection, this.indirectRes.proposalFramebuffer))
       );
-      this.proposalReservoirRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diInitialCandidatesFragment, "common/screen.vsh", this.memoryCollection, this.proposalReservoirFramebuffer))
+      this.indirectRes.proposalReservoirRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diInitialCandidatesFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.proposalReservoirFramebuffer))
       );
-      this.reuseResolveRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diSpatialResamplingFragment, "common/screen.vsh", this.memoryCollection, this.reuseResolveFramebuffer))
+      this.indirectRes.reuseResolveRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diSpatialResamplingFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.reuseResolveFramebuffer))
       );
-      this.temporalCollectRenderer = null;
-      this.robustReuseOptimizationRenderer = null;
-      this.temporalGatherRenderer = null;
-      this.temporalScatterReprojectionRenderer = null;
-      this.temporalMultiScatterReprojectionRenderer = null;
-      this.temporalScatterBinningOffsetsRenderer = null;
-      this.temporalMultiScatterBinningOffsetsRenderer = null;
-      this.temporalScatterBinningRenderer = null;
-      this.temporalMultiScatterBinningRenderer = null;
-      this.scatterTemporalRenderer = null;
-      this.scatterBackupTemporalRenderer = null;
-      this.multiScatterTemporalRenderer = null;
+      this.directRes.temporalCollectRenderer = null;
+      this.directRes.robustReuseOptimizationRenderer = null;
+      this.directRes.temporalGatherRenderer = null;
+      this.directRes.temporalScatterReprojectionRenderer = null;
+      this.directRes.temporalMultiScatterReprojectionRenderer = null;
+      this.directRes.temporalScatterBinningOffsetsRenderer = null;
+      this.directRes.temporalMultiScatterBinningOffsetsRenderer = null;
+      this.directRes.temporalScatterBinningRenderer = null;
+      this.directRes.temporalMultiScatterBinningRenderer = null;
+      this.directRes.scatterTemporalRenderer = null;
+      this.directRes.scatterBackupTemporalRenderer = null;
+      this.directRes.multiScatterTemporalRenderer = null;
       // NRD RELAX_DiffuseSpecular fused pipeline renderers (contract §9).
-      this.nrdClassifyTilesRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(nrdClassifyTilesFragment, "common/screen.vsh", this.memoryCollection, this.nrdClassifyTilesFramebuffer))
+      this.nrdRes.classifyTilesRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(LightTreeNrdResources.classifyTilesFragment, "common/screen.vsh", this.memoryCollection, this.nrdRes.classifyTilesFramebuffer))
       );
-      this.nrdHitDistReconstructionRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(nrdHitDistReconstructionFragment, "common/screen.vsh", this.memoryCollection, this.nrdHitDistReconstructionFramebuffer))
+      this.nrdRes.hitDistReconstructionRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(LightTreeNrdResources.hitDistReconstructionFragment, "common/screen.vsh", this.memoryCollection, this.nrdRes.hitDistReconstructionFramebuffer))
       );
-      this.nrdPrepassRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(nrdPrepassFragment, "common/screen.vsh", this.memoryCollection, this.nrdPrepassFramebuffer))
+      this.nrdRes.prepassRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(LightTreeNrdResources.prepassFragment, "common/screen.vsh", this.memoryCollection, this.nrdRes.prepassFramebuffer))
       );
-      this.directTemporalRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxTemporalAccumulationFragment, "common/screen.vsh", this.memoryCollection, this.directTemporalFramebuffer))
+      this.directRes.directTemporalRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(relaxTemporalAccumulationFragment, "common/screen.vsh", this.memoryCollection, this.directRes.directTemporalFramebuffer))
       );
-      this.directHistoryFixRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxHistoryFixFragment, "common/screen.vsh", this.memoryCollection, this.directHistoryFixFramebuffer))
+      this.directRes.directHistoryFixRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(relaxHistoryFixFragment, "common/screen.vsh", this.memoryCollection, this.directRes.directHistoryFixFramebuffer))
       );
-      this.directHistoryClampingRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxHistoryClampingFragment, "common/screen.vsh", this.memoryCollection, this.directHistoryClampingFramebuffer))
+      this.directRes.directHistoryClampingRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(relaxHistoryClampingFragment, "common/screen.vsh", this.memoryCollection, this.directRes.directHistoryClampingFramebuffer))
       );
-      this.nrdCopyRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(nrdCopyFragment, "common/screen.vsh", this.memoryCollection, this.nrdCopyFramebuffer))
+      this.nrdRes.copyRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(LightTreeNrdResources.copyFragment, "common/screen.vsh", this.memoryCollection, this.nrdRes.copyFramebuffer))
       );
-      this.directAntiFireflyRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxAntiFireflyFragment, "common/screen.vsh", this.memoryCollection, this.directAntiFireflyFramebuffer))
+      this.directRes.directAntiFireflyRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(relaxAntiFireflyFragment, "common/screen.vsh", this.memoryCollection, this.directRes.directAntiFireflyFramebuffer))
       );
-      this.nrdAtrousSmemRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(nrdAtrousSmemFragment, "common/screen.vsh", this.memoryCollection, this.nrdAtrousSmemFramebuffer))
+      this.nrdRes.atrousSmemRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(LightTreeNrdResources.atrousSmemFragment, "common/screen.vsh", this.memoryCollection, this.nrdRes.atrousSmemFramebuffer))
       );
-      this.directAtrousRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(relaxAtrousFragment, "common/screen.vsh", this.memoryCollection, this.directAtrousFramebuffer))
+      this.directRes.directAtrousRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(relaxAtrousFragment, "common/screen.vsh", this.memoryCollection, this.directRes.directAtrousFramebuffer))
       );
       // Confidence cascade renderers (gradient pass + reusable blur pass).
-      this.nrdConfidenceGradientRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(nrdConfidenceGradientFragment, "common/screen.vsh", this.memoryCollection, this.nrdConfidenceGradientFramebuffer))
+      this.nrdRes.confidenceGradientRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(LightTreeNrdResources.confidenceGradientFragment, "common/screen.vsh", this.memoryCollection, this.nrdRes.confidenceGradientFramebuffer))
       );
-      // Blur renderer uses nrdConfidenceBlurFramebuffer whose attachment supplier is dynamic
+      // Blur renderer uses nrdRes.confidenceBlurFramebuffer whose attachment supplier is dynamic
       // (getCurrentConfidenceBlurOutputTexture), so the same renderer can be rendered 5 times
       // with different output destinations per renderConfidenceCascade().
-      this.nrdConfidenceBlurRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(nrdConfidenceBlurFragment, "common/screen.vsh", this.memoryCollection, this.nrdConfidenceBlurFramebuffer))
+      this.nrdRes.confidenceBlurRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(LightTreeNrdResources.confidenceBlurFragment, "common/screen.vsh", this.memoryCollection, this.nrdRes.confidenceBlurFramebuffer))
       );
-      this.indirectInitialRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(indirectInitialFragment, "common/screen.vsh", this.memoryCollection, this.indirectInitialFramebuffer))
+      this.indirectRes.indirectInitialRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(indirectInitialFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.indirectInitialFramebuffer))
       );
-      this.indirectBoilingRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(indirectBoilingFragment, "common/screen.vsh", this.memoryCollection, this.indirectBoilingFramebuffer))
+      this.indirectRes.indirectBoilingRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(indirectBoilingFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.indirectBoilingFramebuffer))
       );
-      this.indirectTemporalReprojectionRenderer = null;
-      this.indirectTemporalBinningOffsetsRenderer = null;
-      this.indirectTemporalBinningRenderer = null;
-      this.indirectScatterTemporalRenderer = null;
+      this.indirectRes.indirectTemporalReprojectionRenderer = null;
+      this.indirectRes.indirectTemporalBinningOffsetsRenderer = null;
+      this.indirectRes.indirectTemporalBinningRenderer = null;
+      this.indirectRes.indirectScatterTemporalRenderer = null;
       // Split GI accumulation: lighting writes full-res lightingBuffer attachments
       // (indirect, indirect_variance, handheld); reservoir writes half-res
       // indirectReservoirBuffer attachments (position, normal, radiance, meta).
       // OpenGL FBO attachments must share resolution; checkerboard makes the
       // reservoir buffer half-width. The monolithic renderer is set to null.
-      this.indirectAccumulationRenderer = null;
-      this.indirectAccumulationLightingRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(indirectAccumulationLightingFragment, "common/screen.vsh", this.memoryCollection, this.indirectAccumulationLightingFramebuffer))
+      this.indirectRes.indirectAccumulationRenderer = null;
+      this.indirectRes.indirectAccumulationLightingRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(indirectAccumulationLightingFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.indirectAccumulationLightingFramebuffer))
       );
-      this.indirectAccumulationReservoirRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(indirectAccumulationReservoirFragment, "common/screen.vsh", this.memoryCollection, this.indirectAccumulationReservoirFramebuffer))
+      this.indirectRes.indirectAccumulationReservoirRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(indirectAccumulationReservoirFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.indirectAccumulationReservoirFramebuffer))
       );
-      this.indirectDenoisingRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(indirectDenoisingFragment, "common/screen.vsh", this.memoryCollection, this.indirectDenoisingFramebuffer))
+      this.indirectRes.indirectDenoisingRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(indirectDenoisingFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.indirectDenoisingFramebuffer))
       );
-      this.accumulationRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader("lighttree/light_tree_accumulation.fsh", "common/screen.vsh", this.memoryCollection, this.positionWriteFramebuffer))
+      this.indirectRes.accumulationRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader("lighttree/light_tree_accumulation.fsh", "common/screen.vsh", this.memoryCollection, this.indirectRes.positionWriteFramebuffer))
       );
-      this.indirectRenderer = rendererCreator.apply(
+      this.indirectRes.indirectRenderer = rendererCreator.apply(
          List.of(new PhotonicsShader("common/indirect.fsh", "common/screen.vsh", this.memoryCollection, null))
       );
       // Split shading path: lighting writes to full-res lightingStageBuffer, reservoir
@@ -636,15 +422,15 @@ public class LightTreeRenderer extends MainRenderer {
       // path can't be used with checkerboard because it mixes full-res lighting with
       // half-res reservoir attachments in one framebuffer (RoutingFramebuffer.bind sets
       // viewport from attachment[0]; mixed-size attachments produce undefined writes).
-      this.shadeSamplesMonolithicRenderer = null;
-      this.shadeSamplesRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diShadeSamplesLightingFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesFramebuffer))
+      this.indirectRes.shadeSamplesMonolithicRenderer = null;
+      this.indirectRes.shadeSamplesRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diShadeSamplesLightingFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.shadeSamplesFramebuffer))
       );
-      this.shadeSamplesReservoirRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diShadeSamplesReservoirFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesReservoirFramebuffer))
+      this.indirectRes.shadeSamplesReservoirRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diShadeSamplesReservoirFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.shadeSamplesReservoirFramebuffer))
       );
-      this.shadeSamplesReconnectionRenderer = rendererCreator.apply(
-         List.of(new PhotonicsShader(diPromoteReconnectionFragment, "common/screen.vsh", this.memoryCollection, this.shadeSamplesReconnectionFramebuffer))
+      this.indirectRes.shadeSamplesReconnectionRenderer = rendererCreator.apply(
+         List.of(new PhotonicsShader(diPromoteReconnectionFragment, "common/screen.vsh", this.memoryCollection, this.indirectRes.shadeSamplesReconnectionFramebuffer))
       );
       this.compileRegirComputeShader();
    }
@@ -668,67 +454,67 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void ensureTemporalGatherRenderers() {
-      if (this.temporalCollectRenderer == null) {
-         this.temporalCollectRenderer = this.createLazyRenderer(diCollectTemporalSamplesFragment, this.temporalCollectFramebuffer);
+      if (this.directRes.temporalCollectRenderer == null) {
+         this.directRes.temporalCollectRenderer = this.createLazyRenderer(diCollectTemporalSamplesFragment, this.directRes.temporalCollectFramebuffer);
       }
       if (
-         this.robustReuseOptimizationRenderer == null
+         this.directRes.robustReuseOptimizationRenderer == null
             && this.compositeRendererCreator != null
             && "robust".equals(
                PhotonicsStorage.normalizeRestirTemporalGatherMode(PhotonicsStorage.RESTIR_TEMPORAL_GATHER_MODE.value)
             )
       ) {
-         this.robustReuseOptimizationRenderer = this.createLazyRenderer(
-            List.of(new PhotonicsShader(diRobustReuseOptimizationFragment, "common/screen.vsh", this.memoryCollection, this.robustReuseOptimizationFramebuffer))
+         this.directRes.robustReuseOptimizationRenderer = this.createLazyRenderer(
+            List.of(new PhotonicsShader(diRobustReuseOptimizationFragment, "common/screen.vsh", this.memoryCollection, this.directRes.robustReuseOptimizationFramebuffer))
          );
       }
-      if (this.temporalGatherRenderer == null) {
-         this.temporalGatherRenderer = this.createLazyRenderer(diGatherTemporalResamplingFragment, this.temporalReservoirFramebuffer);
+      if (this.directRes.temporalGatherRenderer == null) {
+         this.directRes.temporalGatherRenderer = this.createLazyRenderer(diGatherTemporalResamplingFragment, this.directRes.temporalReservoirFramebuffer);
       }
    }
 
    private void ensureTemporalScatterRenderers() {
-      if (this.temporalScatterReprojectionRenderer == null) {
-         this.temporalScatterReprojectionRenderer = this.createLazyRenderer(diTemporalReprojectionFragment, this.temporalScatterStageFramebuffer);
+      if (this.directRes.temporalScatterReprojectionRenderer == null) {
+         this.directRes.temporalScatterReprojectionRenderer = this.createLazyRenderer(diTemporalReprojectionFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.temporalScatterBinningOffsetsRenderer == null) {
-         this.temporalScatterBinningOffsetsRenderer = this.createLazyRenderer(diTemporalBinningOffsetsFragment, this.temporalScatterStageFramebuffer);
+      if (this.directRes.temporalScatterBinningOffsetsRenderer == null) {
+         this.directRes.temporalScatterBinningOffsetsRenderer = this.createLazyRenderer(diTemporalBinningOffsetsFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.temporalScatterBinningRenderer == null) {
-         this.temporalScatterBinningRenderer = this.createLazyRenderer(diTemporalBinningFragment, this.temporalScatterStageFramebuffer);
+      if (this.directRes.temporalScatterBinningRenderer == null) {
+         this.directRes.temporalScatterBinningRenderer = this.createLazyRenderer(diTemporalBinningFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.scatterTemporalRenderer == null) {
-         this.scatterTemporalRenderer = this.createLazyRenderer(diScatterTemporalResamplingFragment, this.temporalReservoirFramebuffer);
+      if (this.directRes.scatterTemporalRenderer == null) {
+         this.directRes.scatterTemporalRenderer = this.createLazyRenderer(diScatterTemporalResamplingFragment, this.directRes.temporalReservoirFramebuffer);
       }
    }
 
    private void ensureMultiTemporalScatterRenderers() {
-      if (this.temporalMultiScatterReprojectionRenderer == null) {
-         this.temporalMultiScatterReprojectionRenderer = this.createLazyRenderer(diMultiTemporalReprojectionFragment, this.temporalScatterStageFramebuffer);
+      if (this.directRes.temporalMultiScatterReprojectionRenderer == null) {
+         this.directRes.temporalMultiScatterReprojectionRenderer = this.createLazyRenderer(diMultiTemporalReprojectionFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.temporalMultiScatterBinningOffsetsRenderer == null) {
-         this.temporalMultiScatterBinningOffsetsRenderer = this.createLazyRenderer(diMultiTemporalBinningOffsetsFragment, this.temporalScatterStageFramebuffer);
+      if (this.directRes.temporalMultiScatterBinningOffsetsRenderer == null) {
+         this.directRes.temporalMultiScatterBinningOffsetsRenderer = this.createLazyRenderer(diMultiTemporalBinningOffsetsFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.temporalMultiScatterBinningRenderer == null) {
-         this.temporalMultiScatterBinningRenderer = this.createLazyRenderer(diMultiTemporalBinningFragment, this.temporalScatterStageFramebuffer);
+      if (this.directRes.temporalMultiScatterBinningRenderer == null) {
+         this.directRes.temporalMultiScatterBinningRenderer = this.createLazyRenderer(diMultiTemporalBinningFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.multiScatterTemporalRenderer == null) {
-         this.multiScatterTemporalRenderer = this.createLazyRenderer(diMultiScatterTemporalResamplingFragment, this.temporalReservoirFramebuffer);
+      if (this.directRes.multiScatterTemporalRenderer == null) {
+         this.directRes.multiScatterTemporalRenderer = this.createLazyRenderer(diMultiScatterTemporalResamplingFragment, this.directRes.temporalReservoirFramebuffer);
       }
    }
 
    private void ensureIndirectTemporalSplattingRenderers() {
-      if (this.indirectTemporalReprojectionRenderer == null) {
-         this.indirectTemporalReprojectionRenderer = this.createLazyRenderer(indirectTemporalReprojectionFragment, this.temporalScatterStageFramebuffer);
+      if (this.indirectRes.indirectTemporalReprojectionRenderer == null) {
+         this.indirectRes.indirectTemporalReprojectionRenderer = this.createLazyRenderer(indirectTemporalReprojectionFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.indirectTemporalBinningOffsetsRenderer == null) {
-         this.indirectTemporalBinningOffsetsRenderer = this.createLazyRenderer(indirectTemporalBinningOffsetsFragment, this.temporalScatterStageFramebuffer);
+      if (this.indirectRes.indirectTemporalBinningOffsetsRenderer == null) {
+         this.indirectRes.indirectTemporalBinningOffsetsRenderer = this.createLazyRenderer(indirectTemporalBinningOffsetsFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.indirectTemporalBinningRenderer == null) {
-         this.indirectTemporalBinningRenderer = this.createLazyRenderer(indirectTemporalBinningFragment, this.temporalScatterStageFramebuffer);
+      if (this.indirectRes.indirectTemporalBinningRenderer == null) {
+         this.indirectRes.indirectTemporalBinningRenderer = this.createLazyRenderer(indirectTemporalBinningFragment, this.directRes.temporalScatterStageFramebuffer);
       }
-      if (this.indirectScatterTemporalRenderer == null) {
-         this.indirectScatterTemporalRenderer = this.createLazyRenderer(indirectScatterTemporalFragment, this.indirectBoilingFramebuffer);
+      if (this.indirectRes.indirectScatterTemporalRenderer == null) {
+         this.indirectRes.indirectScatterTemporalRenderer = this.createLazyRenderer(indirectScatterTemporalFragment, this.indirectRes.indirectBoilingFramebuffer);
       }
    }
 
@@ -783,168 +569,131 @@ public class LightTreeRenderer extends MainRenderer {
 
    @Override
    public void registerCustomTextures(SamplerHolder samplers) {
-      if (this.isCurrentPhotonicsFragment(diScatterBackupTemporalResamplingFragment)) {
-         this.registerScatterBackupTemporalTextures(samplers);
-         return;
+      for (java.util.Map.Entry<Supplier<TextureObject>, String[]> binding : this.samplerBindings) {
+         this.addTextureSampler(samplers, binding.getKey(), binding.getValue());
       }
-      this.addTextureSampler(samplers, "radiosity_position", this::getCurrentGeometryPositionTexture);
-      this.addTextureSampler(samplers, "radiosity_normal", this::getCurrentGeometryNormalTexture);
-      this.addTextureSampler(samplers, "radiosity_mapped_normal", this::getCurrentMappedNormalTexture);
-      this.addTextureSampler(samplers, "radiosity_albedo", this::getCurrentAlbedoTexture);
-      this.addTextureSampler(samplers, "radiosity_material", this::getCurrentMaterialTexture);
-      this.addTextureSampler(samplers, "radiosity_identity", this::getCurrentIdentityTexture);
-      this.addTextureSampler(samplers, "radiosity_proposal_reservoirs", () -> this.directReservoirBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "radiosity_proposal_reservoir_samples", () -> this.directReservoirBuffer.getWriteAttachment("sample"));
-      this.addTextureSampler(samplers, "radiosity_proposal_reservoir_meta", () -> this.directReservoirBuffer.getWriteAttachment("meta"));
-      this.addTextureSampler(samplers, "radiosity_direct", this::getResolvedDirectTexture);
-      this.addTextureSampler(samplers, "radiosity_reservoirs", this::getCurrentDirectReservoirDataTexture);
-      this.addTextureSampler(samplers, "radiosity_reservoir_samples", this::getCurrentDirectReservoirSampleTexture);
-      this.addTextureSampler(samplers, "radiosity_reservoir_meta", this::getCurrentDirectReservoirMetaTexture);
-      this.addTextureSampler(samplers, "radiosity_spatial_reservoirs", this::getCurrentSpatialReservoirDataTexture);
-      this.addTextureSampler(samplers, "radiosity_spatial_reservoir_samples", this::getCurrentSpatialReservoirSampleTexture);
-      this.addTextureSampler(samplers, "radiosity_spatial_reservoir_meta", this::getCurrentSpatialReservoirMetaTexture);
-      this.addTextureSampler(samplers, "direct_initial_debug_input", () -> this.directInitialDebugBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "radiosity_direct_soft", this::getCompatDirectSoftTexture);
-      this.addTextureSampler(samplers, "radiosity_handheld", () -> this.lightingBuffer.getWriteAttachment("handheld"));
-      this.addTextureSampler(samplers, "radiosity_lighting_variance", () -> this.lightingBuffer.getWriteAttachment("lighting_variance"));
-      this.addTextureSampler(samplers, "radiosity_indirect", () -> this.lightingBuffer.getWriteAttachment("indirect"));
-      this.addTextureSampler(samplers, "radiosity_indirect_variance", () -> this.lightingBuffer.getWriteAttachment("indirect_variance"));
-      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_position", this::getCurrentIndirectReservoirPositionTexture);
-      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_normal", this::getCurrentIndirectReservoirNormalTexture);
-      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_radiance", this::getCurrentIndirectReservoirRadianceTexture);
-      this.addTextureSampler(samplers, "radiosity_indirect_reservoir_meta", this::getCurrentIndirectReservoirMetaTexture);
-      this.addTextureSampler(samplers, "radiosity_indirect_initial_position", () -> this.indirectInitialReservoirBuffer.getWriteAttachment("position"));
-      this.addTextureSampler(samplers, "radiosity_indirect_initial_normal", () -> this.indirectInitialReservoirBuffer.getWriteAttachment("normal"));
-      this.addTextureSampler(samplers, "radiosity_indirect_initial_radiance", () -> this.indirectInitialReservoirBuffer.getWriteAttachment("radiance"));
-      this.addTextureSampler(samplers, "radiosity_indirect_initial_meta", () -> this.indirectInitialReservoirBuffer.getWriteAttachment("meta"));
-      this.addTextureSampler(samplers, "radiosity_indirect_resolved", this::getResolvedIndirectTexture);
-      this.addTextureSampler(samplers, "radiosity_motion", () -> this.motionVectorBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "direct_confidence_input", () -> this.directConfidenceBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "stage_radiosity_position", () -> this.lightingStageBuffer.getWriteAttachment("position"));
-      this.addTextureSampler(samplers, "stage_radiosity_normal", () -> this.lightingStageBuffer.getWriteAttachment("normal"));
-      this.addTextureSampler(samplers, "stage_radiosity_mapped_normal", () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"));
-      this.addTextureSampler(samplers, "stage_radiosity_albedo", () -> this.lightingStageBuffer.getWriteAttachment("albedo"));
-      this.addTextureSampler(samplers, "stage_radiosity_material", () -> this.lightingStageBuffer.getWriteAttachment("material"));
-      this.addTextureSampler(samplers, "stage_radiosity_identity", () -> this.lightingStageBuffer.getWriteAttachment("identity"));
-      this.addTextureSampler(samplers, "stage_radiosity_direct", () -> this.lightingStageBuffer.getWriteAttachment("direct"));
-      this.addTextureSampler(samplers, "stage_radiosity_direct_specular", () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"));
-      this.addTextureSampler(samplers, "stage_radiosity_handheld", () -> this.lightingStageBuffer.getWriteAttachment("handheld"));
-      this.addTextureSampler(samplers, "stage_radiosity_indirect", () -> this.lightingStageBuffer.getWriteAttachment("indirect"));
-      this.addTextureSampler(samplers, "prev_radiosity_position", () -> this.lightingBuffer.getReadAttachment("position"));
-      this.addTextureSampler(samplers, "prev_radiosity_normal", () -> this.lightingBuffer.getReadAttachment("normal"));
-      this.addTextureSampler(samplers, "prev_radiosity_mapped_normal", () -> this.lightingBuffer.getReadAttachment("mapped_normal"));
-      this.addTextureSampler(samplers, "prev_radiosity_albedo", () -> this.lightingBuffer.getReadAttachment("albedo"));
-      this.addTextureSampler(samplers, "prev_radiosity_material", () -> this.lightingBuffer.getReadAttachment("material"));
-      this.addTextureSampler(samplers, "prev_radiosity_identity", () -> this.lightingBuffer.getReadAttachment("identity"));
-      this.addTextureSampler(samplers, "prev_radiosity_direct", this::getPreviousResolvedDirectTexture);
-      this.addTextureSampler(samplers, "prev_radiosity_reservoirs", () -> this.directReservoirBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "prev_radiosity_reservoir_samples", () -> this.directReservoirBuffer.getReadAttachment("sample"));
-      this.addTextureSampler(samplers, "prev_radiosity_reservoir_meta", () -> this.directReservoirBuffer.getReadAttachment("meta"));
-      this.addTextureSampler(samplers, "scatter_reconnection0", () -> this.getCurrentStageReconnectionAttachment("reconnection0"));
-      this.addTextureSampler(samplers, "scatter_reconnection1", () -> this.getCurrentStageReconnectionAttachment("reconnection1"));
-      this.addTextureSampler(samplers, "scatter_reconnection2", () -> this.getCurrentStageReconnectionAttachment("reconnection2"));
-      this.addTextureSampler(samplers, "scatter_reconnection3", () -> this.getCurrentStageReconnectionAttachment("reconnection3"));
-      this.addTextureSampler(samplers, "scatter_reconnection4", () -> this.getCurrentStageReconnectionAttachment("reconnection4"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection0", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection0"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection1", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection1"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection2", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection2"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection3", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection3"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection4", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection4"));
-      // Scatter temporal resampling output: consumed by the current local spatial resampling stage
-      this.addTextureSampler(samplers, "temporal_reservoir_data", () -> this.temporalReservoirBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "temporal_reservoir_sample", () -> this.temporalReservoirBuffer.getWriteAttachment("sample"));
-      this.addTextureSampler(samplers, "temporal_reservoir_meta", () -> this.temporalReservoirBuffer.getWriteAttachment("meta"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_data", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_data"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_sample", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_sample"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_meta", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection0", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection1", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection2", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection2"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection3", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection3"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection4", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection4"));
-      this.addTextureSampler(samplers, "prev_radiosity_direct_soft", this::getPreviousCompatDirectSoftTexture);
-      this.addTextureSampler(samplers, "prev_radiosity_handheld", () -> this.lightingBuffer.getReadAttachment("handheld"));
-      this.addTextureSampler(samplers, "prev_radiosity_lighting_variance", () -> this.lightingBuffer.getReadAttachment("lighting_variance"));
-      this.addTextureSampler(samplers, "prev_radiosity_indirect", () -> this.lightingBuffer.getReadAttachment("indirect"));
-      this.addTextureSampler(samplers, "prev_radiosity_indirect_variance", () -> this.lightingBuffer.getReadAttachment("indirect_variance"));
-      this.addTextureSampler(samplers, "prev_radiosity_indirect_reservoir_position", () -> this.indirectReservoirBuffer.getReadAttachment("position"));
-      this.addTextureSampler(samplers, "prev_radiosity_indirect_reservoir_normal", () -> this.indirectReservoirBuffer.getReadAttachment("normal"));
-      this.addTextureSampler(samplers, "prev_radiosity_indirect_reservoir_radiance", () -> this.indirectReservoirBuffer.getReadAttachment("radiance"));
-      this.addTextureSampler(samplers, "prev_radiosity_indirect_reservoir_meta", () -> this.indirectReservoirBuffer.getReadAttachment("meta"));
-      this.addTextureSampler(samplers, "prev_radiosity_motion", () -> this.motionVectorBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "prev_direct_confidence_input", () -> this.directConfidenceBuffer.getReadAttachment("data"));
-      // NRD RELAX_DiffuseSpecular pipeline samplers (contract §6).
-      // Tile classifier (R8, 1/16 resolution)
-      this.addTextureSampler(samplers, "nrd_in_tiles", () -> this.nrdTilesFb.getWriteAttachment("data"));
-      // Raw radiance+hitDist from sampling stage (NRD-packed by light_tree_sampling_stage.fsh)
-      this.addTextureSampler(samplers, "nrd_in_diff_radiance_hitdist", () -> this.lightingStageBuffer.getWriteAttachment("direct"));
-      this.addTextureSampler(samplers, "nrd_in_spec_radiance_hitdist", () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"));
-      // Transient ping/pong buffers
-      this.addTextureSampler(samplers, "nrd_diff_illum_ping", () -> this.nrdDiffIllumPingFb.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_diff_illum_pong", () -> this.nrdDiffIllumPongFb.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_spec_illum_ping", () -> this.nrdSpecIllumPingFb.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_spec_illum_pong", () -> this.nrdSpecIllumPongFb.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_history_length", () -> this.nrdHistoryLengthFb.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_spec_reprojection_confidence", () -> this.nrdSpecReprojectionConfidenceFb.getWriteAttachment("data"));
-      // Permanent prev-frame buffers: temporal reads .read (prev frame); atrous smem reads .write (post-anti-firefly)
-      this.addTextureSampler(samplers, "nrd_diff_illum_prev", this::getCurrentNrdDiffIllumPrevTexture);
-      this.addTextureSampler(samplers, "nrd_diff_illum_responsive_prev", this::getCurrentNrdDiffIllumResponsivePrevTexture);
-      this.addTextureSampler(samplers, "nrd_spec_illum_prev", this::getCurrentNrdSpecIllumPrevTexture);
-      this.addTextureSampler(samplers, "nrd_spec_illum_responsive_prev", this::getCurrentNrdSpecIllumResponsivePrevTexture);
-      this.addTextureSampler(samplers, "nrd_history_length_prev", () -> this.nrdHistoryLengthPrevFb.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_reflection_hit_t_curr", () -> this.nrdReflectionHitTCurrFb.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_reflection_hit_t_prev", () -> this.nrdReflectionHitTPrevFb.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_out_diff_radiance_hitdist", () -> this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_out_spec_radiance_hitdist", () -> this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data"));
-      // A-trous ping-pong inputs (Java rebinds per-pass to the correct ping or pong buffer)
-      this.addTextureSampler(samplers, "nrd_diff_atrous_input", this::getCurrentDiffAtrousInputTexture);
-      this.addTextureSampler(samplers, "nrd_spec_atrous_input", this::getCurrentSpecAtrousInputTexture);
-      // NRD history-confidence cascade samplers.
-      // ph_nrd_diff_confidence: last frame's final confidence output, sampled by TA next frame.
-      // nrd_diff_confidence_gradient: gradient pass output / blur cascade input this frame.
-      this.addTextureSampler(samplers, "ph_nrd_diff_confidence", () -> this.nrdConfidenceBlurPingFb.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "nrd_diff_confidence_gradient", this::getCurrentConfidenceBlurInputTexture);
-      this.addTextureSampler(samplers, "denoised_direct_diffuse", this::getResolvedDirectDiffuseTexture);
-      this.addTextureSampler(samplers, "denoised_direct_specular", this::getResolvedSpecularAtrousTexture);
    }
 
-   private void registerScatterBackupTemporalTextures(SamplerHolder samplers) {
-      this.addTextureSampler(samplers, "radiosity_position", this::getCurrentGeometryPositionTexture);
-      this.addTextureSampler(samplers, "radiosity_normal", this::getCurrentGeometryNormalTexture);
-      this.addTextureSampler(samplers, "radiosity_mapped_normal", this::getCurrentMappedNormalTexture);
-      this.addTextureSampler(samplers, "radiosity_albedo", this::getCurrentAlbedoTexture);
-      this.addTextureSampler(samplers, "radiosity_material", this::getCurrentMaterialTexture);
-      this.addTextureSampler(samplers, "radiosity_identity", this::getCurrentIdentityTexture);
-      this.addTextureSampler(samplers, "radiosity_proposal_reservoirs", () -> this.directReservoirBuffer.getWriteAttachment("data"));
-      this.addTextureSampler(samplers, "radiosity_proposal_reservoir_samples", () -> this.directReservoirBuffer.getWriteAttachment("sample"));
-      this.addTextureSampler(samplers, "radiosity_proposal_reservoir_meta", () -> this.directReservoirBuffer.getWriteAttachment("meta"));
-      this.addTextureSampler(samplers, "scatter_reconnection0", () -> this.getCurrentStageReconnectionAttachment("reconnection0"));
-      this.addTextureSampler(samplers, "scatter_reconnection1", () -> this.getCurrentStageReconnectionAttachment("reconnection1"));
-      this.addTextureSampler(samplers, "scatter_reconnection2", () -> this.getCurrentStageReconnectionAttachment("reconnection2"));
-      this.addTextureSampler(samplers, "scatter_reconnection3", () -> this.getCurrentStageReconnectionAttachment("reconnection3"));
-      this.addTextureSampler(samplers, "scatter_reconnection4", () -> this.getCurrentStageReconnectionAttachment("reconnection4"));
-      this.addTextureSampler(samplers, "prev_radiosity_position", () -> this.lightingBuffer.getReadAttachment("position"));
-      this.addTextureSampler(samplers, "prev_radiosity_normal", () -> this.lightingBuffer.getReadAttachment("normal"));
-      this.addTextureSampler(samplers, "prev_radiosity_mapped_normal", () -> this.lightingBuffer.getReadAttachment("mapped_normal"));
-      this.addTextureSampler(samplers, "prev_radiosity_albedo", () -> this.lightingBuffer.getReadAttachment("albedo"));
-      this.addTextureSampler(samplers, "prev_radiosity_material", () -> this.lightingBuffer.getReadAttachment("material"));
-      this.addTextureSampler(samplers, "prev_radiosity_identity", () -> this.lightingBuffer.getReadAttachment("identity"));
-      this.addTextureSampler(samplers, "prev_radiosity_reservoirs", () -> this.directReservoirBuffer.getReadAttachment("data"));
-      this.addTextureSampler(samplers, "prev_radiosity_reservoir_samples", () -> this.directReservoirBuffer.getReadAttachment("sample"));
-      this.addTextureSampler(samplers, "prev_radiosity_reservoir_meta", () -> this.directReservoirBuffer.getReadAttachment("meta"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection0", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection0"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection1", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection1"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection2", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection2"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection3", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection3"));
-      this.addTextureSampler(samplers, "prev_scatter_reconnection4", () -> this.scatterReconnectionBuffer.getReadAttachment("reconnection4"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_data", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_data"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_sample", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_sample"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reservoir_meta", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection0", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection1", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection2", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection2"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection3", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection3"));
-      this.addTextureSampler(samplers, "temporal_gather_intermediate_reconnection4", () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection4"));
+   private static void bind(
+      java.util.List<java.util.Map.Entry<Supplier<TextureObject>, String[]>> b,
+      Supplier<TextureObject> supplier, String... names) {
+      b.add(java.util.Map.entry(supplier, names));
+   }
+
+   private java.util.List<java.util.Map.Entry<Supplier<TextureObject>, String[]>> buildSamplerBindings() {
+      java.util.ArrayList<java.util.Map.Entry<Supplier<TextureObject>, String[]>> b = new java.util.ArrayList<>();
+      // -- G-buffer (current frame) --
+      bind(b, this::getCurrentGeometryPositionTexture, "radiosity_position");
+      bind(b, this::getCurrentGeometryNormalTexture, "radiosity_normal");
+      bind(b, this::getCurrentMappedNormalTexture, "radiosity_mapped_normal");
+      bind(b, this::getCurrentAlbedoTexture, "radiosity_albedo");
+      bind(b, this::getCurrentMaterialTexture, "radiosity_material");
+      bind(b, this::getCurrentIdentityTexture, "radiosity_identity");
+      // -- Direct reservoir buffer: proposal_* and current reservoir_* are aliases
+      // (both static-equivalent to directReservoirBuffer.write). Sharing one unit
+      // each saves 3 units for any pass that references both name groups. --
+      bind(b, () -> this.directReservoirBuffer.getWriteAttachment("data"),
+         "radiosity_proposal_reservoirs", "radiosity_reservoirs");
+      bind(b, () -> this.directReservoirBuffer.getWriteAttachment("sample"),
+         "radiosity_proposal_reservoir_samples", "radiosity_reservoir_samples");
+      bind(b, () -> this.directReservoirBuffer.getWriteAttachment("meta"),
+         "radiosity_proposal_reservoir_meta", "radiosity_reservoir_meta");
+      bind(b, this::getResolvedDirectTexture, "radiosity_direct");
+      bind(b, this::getCurrentSpatialReservoirDataTexture, "radiosity_spatial_reservoirs");
+      bind(b, this::getCurrentSpatialReservoirSampleTexture, "radiosity_spatial_reservoir_samples");
+      bind(b, this::getCurrentSpatialReservoirMetaTexture, "radiosity_spatial_reservoir_meta");
+      bind(b, () -> this.directRes.directInitialDebugBuffer.getWriteAttachment("data"), "direct_initial_debug_input");
+      bind(b, this::getCompatDirectSoftTexture, "radiosity_direct_soft");
+      bind(b, () -> this.lightingBuffer.getWriteAttachment("handheld"), "radiosity_handheld");
+      bind(b, () -> this.lightingBuffer.getWriteAttachment("lighting_variance"), "radiosity_lighting_variance");
+      bind(b, () -> this.lightingBuffer.getWriteAttachment("indirect"), "radiosity_indirect");
+      bind(b, () -> this.lightingBuffer.getWriteAttachment("indirect_variance"), "radiosity_indirect_variance");
+      bind(b, this::getCurrentIndirectReservoirPositionTexture, "radiosity_indirect_reservoir_position");
+      bind(b, this::getCurrentIndirectReservoirNormalTexture, "radiosity_indirect_reservoir_normal");
+      bind(b, this::getCurrentIndirectReservoirRadianceTexture, "radiosity_indirect_reservoir_radiance");
+      bind(b, this::getCurrentIndirectReservoirMetaTexture, "radiosity_indirect_reservoir_meta");
+      bind(b, () -> this.indirectRes.indirectInitialReservoirBuffer.getWriteAttachment("position"), "radiosity_indirect_initial_position");
+      bind(b, () -> this.indirectRes.indirectInitialReservoirBuffer.getWriteAttachment("normal"), "radiosity_indirect_initial_normal");
+      bind(b, () -> this.indirectRes.indirectInitialReservoirBuffer.getWriteAttachment("radiance"), "radiosity_indirect_initial_radiance");
+      bind(b, () -> this.indirectRes.indirectInitialReservoirBuffer.getWriteAttachment("meta"), "radiosity_indirect_initial_meta");
+      bind(b, this::getResolvedIndirectTexture, "radiosity_indirect_resolved");
+      bind(b, () -> this.motionVectorBuffer.getWriteAttachment("data"), "radiosity_motion");
+      bind(b, () -> this.directConfidenceBuffer.getWriteAttachment("data"), "direct_confidence_input");
+      // -- Stage buffer: stage_radiosity_direct / nrd_in_diff_radiance_hitdist and
+      // stage_radiosity_direct_specular / nrd_in_spec_radiance_hitdist alias to the
+      // same lightingStageBuffer attachments (sampling stage output ≡ NRD input). --
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("position"), "stage_radiosity_position");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("normal"), "stage_radiosity_normal");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"), "stage_radiosity_mapped_normal");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("albedo"), "stage_radiosity_albedo");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("material"), "stage_radiosity_material");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("identity"), "stage_radiosity_identity");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("direct"),
+         "stage_radiosity_direct", "nrd_in_diff_radiance_hitdist");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"),
+         "stage_radiosity_direct_specular", "nrd_in_spec_radiance_hitdist");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("handheld"), "stage_radiosity_handheld");
+      bind(b, () -> this.lightingStageBuffer.getWriteAttachment("indirect"), "stage_radiosity_indirect");
+      // -- Previous-frame G-buffer (lightingBuffer.read) --
+      bind(b, () -> this.lightingBuffer.getReadAttachment("position"), "prev_radiosity_position");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("normal"), "prev_radiosity_normal");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("mapped_normal"), "prev_radiosity_mapped_normal");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("albedo"), "prev_radiosity_albedo");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("material"), "prev_radiosity_material");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("identity"), "prev_radiosity_identity");
+      bind(b, this::getPreviousResolvedDirectTexture, "prev_radiosity_direct");
+      bind(b, () -> this.directReservoirBuffer.getReadAttachment("data"), "prev_radiosity_reservoirs");
+      bind(b, () -> this.directReservoirBuffer.getReadAttachment("sample"), "prev_radiosity_reservoir_samples");
+      bind(b, () -> this.directReservoirBuffer.getReadAttachment("meta"), "prev_radiosity_reservoir_meta");
+      // -- Reconnection payloads: 3 sampler2DArrays replace 15 sampler2D uniforms --
+      // Layer 0 attachment carries the shared array texture id for the whole group.
+      bind(b, () -> this.getCurrentStageReconnectionAttachment("reconnection0"), "scatter_reconnections");
+      bind(b, () -> this.directRes.scatterReconnectionBuffer.getReadAttachment("reconnection0"), "prev_scatter_reconnections");
+      // -- Temporal reservoir routing (scatter resolve output ↔ spatial resampling input) --
+      bind(b, () -> this.directRes.temporalReservoirBuffer.getWriteAttachment("data"), "temporal_reservoir_data");
+      bind(b, () -> this.directRes.temporalReservoirBuffer.getWriteAttachment("sample"), "temporal_reservoir_sample");
+      bind(b, () -> this.directRes.temporalReservoirBuffer.getWriteAttachment("meta"), "temporal_reservoir_meta");
+      bind(b, () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_data"), "temporal_gather_intermediate_reservoir_data");
+      bind(b, () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_sample"), "temporal_gather_intermediate_reservoir_sample");
+      bind(b, () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_meta"), "temporal_gather_intermediate_reservoir_meta");
+      // Layer 0 attachment carries the shared array texture id for intermediate_reconnection0..4.
+      bind(b, () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"), "temporal_gather_intermediate_reconnections");
+      // -- Previous-frame ancillary buffers --
+      bind(b, this::getPreviousCompatDirectSoftTexture, "prev_radiosity_direct_soft");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("handheld"), "prev_radiosity_handheld");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("lighting_variance"), "prev_radiosity_lighting_variance");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("indirect"), "prev_radiosity_indirect");
+      bind(b, () -> this.lightingBuffer.getReadAttachment("indirect_variance"), "prev_radiosity_indirect_variance");
+      bind(b, () -> this.indirectRes.indirectReservoirBuffer.getReadAttachment("position"), "prev_radiosity_indirect_reservoir_position");
+      bind(b, () -> this.indirectRes.indirectReservoirBuffer.getReadAttachment("normal"), "prev_radiosity_indirect_reservoir_normal");
+      bind(b, () -> this.indirectRes.indirectReservoirBuffer.getReadAttachment("radiance"), "prev_radiosity_indirect_reservoir_radiance");
+      bind(b, () -> this.indirectRes.indirectReservoirBuffer.getReadAttachment("meta"), "prev_radiosity_indirect_reservoir_meta");
+      bind(b, () -> this.motionVectorBuffer.getReadAttachment("data"), "prev_radiosity_motion");
+      bind(b, () -> this.directConfidenceBuffer.getReadAttachment("data"), "prev_direct_confidence_input");
+      // -- NRD RELAX_DiffuseSpecular pipeline (contract §6) --
+      bind(b, () -> this.nrdRes.tilesFb.getWriteAttachment("data"), "nrd_in_tiles");
+      bind(b, () -> this.nrdRes.diffIllumPingFb.getWriteAttachment("data"), "nrd_diff_illum_ping");
+      bind(b, () -> this.nrdRes.diffIllumPongFb.getWriteAttachment("data"), "nrd_diff_illum_pong");
+      bind(b, () -> this.nrdRes.specIllumPingFb.getWriteAttachment("data"), "nrd_spec_illum_ping");
+      bind(b, () -> this.nrdRes.specIllumPongFb.getWriteAttachment("data"), "nrd_spec_illum_pong");
+      bind(b, () -> this.nrdRes.historyLengthFb.getWriteAttachment("data"), "nrd_history_length");
+      bind(b, () -> this.nrdRes.specReprojectionConfidenceFb.getWriteAttachment("data"), "nrd_spec_reprojection_confidence");
+      bind(b, this::getCurrentNrdDiffIllumPrevTexture, "nrd_diff_illum_prev");
+      bind(b, this::getCurrentNrdDiffIllumResponsivePrevTexture, "nrd_diff_illum_responsive_prev");
+      bind(b, this::getCurrentNrdSpecIllumPrevTexture, "nrd_spec_illum_prev");
+      bind(b, this::getCurrentNrdSpecIllumResponsivePrevTexture, "nrd_spec_illum_responsive_prev");
+      bind(b, () -> this.nrdRes.historyLengthPrevFb.getReadAttachment("data"), "nrd_history_length_prev");
+      bind(b, () -> this.nrdRes.reflectionHitTCurrFb.getWriteAttachment("data"), "nrd_reflection_hit_t_curr");
+      bind(b, () -> this.nrdRes.reflectionHitTPrevFb.getReadAttachment("data"), "nrd_reflection_hit_t_prev");
+      bind(b, () -> this.nrdRes.outDiffRadianceHitDistFb.getWriteAttachment("data"), "nrd_out_diff_radiance_hitdist");
+      bind(b, () -> this.nrdRes.outSpecRadianceHitDistFb.getWriteAttachment("data"), "nrd_out_spec_radiance_hitdist");
+      bind(b, this::getCurrentDiffAtrousInputTexture, "nrd_diff_atrous_input");
+      bind(b, this::getCurrentSpecAtrousInputTexture, "nrd_spec_atrous_input");
+      bind(b, () -> this.nrdRes.confidenceBlurPingFb.getWriteAttachment("data"), "ph_nrd_diff_confidence");
+      bind(b, this::getCurrentConfidenceBlurInputTexture, "nrd_diff_confidence_gradient");
+      bind(b, this::getResolvedDirectDiffuseTexture, "denoised_direct_diffuse");
+      bind(b, this::getResolvedSpecularAtrousTexture, "denoised_direct_specular");
+      return b;
    }
 
    @Override
@@ -1280,16 +1029,16 @@ public class LightTreeRenderer extends MainRenderer {
       // Match the reference ownership model more closely by publishing the just-finished
       // frame's final reconnection payload at end-of-frame rather than pre-emptively at
       // frame start. The temporal DI output buffer remains single-frame local.
-      this.scatterReconnectionBuffer.swap();
+      this.directRes.scatterReconnectionBuffer.swap();
    }
 
    private void updateScatterTemporalResourcesPerFrame() {
       this.ensureTemporalScatterMemoryCapacity();
-      this.proposalReconnectionBuffer.updatePerFrame();
-      this.temporalReconnectionBuffer.updatePerFrame();
-      this.scatterReconnectionBuffer.updatePerFrame();
-      this.temporalReservoirBuffer.updatePerFrame();
-      this.temporalGatherBuffer.updatePerFrame();
+      this.directRes.proposalReconnectionBuffer.updatePerFrame();
+      this.directRes.temporalReconnectionBuffer.updatePerFrame();
+      this.directRes.scatterReconnectionBuffer.updatePerFrame();
+      this.directRes.temporalReservoirBuffer.updatePerFrame();
+      this.directRes.temporalGatherBuffer.updatePerFrame();
    }
 
    private void allocateTemporalScatterMemoryManagers() {
@@ -1478,15 +1227,15 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void destroyScatterTemporalResources() {
-      this.temporalCollectFramebuffer.destroy();
-      this.robustReuseOptimizationFramebuffer.destroy();
-      this.temporalScatterStageFramebuffer.destroy();
-      this.temporalReservoirFramebuffer.destroy();
-      this.proposalReconnectionBuffer.destroy();
-      this.temporalReconnectionBuffer.destroy();
-      this.scatterReconnectionBuffer.destroy();
-      this.temporalReservoirBuffer.destroy();
-      this.temporalGatherBuffer.destroy();
+      this.directRes.temporalCollectFramebuffer.destroy();
+      this.directRes.robustReuseOptimizationFramebuffer.destroy();
+      this.directRes.temporalScatterStageFramebuffer.destroy();
+      this.directRes.temporalReservoirFramebuffer.destroy();
+      this.directRes.proposalReconnectionBuffer.destroy();
+      this.directRes.temporalReconnectionBuffer.destroy();
+      this.directRes.scatterReconnectionBuffer.destroy();
+      this.directRes.temporalReservoirBuffer.destroy();
+      this.directRes.temporalGatherBuffer.destroy();
       this.destroyTemporalScatterMemoryManagers();
    }
 
@@ -1494,21 +1243,21 @@ public class LightTreeRenderer extends MainRenderer {
       // Reference topology keeps only prev/curr history persistent across frames.
       // Proposal/current-write and intermediate gather targets are frame-local and
       // should not be treated as double-buffered history on resets.
-      this.proposalReconnectionBuffer.clear(clearColor);
-      this.temporalReconnectionBuffer.clear(clearColor);
-      this.temporalReservoirBuffer.clear(clearColor);
-      this.temporalGatherBuffer.clear(clearColor);
+      this.directRes.proposalReconnectionBuffer.clear(clearColor);
+      this.directRes.temporalReconnectionBuffer.clear(clearColor);
+      this.directRes.temporalReservoirBuffer.clear(clearColor);
+      this.directRes.temporalGatherBuffer.clear(clearColor);
    }
 
    private void clearPreviousTemporalHistory(Vector4f clearColor) {
       // Final temporal/spatial reconnection history is the only DI reconnection
       // payload that survives across frames in the current topology.
-      this.scatterReconnectionBuffer.clearBothSides(clearColor);
+      this.directRes.scatterReconnectionBuffer.clearBothSides(clearColor);
    }
 
    @Override
    public void render() {
-      if (this.proposalStageRenderer == null) {
+      if (this.indirectRes.proposalStageRenderer == null) {
          return;
       }
 
@@ -1526,15 +1275,15 @@ public class LightTreeRenderer extends MainRenderer {
       this.directReservoirBuffer.swap();
       this.directConfidenceBuffer.swap();
       // Swap permanent NRD history buffers so current-frame writes become next-frame reads.
-      this.nrdDiffIllumPrevFb.swap();
-      this.nrdDiffIllumResponsivePrevFb.swap();
-      this.nrdSpecIllumPrevFb.swap();
-      this.nrdSpecIllumResponsivePrevFb.swap();
-      this.nrdHistoryLengthPrevFb.swap();
-      this.nrdReflectionHitTPrevFb.swap();
-      this.indirectInitialReservoirBuffer.swap();
-      this.indirectReservoirBuffer.swap();
-      this.indirectDenoisedBuffer.swap();
+      this.nrdRes.diffIllumPrevFb.swap();
+      this.nrdRes.diffIllumResponsivePrevFb.swap();
+      this.nrdRes.specIllumPrevFb.swap();
+      this.nrdRes.specIllumResponsivePrevFb.swap();
+      this.nrdRes.historyLengthPrevFb.swap();
+      this.nrdRes.reflectionHitTPrevFb.swap();
+      this.indirectRes.indirectInitialReservoirBuffer.swap();
+      this.indirectRes.indirectReservoirBuffer.swap();
+      this.indirectRes.indirectDenoisedBuffer.swap();
       long t0 = System.nanoTime();
       this.renderLightTreeSamplingStageProfiled();
       long t1 = System.nanoTime();
@@ -1555,27 +1304,27 @@ public class LightTreeRenderer extends MainRenderer {
       long t5 = System.nanoTime();
       // NRD RELAX_DiffuseSpecular fused pipeline (contract §9, pipeline order §1).
       long t6 = System.nanoTime();
-      this.renderProfiled(nrdClassifyTilesRegionIndex, this.nrdClassifyTilesRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.nrdClassifyTilesRegionIndex, this.nrdRes.classifyTilesRenderer);
       long t7 = System.nanoTime();
       if (this.shouldRunHitDistReconstruction()) {
-         this.renderProfiled(nrdHitDistReconstructionRegionIndex, this.nrdHitDistReconstructionRenderer);
+         this.renderProfiled(LightTreePipelineProfiler.nrdHitDistReconstructionRegionIndex, this.nrdRes.hitDistReconstructionRenderer);
       }
       long t8 = System.nanoTime();
-      this.renderProfiled(nrdPrepassRegionIndex, this.nrdPrepassRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.nrdPrepassRegionIndex, this.nrdRes.prepassRenderer);
       long t9 = System.nanoTime();
-      this.renderProfiled(relaxTemporalAccumulationRegionIndex, this.directTemporalRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.relaxTemporalAccumulationRegionIndex, this.directRes.directTemporalRenderer);
       long t10 = System.nanoTime();
       // Confidence cascade runs AFTER TA so the new noisy input is available.
       // The produced confidence texture is consumed by TA in the NEXT frame.
       // Reference placement: NRD-Sample dispatches ConfidenceBlur after TemporalAccumulation.
       this.renderConfidenceCascade();
-      this.renderProfiled(relaxHistoryFixRegionIndex, this.directHistoryFixRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.relaxHistoryFixRegionIndex, this.directRes.directHistoryFixRenderer);
       long t11 = System.nanoTime();
-      this.renderProfiled(relaxHistoryClampingRegionIndex, this.directHistoryClampingRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.relaxHistoryClampingRegionIndex, this.directRes.directHistoryClampingRenderer);
       long t12 = System.nanoTime();
-      this.renderProfiled(nrdCopyRegionIndex, this.nrdCopyRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.nrdCopyRegionIndex, this.nrdRes.copyRenderer);
       long t13 = System.nanoTime();
-      this.renderProfiled(relaxAntiFireflyRegionIndex, this.directAntiFireflyRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.relaxAntiFireflyRegionIndex, this.directRes.directAntiFireflyRenderer);
       long t14 = System.nanoTime();
       this.renderNrdAtrousProfiled();
       long t15 = System.nanoTime();
@@ -1588,20 +1337,20 @@ public class LightTreeRenderer extends MainRenderer {
          this.clearDisabledIndirectOutputs();
       }
       long t17 = System.nanoTime();
-      this.renderProfiled(lightingAccumulationRegionIndex, this.accumulationRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.lightingAccumulationRegionIndex, this.indirectRes.accumulationRenderer);
       long t18 = System.nanoTime();
       if (runReservoirSplattingIndirect && this.shouldRunIndirectDenoise()) {
-         this.renderProfiled(indirectDenoiseRegionIndex, this.indirectDenoisingRenderer);
+         this.renderProfiled(LightTreePipelineProfiler.indirectDenoiseRegionIndex, this.indirectRes.indirectDenoisingRenderer);
       }
       long t19 = System.nanoTime();
       if (runReservoirSplattingIndirect) {
-         this.renderProfiled(indirectCompositeRegionIndex, this.indirectRenderer);
+         this.renderProfiled(LightTreePipelineProfiler.indirectCompositeRegionIndex, this.indirectRes.indirectRenderer);
       }
       long t20 = System.nanoTime();
       this.swapScatterTemporalHistory();
       this.recordCpuPassTimes(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t17, t18, t19, t20);
       this.worldRegistry.advanceLightBlendFrame(this.renderFrameIndex);
-      this.logRenderProfileIfNeeded(t20 - t0);
+      this.profiler.logFrameSummaryIfDue(t20 - t0, this.getCpuPassNanos(), this.worldRegistry, this.renderScale, this.lastCpuDirectAtrousIterationNanos, NRD_ATROUS_STRIDES);
    }
 
    @Override
@@ -1615,26 +1364,26 @@ public class LightTreeRenderer extends MainRenderer {
          // NRD-pipeline mapped names (contract §8 Task 8).
          Map.entry("nrd_in_diff", this.lightingStageBuffer.getWriteAttachment("direct")),
          Map.entry("nrd_in_spec", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
-         Map.entry("tiles", this.nrdTilesFb.getWriteAttachment("data")),
-         Map.entry("prepass_diff", this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data")),
-         Map.entry("direct_slow", this.nrdDiffIllumPingFb.getWriteAttachment("data")),
-         Map.entry("direct_fast", this.nrdDiffIllumPongFb.getWriteAttachment("data")),
-         Map.entry("direct_clamped_slow", this.nrdDiffIllumPrevFb.getWriteAttachment("data")),
-         Map.entry("direct_clamped_fast", this.nrdDiffIllumResponsivePrevFb.getWriteAttachment("data")),
-         Map.entry("direct_anti_firefly", this.nrdDiffIllumPrevFb.getWriteAttachment("data")),
-         Map.entry("direct_denoised", this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data")),
+         Map.entry("tiles", this.nrdRes.tilesFb.getWriteAttachment("data")),
+         Map.entry("prepass_diff", this.nrdRes.outDiffRadianceHitDistFb.getWriteAttachment("data")),
+         Map.entry("direct_slow", this.nrdRes.diffIllumPingFb.getWriteAttachment("data")),
+         Map.entry("direct_fast", this.nrdRes.diffIllumPongFb.getWriteAttachment("data")),
+         Map.entry("direct_clamped_slow", this.nrdRes.diffIllumPrevFb.getWriteAttachment("data")),
+         Map.entry("direct_clamped_fast", this.nrdRes.diffIllumResponsivePrevFb.getWriteAttachment("data")),
+         Map.entry("direct_anti_firefly", this.nrdRes.diffIllumPrevFb.getWriteAttachment("data")),
+         Map.entry("direct_denoised", this.nrdRes.outDiffRadianceHitDistFb.getWriteAttachment("data")),
          Map.entry("direct_atrous", this.getResolvedDiffuseAtrousTexture()),
          Map.entry("direct_raw", this.lightingStageBuffer.getWriteAttachment("direct_combined")),
          Map.entry("direct_raw_diffuse", this.lightingStageBuffer.getWriteAttachment("direct")),
          Map.entry("direct_raw_specular", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
          Map.entry("spec_denoised", this.getResolvedSpecularAtrousTexture()),
          Map.entry("spec_raw", this.lightingStageBuffer.getWriteAttachment("direct_specular")),
-         Map.entry("direct_initial_debug", this.directInitialDebugBuffer.getWriteAttachment("data")),
+         Map.entry("direct_initial_debug", this.directRes.directInitialDebugBuffer.getWriteAttachment("data")),
          Map.entry("handheld", this.lightingBuffer.getWriteAttachment("handheld")),
          Map.entry("indirect", this.getResolvedIndirectTexture()),
          Map.entry("indirect_raw", this.lightingBuffer.getWriteAttachment("indirect")),
-         Map.entry("indirect_reservoir", this.indirectReservoirBuffer.getWriteAttachment("radiance")),
-         Map.entry("lighting", this.nrdDiffIllumPingFb.getWriteAttachment("data")),
+         Map.entry("indirect_reservoir", this.indirectRes.indirectReservoirBuffer.getWriteAttachment("radiance")),
+         Map.entry("lighting", this.nrdRes.diffIllumPingFb.getWriteAttachment("data")),
          Map.entry("stage_albedo", this.lightingStageBuffer.getWriteAttachment("albedo")),
          Map.entry("stage_direct", this.lightingStageBuffer.getWriteAttachment("direct_combined")),
          Map.entry("stage_direct_diffuse", this.lightingStageBuffer.getWriteAttachment("direct")),
@@ -1654,72 +1403,54 @@ public class LightTreeRenderer extends MainRenderer {
       this.directSpatialReservoirBuffer.updatePerFrame();
       this.updateScatterTemporalResourcesPerFrame();
       this.directConfidenceBuffer.updatePerFrame();
-      this.directInitialDebugBuffer.updatePerFrame();
+      this.directRes.directInitialDebugBuffer.updatePerFrame();
       this.motionVectorBuffer.updatePerFrame();
-      // NRD permanent FBOs
-      this.nrdDiffIllumPrevFb.updatePerFrame();
-      this.nrdDiffIllumResponsivePrevFb.updatePerFrame();
-      this.nrdSpecIllumPrevFb.updatePerFrame();
-      this.nrdSpecIllumResponsivePrevFb.updatePerFrame();
-      this.nrdHistoryLengthPrevFb.updatePerFrame();
-      this.nrdReflectionHitTPrevFb.updatePerFrame();
-      // NRD transient FBOs (tile FBO recalculated by updatePerFrame - size computed in ColorFramebuffer via supplier)
-      this.nrdTilesFb.updatePerFrame();
-      this.nrdDiffIllumPingFb.updatePerFrame();
-      this.nrdDiffIllumPongFb.updatePerFrame();
-      this.nrdSpecIllumPingFb.updatePerFrame();
-      this.nrdSpecIllumPongFb.updatePerFrame();
-      this.nrdHistoryLengthFb.updatePerFrame();
-      this.nrdSpecReprojectionConfidenceFb.updatePerFrame();
-      this.nrdReflectionHitTCurrFb.updatePerFrame();
-      this.nrdOutDiffRadianceHitDistFb.updatePerFrame();
-      this.nrdOutSpecRadianceHitDistFb.updatePerFrame();
-      this.nrdDiffHitDistReconFb.updatePerFrame();
-      this.nrdSpecHitDistReconFb.updatePerFrame();
-      this.indirectInitialReservoirBuffer.updatePerFrame();
-      this.indirectReservoirBuffer.updatePerFrame();
-      this.indirectDenoisedBuffer.updatePerFrame();
-      this.recalculateRenderer(this.proposalStageRenderer);
-      this.recalculateRenderer(this.proposalReservoirRenderer);
-      this.recalculateRenderer(this.temporalCollectRenderer);
-      this.recalculateRenderer(this.robustReuseOptimizationRenderer);
-      this.recalculateRenderer(this.temporalGatherRenderer);
-      this.recalculateRenderer(this.temporalScatterReprojectionRenderer);
-      this.recalculateRenderer(this.temporalMultiScatterReprojectionRenderer);
-      this.recalculateRenderer(this.temporalScatterBinningOffsetsRenderer);
-      this.recalculateRenderer(this.temporalMultiScatterBinningOffsetsRenderer);
-      this.recalculateRenderer(this.temporalScatterBinningRenderer);
-      this.recalculateRenderer(this.temporalMultiScatterBinningRenderer);
-      this.recalculateRenderer(this.scatterTemporalRenderer);
-      this.recalculateRenderer(this.scatterBackupTemporalRenderer);
-      this.recalculateRenderer(this.multiScatterTemporalRenderer);
-      this.recalculateRenderer(this.reuseResolveRenderer);
-      this.recalculateRenderer(this.nrdClassifyTilesRenderer);
-      this.recalculateRenderer(this.nrdHitDistReconstructionRenderer);
-      this.recalculateRenderer(this.nrdPrepassRenderer);
-      this.recalculateRenderer(this.directTemporalRenderer);
-      this.recalculateRenderer(this.directHistoryFixRenderer);
-      this.recalculateRenderer(this.directHistoryClampingRenderer);
-      this.recalculateRenderer(this.nrdCopyRenderer);
-      this.recalculateRenderer(this.directAntiFireflyRenderer);
-      this.recalculateRenderer(this.nrdAtrousSmemRenderer);
-      this.recalculateRenderer(this.directAtrousRenderer);
-      this.recalculateRenderer(this.indirectInitialRenderer);
-      this.recalculateRenderer(this.indirectBoilingRenderer);
-      this.recalculateRenderer(this.indirectTemporalReprojectionRenderer);
-      this.recalculateRenderer(this.indirectTemporalBinningOffsetsRenderer);
-      this.recalculateRenderer(this.indirectTemporalBinningRenderer);
-      this.recalculateRenderer(this.indirectScatterTemporalRenderer);
-      this.recalculateRenderer(this.indirectAccumulationRenderer);
-      this.recalculateRenderer(this.indirectAccumulationLightingRenderer);
-      this.recalculateRenderer(this.indirectAccumulationReservoirRenderer);
-      this.recalculateRenderer(this.indirectDenoisingRenderer);
-      this.recalculateRenderer(this.accumulationRenderer);
-      this.recalculateRenderer(this.indirectRenderer);
-      this.recalculateRenderer(this.shadeSamplesMonolithicRenderer);
-      this.recalculateRenderer(this.shadeSamplesReservoirRenderer);
-      this.recalculateRenderer(this.shadeSamplesRenderer);
-      this.recalculateRenderer(this.shadeSamplesReconnectionRenderer);
+      // NRD FBOs (delegated to holder — includes permanent, transient, and confidence cascade)
+      this.nrdRes.updatePerFrame();
+      this.indirectRes.indirectInitialReservoirBuffer.updatePerFrame();
+      this.indirectRes.indirectReservoirBuffer.updatePerFrame();
+      this.indirectRes.indirectDenoisedBuffer.updatePerFrame();
+      this.recalculateRenderer(this.indirectRes.proposalStageRenderer);
+      this.recalculateRenderer(this.indirectRes.proposalReservoirRenderer);
+      this.recalculateRenderer(this.directRes.temporalCollectRenderer);
+      this.recalculateRenderer(this.directRes.robustReuseOptimizationRenderer);
+      this.recalculateRenderer(this.directRes.temporalGatherRenderer);
+      this.recalculateRenderer(this.directRes.temporalScatterReprojectionRenderer);
+      this.recalculateRenderer(this.directRes.temporalMultiScatterReprojectionRenderer);
+      this.recalculateRenderer(this.directRes.temporalScatterBinningOffsetsRenderer);
+      this.recalculateRenderer(this.directRes.temporalMultiScatterBinningOffsetsRenderer);
+      this.recalculateRenderer(this.directRes.temporalScatterBinningRenderer);
+      this.recalculateRenderer(this.directRes.temporalMultiScatterBinningRenderer);
+      this.recalculateRenderer(this.directRes.scatterTemporalRenderer);
+      this.recalculateRenderer(this.directRes.scatterBackupTemporalRenderer);
+      this.recalculateRenderer(this.directRes.multiScatterTemporalRenderer);
+      this.recalculateRenderer(this.indirectRes.reuseResolveRenderer);
+      this.recalculateRenderer(this.nrdRes.classifyTilesRenderer);
+      this.recalculateRenderer(this.nrdRes.hitDistReconstructionRenderer);
+      this.recalculateRenderer(this.nrdRes.prepassRenderer);
+      this.recalculateRenderer(this.directRes.directTemporalRenderer);
+      this.recalculateRenderer(this.directRes.directHistoryFixRenderer);
+      this.recalculateRenderer(this.directRes.directHistoryClampingRenderer);
+      this.recalculateRenderer(this.nrdRes.copyRenderer);
+      this.recalculateRenderer(this.directRes.directAntiFireflyRenderer);
+      this.recalculateRenderer(this.nrdRes.atrousSmemRenderer);
+      this.recalculateRenderer(this.directRes.directAtrousRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectInitialRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectBoilingRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectTemporalReprojectionRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectTemporalBinningOffsetsRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectTemporalBinningRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectScatterTemporalRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectAccumulationRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectAccumulationLightingRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectAccumulationReservoirRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectDenoisingRenderer);
+      this.recalculateRenderer(this.indirectRes.accumulationRenderer);
+      this.recalculateRenderer(this.indirectRes.indirectRenderer);
+      this.recalculateRenderer(this.indirectRes.shadeSamplesMonolithicRenderer);
+      this.recalculateRenderer(this.indirectRes.shadeSamplesReservoirRenderer);
+      this.recalculateRenderer(this.indirectRes.shadeSamplesRenderer);
+      this.recalculateRenderer(this.indirectRes.shadeSamplesReconnectionRenderer);
    }
 
    @Override
@@ -1727,31 +1458,25 @@ public class LightTreeRenderer extends MainRenderer {
       PhotonicsStorage.RESTIR_LOCAL_LIGHT_SAMPLING_MODE.removeObserver(this.localLightSamplingModeObserver);
       PhotonicsStorage.RESTIR_TEMPORAL_REUSE.removeObserver(this.temporalScatterIsolationModeObserver);
       PhotonicsStorage.RESTIR_GI_TEMPORAL_REUSE.removeObserver(this.indirectTemporalReuseObserver);
-      this.proposalFramebuffer.destroy();
-      this.proposalReservoirFramebuffer.destroy();
-      this.reuseResolveFramebuffer.destroy();
-      // NRD RELAX_DiffuseSpecular fused routing framebuffers
-      this.nrdClassifyTilesFramebuffer.destroy();
-      this.nrdHitDistReconstructionFramebuffer.destroy();
-      this.nrdPrepassFramebuffer.destroy();
-      this.directTemporalFramebuffer.destroy();
-      this.directHistoryFixFramebuffer.destroy();
-      this.directHistoryClampingFramebuffer.destroy();
-      this.nrdCopyFramebuffer.destroy();
-      this.directAntiFireflyFramebuffer.destroy();
-      this.nrdAtrousSmemFramebuffer.destroy();
-      this.directAtrousFramebuffer.destroy();
-      this.indirectInitialFramebuffer.destroy();
-      this.indirectBoilingFramebuffer.destroy();
-      this.indirectAccumulationFramebuffer.destroy();
-      this.indirectAccumulationLightingFramebuffer.destroy();
-      this.indirectAccumulationReservoirFramebuffer.destroy();
-      this.indirectDenoisingFramebuffer.destroy();
-      this.positionWriteFramebuffer.destroy();
-      this.shadeSamplesMonolithicFramebuffer.destroy();
-      this.shadeSamplesFramebuffer.destroy();
-      this.shadeSamplesReservoirFramebuffer.destroy();
-      this.shadeSamplesReconnectionFramebuffer.destroy();
+      this.indirectRes.proposalFramebuffer.destroy();
+      this.indirectRes.proposalReservoirFramebuffer.destroy();
+      this.indirectRes.reuseResolveFramebuffer.destroy();
+      this.directRes.directTemporalFramebuffer.destroy();
+      this.directRes.directHistoryFixFramebuffer.destroy();
+      this.directRes.directHistoryClampingFramebuffer.destroy();
+      this.directRes.directAntiFireflyFramebuffer.destroy();
+      this.directRes.directAtrousFramebuffer.destroy();
+      this.indirectRes.indirectInitialFramebuffer.destroy();
+      this.indirectRes.indirectBoilingFramebuffer.destroy();
+      this.indirectRes.indirectAccumulationFramebuffer.destroy();
+      this.indirectRes.indirectAccumulationLightingFramebuffer.destroy();
+      this.indirectRes.indirectAccumulationReservoirFramebuffer.destroy();
+      this.indirectRes.indirectDenoisingFramebuffer.destroy();
+      this.indirectRes.positionWriteFramebuffer.destroy();
+      this.indirectRes.shadeSamplesMonolithicFramebuffer.destroy();
+      this.indirectRes.shadeSamplesFramebuffer.destroy();
+      this.indirectRes.shadeSamplesReservoirFramebuffer.destroy();
+      this.indirectRes.shadeSamplesReconnectionFramebuffer.destroy();
       this.destroyScatterTemporalResources();
       this.lightingBuffer.destroy();
       this.lightingStageBuffer.destroy();
@@ -1760,72 +1485,52 @@ public class LightTreeRenderer extends MainRenderer {
       this.directReservoirBuffer.destroy();
       this.directSpatialReservoirBuffer.destroy();
       this.directConfidenceBuffer.destroy();
-      // NRD permanent (swap-buffered) FBOs
-      this.nrdDiffIllumPrevFb.destroy();
-      this.nrdDiffIllumResponsivePrevFb.destroy();
-      this.nrdSpecIllumPrevFb.destroy();
-      this.nrdSpecIllumResponsivePrevFb.destroy();
-      this.nrdHistoryLengthPrevFb.destroy();
-      this.nrdReflectionHitTPrevFb.destroy();
-      // NRD transient FBOs
-      this.nrdTilesFb.destroy();
-      this.nrdDiffIllumPingFb.destroy();
-      this.nrdDiffIllumPongFb.destroy();
-      this.nrdSpecIllumPingFb.destroy();
-      this.nrdSpecIllumPongFb.destroy();
-      this.nrdHistoryLengthFb.destroy();
-      this.nrdSpecReprojectionConfidenceFb.destroy();
-      this.nrdReflectionHitTCurrFb.destroy();
-      this.nrdOutDiffRadianceHitDistFb.destroy();
-      this.nrdOutSpecRadianceHitDistFb.destroy();
-      this.nrdDiffHitDistReconFb.destroy();
-      this.nrdSpecHitDistReconFb.destroy();
-      this.indirectInitialReservoirBuffer.destroy();
-      this.indirectReservoirBuffer.destroy();
-      this.indirectDenoisedBuffer.destroy();
-      this.destroyRenderer(this.proposalStageRenderer);
-      this.destroyRenderer(this.proposalReservoirRenderer);
-      this.destroyRenderer(this.temporalCollectRenderer);
-      this.destroyRenderer(this.robustReuseOptimizationRenderer);
-      this.destroyRenderer(this.temporalGatherRenderer);
-      this.destroyRenderer(this.temporalScatterReprojectionRenderer);
-      this.destroyRenderer(this.temporalMultiScatterReprojectionRenderer);
-      this.destroyRenderer(this.temporalScatterBinningOffsetsRenderer);
-      this.destroyRenderer(this.temporalMultiScatterBinningOffsetsRenderer);
-      this.destroyRenderer(this.temporalScatterBinningRenderer);
-      this.destroyRenderer(this.temporalMultiScatterBinningRenderer);
-      this.destroyRenderer(this.scatterTemporalRenderer);
-      this.destroyRenderer(this.scatterBackupTemporalRenderer);
-      this.destroyRenderer(this.multiScatterTemporalRenderer);
-      this.destroyRenderer(this.reuseResolveRenderer);
-      // NRD RELAX_DiffuseSpecular fused pipeline renderers
-      this.destroyRenderer(this.nrdClassifyTilesRenderer);
-      this.destroyRenderer(this.nrdHitDistReconstructionRenderer);
-      this.destroyRenderer(this.nrdPrepassRenderer);
-      this.destroyRenderer(this.directTemporalRenderer);
-      this.destroyRenderer(this.directHistoryFixRenderer);
-      this.destroyRenderer(this.directHistoryClampingRenderer);
-      this.destroyRenderer(this.nrdCopyRenderer);
-      this.destroyRenderer(this.directAntiFireflyRenderer);
-      this.destroyRenderer(this.nrdAtrousSmemRenderer);
-      this.destroyRenderer(this.directAtrousRenderer);
-      this.destroyRenderer(this.indirectInitialRenderer);
-      this.destroyRenderer(this.indirectBoilingRenderer);
-      this.destroyRenderer(this.indirectTemporalReprojectionRenderer);
-      this.destroyRenderer(this.indirectTemporalBinningOffsetsRenderer);
-      this.destroyRenderer(this.indirectTemporalBinningRenderer);
-      this.destroyRenderer(this.indirectScatterTemporalRenderer);
-      this.destroyRenderer(this.indirectAccumulationRenderer);
-      this.destroyRenderer(this.indirectAccumulationLightingRenderer);
-      this.destroyRenderer(this.indirectAccumulationReservoirRenderer);
-      this.destroyRenderer(this.indirectDenoisingRenderer);
-      this.destroyRenderer(this.accumulationRenderer);
-      this.destroyRenderer(this.indirectRenderer);
-      this.destroyRenderer(this.shadeSamplesMonolithicRenderer);
-      this.destroyRenderer(this.shadeSamplesReservoirRenderer);
-      this.destroyRenderer(this.shadeSamplesRenderer);
-      this.destroyRenderer(this.shadeSamplesReconnectionRenderer);
-      this.destroyGpuTimerQuery();
+      this.nrdRes.free();
+      this.indirectRes.indirectInitialReservoirBuffer.destroy();
+      this.indirectRes.indirectReservoirBuffer.destroy();
+      this.indirectRes.indirectDenoisedBuffer.destroy();
+      this.destroyRenderer(this.indirectRes.proposalStageRenderer);
+      this.destroyRenderer(this.indirectRes.proposalReservoirRenderer);
+      this.destroyRenderer(this.directRes.temporalCollectRenderer);
+      this.destroyRenderer(this.directRes.robustReuseOptimizationRenderer);
+      this.destroyRenderer(this.directRes.temporalGatherRenderer);
+      this.destroyRenderer(this.directRes.temporalScatterReprojectionRenderer);
+      this.destroyRenderer(this.directRes.temporalMultiScatterReprojectionRenderer);
+      this.destroyRenderer(this.directRes.temporalScatterBinningOffsetsRenderer);
+      this.destroyRenderer(this.directRes.temporalMultiScatterBinningOffsetsRenderer);
+      this.destroyRenderer(this.directRes.temporalScatterBinningRenderer);
+      this.destroyRenderer(this.directRes.temporalMultiScatterBinningRenderer);
+      this.destroyRenderer(this.directRes.scatterTemporalRenderer);
+      this.destroyRenderer(this.directRes.scatterBackupTemporalRenderer);
+      this.destroyRenderer(this.directRes.multiScatterTemporalRenderer);
+      this.destroyRenderer(this.indirectRes.reuseResolveRenderer);
+      this.destroyRenderer(this.nrdRes.classifyTilesRenderer);
+      this.destroyRenderer(this.nrdRes.hitDistReconstructionRenderer);
+      this.destroyRenderer(this.nrdRes.prepassRenderer);
+      this.destroyRenderer(this.directRes.directTemporalRenderer);
+      this.destroyRenderer(this.directRes.directHistoryFixRenderer);
+      this.destroyRenderer(this.directRes.directHistoryClampingRenderer);
+      this.destroyRenderer(this.nrdRes.copyRenderer);
+      this.destroyRenderer(this.directRes.directAntiFireflyRenderer);
+      this.destroyRenderer(this.nrdRes.atrousSmemRenderer);
+      this.destroyRenderer(this.directRes.directAtrousRenderer);
+      this.destroyRenderer(this.indirectRes.indirectInitialRenderer);
+      this.destroyRenderer(this.indirectRes.indirectBoilingRenderer);
+      this.destroyRenderer(this.indirectRes.indirectTemporalReprojectionRenderer);
+      this.destroyRenderer(this.indirectRes.indirectTemporalBinningOffsetsRenderer);
+      this.destroyRenderer(this.indirectRes.indirectTemporalBinningRenderer);
+      this.destroyRenderer(this.indirectRes.indirectScatterTemporalRenderer);
+      this.destroyRenderer(this.indirectRes.indirectAccumulationRenderer);
+      this.destroyRenderer(this.indirectRes.indirectAccumulationLightingRenderer);
+      this.destroyRenderer(this.indirectRes.indirectAccumulationReservoirRenderer);
+      this.destroyRenderer(this.indirectRes.indirectDenoisingRenderer);
+      this.destroyRenderer(this.indirectRes.accumulationRenderer);
+      this.destroyRenderer(this.indirectRes.indirectRenderer);
+      this.destroyRenderer(this.indirectRes.shadeSamplesMonolithicRenderer);
+      this.destroyRenderer(this.indirectRes.shadeSamplesReservoirRenderer);
+      this.destroyRenderer(this.indirectRes.shadeSamplesRenderer);
+      this.destroyRenderer(this.indirectRes.shadeSamplesReconnectionRenderer);
+      this.profiler.destroy();
       if (this.regirComputeProgram != null) {
          this.regirComputeProgram.destroy();
       }
@@ -1852,10 +1557,11 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createTemporalScatterStageFramebuffer() {
-      RoutingFramebuffer framebuffer = this.createDirectPackedRoutingFramebuffer(
-         () -> this.directInitialDebugBuffer.getWriteAttachment("data"),
-         () -> this.directInitialDebugBuffer.getWriteAttachment("data"),
-         () -> this.directInitialDebugBuffer.getWriteAttachment("data")
+      RoutingFramebuffer framebuffer = RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
+         () -> this.directRes.directInitialDebugBuffer.getWriteAttachment("data"),
+         () -> this.directRes.directInitialDebugBuffer.getWriteAttachment("data"),
+         () -> this.directRes.directInitialDebugBuffer.getWriteAttachment("data")
       );
       framebuffer.setDrawBuffers(new int[] {-1});
       return framebuffer;
@@ -1902,36 +1608,39 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createTemporalCollectFramebuffer() {
-      return this.createDirectPackedRoutingFramebuffer(
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_data"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_sample"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_meta"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection2"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection3"),
-         () -> this.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection4")
+      return RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
+         () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_data"),
+         () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_sample"),
+         () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_meta"),
+         () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection0"),
+         () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection1"),
+         () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection2"),
+         () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection3"),
+         () -> this.directRes.temporalGatherBuffer.getWriteAttachment("intermediate_reconnection4")
       );
    }
 
    private RoutingFramebuffer createRobustReuseOptimizationFramebuffer() {
-      RoutingFramebuffer framebuffer = this.createDirectPackedRoutingFramebuffer(
-         () -> this.directInitialDebugBuffer.getWriteAttachment("data")
+      RoutingFramebuffer framebuffer = RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
+         () -> this.directRes.directInitialDebugBuffer.getWriteAttachment("data")
       );
       framebuffer.setDrawBuffers(new int[] {-1});
       return framebuffer;
    }
 
    private RoutingFramebuffer createTemporalReservoirRoutingFramebuffer() {
-      return this.createDirectPackedRoutingFramebuffer(
-         () -> this.temporalReservoirBuffer.getWriteAttachment("data"),
-         () -> this.temporalReservoirBuffer.getWriteAttachment("sample"),
-         () -> this.temporalReservoirBuffer.getWriteAttachment("meta"),
-         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection1"),
-         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection2"),
-         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection3"),
-         () -> this.temporalReconnectionBuffer.getWriteAttachment("reconnection4")
+      return RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
+         () -> this.directRes.temporalReservoirBuffer.getWriteAttachment("data"),
+         () -> this.directRes.temporalReservoirBuffer.getWriteAttachment("sample"),
+         () -> this.directRes.temporalReservoirBuffer.getWriteAttachment("meta"),
+         () -> this.directRes.temporalReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.directRes.temporalReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.directRes.temporalReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.directRes.temporalReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.directRes.temporalReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
@@ -1963,133 +1672,81 @@ public class LightTreeRenderer extends MainRenderer {
       return new Vector2f(fbWidth, fbHeight);
    }
 
-   // ---------------------------------------------------------------------------
-   // NRD RELAX_DiffuseSpecular framebuffer factory methods (contract §7/§8)
-   // ---------------------------------------------------------------------------
-
-   private ColorFramebuffer createNrdTileFramebuffer(float renderScale) {
-      // Tile classifier runs at ceil(w/16) x ceil(h/16).  We encode this as a
-      // custom resolution supplier so updatePerFrame() recalculates correctly.
-      Supplier<Vector2f> tileSizeSupplier = () -> {
-         Vector2f base = this.getDirectReservoirResolution();
-         return new Vector2f(
-            (float) Math.ceil(base.x / 16.0),
-            (float) Math.ceil(base.y / 16.0)
-         );
-      };
-      ColorFramebuffer framebuffer = new ColorFramebuffer(tileSizeSupplier, renderScale);
-      framebuffer.createAttachment("data", "R8", false);
-      return framebuffer;
-   }
-
-   private RoutingFramebuffer createNrdClassifyTilesFramebuffer() {
-      return this.createRoutingFramebuffer(() -> this.nrdTilesFb.getWriteAttachment("data"));
-   }
-
-   private RoutingFramebuffer createNrdHitDistReconstructionFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdDiffHitDistReconFb.getWriteAttachment("data"),
-         () -> this.nrdSpecHitDistReconFb.getWriteAttachment("data")
-      );
-   }
-
-   private RoutingFramebuffer createNrdPrepassFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data"),
-         () -> this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data")
-      );
-   }
-
    // Temporal accumulation: 7 outputs per contract §7
-   //   loc 0 -> nrdHistoryLengthFb
-   //   loc 1 -> nrdDiffIllumPingFb
-   //   loc 2 -> nrdSpecIllumPingFb
-   //   loc 3 -> nrdDiffIllumPongFb
-   //   loc 4 -> nrdSpecIllumPongFb
-   //   loc 5 -> nrdReflectionHitTCurrFb
-   //   loc 6 -> nrdSpecReprojectionConfidenceFb
+   //   loc 0 -> nrdRes.historyLengthFb
+   //   loc 1 -> nrdRes.diffIllumPingFb
+   //   loc 2 -> nrdRes.specIllumPingFb
+   //   loc 3 -> nrdRes.diffIllumPongFb
+   //   loc 4 -> nrdRes.specIllumPongFb
+   //   loc 5 -> nrdRes.reflectionHitTCurrFb
+   //   loc 6 -> nrdRes.specReprojectionConfidenceFb
    private RoutingFramebuffer createDirectTemporalFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdHistoryLengthFb.getWriteAttachment("data"),
-         () -> this.nrdDiffIllumPingFb.getWriteAttachment("data"),
-         () -> this.nrdSpecIllumPingFb.getWriteAttachment("data"),
-         () -> this.nrdDiffIllumPongFb.getWriteAttachment("data"),
-         () -> this.nrdSpecIllumPongFb.getWriteAttachment("data"),
-         () -> this.nrdReflectionHitTCurrFb.getWriteAttachment("data"),
-         () -> this.nrdSpecReprojectionConfidenceFb.getWriteAttachment("data")
+      return RoutingFramebuffer.create(
+         () -> this.nrdRes.historyLengthFb.getWriteAttachment("data"),
+         () -> this.nrdRes.diffIllumPingFb.getWriteAttachment("data"),
+         () -> this.nrdRes.specIllumPingFb.getWriteAttachment("data"),
+         () -> this.nrdRes.diffIllumPongFb.getWriteAttachment("data"),
+         () -> this.nrdRes.specIllumPongFb.getWriteAttachment("data"),
+         () -> this.nrdRes.reflectionHitTCurrFb.getWriteAttachment("data"),
+         () -> this.nrdRes.specReprojectionConfidenceFb.getWriteAttachment("data")
       );
    }
 
    // History fix: 2 outputs -> pong buffers (loc 0 = diff pong, loc 1 = spec pong)
    private RoutingFramebuffer createDirectHistoryFixFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdDiffIllumPongFb.getWriteAttachment("data"),
-         () -> this.nrdSpecIllumPongFb.getWriteAttachment("data")
+      return RoutingFramebuffer.create(
+         () -> this.nrdRes.diffIllumPongFb.getWriteAttachment("data"),
+         () -> this.nrdRes.specIllumPongFb.getWriteAttachment("data")
       );
    }
 
    // History clamping: 5 outputs -> permanent prev-frame history
-   //   loc 0 -> nrdDiffIllumPrevFb.write
-   //   loc 1 -> nrdDiffIllumResponsivePrevFb.write
-   //   loc 2 -> nrdSpecIllumPrevFb.write
-   //   loc 3 -> nrdSpecIllumResponsivePrevFb.write
-   //   loc 4 -> nrdHistoryLengthPrevFb.write
+   //   loc 0 -> nrdRes.diffIllumPrevFb.write
+   //   loc 1 -> nrdRes.diffIllumResponsivePrevFb.write
+   //   loc 2 -> nrdRes.specIllumPrevFb.write
+   //   loc 3 -> nrdRes.specIllumResponsivePrevFb.write
+   //   loc 4 -> nrdRes.historyLengthPrevFb.write
    private RoutingFramebuffer createDirectHistoryClampingFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdDiffIllumPrevFb.getWriteAttachment("data"),
-         () -> this.nrdDiffIllumResponsivePrevFb.getWriteAttachment("data"),
-         () -> this.nrdSpecIllumPrevFb.getWriteAttachment("data"),
-         () -> this.nrdSpecIllumResponsivePrevFb.getWriteAttachment("data"),
-         () -> this.nrdHistoryLengthPrevFb.getWriteAttachment("data")
-      );
-   }
-
-   private RoutingFramebuffer createNrdCopyFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data"),
-         () -> this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data")
+      return RoutingFramebuffer.create(
+         () -> this.nrdRes.diffIllumPrevFb.getWriteAttachment("data"),
+         () -> this.nrdRes.diffIllumResponsivePrevFb.getWriteAttachment("data"),
+         () -> this.nrdRes.specIllumPrevFb.getWriteAttachment("data"),
+         () -> this.nrdRes.specIllumResponsivePrevFb.getWriteAttachment("data"),
+         () -> this.nrdRes.historyLengthPrevFb.getWriteAttachment("data")
       );
    }
 
    // Anti-firefly: 2 outputs -> prev-frame illum write sides (post-clamping in-place update)
    private RoutingFramebuffer createDirectAntiFireflyFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdDiffIllumPrevFb.getWriteAttachment("data"),
-         () -> this.nrdSpecIllumPrevFb.getWriteAttachment("data")
-      );
-   }
-
-   // AtrousSmem: 2 outputs -> pong buffers (first regular atrous pass input)
-   private RoutingFramebuffer createNrdAtrousSmemFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdDiffIllumPongFb.getWriteAttachment("data"),
-         () -> this.nrdSpecIllumPongFb.getWriteAttachment("data")
+      return RoutingFramebuffer.create(
+         () -> this.nrdRes.diffIllumPrevFb.getWriteAttachment("data"),
+         () -> this.nrdRes.specIllumPrevFb.getWriteAttachment("data")
       );
    }
 
    // Regular A-trous: 2 outputs via ping-pong routing helpers
    private RoutingFramebuffer createDirectAtrousFramebuffer() {
-      return this.createRoutingFramebuffer(
+      return RoutingFramebuffer.create(
          this::getCurrentDiffAtrousOutputTexture,
          this::getCurrentSpecAtrousOutputTexture
       );
    }
 
    private RoutingFramebuffer createIndirectInitialFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.indirectInitialReservoirBuffer.getWriteAttachment("position"),
-         () -> this.indirectInitialReservoirBuffer.getWriteAttachment("normal"),
-         () -> this.indirectInitialReservoirBuffer.getWriteAttachment("radiance"),
-         () -> this.indirectInitialReservoirBuffer.getWriteAttachment("meta")
+      return RoutingFramebuffer.create(
+         () -> this.indirectRes.indirectInitialReservoirBuffer.getWriteAttachment("position"),
+         () -> this.indirectRes.indirectInitialReservoirBuffer.getWriteAttachment("normal"),
+         () -> this.indirectRes.indirectInitialReservoirBuffer.getWriteAttachment("radiance"),
+         () -> this.indirectRes.indirectInitialReservoirBuffer.getWriteAttachment("meta")
       );
    }
 
    private RoutingFramebuffer createIndirectBoilingFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.indirectReservoirBuffer.getWriteAttachment("position"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("normal"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("radiance"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("meta")
+      return RoutingFramebuffer.create(
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("position"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("normal"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("radiance"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("meta")
       );
    }
 
@@ -2140,7 +1797,7 @@ public class LightTreeRenderer extends MainRenderer {
 
 
    private RoutingFramebuffer createProposalGeometryFramebuffer() {
-      return this.createRoutingFramebuffer(
+      return RoutingFramebuffer.create(
          () -> this.lightingStageBuffer.getWriteAttachment("position"),
          () -> this.lightingStageBuffer.getWriteAttachment("normal"),
          () -> this.lightingStageBuffer.getWriteAttachment("mapped_normal"),
@@ -2152,35 +1809,37 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createProposalReservoirFramebuffer() {
-      return this.createDirectPackedRoutingFramebuffer(
+      return RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta"),
-         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection1"),
-         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection2"),
-         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection3"),
-         () -> this.proposalReconnectionBuffer.getWriteAttachment("reconnection4")
+         () -> this.directRes.proposalReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.directRes.proposalReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.directRes.proposalReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.directRes.proposalReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.directRes.proposalReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
    private RoutingFramebuffer createReuseResolveFramebuffer() {
       // Spatial reuse writes the paired post-temporal reservoir and reconnection state
       // that the local final resolve stages consume directly in the same frame.
-      return this.createDirectPackedRoutingFramebuffer(
+      return RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
          () -> this.directSpatialReservoirBuffer.getWriteAttachment("data"),
          () -> this.directSpatialReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directSpatialReservoirBuffer.getWriteAttachment("meta"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
    private RoutingFramebuffer createShadeSamplesLightingFramebuffer() {
-      return this.createRoutingFramebuffer(
+      return RoutingFramebuffer.create(
          () -> this.lightingStageBuffer.getWriteAttachment("direct"),
          () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"),
          () -> this.lightingStageBuffer.getWriteAttachment("direct_combined")
@@ -2190,7 +1849,8 @@ public class LightTreeRenderer extends MainRenderer {
    private RoutingFramebuffer createShadeSamplesReservoirFramebuffer() {
       // Reservoir finalization is the only promotion step from authoritative
       // same-frame post-spatial output into persistent direct history.
-      return this.createDirectPackedRoutingFramebuffer(
+      return RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
          () -> this.directReservoirBuffer.getWriteAttachment("sample"),
          () -> this.directReservoirBuffer.getWriteAttachment("meta")
@@ -2198,29 +1858,30 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createShadeSamplesReconnectionFramebuffer() {
-      return this.createDirectPackedRoutingFramebuffer(
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
-         () -> this.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
+      return RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection0"),
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection1"),
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection2"),
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection3"),
+         () -> this.directRes.scatterReconnectionBuffer.getWriteAttachment("reconnection4")
       );
    }
 
    private RoutingFramebuffer createIndirectAccumulationFramebuffer() {
-      return this.createRoutingFramebuffer(
+      return RoutingFramebuffer.create(
          () -> this.lightingBuffer.getWriteAttachment("indirect"),
          () -> this.lightingBuffer.getWriteAttachment("indirect_variance"),
          () -> this.lightingBuffer.getWriteAttachment("handheld"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("position"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("normal"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("radiance"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("meta")
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("position"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("normal"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("radiance"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("meta")
       );
    }
 
    private RoutingFramebuffer createIndirectAccumulationLightingFramebuffer() {
-      return this.createRoutingFramebuffer(
+      return RoutingFramebuffer.create(
          () -> this.lightingBuffer.getWriteAttachment("indirect"),
          () -> this.lightingBuffer.getWriteAttachment("indirect_variance"),
          () -> this.lightingBuffer.getWriteAttachment("handheld")
@@ -2228,20 +1889,21 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createIndirectAccumulationReservoirFramebuffer() {
-      return this.createDirectPackedRoutingFramebuffer(
-         () -> this.indirectReservoirBuffer.getWriteAttachment("position"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("normal"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("radiance"),
-         () -> this.indirectReservoirBuffer.getWriteAttachment("meta")
+      return RoutingFramebuffer.create(
+         this::getDirectPackedViewportWidth,
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("position"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("normal"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("radiance"),
+         () -> this.indirectRes.indirectReservoirBuffer.getWriteAttachment("meta")
       );
    }
 
    private RoutingFramebuffer createIndirectDenoisingFramebuffer() {
-      return this.createRoutingFramebuffer(() -> this.indirectDenoisedBuffer.getWriteAttachment("data"));
+      return RoutingFramebuffer.create(() -> this.indirectRes.indirectDenoisedBuffer.getWriteAttachment("data"));
    }
 
    private RoutingFramebuffer createPositionWriteFramebuffer() {
-      return this.createRoutingFramebuffer(
+      return RoutingFramebuffer.create(
          () -> this.lightingBuffer.getWriteAttachment("position"),
          () -> this.lightingBuffer.getWriteAttachment("normal"),
          () -> this.lightingBuffer.getWriteAttachment("mapped_normal"),
@@ -2254,7 +1916,7 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private RoutingFramebuffer createShadeSamplesMonolithicFramebuffer() {
-      return this.createRoutingFramebuffer(
+      return RoutingFramebuffer.create(
          () -> this.lightingStageBuffer.getWriteAttachment("direct"),
          () -> this.lightingStageBuffer.getWriteAttachment("direct_specular"),
          () -> this.directReservoirBuffer.getWriteAttachment("data"),
@@ -2262,28 +1924,6 @@ public class LightTreeRenderer extends MainRenderer {
          () -> this.directReservoirBuffer.getWriteAttachment("meta"),
          () -> this.lightingStageBuffer.getWriteAttachment("direct_combined")
       );
-   }
-
-   private RoutingFramebuffer createRoutingFramebuffer(Supplier<TextureObject>... attachments) {
-      RoutingFramebuffer framebuffer = new RoutingFramebuffer();
-      for (Supplier<TextureObject> attachment : attachments) {
-         framebuffer.addAttachment(attachment);
-      }
-      return framebuffer;
-   }
-
-   @SafeVarargs
-   private final RoutingFramebuffer createDirectPackedRoutingFramebuffer(Supplier<TextureObject>... attachments) {
-      return this.createRoutingFramebuffer(this::getDirectPackedViewportWidth, attachments);
-   }
-
-   @SafeVarargs
-   private final RoutingFramebuffer createRoutingFramebuffer(IntSupplier viewportWidthSupplier, Supplier<TextureObject>... attachments) {
-      RoutingFramebuffer framebuffer = new RoutingFramebuffer(viewportWidthSupplier::getAsInt);
-      for (Supplier<TextureObject> attachment : attachments) {
-         framebuffer.addAttachment(attachment);
-      }
-      return framebuffer;
    }
 
    private int getDirectPackedViewportWidth() {
@@ -2351,15 +1991,15 @@ public class LightTreeRenderer extends MainRenderer {
          || this.isCurrentPhotonicsFragment(diScatterBackupTemporalResamplingFragment)
          || this.isCurrentPhotonicsFragment(diMultiScatterTemporalResamplingFragment)
          // NRD RELAX fused pipeline passes that read stage geometry (current frame)
-         || this.isCurrentPhotonicsFragment(nrdClassifyTilesFragment)
-         || this.isCurrentPhotonicsFragment(nrdHitDistReconstructionFragment)
-         || this.isCurrentPhotonicsFragment(nrdPrepassFragment)
+         || this.isCurrentPhotonicsFragment(LightTreeNrdResources.classifyTilesFragment)
+         || this.isCurrentPhotonicsFragment(LightTreeNrdResources.hitDistReconstructionFragment)
+         || this.isCurrentPhotonicsFragment(LightTreeNrdResources.prepassFragment)
          || this.isCurrentPhotonicsFragment(relaxTemporalAccumulationFragment)
          || this.isCurrentPhotonicsFragment(relaxHistoryFixFragment)
          || this.isCurrentPhotonicsFragment(relaxHistoryClampingFragment)
-         || this.isCurrentPhotonicsFragment(nrdCopyFragment)
+         || this.isCurrentPhotonicsFragment(LightTreeNrdResources.copyFragment)
          || this.isCurrentPhotonicsFragment(relaxAntiFireflyFragment)
-         || this.isCurrentPhotonicsFragment(nrdAtrousSmemFragment)
+         || this.isCurrentPhotonicsFragment(LightTreeNrdResources.atrousSmemFragment)
          || this.isCurrentPhotonicsFragment(relaxAtrousFragment)
          || this.isCurrentPhotonicsFragment(indirectTemporalReprojectionFragment)
          || this.isCurrentPhotonicsFragment(indirectTemporalBinningOffsetsFragment)
@@ -2386,73 +2026,73 @@ public class LightTreeRenderer extends MainRenderer {
    //   atrous smem reads THIS frame's post-anti-firefly slow (.write).
    //   anti-firefly does not sample this binding (it reads nrd_out_*).
    private boolean shouldUseCurrentNrdIllumPrev() {
-      return this.isCurrentPhotonicsFragment(nrdAtrousSmemFragment)
-         || this.isCurrentPhotonicsFragment(nrdCopyFragment);
+      return this.isCurrentPhotonicsFragment(LightTreeNrdResources.atrousSmemFragment)
+         || this.isCurrentPhotonicsFragment(LightTreeNrdResources.copyFragment);
    }
 
    private TextureObject getCurrentNrdDiffIllumPrevTexture() {
       if (this.shouldUseCurrentNrdIllumPrev()) {
-         return this.nrdDiffIllumPrevFb.getWriteAttachment("data");
+         return this.nrdRes.diffIllumPrevFb.getWriteAttachment("data");
       }
-      return this.nrdDiffIllumPrevFb.getReadAttachment("data");
+      return this.nrdRes.diffIllumPrevFb.getReadAttachment("data");
    }
 
    private TextureObject getCurrentNrdDiffIllumResponsivePrevTexture() {
       if (this.shouldUseCurrentNrdIllumPrev()) {
-         return this.nrdDiffIllumResponsivePrevFb.getWriteAttachment("data");
+         return this.nrdRes.diffIllumResponsivePrevFb.getWriteAttachment("data");
       }
-      return this.nrdDiffIllumResponsivePrevFb.getReadAttachment("data");
+      return this.nrdRes.diffIllumResponsivePrevFb.getReadAttachment("data");
    }
 
    private TextureObject getCurrentNrdSpecIllumPrevTexture() {
       if (this.shouldUseCurrentNrdIllumPrev()) {
-         return this.nrdSpecIllumPrevFb.getWriteAttachment("data");
+         return this.nrdRes.specIllumPrevFb.getWriteAttachment("data");
       }
-      return this.nrdSpecIllumPrevFb.getReadAttachment("data");
+      return this.nrdRes.specIllumPrevFb.getReadAttachment("data");
    }
 
    private TextureObject getCurrentNrdSpecIllumResponsivePrevTexture() {
       if (this.shouldUseCurrentNrdIllumPrev()) {
-         return this.nrdSpecIllumResponsivePrevFb.getWriteAttachment("data");
+         return this.nrdRes.specIllumResponsivePrevFb.getWriteAttachment("data");
       }
-      return this.nrdSpecIllumResponsivePrevFb.getReadAttachment("data");
+      return this.nrdRes.specIllumResponsivePrevFb.getReadAttachment("data");
    }
 
    // Regular A-trous input: ping/pong based on iteration parity.
    // iteration 1 reads pong (SMEM output), iteration 2 reads ping, etc.
    private TextureObject getCurrentDiffAtrousInputTexture() {
       if ((this.directAtrousIteration & 1) == 1) {
-         return this.nrdDiffIllumPongFb.getWriteAttachment("data");
+         return this.nrdRes.diffIllumPongFb.getWriteAttachment("data");
       }
-      return this.nrdDiffIllumPingFb.getWriteAttachment("data");
+      return this.nrdRes.diffIllumPingFb.getWriteAttachment("data");
    }
 
    private TextureObject getCurrentSpecAtrousInputTexture() {
       if ((this.directAtrousIteration & 1) == 1) {
-         return this.nrdSpecIllumPongFb.getWriteAttachment("data");
+         return this.nrdRes.specIllumPongFb.getWriteAttachment("data");
       }
-      return this.nrdSpecIllumPingFb.getWriteAttachment("data");
+      return this.nrdRes.specIllumPingFb.getWriteAttachment("data");
    }
 
-   // Regular A-trous output: opposite of input, except final pass -> nrdOutXxx.
+   // Regular A-trous output: opposite of input, except final pass -> nrdRes.outXxx.
    private TextureObject getCurrentDiffAtrousOutputTexture() {
       if (this.directAtrousIteration == NRD_ATROUS_STRIDES.length - 1) {
-         return this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data");
+         return this.nrdRes.outDiffRadianceHitDistFb.getWriteAttachment("data");
       }
       if ((this.directAtrousIteration & 1) == 1) {
-         return this.nrdDiffIllumPingFb.getWriteAttachment("data");
+         return this.nrdRes.diffIllumPingFb.getWriteAttachment("data");
       }
-      return this.nrdDiffIllumPongFb.getWriteAttachment("data");
+      return this.nrdRes.diffIllumPongFb.getWriteAttachment("data");
    }
 
    private TextureObject getCurrentSpecAtrousOutputTexture() {
       if (this.directAtrousIteration == NRD_ATROUS_STRIDES.length - 1) {
-         return this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data");
+         return this.nrdRes.outSpecRadianceHitDistFb.getWriteAttachment("data");
       }
       if ((this.directAtrousIteration & 1) == 1) {
-         return this.nrdSpecIllumPingFb.getWriteAttachment("data");
+         return this.nrdRes.specIllumPingFb.getWriteAttachment("data");
       }
-      return this.nrdSpecIllumPongFb.getWriteAttachment("data");
+      return this.nrdRes.specIllumPongFb.getWriteAttachment("data");
    }
 
    private int getCurrentDirectAtrousStepSize() {
@@ -2474,12 +2114,8 @@ public class LightTreeRenderer extends MainRenderer {
       return false;
    }
 
-   private GpuTimerQuery createGpuTimerQuery() {
-      return new GpuTimerQuery(gpuProfilerRegionNames);
-   }
-
    private void resolveGpuProfile() {
-      this.gpuTimerQuery.resolve();
+      this.profiler.timerQuery().resolve();
    }
 
    private int resolveRegirFrameSeed(String stageProperty, String sharedProperty, String stageName) {
@@ -2649,13 +2285,13 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void renderLightTreeSamplingStageProfiled() {
-      this.beginGpuRegion(lightTreeSamplingStageRegionIndex);
-      if (this.proposalStageRenderer != null) {
-         this.proposalStageRenderer.renderAll();
+      this.beginGpuRegion(LightTreePipelineProfiler.lightTreeSamplingStageRegionIndex);
+      if (this.indirectRes.proposalStageRenderer != null) {
+         this.indirectRes.proposalStageRenderer.renderAll();
       }
       GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       this.dispatchRegirCompute();
-      this.endGpuRegion(lightTreeSamplingStageRegionIndex);
+      this.endGpuRegion(LightTreePipelineProfiler.lightTreeSamplingStageRegionIndex);
    }
 
    private boolean shouldUseRegirLocalLightSampling() {
@@ -2665,20 +2301,20 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void renderDIInitialCandidatesProfiled() {
-      this.beginGpuRegion(initialCandidatesRegionIndex);
+      this.beginGpuRegion(LightTreePipelineProfiler.initialCandidatesRegionIndex);
       if (this.isDirectProposalReservoirEnabled()) {
-         if (this.proposalReservoirRenderer != null) {
-            this.proposalReservoirRenderer.renderAll();
+         if (this.indirectRes.proposalReservoirRenderer != null) {
+            this.indirectRes.proposalReservoirRenderer.renderAll();
          }
       } else {
          this.clearProposalReservoirOutputs();
       }
       this.setCurrentDiReconnectionSource(DiReconnectionSource.PROPOSAL);
-      this.endGpuRegion(initialCandidatesRegionIndex);
+      this.endGpuRegion(LightTreePipelineProfiler.initialCandidatesRegionIndex);
    }
 
    private void renderDIScatterTemporalProfiled() {
-      this.beginGpuRegion(diTemporalResamplingRegionIndex);
+      this.beginGpuRegion(LightTreePipelineProfiler.diTemporalResamplingRegionIndex);
       this.setCurrentDiReconnectionSource(DiReconnectionSource.PROPOSAL);
       String resolvedTemporalReuse = PhotonicsStorage.normalizeRestirTemporalReuse(PhotonicsStorage.RESTIR_TEMPORAL_REUSE.value);
       boolean scatterBackupTemporalBranch = "scatter_backup".equals(resolvedTemporalReuse);
@@ -2711,38 +2347,38 @@ public class LightTreeRenderer extends MainRenderer {
       if (scatterBackupTemporalBranch) {
          this.ensureScatterBackupTemporalRenderer();
       }
-      if (gatherTemporalBranch && robustTemporalGather && this.robustReuseOptimizationRenderer != null) {
-         this.robustReuseOptimizationRenderer.renderAll();
+      if (gatherTemporalBranch && robustTemporalGather && this.directRes.robustReuseOptimizationRenderer != null) {
+         this.directRes.robustReuseOptimizationRenderer.renderAll();
          GL42.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_FRAMEBUFFER_BARRIER_BIT);
       }
-      if ((gatherTemporalBranch || scatterBackupTemporalBranch) && this.temporalCollectRenderer != null) {
-         this.temporalCollectRenderer.renderAll();
+      if ((gatherTemporalBranch || scatterBackupTemporalBranch) && this.directRes.temporalCollectRenderer != null) {
+         this.directRes.temporalCollectRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
-      if (gatherTemporalResolveBranch && this.temporalGatherRenderer != null) {
-         this.temporalGatherRenderer.renderAll();
+      if (gatherTemporalResolveBranch && this.directRes.temporalGatherRenderer != null) {
+         this.directRes.temporalGatherRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
          wroteTemporalOutput = true;
       }
       if (multiScatterTemporalBranch) {
-         if (this.temporalMultiScatterReprojectionRenderer != null) {
-            this.temporalMultiScatterReprojectionRenderer.renderAll();
+         if (this.directRes.temporalMultiScatterReprojectionRenderer != null) {
+            this.directRes.temporalMultiScatterReprojectionRenderer.renderAll();
             this.barrierTemporalScatterOwnershipWrites();
          }
-         if (this.temporalMultiScatterBinningOffsetsRenderer != null) {
-            this.temporalMultiScatterBinningOffsetsRenderer.renderAll();
+         if (this.directRes.temporalMultiScatterBinningOffsetsRenderer != null) {
+            this.directRes.temporalMultiScatterBinningOffsetsRenderer.renderAll();
             this.barrierTemporalScatterBinningHalves();
          }
-         if (this.temporalMultiScatterBinningRenderer != null) {
-            this.temporalMultiScatterBinningRenderer.renderAll();
+         if (this.directRes.temporalMultiScatterBinningRenderer != null) {
+            this.directRes.temporalMultiScatterBinningRenderer.renderAll();
             this.barrierTemporalScatterResolveInputs();
          }
-         if (this.multiScatterTemporalRenderer != null) {
-            this.multiScatterTemporalRenderer.renderAll();
+         if (this.directRes.multiScatterTemporalRenderer != null) {
+            this.directRes.multiScatterTemporalRenderer.renderAll();
             wroteTemporalOutput = true;
          }
-      } else if (scatterOnlyTemporalBranch && this.temporalScatterReprojectionRenderer != null) {
-         this.temporalScatterReprojectionRenderer.renderAll();
+      } else if (scatterOnlyTemporalBranch && this.directRes.temporalScatterReprojectionRenderer != null) {
+         this.directRes.temporalScatterReprojectionRenderer.renderAll();
          this.barrierTemporalScatterOwnershipWrites();
       }
       // Reference: SortReprojectedReservoirs.cs.slang runs computeCellOffsets
@@ -2752,37 +2388,37 @@ public class LightTreeRenderer extends MainRenderer {
       // cellOffsets[] writes MUST be globally visible before the sort half
       // reads `cellOffsets[indices.x]`, otherwise the sort reads stale values
       // and writes contributors to wrong cells -- producing flashing tiles.
-      if (scatterOnlyTemporalBranch && this.temporalScatterBinningOffsetsRenderer != null) {
-         this.temporalScatterBinningOffsetsRenderer.renderAll();
+      if (scatterOnlyTemporalBranch && this.directRes.temporalScatterBinningOffsetsRenderer != null) {
+         this.directRes.temporalScatterBinningOffsetsRenderer.renderAll();
          this.barrierTemporalScatterBinningHalves();
       }
-      if (scatterOnlyTemporalBranch && this.temporalScatterBinningRenderer != null) {
-         this.temporalScatterBinningRenderer.renderAll();
+      if (scatterOnlyTemporalBranch && this.directRes.temporalScatterBinningRenderer != null) {
+         this.directRes.temporalScatterBinningRenderer.renderAll();
          this.barrierTemporalScatterResolveInputs();
       }
-      if (scatterBackupTemporalBranch && this.scatterBackupTemporalRenderer != null) {
-         if (this.temporalScatterReprojectionRenderer != null) {
-            this.temporalScatterReprojectionRenderer.renderAll();
+      if (scatterBackupTemporalBranch && this.directRes.scatterBackupTemporalRenderer != null) {
+         if (this.directRes.temporalScatterReprojectionRenderer != null) {
+            this.directRes.temporalScatterReprojectionRenderer.renderAll();
             this.barrierTemporalScatterOwnershipWrites();
          }
-         if (this.temporalScatterBinningOffsetsRenderer != null) {
-            this.temporalScatterBinningOffsetsRenderer.renderAll();
+         if (this.directRes.temporalScatterBinningOffsetsRenderer != null) {
+            this.directRes.temporalScatterBinningOffsetsRenderer.renderAll();
             this.barrierTemporalScatterBinningHalves();
          }
-         if (this.temporalScatterBinningRenderer != null) {
-            this.temporalScatterBinningRenderer.renderAll();
+         if (this.directRes.temporalScatterBinningRenderer != null) {
+            this.directRes.temporalScatterBinningRenderer.renderAll();
             this.barrierTemporalScatterResolveInputs();
          }
-         this.scatterBackupTemporalRenderer.renderAll();
+         this.directRes.scatterBackupTemporalRenderer.renderAll();
          wroteTemporalOutput = true;
-      } else if (scatterOnlyTemporalBranch && this.scatterTemporalRenderer != null) {
-         this.scatterTemporalRenderer.renderAll();
+      } else if (scatterOnlyTemporalBranch && this.directRes.scatterTemporalRenderer != null) {
+         this.directRes.scatterTemporalRenderer.renderAll();
          wroteTemporalOutput = true;
       }
       if (wroteTemporalOutput) {
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
-      this.endGpuRegion(diTemporalResamplingRegionIndex);
+      this.endGpuRegion(LightTreePipelineProfiler.diTemporalResamplingRegionIndex);
    }
 
    private void barrierTemporalScatterOwnershipWrites() {
@@ -2792,14 +2428,14 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void ensureScatterBackupTemporalRenderer() {
-      if (this.scatterBackupTemporalRenderer != null || this.compositeRendererCreator == null) {
+      if (this.directRes.scatterBackupTemporalRenderer != null || this.compositeRendererCreator == null) {
          return;
       }
 
       this.setCurrentPhotonicsFragment(diScatterBackupTemporalResamplingFragment);
       try {
-         this.scatterBackupTemporalRenderer = this.compositeRendererCreator.apply(
-            List.of(new PhotonicsShader(diScatterBackupTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.temporalReservoirFramebuffer))
+         this.directRes.scatterBackupTemporalRenderer = this.compositeRendererCreator.apply(
+            List.of(new PhotonicsShader(diScatterBackupTemporalResamplingFragment, "common/screen.vsh", this.memoryCollection, this.directRes.temporalReservoirFramebuffer))
          );
       } finally {
          this.setCurrentPhotonicsFragment("");
@@ -2904,17 +2540,17 @@ public class LightTreeRenderer extends MainRenderer {
    //   => Input of pass 0 -> gradientFb (gradient pass output)
    private TextureObject getCurrentConfidenceBlurInputTexture() {
       if (this.confidenceBlurIteration == 0) {
-         return this.nrdConfidenceGradientFb.getWriteAttachment("data");
+         return this.nrdRes.confidenceGradientFb.getWriteAttachment("data");
       }
       // pass j reads: ping if j is odd (prev was even -> wrote ping)
       //                pong if j is even (prev was odd -> wrote pong)
       return ((this.confidenceBlurIteration % 2) == 1)
-         ? this.nrdConfidenceBlurPingFb.getWriteAttachment("data")
-         : this.nrdConfidenceBlurPongFb.getWriteAttachment("data");
+         ? this.nrdRes.confidenceBlurPingFb.getWriteAttachment("data")
+         : this.nrdRes.confidenceBlurPongFb.getWriteAttachment("data");
    }
 
    // Returns the texture that the current blur pass should write to.
-   // Used by the nrdConfidenceBlurFramebuffer attachment supplier.
+   // Used by the nrdRes.confidenceBlurFramebuffer attachment supplier.
    //   Pass 0 (step=1):  writes ping  (even)
    //   Pass 1 (step=2):  writes pong  (odd)
    //   Pass 2 (step=4):  writes ping  (even)
@@ -2922,29 +2558,15 @@ public class LightTreeRenderer extends MainRenderer {
    //   Pass 4 (step=16): writes ping  (even) <- final confidence in pingFb
    private TextureObject getCurrentConfidenceBlurOutputTexture() {
       return ((this.confidenceBlurIteration % 2) == 0)
-         ? this.nrdConfidenceBlurPingFb.getWriteAttachment("data")
-         : this.nrdConfidenceBlurPongFb.getWriteAttachment("data");
-   }
-
-   private RoutingFramebuffer createNrdConfidenceGradientFramebuffer() {
-      return this.createRoutingFramebuffer(
-         () -> this.nrdConfidenceGradientFb.getWriteAttachment("data")
-      );
-   }
-
-   // Single dynamic blur framebuffer: attachment supplier evaluates getCurrentConfidenceBlurOutputTexture()
-   // at bind-time so each renderAll() call routes to the correct ping or pong buffer.
-   private RoutingFramebuffer createNrdConfidenceBlurFramebuffer() {
-      return this.createRoutingFramebuffer(
-         this::getCurrentConfidenceBlurOutputTexture
-      );
+         ? this.nrdRes.confidenceBlurPingFb.getWriteAttachment("data")
+         : this.nrdRes.confidenceBlurPongFb.getWriteAttachment("data");
    }
 
    // Dispatch the gradient pass then the 5-pass blur cascade.
    // Must run after RELAXTemporalAccumulation each frame.
    // Reference: NRD-Sample dispatches ConfidenceBlur passes after TemporalAccumulation.
    private void renderConfidenceCascade() {
-      if (this.nrdConfidenceGradientRenderer == null || this.nrdConfidenceBlurRenderer == null) {
+      if (this.nrdRes.confidenceGradientRenderer == null || this.nrdRes.confidenceBlurRenderer == null) {
          return;
       }
 
@@ -2953,10 +2575,10 @@ public class LightTreeRenderer extends MainRenderer {
          this.hasHistoryConfidence = false;
       }
 
-      this.beginGpuRegion(nrdConfidenceCascadeRegionIndex);
+      this.beginGpuRegion(LightTreePipelineProfiler.nrdConfidenceCascadeRegionIndex);
 
       // Pass 0: gradient
-      this.nrdConfidenceGradientRenderer.renderAll();
+      this.nrdRes.confidenceGradientRenderer.renderAll();
       GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
 
       // Passes 1-5: blur cascade with step sizes 1, 2, 4, 8, 16.
@@ -2965,11 +2587,11 @@ public class LightTreeRenderer extends MainRenderer {
       for (int passIndex = 0; passIndex < NRD_CONFIDENCE_BLUR_STEPS.length; passIndex++) {
          this.confidenceBlurIteration = passIndex;
          this.currentConfidenceBlurStep = NRD_CONFIDENCE_BLUR_STEPS[passIndex];
-         this.nrdConfidenceBlurRenderer.renderAll();
+         this.nrdRes.confidenceBlurRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       }
 
-      this.endGpuRegion(nrdConfidenceCascadeRegionIndex);
+      this.endGpuRegion(LightTreePipelineProfiler.nrdConfidenceCascadeRegionIndex);
 
       // After the first complete cascade the confidence texture is valid.
       this.hasHistoryConfidence = true;
@@ -3004,7 +2626,7 @@ public class LightTreeRenderer extends MainRenderer {
       }
 
       this.setCurrentDiReconnectionSource(this.getSpatialResamplingInputReconnectionSource());
-      this.renderProfiled(diSpatialResamplingRegionIndex, this.reuseResolveRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.diSpatialResamplingRegionIndex, this.indirectRes.reuseResolveRenderer);
       GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       this.setCurrentDiReconnectionSource(DiReconnectionSource.FINAL);
    }
@@ -3013,54 +2635,54 @@ public class LightTreeRenderer extends MainRenderer {
       if (!this.shouldRunReservoirSplattingIndirectPipeline()) {
          return;
       }
-      if (this.indirectInitialRenderer == null && this.indirectBoilingRenderer == null && this.indirectAccumulationRenderer == null
-            && this.indirectAccumulationLightingRenderer == null && this.indirectAccumulationReservoirRenderer == null) {
+      if (this.indirectRes.indirectInitialRenderer == null && this.indirectRes.indirectBoilingRenderer == null && this.indirectRes.indirectAccumulationRenderer == null
+            && this.indirectRes.indirectAccumulationLightingRenderer == null && this.indirectRes.indirectAccumulationReservoirRenderer == null) {
          return;
       }
-      this.beginGpuRegion(restirGIRegionIndex);
-      if (this.indirectInitialRenderer != null) {
-         this.indirectInitialRenderer.renderAll();
+      this.beginGpuRegion(LightTreePipelineProfiler.restirGIRegionIndex);
+      if (this.indirectRes.indirectInitialRenderer != null) {
+         this.indirectRes.indirectInitialRenderer.renderAll();
       }
-      if (this.shouldRunIndirectBoilingFilter() && this.indirectBoilingRenderer != null) {
-         this.indirectBoilingRenderer.renderAll();
+      if (this.shouldRunIndirectBoilingFilter() && this.indirectRes.indirectBoilingRenderer != null) {
+         this.indirectRes.indirectBoilingRenderer.renderAll();
          GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
-         this.indirectReservoirBuffer.swap();
+         this.indirectRes.indirectReservoirBuffer.swap();
       }
       if (this.indirectTemporalSplattingActiveThisFrame) {
          if (this.renderIndirectTemporalSplatting()) {
-            this.indirectReservoirBuffer.swap();
+            this.indirectRes.indirectReservoirBuffer.swap();
          } else {
             this.indirectTemporalSplattingActiveThisFrame = false;
          }
       }
-      if (this.indirectAccumulationRenderer != null) {
-         this.indirectAccumulationRenderer.renderAll();
+      if (this.indirectRes.indirectAccumulationRenderer != null) {
+         this.indirectRes.indirectAccumulationRenderer.renderAll();
       }
-      if (this.indirectAccumulationLightingRenderer != null) {
-         this.indirectAccumulationLightingRenderer.renderAll();
+      if (this.indirectRes.indirectAccumulationLightingRenderer != null) {
+         this.indirectRes.indirectAccumulationLightingRenderer.renderAll();
       }
-      if (this.indirectAccumulationReservoirRenderer != null) {
-         this.indirectAccumulationReservoirRenderer.renderAll();
+      if (this.indirectRes.indirectAccumulationReservoirRenderer != null) {
+         this.indirectRes.indirectAccumulationReservoirRenderer.renderAll();
       }
-      this.endGpuRegion(restirGIRegionIndex);
+      this.endGpuRegion(LightTreePipelineProfiler.restirGIRegionIndex);
    }
 
    private boolean renderIndirectTemporalSplatting() {
       this.ensureIndirectTemporalSplattingRenderers();
-      if (this.indirectTemporalReprojectionRenderer == null
-         || this.indirectTemporalBinningOffsetsRenderer == null
-         || this.indirectTemporalBinningRenderer == null
-         || this.indirectScatterTemporalRenderer == null) {
+      if (this.indirectRes.indirectTemporalReprojectionRenderer == null
+         || this.indirectRes.indirectTemporalBinningOffsetsRenderer == null
+         || this.indirectRes.indirectTemporalBinningRenderer == null
+         || this.indirectRes.indirectScatterTemporalRenderer == null) {
          return false;
       }
       this.clearCurrentTemporalScatterBuffers();
-      this.indirectTemporalReprojectionRenderer.renderAll();
+      this.indirectRes.indirectTemporalReprojectionRenderer.renderAll();
       this.barrierTemporalScatterOwnershipWrites();
-      this.indirectTemporalBinningOffsetsRenderer.renderAll();
+      this.indirectRes.indirectTemporalBinningOffsetsRenderer.renderAll();
       this.barrierTemporalScatterBinningHalves();
-      this.indirectTemporalBinningRenderer.renderAll();
+      this.indirectRes.indirectTemporalBinningRenderer.renderAll();
       this.barrierTemporalScatterResolveInputs();
-      this.indirectScatterTemporalRenderer.renderAll();
+      this.indirectRes.indirectScatterTemporalRenderer.renderAll();
       GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
       return true;
    }
@@ -3092,9 +2714,9 @@ public class LightTreeRenderer extends MainRenderer {
       }
 
       Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
-      this.indirectInitialReservoirBuffer.clearBothSides(clearColor);
-      this.indirectReservoirBuffer.clearBothSides(clearColor);
-      this.indirectDenoisedBuffer.clearBothSides(clearColor);
+      this.indirectRes.indirectInitialReservoirBuffer.clearBothSides(clearColor);
+      this.indirectRes.indirectReservoirBuffer.clearBothSides(clearColor);
+      this.indirectRes.indirectDenoisedBuffer.clearBothSides(clearColor);
       this.disabledIndirectOutputsCleared = true;
    }
 
@@ -3107,54 +2729,54 @@ public class LightTreeRenderer extends MainRenderer {
       // SMEM pass: iteration index 0 (strides[0] == 1)
       this.directAtrousIteration = 0;
       long smemStart = System.nanoTime();
-      this.renderProfiled(relaxAtrousSmemRegionIndex, this.nrdAtrousSmemRenderer);
+      this.renderProfiled(LightTreePipelineProfiler.relaxAtrousSmemRegionIndex, this.nrdRes.atrousSmemRenderer);
       this.lastCpuDirectAtrousIterationNanos[0] = System.nanoTime() - smemStart;
       // Regular A-trous passes: iterations 1-4
-      if (this.directAtrousRenderer != null) {
-         this.beginGpuRegion(relaxAtrousRegionIndex);
+      if (this.directRes.directAtrousRenderer != null) {
+         this.beginGpuRegion(LightTreePipelineProfiler.relaxAtrousRegionIndex);
          for (this.directAtrousIteration = 1; this.directAtrousIteration < NRD_ATROUS_STRIDES.length; this.directAtrousIteration++) {
             long iterationStart = System.nanoTime();
-            this.directAtrousRenderer.renderAll();
+            this.directRes.directAtrousRenderer.renderAll();
             this.lastCpuDirectAtrousIterationNanos[this.directAtrousIteration] = System.nanoTime() - iterationStart;
          }
-         this.endGpuRegion(relaxAtrousRegionIndex);
+         this.endGpuRegion(LightTreePipelineProfiler.relaxAtrousRegionIndex);
       }
    }
 
    private void renderShadeSamplesProfiled() {
       this.setCurrentDiReconnectionSource(this.getShadingInputReconnectionSource());
-      if (this.shadeSamplesRenderer == null || this.shadeSamplesReservoirRenderer == null) {
+      if (this.indirectRes.shadeSamplesRenderer == null || this.indirectRes.shadeSamplesReservoirRenderer == null) {
          return;
       }
-      this.beginGpuRegion(diShadeSamplesRegionIndex);
+      this.beginGpuRegion(LightTreePipelineProfiler.diShadeSamplesRegionIndex);
       if (this.isDirectShadeSamplesEnabled()) {
          this.promoteShadingReconnectionHistory();
          // Lighting first (full-res FBO), then reservoir promotion (half-res FBO when
          // checkerboard is on). Order matters because the reservoir pass reads the
          // post-spatial reservoir that was finalized within the same frame.
-         this.shadeSamplesRenderer.renderAll();
-         this.shadeSamplesReservoirRenderer.renderAll();
+         this.indirectRes.shadeSamplesRenderer.renderAll();
+         this.indirectRes.shadeSamplesReservoirRenderer.renderAll();
       } else {
          this.clearShadeSamplesSplitOutputs();
          this.clearFrameFinalReconnectionOutputs();
       }
-      this.endGpuRegion(diShadeSamplesRegionIndex);
+      this.endGpuRegion(LightTreePipelineProfiler.diShadeSamplesRegionIndex);
    }
 
    private void promoteShadingReconnectionHistory() {
       if (this.getShadingInputReconnectionSource() == DiReconnectionSource.FINAL) {
          return;
       }
-      if (this.shadeSamplesReconnectionRenderer == null) {
+      if (this.indirectRes.shadeSamplesReconnectionRenderer == null) {
          return;
       }
 
-      this.shadeSamplesReconnectionRenderer.renderAll();
+      this.indirectRes.shadeSamplesReconnectionRenderer.renderAll();
       GL42.glMemoryBarrier(GL42.GL_FRAMEBUFFER_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
    }
 
    private void clearFrameFinalReconnectionOutputs() {
-      this.scatterReconnectionBuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
+      this.directRes.scatterReconnectionBuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
    }
 
    private void setCurrentDiReconnectionSource(DiReconnectionSource source) {
@@ -3163,34 +2785,30 @@ public class LightTreeRenderer extends MainRenderer {
 
    private TextureObject getCurrentStageReconnectionAttachment(String name) {
       if (this.currentDiReconnectionSource == DiReconnectionSource.PROPOSAL) {
-         return this.proposalReconnectionBuffer.getWriteAttachment(name);
+         return this.directRes.proposalReconnectionBuffer.getWriteAttachment(name);
       }
       if (this.currentDiReconnectionSource == DiReconnectionSource.TEMPORAL) {
-         return this.temporalReconnectionBuffer.getWriteAttachment(name);
+         return this.directRes.temporalReconnectionBuffer.getWriteAttachment(name);
       }
-      return this.scatterReconnectionBuffer.getWriteAttachment(name);
+      return this.directRes.scatterReconnectionBuffer.getWriteAttachment(name);
    }
 
    private void beginGpuRegion(int regionIndex) {
-      this.gpuTimerQuery.begin(regionIndex);
+      this.profiler.timerQuery().begin(regionIndex);
    }
 
    private void endGpuRegion(int regionIndex) {
-      this.gpuTimerQuery.end(regionIndex);
+      this.profiler.timerQuery().end(regionIndex);
    }
 
-   private void destroyGpuTimerQuery() {
-      this.gpuTimerQuery.destroy();
-   }
-
-   // After the 5-pass cascade the final result is always in nrdOutXxxRadianceHitDistFb
+   // After the 5-pass cascade the final result is always in nrdRes.outXxxRadianceHitDistFb
    // (the last regular atrous pass writes there regardless of ping-pong parity).
    private TextureObject getResolvedDiffuseAtrousTexture() {
-      return this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data");
+      return this.nrdRes.outDiffRadianceHitDistFb.getWriteAttachment("data");
    }
 
    private TextureObject getResolvedSpecularAtrousTexture() {
-      return this.nrdOutSpecRadianceHitDistFb.getWriteAttachment("data");
+      return this.nrdRes.outSpecRadianceHitDistFb.getWriteAttachment("data");
    }
 
    @Nullable
@@ -3206,15 +2824,15 @@ public class LightTreeRenderer extends MainRenderer {
          case "stage_specular", "spec_raw", "direct_specular" -> this.lightingStageBuffer.getWriteAttachment("direct_specular");
          case "stage_indirect", "indirect_raw" -> this.lightingStageBuffer.getWriteAttachment("indirect");
          // NRD fused pipeline intermediate buffers
-         case "direct_noisy", "noisy", "temporal", "temporal_raw" -> this.nrdDiffIllumPingFb.getWriteAttachment("data");
-         case "direct_responsive", "responsive" -> this.nrdDiffIllumPongFb.getWriteAttachment("data");
-         case "direct_slow", "slow" -> this.nrdDiffIllumPingFb.getWriteAttachment("data");
-         case "direct_fast", "fast" -> this.nrdDiffIllumPongFb.getWriteAttachment("data");
-         case "direct_historyfix", "historyfix" -> this.nrdDiffIllumPongFb.getWriteAttachment("data");
-         case "direct_anti_firefly", "anti_firefly" -> this.nrdDiffIllumPrevFb.getWriteAttachment("data");
-         case "direct_clamped_slow", "clamped_slow" -> this.nrdDiffIllumPrevFb.getWriteAttachment("data");
-         case "direct_clamped_fast", "clamped_fast" -> this.nrdDiffIllumResponsivePrevFb.getWriteAttachment("data");
-         case "direct_denoised", "denoised" -> this.nrdOutDiffRadianceHitDistFb.getWriteAttachment("data");
+         case "direct_noisy", "noisy", "temporal", "temporal_raw" -> this.nrdRes.diffIllumPingFb.getWriteAttachment("data");
+         case "direct_responsive", "responsive" -> this.nrdRes.diffIllumPongFb.getWriteAttachment("data");
+         case "direct_slow", "slow" -> this.nrdRes.diffIllumPingFb.getWriteAttachment("data");
+         case "direct_fast", "fast" -> this.nrdRes.diffIllumPongFb.getWriteAttachment("data");
+         case "direct_historyfix", "historyfix" -> this.nrdRes.diffIllumPongFb.getWriteAttachment("data");
+         case "direct_anti_firefly", "anti_firefly" -> this.nrdRes.diffIllumPrevFb.getWriteAttachment("data");
+         case "direct_clamped_slow", "clamped_slow" -> this.nrdRes.diffIllumPrevFb.getWriteAttachment("data");
+         case "direct_clamped_fast", "clamped_fast" -> this.nrdRes.diffIllumResponsivePrevFb.getWriteAttachment("data");
+         case "direct_denoised", "denoised" -> this.nrdRes.outDiffRadianceHitDistFb.getWriteAttachment("data");
          case "direct_atrous", "atrous" -> this.getResolvedDiffuseAtrousTexture();
          default -> null;
       };
@@ -3223,7 +2841,7 @@ public class LightTreeRenderer extends MainRenderer {
    private TextureObject getResolvedDirectDiffuseTexture() {
       if (!this.isDirectAtrousEnabled()) {
          // When atrous is disabled the anti-firefly output is the final diffuse result.
-         return this.nrdDiffIllumPrevFb.getWriteAttachment("data");
+         return this.nrdRes.diffIllumPrevFb.getWriteAttachment("data");
       }
       return this.getResolvedDiffuseAtrousTexture();
    }
@@ -3244,7 +2862,7 @@ public class LightTreeRenderer extends MainRenderer {
       if (!this.shouldRunIndirectDenoise()) {
          return this.lightingBuffer.getWriteAttachment("indirect");
       }
-      return this.indirectDenoisedBuffer.getWriteAttachment("data");
+      return this.indirectRes.indirectDenoisedBuffer.getWriteAttachment("data");
    }
 
    private TextureObject getCurrentDirectReservoirDataTexture() {
@@ -3261,51 +2879,51 @@ public class LightTreeRenderer extends MainRenderer {
 
    private TextureObject getCurrentSpatialReservoirDataTexture() {
       if (!this.isDirectSpatialReuseEnabled()) {
-         return this.temporalReservoirBuffer.getWriteAttachment("data");
+         return this.directRes.temporalReservoirBuffer.getWriteAttachment("data");
       }
       return this.directSpatialReservoirBuffer.getWriteAttachment("data");
    }
 
    private TextureObject getCurrentSpatialReservoirSampleTexture() {
       if (!this.isDirectSpatialReuseEnabled()) {
-         return this.temporalReservoirBuffer.getWriteAttachment("sample");
+         return this.directRes.temporalReservoirBuffer.getWriteAttachment("sample");
       }
       return this.directSpatialReservoirBuffer.getWriteAttachment("sample");
    }
 
    private TextureObject getCurrentSpatialReservoirMetaTexture() {
       if (!this.isDirectSpatialReuseEnabled()) {
-         return this.temporalReservoirBuffer.getWriteAttachment("meta");
+         return this.directRes.temporalReservoirBuffer.getWriteAttachment("meta");
       }
       return this.directSpatialReservoirBuffer.getWriteAttachment("meta");
    }
 
    private TextureObject getCurrentIndirectReservoirPositionTexture() {
       if (this.shouldReadCurrentIndirectReservoirHistory()) {
-         return this.indirectReservoirBuffer.getReadAttachment("position");
+         return this.indirectRes.indirectReservoirBuffer.getReadAttachment("position");
       }
-      return this.indirectReservoirBuffer.getWriteAttachment("position");
+      return this.indirectRes.indirectReservoirBuffer.getWriteAttachment("position");
    }
 
    private TextureObject getCurrentIndirectReservoirNormalTexture() {
       if (this.shouldReadCurrentIndirectReservoirHistory()) {
-         return this.indirectReservoirBuffer.getReadAttachment("normal");
+         return this.indirectRes.indirectReservoirBuffer.getReadAttachment("normal");
       }
-      return this.indirectReservoirBuffer.getWriteAttachment("normal");
+      return this.indirectRes.indirectReservoirBuffer.getWriteAttachment("normal");
    }
 
    private TextureObject getCurrentIndirectReservoirRadianceTexture() {
       if (this.shouldReadCurrentIndirectReservoirHistory()) {
-         return this.indirectReservoirBuffer.getReadAttachment("radiance");
+         return this.indirectRes.indirectReservoirBuffer.getReadAttachment("radiance");
       }
-      return this.indirectReservoirBuffer.getWriteAttachment("radiance");
+      return this.indirectRes.indirectReservoirBuffer.getWriteAttachment("radiance");
    }
 
    private TextureObject getCurrentIndirectReservoirMetaTexture() {
       if (this.shouldReadCurrentIndirectReservoirHistory()) {
-         return this.indirectReservoirBuffer.getReadAttachment("meta");
+         return this.indirectRes.indirectReservoirBuffer.getReadAttachment("meta");
       }
-      return this.indirectReservoirBuffer.getWriteAttachment("meta");
+      return this.indirectRes.indirectReservoirBuffer.getWriteAttachment("meta");
    }
 
    private boolean shouldReadCurrentIndirectReservoirHistory() {
@@ -3346,21 +2964,21 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private void clearProposalReservoirOutputs() {
-      this.proposalReservoirFramebuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
+      this.indirectRes.proposalReservoirFramebuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
    }
 
    private void clearShadeSamplesMonolithicOutputs() {
-      this.shadeSamplesMonolithicFramebuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
+      this.indirectRes.shadeSamplesMonolithicFramebuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
    }
 
    private void clearShadeSamplesLightingOutputs() {
-      this.shadeSamplesFramebuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
+      this.indirectRes.shadeSamplesFramebuffer.clear(new Vector4f(0.0f, 0.0f, 0.0f, 0.0f));
    }
 
    private void clearShadeSamplesSplitOutputs() {
       Vector4f clearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
-      this.shadeSamplesFramebuffer.clear(clearColor);
-      this.shadeSamplesReservoirFramebuffer.clear(clearColor);
+      this.indirectRes.shadeSamplesFramebuffer.clear(clearColor);
+      this.indirectRes.shadeSamplesReservoirFramebuffer.clear(clearColor);
    }
 
    private void invalidateDirectReuseHistory() {
@@ -3393,8 +3011,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.directSpatialReservoirBuffer.clear(clearColor);
       this.clearCurrentTemporalStageBuffers(clearColor);
       this.clearPreviousTemporalHistory(clearColor);
-      this.indirectInitialReservoirBuffer.clearBothSides(clearColor);
-      this.indirectReservoirBuffer.clearBothSides(clearColor);
+      this.indirectRes.indirectInitialReservoirBuffer.clearBothSides(clearColor);
+      this.indirectRes.indirectReservoirBuffer.clearBothSides(clearColor);
       this.reservoirHistoryDirty = false;
       return true;
    }
@@ -3438,181 +3056,8 @@ public class LightTreeRenderer extends MainRenderer {
       this.lastCpuIndirectDenoiseNanos = t19 - t18;
       this.lastCpuIndirectCompositeNanos = t20 - t19;
       // Confidence cascade CPU time is absorbed into TA (t10-t9) as it runs inline.
-      // GPU time is accurately tracked via nrdConfidenceCascadeRegionIndex GPU timer query.
+      // GPU time is accurately tracked via LightTreePipelineProfiler.nrdConfidenceCascadeRegionIndex GPU timer query.
       this.lastCpuNRDConfidenceCascadeNanos = 0;
-   }
-
-   private void logRenderProfileIfNeeded(long totalCpuNanos) {
-      this.profilerFrameCounter++;
-      if (this.profilerFrameCounter < profilerLogIntervalFrames) {
-         return;
-      }
-      this.profilerFrameCounter = 0;
-      long[] cpuPassNanos = this.getCpuPassNanos();
-      long[] gpuPassNanos = this.getGpuPassNanos();
-      int worstCpuIndex = this.getWorstPassIndex(cpuPassNanos);
-      int worstGpuIndex = this.getWorstPassIndex(gpuPassNanos);
-      WorldRegistry worldRegistry = this.worldRegistry;
-      LightRegistry lightRegistry = worldRegistry.getLightRegistry();
-      long totalGpuNanos = this.sumNanos(gpuPassNanos);
-      int fbWidth = MinecraftClient.getInstance().getWindow().getFramebufferWidth();
-      int fbHeight = MinecraftClient.getInstance().getWindow().getFramebufferHeight();
-      int renderWidth = Math.round(fbWidth * this.renderScale);
-      int renderHeight = Math.round(fbHeight * this.renderScale);
-      long renderPixels = (long) renderWidth * renderHeight;
-      Photonic.info(
-         "[Profiler] RTXDI/NRD summary: cpuTotal={}us gpuTotal={}us worstCpu={}={}us worstGpu={}={}us reloadActive={} blendFactor={} blendRegions={} tracedLights={}/{} regirCells={} regirLightSlots={} regirGrid={}^3 viewport={}x{} renderRes={}x{} pixels={} lightTreeSamplingStageNsPerPixel={} stageGeometry={}",
-         this.toMicros(totalCpuNanos),
-         this.toMicros(totalGpuNanos),
-         profilerPassNames[worstCpuIndex],
-         this.toMicros(cpuPassNanos[worstCpuIndex]),
-         profilerPassNames[worstGpuIndex],
-         this.toMicros(gpuPassNanos[worstGpuIndex]),
-         worldRegistry.fetchLightReload(),
-         this.formatBlendFactor(worldRegistry.fetchLightBlendFactor()),
-         worldRegistry.getLightBlendRegionCount(),
-         lightRegistry.lightCount(),
-         lightRegistry.totalLights(),
-         lightRegistry.getRegirActiveCellCount(),
-         lightRegistry.getRegirActiveLightSlotCount(),
-         lightRegistry.getRegirGridResolution(),
-         fbWidth, fbHeight,
-         renderWidth, renderHeight,
-         renderPixels,
-         renderPixels > 0 ? (gpuPassNanos[lightTreeSamplingStageRegionIndex] / renderPixels) : 0,
-         this.describeStageGeometryUsage()
-      );
-      Photonic.info(
-         "[Profiler] RTXDI/NRD CPU passes: LightTreeSamplingStage={}us InitialCandidates={}us DITemporalResampling={}us DISpatialResampling={}us DIShadeSamples={}us NRDClassifyTiles={}us NRDHitDistReconstruction={}us NRDPrepass={}us RELAXTemporalAccumulation={}us RELAXHistoryFix={}us RELAXHistoryClamping={}us NRDCopy={}us RELAXAntiFirefly={}us RELAXAtrousSmem={}us RELAXAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
-         this.toMicros(cpuPassNanos[lightTreeSamplingStageRegionIndex]),
-         this.toMicros(cpuPassNanos[initialCandidatesRegionIndex]),
-         this.toMicros(cpuPassNanos[diTemporalResamplingRegionIndex]),
-         this.toMicros(cpuPassNanos[diSpatialResamplingRegionIndex]),
-         this.toMicros(cpuPassNanos[diShadeSamplesRegionIndex]),
-         this.toMicros(cpuPassNanos[nrdClassifyTilesRegionIndex]),
-         this.toMicros(cpuPassNanos[nrdHitDistReconstructionRegionIndex]),
-         this.toMicros(cpuPassNanos[nrdPrepassRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxTemporalAccumulationRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxHistoryFixRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxHistoryClampingRegionIndex]),
-         this.toMicros(cpuPassNanos[nrdCopyRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxAntiFireflyRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxAtrousSmemRegionIndex]),
-         this.toMicros(cpuPassNanos[relaxAtrousRegionIndex]),
-         this.toMicros(cpuPassNanos[restirGIRegionIndex]),
-         this.toMicros(cpuPassNanos[indirectDenoiseRegionIndex]),
-         this.toMicros(cpuPassNanos[lightingAccumulationRegionIndex]),
-         this.toMicros(cpuPassNanos[indirectCompositeRegionIndex])
-      );
-      this.logGpuRenderProfile(gpuPassNanos);
-   }
-
-   private void logGpuRenderProfile(long[] gpuPassNanos) {
-      long diTotal = gpuPassNanos[lightTreeSamplingStageRegionIndex]
-         + gpuPassNanos[initialCandidatesRegionIndex]
-         + gpuPassNanos[diTemporalResamplingRegionIndex]
-         + gpuPassNanos[diSpatialResamplingRegionIndex]
-         + gpuPassNanos[diShadeSamplesRegionIndex];
-      long relaxTotal = gpuPassNanos[nrdClassifyTilesRegionIndex]
-         + gpuPassNanos[nrdHitDistReconstructionRegionIndex]
-         + gpuPassNanos[nrdPrepassRegionIndex]
-         + gpuPassNanos[relaxTemporalAccumulationRegionIndex]
-         + gpuPassNanos[relaxHistoryFixRegionIndex]
-         + gpuPassNanos[relaxHistoryClampingRegionIndex]
-         + gpuPassNanos[nrdCopyRegionIndex]
-         + gpuPassNanos[relaxAntiFireflyRegionIndex]
-         + gpuPassNanos[relaxAtrousSmemRegionIndex]
-         + gpuPassNanos[relaxAtrousRegionIndex];
-      long indirectTotal = gpuPassNanos[restirGIRegionIndex]
-         + gpuPassNanos[indirectDenoiseRegionIndex];
-      long compositeTotal = gpuPassNanos[lightingAccumulationRegionIndex]
-         + gpuPassNanos[indirectCompositeRegionIndex];
-      LightRegistry lightRegistry = this.worldRegistry.getLightRegistry();
-      int fbWidth = MinecraftClient.getInstance().getWindow().getFramebufferWidth();
-      int fbHeight = MinecraftClient.getInstance().getWindow().getFramebufferHeight();
-      int renderWidth = Math.round(fbWidth * this.renderScale);
-      int renderHeight = Math.round(fbHeight * this.renderScale);
-      long renderPixels = (long) renderWidth * renderHeight;
-      Photonic.info(
-         "[Profiler] RTXDI/NRD GPU passes: LightTreeSamplingStage={}us InitialCandidates={}us DITemporalResampling={}us DISpatialResampling={}us DIShadeSamples={}us NRDClassifyTiles={}us NRDHitDistReconstruction={}us NRDPrepass={}us RELAXTemporalAccumulation={}us RELAXHistoryFix={}us RELAXHistoryClamping={}us NRDCopy={}us RELAXAntiFirefly={}us RELAXAtrousSmem={}us RELAXAtrous={}us ReSTIRGI={}us IndirectDenoise={}us LightingAccumulation={}us IndirectComposite={}us",
-         this.toMicros(gpuPassNanos[lightTreeSamplingStageRegionIndex]),
-         this.toMicros(gpuPassNanos[initialCandidatesRegionIndex]),
-         this.toMicros(gpuPassNanos[diTemporalResamplingRegionIndex]),
-         this.toMicros(gpuPassNanos[diSpatialResamplingRegionIndex]),
-         this.toMicros(gpuPassNanos[diShadeSamplesRegionIndex]),
-         this.toMicros(gpuPassNanos[nrdClassifyTilesRegionIndex]),
-         this.toMicros(gpuPassNanos[nrdHitDistReconstructionRegionIndex]),
-         this.toMicros(gpuPassNanos[nrdPrepassRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxTemporalAccumulationRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxHistoryFixRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxHistoryClampingRegionIndex]),
-         this.toMicros(gpuPassNanos[nrdCopyRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxAntiFireflyRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxAtrousSmemRegionIndex]),
-         this.toMicros(gpuPassNanos[relaxAtrousRegionIndex]),
-         this.toMicros(gpuPassNanos[restirGIRegionIndex]),
-         this.toMicros(gpuPassNanos[indirectDenoiseRegionIndex]),
-         this.toMicros(gpuPassNanos[lightingAccumulationRegionIndex]),
-         this.toMicros(gpuPassNanos[indirectCompositeRegionIndex])
-      );
-      Photonic.info(
-         "[Profiler] RTXDI/NRD GPU buckets: DITotal={}us RELAXTotal={}us IndirectTotal={}us CompositeTotal={}us DIShare={} RELAXShare={} IndirectShare={} CompositeShare={}",
-         this.toMicros(diTotal),
-         this.toMicros(relaxTotal),
-         this.toMicros(indirectTotal),
-         this.toMicros(compositeTotal),
-         this.formatShare(diTotal, gpuPassNanos),
-         this.formatShare(relaxTotal, gpuPassNanos),
-         this.formatShare(indirectTotal, gpuPassNanos),
-         this.formatShare(compositeTotal, gpuPassNanos)
-      );
-      long diNs = diTotal;
-      long relaxNs = relaxTotal;
-      long indirectNs = indirectTotal;
-      long compositeNs = compositeTotal;
-      Photonic.info(
-         "[Profiler] RTXDI/NRD per-pixel: diNspp={}ns relaxNspp={}ns indirectNspp={}ns compositeNspp={}ns regirCells={} regirLightSlots={}",
-         renderPixels > 0 ? diNs / renderPixels : 0,
-         renderPixels > 0 ? relaxNs / renderPixels : 0,
-         renderPixels > 0 ? indirectNs / renderPixels : 0,
-         renderPixels > 0 ? compositeNs / renderPixels : 0,
-         lightRegistry.getRegirActiveCellCount(),
-         lightRegistry.getRegirActiveLightSlotCount()
-      );
-      this.logDirectAtrousBreakdown();
-   }
-
-   private void logDirectAtrousBreakdown() {
-      if (this.lastCpuDirectAtrousIterationNanos.length == 0) {
-         return;
-      }
-      StringBuilder passSummary = new StringBuilder();
-      long worstNanos = 0L;
-      int worstPass = 0;
-      for (int i = 0; i < this.lastCpuDirectAtrousIterationNanos.length; i++) {
-         long iterationNanos = this.lastCpuDirectAtrousIterationNanos[i];
-         if (i > 0) {
-            passSummary.append(' ');
-         }
-         passSummary.append("pass")
-            .append(i)
-            .append("(step=")
-            .append(NRD_ATROUS_STRIDES[i])
-            .append(")=")
-            .append(this.toMicros(iterationNanos))
-            .append("us");
-         if (iterationNanos > worstNanos) {
-            worstNanos = iterationNanos;
-            worstPass = i;
-         }
-      }
-      Photonic.info(
-         "[Profiler] RTXDI/NRD RELAXDiffuseAtrous breakdown: passes={} worstPass=pass{}(step={})={}us",
-         passSummary,
-         worstPass,
-         NRD_ATROUS_STRIDES[worstPass],
-         this.toMicros(worstNanos)
-      );
    }
 
    private long[] getCpuPassNanos() {
@@ -3640,71 +3085,8 @@ public class LightTreeRenderer extends MainRenderer {
       };
    }
 
-   private long[] getGpuPassNanos() {
-      return new long[]{
-         this.gpuTimerQuery.getTimeNanos(lightTreeSamplingStageRegionIndex),      // 0
-         this.gpuTimerQuery.getTimeNanos(initialCandidatesRegionIndex),           // 1
-         this.gpuTimerQuery.getTimeNanos(diTemporalResamplingRegionIndex),        // 2
-         this.gpuTimerQuery.getTimeNanos(diSpatialResamplingRegionIndex),         // 3
-         this.gpuTimerQuery.getTimeNanos(diShadeSamplesRegionIndex),              // 4
-         this.gpuTimerQuery.getTimeNanos(nrdClassifyTilesRegionIndex),            // 5
-         this.gpuTimerQuery.getTimeNanos(nrdHitDistReconstructionRegionIndex),    // 6
-         this.gpuTimerQuery.getTimeNanos(nrdPrepassRegionIndex),                  // 7
-         this.gpuTimerQuery.getTimeNanos(relaxTemporalAccumulationRegionIndex),   // 8
-         this.gpuTimerQuery.getTimeNanos(relaxHistoryFixRegionIndex),             // 9
-         this.gpuTimerQuery.getTimeNanos(relaxHistoryClampingRegionIndex),        // 10
-         this.gpuTimerQuery.getTimeNanos(nrdCopyRegionIndex),                     // 11
-         this.gpuTimerQuery.getTimeNanos(relaxAntiFireflyRegionIndex),            // 12
-         this.gpuTimerQuery.getTimeNanos(relaxAtrousSmemRegionIndex),             // 13
-         this.gpuTimerQuery.getTimeNanos(relaxAtrousRegionIndex),                 // 14
-         this.gpuTimerQuery.getTimeNanos(restirGIRegionIndex),                    // 15
-         this.gpuTimerQuery.getTimeNanos(indirectDenoiseRegionIndex),             // 16
-         this.gpuTimerQuery.getTimeNanos(lightingAccumulationRegionIndex),        // 17
-         this.gpuTimerQuery.getTimeNanos(indirectCompositeRegionIndex),           // 18
-         this.gpuTimerQuery.getTimeNanos(nrdConfidenceCascadeRegionIndex)         // 19
-      };
-   }
-
-   private int getWorstPassIndex(long[] passNanos) {
-      int worstIndex = 0;
-      for (int i = 1; i < passNanos.length; i++) {
-         if (passNanos[i] > passNanos[worstIndex]) {
-            worstIndex = i;
-         }
-      }
-      return worstIndex;
-   }
-
-   private long sumNanos(long[] passNanos) {
-      long total = 0L;
-      for (long passNano : passNanos) {
-         total += passNano;
-      }
-      return total;
-   }
-
    private void advanceGpuProfileFrame() {
-      this.gpuTimerQuery.nextFrame();
-   }
-
-   private String formatShare(long bucketNanos, long[] allPassNanos) {
-      long total = this.sumNanos(allPassNanos);
-      if (total <= 0L) {
-         return "0.000";
-      }
-      return String.format(java.util.Locale.ROOT, "%.3f", (double) bucketNanos / (double) total);
-   }
-
-   private String formatBlendFactor(float blendFactor) {
-      return String.format(java.util.Locale.ROOT, "%.3f", blendFactor);
-   }
-
-   private String describeStageGeometryUsage() {
-      return "DIShadeSamples+NRDClassifyTiles+NRDHitDistReconstruction+NRDPrepass+RELAXTemporalAccumulation+RELAXHistoryFix+RELAXHistoryClamping+NRDCopy+RELAXAntiFirefly+RELAXAtrousSmem+RELAXAtrous+IndirectDenoise";
-   }
-
-   private long toMicros(long nanos) {
-      return nanos / 1_000L;
+      this.profiler.timerQuery().nextFrame();
    }
 }
 

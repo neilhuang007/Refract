@@ -13,16 +13,7 @@ layout(location = 2) out vec4 direct_combined_frag_out;
 #include "/photonics/lighttree/restir_di_resolve.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
 
-const float ph_nrd_spec_fp16_safe_luma = 248.0;
-
-vec3 ph_clamp_specular_for_relax(vec3 demodulatedSpecular) {
-    demodulatedSpecular = max(demodulatedSpecular, vec3(0.0));
-    float specularLuma = nrd_luminance(demodulatedSpecular);
-    if (specularLuma > ph_nrd_spec_fp16_safe_luma) {
-        demodulatedSpecular *= ph_nrd_spec_fp16_safe_luma / max(specularLuma, 1e-6);
-    }
-    return demodulatedSpecular;
-}
+#include "/photonics/lighttree/lt_debug.glsl"
 
 void storeEmptyResolveReSTIROutputs()
 {

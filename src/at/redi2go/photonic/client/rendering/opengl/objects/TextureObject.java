@@ -45,16 +45,16 @@ public abstract class TextureObject implements Destructable {
    public abstract void updatePerFrame();
 
    public TextureStats readStats() {
-      if (this.getTextureDimensions().length > 2 || this.target != 3553) {
+      if (this.getTextureDimensions().length > 2 || this.target != GL11.GL_TEXTURE_2D) {
          return TextureStats.EMPTY;
       }
 
       this.bind();
       IntBuffer buffer = BufferUtils.createIntBuffer(1);
-      GL11.glGetTexLevelParameteriv(this.target, 0, 4096, buffer);
+      GL11.glGetTexLevelParameteriv(this.target, 0, GL11.GL_TEXTURE_WIDTH, buffer);
       int width = buffer.get(0);
       buffer.clear();
-      GL11.glGetTexLevelParameteriv(this.target, 0, 4097, buffer);
+      GL11.glGetTexLevelParameteriv(this.target, 0, GL11.GL_TEXTURE_HEIGHT, buffer);
       int height = buffer.get(0);
       if (width <= 0 || height <= 0) {
          this.unbind();
@@ -68,7 +68,7 @@ public abstract class TextureObject implements Destructable {
          stats = computeFloatStats(pixels, width, height);
       } else {
          ByteBuffer pixels = BufferUtils.createByteBuffer(width * height * 4);
-         GL11.glGetTexImage(this.target, 0, 6408, 5121, pixels);
+         GL11.glGetTexImage(this.target, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels);
          stats = computeByteStats(pixels, width, height);
       }
 
@@ -77,15 +77,15 @@ public abstract class TextureObject implements Destructable {
    }
 
    public BufferedImage download() {
-      if (this.getTextureDimensions().length > 2 || this.target != 3553) {
+      if (this.getTextureDimensions().length > 2 || this.target != GL11.GL_TEXTURE_2D) {
          return null;
       } else {
          this.bind();
          IntBuffer buffer = BufferUtils.createIntBuffer(1);
-         GL11.glGetTexLevelParameteriv(this.target, 0, 4096, buffer);
+         GL11.glGetTexLevelParameteriv(this.target, 0, GL11.GL_TEXTURE_WIDTH, buffer);
          int width = buffer.get(0);
          buffer.clear();
-         GL11.glGetTexLevelParameteriv(this.target, 0, 4097, buffer);
+         GL11.glGetTexLevelParameteriv(this.target, 0, GL11.GL_TEXTURE_HEIGHT, buffer);
          int height = buffer.get(0);
          if (width <= 0 || height <= 0) {
             this.unbind();
@@ -112,7 +112,7 @@ public abstract class TextureObject implements Destructable {
          }
 
          ByteBuffer pixels = BufferUtils.createByteBuffer(width * height * 4);
-         GL11.glGetTexImage(this.target, 0, 6408, 5121, pixels);
+         GL11.glGetTexImage(this.target, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels);
          BufferedImage image = new BufferedImage(width, height, 2);
 
          for (int x = 0; x < width; x++) {
@@ -132,16 +132,16 @@ public abstract class TextureObject implements Destructable {
    }
 
    public float[] downloadFloatData() {
-      if (this.getTextureDimensions().length > 2 || this.target != 3553 || !this.isFloatingPointTexture()) {
+      if (this.getTextureDimensions().length > 2 || this.target != GL11.GL_TEXTURE_2D || !this.isFloatingPointTexture()) {
          return null;
       }
 
       this.bind();
       IntBuffer buffer = BufferUtils.createIntBuffer(1);
-      GL11.glGetTexLevelParameteriv(this.target, 0, 4096, buffer);
+      GL11.glGetTexLevelParameteriv(this.target, 0, GL11.GL_TEXTURE_WIDTH, buffer);
       int width = buffer.get(0);
       buffer.clear();
-      GL11.glGetTexLevelParameteriv(this.target, 0, 4097, buffer);
+      GL11.glGetTexLevelParameteriv(this.target, 0, GL11.GL_TEXTURE_HEIGHT, buffer);
       int height = buffer.get(0);
       if (width <= 0 || height <= 0) {
          this.unbind();

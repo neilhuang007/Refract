@@ -1,11 +1,14 @@
 package at.redi2go.photonic.client.rendering.opengl.objects;
 
+import com.mojang.blaze3d.platform.GlStateManager;
 import java.nio.ByteBuffer;
 import java.util.function.Consumer;
 import net.minecraft.client.util.Window;
 import net.minecraft.client.MinecraftClient;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL30;
 
 public class CubeMapFramebuffer extends TextureObject {
@@ -14,56 +17,56 @@ public class CubeMapFramebuffer extends TextureObject {
    private final int size;
 
    public CubeMapFramebuffer(int size) {
-      super(new int[]{1, 1, 4, 1}, 6408, 34067, createCubeMapTexture(size), false);
+      super(new int[]{1, 1, 4, 1}, GL11.GL_RGBA, GL13.GL_TEXTURE_CUBE_MAP, createCubeMapTexture(size), false);
       this.size = size;
       this.fbo = GL30.glGenFramebuffers();
       this.depthBuffer = GL30.glGenRenderbuffers();
    }
 
    public void render(Consumer<Integer> consumer) {
-      GL30.glBindFramebuffer(36160, this.fbo);
-      GL11.glDrawBuffer(36064);
-      GL30.glBindRenderbuffer(36161, this.depthBuffer);
-      GL30.glRenderbufferStorage(36161, 33190, this.size, this.size);
-      GL30.glFramebufferRenderbuffer(36160, 36096, 36161, this.depthBuffer);
-      GL11.glViewport(0, 0, this.size, this.size);
+      GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.fbo);
+      GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+      GL30.glBindRenderbuffer(GL30.GL_RENDERBUFFER, this.depthBuffer);
+      GL30.glRenderbufferStorage(GL30.GL_RENDERBUFFER, GL14.GL_DEPTH_COMPONENT24, this.size, this.size);
+      GL30.glFramebufferRenderbuffer(GL30.GL_FRAMEBUFFER, GL30.GL_DEPTH_ATTACHMENT, GL30.GL_RENDERBUFFER, this.depthBuffer);
+      GlStateManager._viewport(0, 0, this.size, this.size);
 
       for (int i = 0; i < 6; i++) {
-         GL30.glFramebufferTexture2D(36160, 36064, 34069 + i, this.getTextureId(), 0);
+         GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL13.GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, this.getTextureId(), 0);
          consumer.accept(i);
       }
 
       Window window = MinecraftClient.getInstance().getWindow();
-      GL30.glBindFramebuffer(36160, 0);
-      GL11.glViewport(0, 0, window.getFramebufferWidth(), window.getFramebufferHeight());
+      GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
+      GlStateManager._viewport(0, 0, window.getFramebufferWidth(), window.getFramebufferHeight());
    }
 
    private static int createCubeMapTexture(int size) {
-      int texID = GL11.glGenTextures();
-      GL11.glBindTexture(34067, texID);
+      int texID = GlStateManager._genTexture();
+      GL11.glBindTexture(GL13.GL_TEXTURE_CUBE_MAP, texID);
 
       for (int i = 0; i < 6; i++) {
-         GL11.glTexImage2D(34069 + i, 0, 32856, size, size, 0, 6408, 5121, (ByteBuffer)null);
+         GL11.glTexImage2D(GL13.GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL11.GL_RGBA8, size, size, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, (ByteBuffer)null);
       }
 
-      GL11.glTexParameteri(34067, 10240, 9729);
-      GL11.glTexParameteri(34067, 10241, 9729);
-      GL11.glTexParameteri(34067, 10242, 33071);
-      GL11.glTexParameteri(34067, 10243, 33071);
-      GL11.glTexParameteri(34067, 32882, 33071);
-      GL11.glBindTexture(34067, 0);
+      GL11.glTexParameteri(GL13.GL_TEXTURE_CUBE_MAP, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+      GL11.glTexParameteri(GL13.GL_TEXTURE_CUBE_MAP, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+      GL11.glTexParameteri(GL13.GL_TEXTURE_CUBE_MAP, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+      GL11.glTexParameteri(GL13.GL_TEXTURE_CUBE_MAP, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+      GL11.glTexParameteri(GL13.GL_TEXTURE_CUBE_MAP, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE);
+      GL11.glBindTexture(GL13.GL_TEXTURE_CUBE_MAP, 0);
       return texID;
    }
 
    @Override
    public void bind() {
-      GL13.glActiveTexture(33984 + this.getTextureUnit());
-      GL11.glBindTexture(34067, this.getTextureId());
+      GL13.glActiveTexture(GL13.GL_TEXTURE0 + this.getTextureUnit());
+      GL11.glBindTexture(GL13.GL_TEXTURE_CUBE_MAP, this.getTextureId());
    }
 
    @Override
    public void unbind() {
-      GL11.glBindTexture(34067, 0);
+      GL11.glBindTexture(GL13.GL_TEXTURE_CUBE_MAP, 0);
    }
 
    @Override
@@ -79,6 +82,6 @@ public class CubeMapFramebuffer extends TextureObject {
    public void free() {
       GL30.glDeleteFramebuffers(this.fbo);
       GL30.glDeleteRenderbuffers(this.depthBuffer);
-      GL11.glDeleteTextures(this.textureId);
+      GlStateManager._deleteTexture(this.textureId);
    }
 }

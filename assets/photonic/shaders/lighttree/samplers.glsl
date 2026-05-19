@@ -35,11 +35,8 @@ uniform sampler2D radiosity_indirect_initial_meta;
 uniform sampler2D radiosity_motion;
 
 // Reference current-frame reconnection payload (currReconnectionData).
-uniform sampler2D scatter_reconnection0;
-uniform sampler2D scatter_reconnection1;
-uniform sampler2D scatter_reconnection2;
-uniform sampler2D scatter_reconnection3;
-uniform sampler2D scatter_reconnection4;
+// Packed as a 5-layer sampler2DArray (layers 0..4).
+uniform sampler2DArray scatter_reconnections;
 // Reference current-frame temporal output (currReservoirs / currReconnectionData).
 uniform sampler2D temporal_reservoir_data;
 uniform sampler2D temporal_reservoir_sample;
@@ -50,11 +47,8 @@ uniform sampler2D temporal_reservoir_meta;
 uniform sampler2D temporal_gather_intermediate_reservoir_data;
 uniform sampler2D temporal_gather_intermediate_reservoir_sample;
 uniform sampler2D temporal_gather_intermediate_reservoir_meta;
-uniform sampler2D temporal_gather_intermediate_reconnection0;
-uniform sampler2D temporal_gather_intermediate_reconnection1;
-uniform sampler2D temporal_gather_intermediate_reconnection2;
-uniform sampler2D temporal_gather_intermediate_reconnection3;
-uniform sampler2D temporal_gather_intermediate_reconnection4;
+// Packed as a 5-layer sampler2DArray (layers 0..4).
+uniform sampler2DArray temporal_gather_intermediate_reconnections;
 uniform sampler2D prev_radiosity_position;
 uniform sampler2D prev_radiosity_normal;
 uniform sampler2D prev_radiosity_mapped_normal;
@@ -77,11 +71,8 @@ uniform sampler2D prev_radiosity_lighting;
 uniform sampler2D prev_radiosity_lighting_variance;
 uniform sampler2D prev_radiosity_motion;
 // Reference previous-frame reconnection history (prevReconnectionData).
-uniform sampler2D prev_scatter_reconnection0;
-uniform sampler2D prev_scatter_reconnection1;
-uniform sampler2D prev_scatter_reconnection2;
-uniform sampler2D prev_scatter_reconnection3;
-uniform sampler2D prev_scatter_reconnection4;
+// Packed as a 5-layer sampler2DArray (layers 0..4).
+uniform sampler2DArray prev_scatter_reconnections;
 
 uniform sampler2D prev_spec_slow_input;
 uniform sampler2D prev_spec_fast_input;

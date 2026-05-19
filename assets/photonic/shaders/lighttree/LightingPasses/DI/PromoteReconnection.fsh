@@ -13,11 +13,8 @@ layout(location = 4) out vec4 reconnection4_frag_out;
 
 //ph_required: uniform float viewWidth, viewHeight;
 
-uniform sampler2D scatter_reconnection0;
-uniform sampler2D scatter_reconnection1;
-uniform sampler2D scatter_reconnection2;
-uniform sampler2D scatter_reconnection3;
-uniform sampler2D scatter_reconnection4;
+// Packed 5-layer array replacing scatter_reconnection0..4.
+uniform sampler2DArray scatter_reconnections;
 
 uniform int ph_restir_active_checkerboard_field;
 
@@ -58,9 +55,9 @@ void main()
         return;
     }
 
-    reconnection0_frag_out = texelFetch(scatter_reconnection0, reservoirPos, 0);
-    reconnection1_frag_out = texelFetch(scatter_reconnection1, reservoirPos, 0);
-    reconnection2_frag_out = texelFetch(scatter_reconnection2, reservoirPos, 0);
-    reconnection3_frag_out = texelFetch(scatter_reconnection3, reservoirPos, 0);
-    reconnection4_frag_out = texelFetch(scatter_reconnection4, reservoirPos, 0);
+    reconnection0_frag_out = texelFetch(scatter_reconnections, ivec3(reservoirPos, 0), 0);
+    reconnection1_frag_out = texelFetch(scatter_reconnections, ivec3(reservoirPos, 1), 0);
+    reconnection2_frag_out = texelFetch(scatter_reconnections, ivec3(reservoirPos, 2), 0);
+    reconnection3_frag_out = texelFetch(scatter_reconnections, ivec3(reservoirPos, 3), 0);
+    reconnection4_frag_out = texelFetch(scatter_reconnections, ivec3(reservoirPos, 4), 0);
 }

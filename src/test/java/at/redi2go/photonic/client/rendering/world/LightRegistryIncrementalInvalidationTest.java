@@ -134,7 +134,7 @@ class LightRegistryIncrementalInvalidationTest {
    void createTracedLightsKeepsStableIndicesWhenMapIterationOrderChanges() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
       Vector3f lightA = new Vector3f(8.5F, 3.5F, 9.5F);
       Vector3f lightB = new Vector3f(2.5F, 9.5F, 4.5F);
@@ -163,7 +163,7 @@ class LightRegistryIncrementalInvalidationTest {
    void createTracedLightsTreatsBlockIdChangesAtStablePositionsAsDirty() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
       Vector3f lightPos = new Vector3f(8.5F, 3.5F, 9.5F);
 
@@ -181,7 +181,7 @@ class LightRegistryIncrementalInvalidationTest {
    void createTracedLightsCompactsRemovedLightsOutOfTheActiveList() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
       Vector3f lightA = new Vector3f(2.5F, 1.5F, 7.5F);
       Vector3f lightB = new Vector3f(8.5F, 3.5F, 9.5F);
@@ -209,7 +209,7 @@ class LightRegistryIncrementalInvalidationTest {
    void createTracedLightsKeepsStableIndicesForUnchangedUncappedTracking() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo bright = createTestLightInfo(100.0F);
       BlockLightInfo dim = createTestLightInfo(10.0F);
       Vector3f lightA = new Vector3f(2.5F, 1.5F, 7.5F);
@@ -245,7 +245,7 @@ class LightRegistryIncrementalInvalidationTest {
    void createTracedLightsAdmitsNewcomerWhenCapacityWasPreviouslySaturated() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo incumbent = createTestLightInfo(100.0F);
       BlockLightInfo slightUpgrade = createTestLightInfo(110.0F);
       Vector3f lightA = new Vector3f(0.5F, 0.5F, 0.5F);
@@ -270,7 +270,7 @@ class LightRegistryIncrementalInvalidationTest {
    void createTracedLightsPreservesAllTrackedLightsWhenAddingStrongerNewcomer() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo incumbent = createTestLightInfo(100.0F);
       BlockLightInfo stronger = createTestLightInfo(140.0F);
       Vector3f lightA = new Vector3f(0.5F, 0.5F, 0.5F);
@@ -295,7 +295,7 @@ class LightRegistryIncrementalInvalidationTest {
    void createTracedLightsTracksWeakLightsInsteadOfDroppingThemBeforeCapping() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo bright = createTestLightInfo(100.0F);
       BlockLightInfo weak = createTestLightInfo(0.01F);
       Vector3f lightA = new Vector3f(2.5F, 1.5F, 7.5F);
@@ -374,7 +374,7 @@ class LightRegistryIncrementalInvalidationTest {
    void syncTracedLightTreatsEquivalentLightDescriptorInstancesAsNoop() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo infoA = createTestLightInfo(100.0F);
       BlockLightInfo infoB = createTestLightInfo(100.0F);
       Vector3f lightPos = new Vector3f(8.5F, 3.5F, 9.5F);
@@ -395,7 +395,7 @@ class LightRegistryIncrementalInvalidationTest {
    void clearChunkLightsRemovesOnlyLightsInsideTheChunk() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
 
       positions.put(new Vector3f(1.5F, 1.5F, 1.5F), new TracedLightPosition(1, info));
@@ -421,9 +421,9 @@ class LightRegistryIncrementalInvalidationTest {
    void clearChunkLightsDropsLoadedMarkerAndPreservesOutsideLights() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       @SuppressWarnings("unchecked")
-      java.util.Set<Long> loadedChunks = (java.util.Set<Long>) getField(registry, "loadedLightChunks");
+      java.util.Set<Long> loadedChunks = (java.util.Set<Long>) getField(getField(registry, "tracing"), "loadedLightChunks");
       BlockLightInfo info = createTestLightInfo();
 
       positions.put(new Vector3f(1.5F, 1.5F, 1.5F), new TracedLightPosition(1, info));
@@ -443,7 +443,7 @@ class LightRegistryIncrementalInvalidationTest {
    void toLightInstanceArraySortsLightsDeterministicallyByPosition() throws Exception {
       LightRegistry registry = new LightRegistry(8, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo info = createTestLightInfo();
 
       positions.put(new Vector3f(8.5F, 3.5F, 9.5F), new TracedLightPosition(3, info));
@@ -462,7 +462,7 @@ class LightRegistryIncrementalInvalidationTest {
    void describeRecentChurnReportsLightChanges() throws Exception {
       LightRegistry registry = new LightRegistry(2, 4, 0.001F, 8, 64);
       @SuppressWarnings("unchecked")
-      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(registry, "tracedLightPositions");
+      Map<Vector3f, TracedLightPosition> positions = (Map<Vector3f, TracedLightPosition>) getField(getField(registry, "tracing"), "tracedLightPositions");
       BlockLightInfo bright = createTestLightInfo(100.0F);
       BlockLightInfo dim = createTestLightInfo(10.0F);
 
@@ -508,11 +508,12 @@ class LightRegistryIncrementalInvalidationTest {
       assertTrue(registry.getRegirActiveCellCount() >= 3);
       assertTrue(registry.getRegirActiveLightSlotCount() >= lights.length);
 
-      MemoryOwner cellCountMemory = (MemoryOwner) getField(registry, "regirCellCountMemory");
+      Object regir = getField(registry, "regir");
+      MemoryOwner cellCountMemory = (MemoryOwner) getField(regir, "regirCellCountMemory");
       IntBuffer cellCountBuffer = cellCountMemory.getMemory().getBuffer().asIntBuffer();
       assertTrue(cellCountBuffer.get(0) > 0, "First ReGIR cell should contain at least one candidate light");
 
-      MemoryOwner lightIndexMemory = (MemoryOwner) getField(registry, "regirLightIndexMemory");
+      MemoryOwner lightIndexMemory = (MemoryOwner) getField(regir, "regirLightIndexMemory");
       IntBuffer lightIndexBuffer = lightIndexMemory.getMemory().getBuffer().asIntBuffer();
       assertTrue(lightIndexBuffer.get(0) >= 0, "First populated ReGIR slot should point at a traced light index");
    }
@@ -536,7 +537,7 @@ class LightRegistryIncrementalInvalidationTest {
       invokeBuildSpatialGrid(registry, lights);
 
       @SuppressWarnings("unchecked")
-      Map<Long, java.util.List<Integer>> lightGrid = (Map<Long, java.util.List<Integer>>) getField(registry, "lightGrid");
+      Map<Long, java.util.List<Integer>> lightGrid = (Map<Long, java.util.List<Integer>>) getField(getField(registry, "regir"), "lightGrid");
       assertFalse(lightGrid.isEmpty(), "Active lights should still populate the grid");
       assertTrue(lightGrid.values().stream().anyMatch(indices -> indices.contains(1)),
          "Inactive placeholders should remain in spatial topology so toggling on does not require a grid rebuild");
@@ -570,7 +571,7 @@ class LightRegistryIncrementalInvalidationTest {
       invokeBuildSpatialGrid(registry, lights);
 
       @SuppressWarnings("unchecked")
-      Map<Long, java.util.List<Integer>> lightGrid = (Map<Long, java.util.List<Integer>>) getField(registry, "lightGrid");
+      Map<Long, java.util.List<Integer>> lightGrid = (Map<Long, java.util.List<Integer>>) getField(getField(registry, "regir"), "lightGrid");
       long nearbyButOutOfRawRadiusCell = invokeGridKey(2, 0, 0);
       java.util.List<Integer> candidates = lightGrid.get(nearbyButOutOfRawRadiusCell);
       assertTrue(candidates != null, "ReGIR spatial coverage should include cells reached by the jitter-expanded build volume");

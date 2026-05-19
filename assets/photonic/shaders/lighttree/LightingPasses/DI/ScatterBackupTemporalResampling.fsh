@@ -1,17 +1,9 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE 1
-
-// SSBO-budget gates: scatter_backup_run only reads reservoir/G-buffer textures
-// and the scatter sort/counter SSBOs; it does not sample ReGIR/RIS, robust-
-// gather floating coords, or the light data arrays directly (radiance is taken
-// from the reservoir's stored integrand and from G-buffer texturing). Gating
-// these declarations keeps the bindable-SSBO count under the NVIDIA fragment-
-// stage cap (~16) while preserving paper-faithful scatter_backup semantics.
-// Consumer helpers remain compilable via local stub arrays.
-#define PH_LIGHTTREE_OMIT_REGIR_BUFFERS
-#define PH_LIGHTTREE_OMIT_FLOATING_COORDS_BUFFER
-#define PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
+// SSBO/sampler inclusion is driven by lt_buffer_features.glsl based on the
+// PH_LIGHTTREE_ENABLE_*_STAGE flag above. Lean scatter passes opt out of
+// ReGIR/light-data/floating-coords SSBOs centrally — no per-shader overrides.
 
 in vec4 direction_vert_out;
 

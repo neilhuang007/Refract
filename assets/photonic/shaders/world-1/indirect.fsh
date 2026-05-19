@@ -3,4 +3,4 @@
 #define NETHER
 #define FSH
 
-#include "/photonics/lighting.glsl"
+#include "/photonics/indirect.glsl"

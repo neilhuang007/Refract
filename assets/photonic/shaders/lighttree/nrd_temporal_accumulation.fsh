@@ -35,6 +35,7 @@ layout(location = 6) out vec4 nrd_spec_reproj_confidence_out;// R8     .r = spec
 
 #include "/photonics/common/header.glsl"
 #include "/photonics/lighttree/nrd_common.glsl"
+#include "/photonics/lighttree/nrd_parameters.glsl"
 
 // -----------------------------------------------------------------------
 // Helper: convert pixel coords to UV
@@ -228,7 +229,7 @@ bool nrd_ta_history_sample_valid(vec4 historySample, vec4 currentSample) {
     // lamp-off events (typical luma ratios 4-10x) are caught before they
     // exponentially decay over RELAX_MAX_ACCUM_FRAME_NUM frames. This is a
     // local check; pixels whose lighting did not change are unaffected.
-    float maxAllowedLuma = max(currentLuma * 4.0f, currentLuma + 2.0f);
+    float maxAllowedLuma = max(currentLuma * NRD_ANTI_LAG_MULT, currentLuma + NRD_ANTI_LAG_ADDEND);
     return historyLuma <= maxAllowedLuma;
 }
 

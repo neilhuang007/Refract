@@ -1,6 +1,11 @@
 #ifndef PH_RESTIR_REGIR_INCLUDE
 #define PH_RESTIR_REGIR_INCLUDE
 
+// Buffer-feature manifest must be evaluated before any gated SSBO declaration.
+// Each .fsh sets its PH_LIGHTTREE_ENABLE_<STAGE>_STAGE identity flag prior to
+// reaching this include, and the manifest expands the appropriate USES_* flags.
+#include "/photonics/lighttree/lt_buffer_features.glsl"
+
 // ReGIR output buffer -- each cell has lightsPerCell fixed-position slots.
 // Stored as uvec2 matching the RIS tile buffer format:
 //   .x = lightIndex & RTXDI_LIGHT_INDEX_MASK  (ReGIR leaves RTXDI_LIGHT_COMPACT_BIT clear)
@@ -13,7 +18,7 @@
 const uint RTXDI_LIGHT_COMPACT_BIT = 0x80000000u;
 const uint RTXDI_LIGHT_INDEX_MASK  = 0x7FFFFFFFu;
 
-#ifndef PH_LIGHTTREE_OMIT_REGIR_BUFFERS
+#ifdef PH_LIGHTTREE_USES_REGIR
 layout(std430, binding = 5) restrict buffer ph_ris_buffer {
     uvec2 ph_ris_data[];
 };
@@ -70,7 +75,7 @@ uniform int   ph_regir_hash_normal_buckets;    // currently 6 (axis-aligned)
 uniform int   ph_regir_build_region_cells;     // build cube side (cells)
 
 // Hash-grid auxiliary buffers (read-only at lookup time; written by regir_build.glsl).
-#ifndef PH_LIGHTTREE_OMIT_REGIR_BUFFERS
+#ifdef PH_LIGHTTREE_USES_REGIR
 layout(std430, binding = 7) restrict readonly buffer ph_regir_cell_checksums {
     uint ph_regir_cell_checksum[];
 };

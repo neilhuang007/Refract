@@ -1,15 +1,9 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE 1
-
-// SSBO-budget gates: the scatter-temporal resolve pass does not sample ReGIR/RIS
-// (initial-candidate path) and does not consume robust-gather floating coords.
-// Gating these buffer declarations keeps the bindable-SSBO count under the
-// NVIDIA fragment-stage cap (~16) while preserving paper-faithful scatter_backup
-// semantics. Consumer helpers remain compilable via local stub arrays.
-#define PH_LIGHTTREE_OMIT_REGIR_BUFFERS
-#define PH_LIGHTTREE_OMIT_FLOATING_COORDS_BUFFER
-#define PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
+// SSBO/sampler inclusion is driven by lt_buffer_features.glsl based on the
+// PH_LIGHTTREE_ENABLE_*_STAGE flag above. Lean scatter passes opt out of
+// ReGIR/light-data/floating-coords SSBOs centrally — no per-shader overrides.
 
 in vec4 direction_vert_out;
 

@@ -149,11 +149,11 @@ ReconnectionData RestirDI_loadPreviousFrameReconnection(ivec2 pixelPosition)
     // prev_scatter_reconnection* are half-width when checkerboard is active; halve x.
     ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixelPosition, ph_restir_active_checkerboard_field);
     scatter_unpack_reconnection(
-        texelFetch(prev_scatter_reconnection0, reservoirPos, 0),
-        texelFetch(prev_scatter_reconnection1, reservoirPos, 0),
-        texelFetch(prev_scatter_reconnection2, reservoirPos, 0),
-        texelFetch(prev_scatter_reconnection3, reservoirPos, 0),
-        texelFetch(prev_scatter_reconnection4, reservoirPos, 0),
+        texelFetch(prev_scatter_reconnections, ivec3(reservoirPos, 0), 0),
+        texelFetch(prev_scatter_reconnections, ivec3(reservoirPos, 1), 0),
+        texelFetch(prev_scatter_reconnections, ivec3(reservoirPos, 2), 0),
+        texelFetch(prev_scatter_reconnections, ivec3(reservoirPos, 3), 0),
+        texelFetch(prev_scatter_reconnections, ivec3(reservoirPos, 4), 0),
         0.0f,
         0.0f,
         reconnection
@@ -219,11 +219,11 @@ ReconnectionData RestirDI_loadPreviousTemporalReconnection(ivec2 pixelPosition)
 
     ReconnectionData reconnection;
     scatter_unpack_reconnection(
-        texelFetch(temporal_gather_intermediate_reconnection0, reservoirPos, 0),
-        texelFetch(temporal_gather_intermediate_reconnection1, reservoirPos, 0),
-        texelFetch(temporal_gather_intermediate_reconnection2, reservoirPos, 0),
-        texelFetch(temporal_gather_intermediate_reconnection3, reservoirPos, 0),
-        texelFetch(temporal_gather_intermediate_reconnection4, reservoirPos, 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(reservoirPos, 0), 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(reservoirPos, 1), 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(reservoirPos, 2), 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(reservoirPos, 3), 0),
+        texelFetch(temporal_gather_intermediate_reconnections, ivec3(reservoirPos, 4), 0),
         0.0f,
         0.0f,
         reconnection

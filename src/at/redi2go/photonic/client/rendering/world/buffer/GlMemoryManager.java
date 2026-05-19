@@ -129,9 +129,16 @@ public class GlMemoryManager implements MemoryManager {
    public void download(Consumer<ByteBuffer> downloadContext) {
       this.ensureAllocated();
       GL15.glBindBuffer(this.target.target, this.id);
-      ByteBuffer downloadedBuffer = GL15.glMapBuffer(this.target.target, 35002, null);
-      downloadContext.accept(downloadedBuffer);
-      GL15.glUnmapBuffer(this.target.target);
+      ByteBuffer downloadedBuffer = GL15.glMapBuffer(this.target.target, GL15.GL_READ_WRITE, null);
+      if (downloadedBuffer == null) {
+         GL15.glBindBuffer(this.target.target, 0);
+         return;
+      }
+      try {
+         downloadContext.accept(downloadedBuffer);
+      } finally {
+         GL15.glUnmapBuffer(this.target.target);
+      }
       GL15.glBindBuffer(this.target.target, 0);
    }
 

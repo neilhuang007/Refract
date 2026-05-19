@@ -1,6 +1,10 @@
 #ifndef PH_LIGHTTREE_REUSE_INCLUDE
 #define PH_LIGHTTREE_REUSE_INCLUDE
 
+// Resolve PH_LIGHTTREE_USES_* feature flags from the pass identity flags set
+// by the calling .fsh. Must precede every gated SSBO declaration below.
+#include "/photonics/lighttree/lt_buffer_features.glsl"
+
 #include "/photonics/lighttree/restir_di_temporal_buffer_bridge.glsl"
 
 void SortReprojectedReservoirs_computeCellOffsets(ivec2 pixel);
@@ -8,11 +12,7 @@ void SortReprojectedReservoirs_sortCellData(uint scatterIndex);
 void MultiSortReprojectedReservoirs_computeCellOffsets(ivec2 pixel);
 void MultiSortReprojectedReservoirs_sortCellData(uint scatterIndex);
 
-#ifndef PH_LIGHTTREE_INITIAL_SAMPLE_COUNT_HELPERS
-#define PH_LIGHTTREE_INITIAL_SAMPLE_COUNT_HELPERS
-int lt_resolve_initial_num_environment_samples();
-int lt_resolve_initial_num_brdf_samples();
-#endif
+#include "/photonics/lighttree/lt_initial_sampling_mis.glsl"
 
 #include "/photonics/lighttree/nrd_material_id.glsl"
 
@@ -20,48 +20,9 @@ int lt_resolve_initial_num_brdf_samples();
 #define PH_LIGHTTREE_INITIAL_SAMPLES 1
 #endif
 
-// RTXDI initial-sampling MIS data: needed by the ReSTIR_DI initial-candidate
-// stage regardless of whether the scatter buffers are wired in, so it lives at
-// top level instead of inside the SCATTER_BUFFERS gate further below.
-#ifndef PH_LIGHTTREE_INITIAL_SAMPLING_MIS_DATA_DECLARED
-#define PH_LIGHTTREE_INITIAL_SAMPLING_MIS_DATA_DECLARED
-struct RTXDI_InitialSamplingMisData {
-    int numMisSamples;              // total candidates across all techniques
-    float localLightMisWeight;      // fraction of candidates from local-light sampling
-    float environmentMapMisWeight;  // fraction of candidates from environment sampling
-    float brdfMisWeight;            // fraction of candidates from BRDF sampling
-};
-#endif
+#include "/photonics/lighttree/lt_rng.glsl"
 
-uint lt_rng_hash(uint x)
-{
-    x ^= x >> 16u;
-    x *= 0x7feb352du;
-    x ^= x >> 15u;
-    x *= 0x846ca68bu;
-    x ^= x >> 16u;
-    return x;
-}
-
-RTXDI_RandomSamplerState lt_init_random_sampler(uvec2 pixelPosition, uint frameIndex, uint seed)
-{
-    RTXDI_RandomSamplerState rng;
-    uint mixed = pixelPosition.x * 0x1f123bb5u;
-    mixed ^= pixelPosition.y * 0x5f356495u;
-    mixed ^= frameIndex * 0x9e3779b9u;
-    mixed ^= seed * 0x85ebca6bu;
-    rng.seed = lt_rng_hash(mixed | 1u);
-    rng.index = 1u;
-    return rng;
-}
-
-float lt_next_random(inout RTXDI_RandomSamplerState rng)
-{
-    rng.seed = lt_rng_hash(rng.seed + 0x9e3779b9u);
-    return float(rng.seed & 0x00ffffffu) / float(0x01000000u);
-}
-
-#ifndef PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
+#ifdef PH_LIGHTTREE_USES_LIGHT_DATA
 layout(std430) restrict readonly buffer ph_global_light_cdf {
     float ph_global_light_cdf_data[];
 };
@@ -83,7 +44,7 @@ uniform int  ph_ris_tile_buffer_offset;   // RTXDI: risBufferSegmentParams.buffe
 // Reverse light mapping: current-frame index -> previous-frame index.
 // Inverse of ph_light_list_mapping (previous->current). Built in LightRegistry.java.
 // Returns -1 when no previous-frame equivalent exists for the current-frame light.
-#ifndef PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
+#ifdef PH_LIGHTTREE_USES_LIGHT_DATA
 layout(std430) restrict readonly buffer ph_light_reverse_mapping_buf {
     int ph_light_reverse_mapping[];
 };
@@ -327,7 +288,7 @@ uvec2 lt_temporal_scatter_decode_linear_index(uint linearIndex) {
 // Populated once at init by LightRegistry.fillNeighborOffsets(); never written per-frame.
 // neighborOffsetMask = lt_neighbor_offset_count - 1 = 8191.
 // SDK default: NeighborOffsetCount = 8192 (ReSTIRDI.h line 45).
-#ifndef PH_LIGHTTREE_OMIT_LIGHT_DATA_BUFFERS
+#ifdef PH_LIGHTTREE_USES_NEIGHBOR_OFFSETS
 layout(std430) restrict readonly buffer ph_neighbor_offsets {
     uint ph_neighbor_offsets_data[];
 };
@@ -450,349 +411,16 @@ vec3 lt_resolve_reuse_normal(vec3 geoNormal, vec3 mappedNormal) {
     return vec3(0.0f, 1.0f, 0.0f);
 }
 
-const float BACKGROUND_DEPTH = 0.0f;
+#include "/photonics/lighttree/lt_material.glsl"
+#include "/photonics/lighttree/lt_surface.glsl"
 
-struct RAB_Material {
-    vec3 diffuseAlbedo;
-    vec3 specularF0;
-    float roughness;
-    vec3 emissiveColor;
-};
-
-RAB_Material RAB_EmptyMaterial() {
-    return RAB_Material(vec3(0.0f), vec3(0.0f), 0.0f, vec3(0.0f));
-}
-
-vec3 GetDiffuseAlbedo(RAB_Material material) {
-    return material.diffuseAlbedo;
-}
-
-vec3 GetSpecularF0(RAB_Material material) {
-    return material.specularF0;
-}
-
-float GetRoughness(RAB_Material material) {
-    return material.roughness;
-}
-
-float RAB_GetRoughness(RAB_Material material) {
-    return GetRoughness(material);
-}
-
-vec3 RAB_GetEmissiveColor(RAB_Material material) {
-    return material.emissiveColor;
-}
-
-float lt_material_diffuse_probability_with_view(RAB_Material material, vec3 shadingNormal, vec3 viewDir);
-
-struct RAB_Surface {
-    vec3 worldPos;
-    vec3 viewDir;
-    vec3 normal;
-    vec3 geoNormal;
-    float viewDepth;
-    float diffuseProbability;
-    RAB_Material material;
-};
-
-RAB_Surface lt_load_surface(ivec2 uv);
-RAB_Surface lt_load_previous_surface(ivec2 uv);
-RAB_Surface RAB_EmptySurface();
-bool lt_materials_similar(RAB_Surface a, RAB_Surface b);
-bool lt_is_complex_surface(RAB_Surface surface);
 int lt_resolve_initial_num_environment_samples();
 int lt_resolve_initial_num_brdf_samples();
 int RAB_TranslateLightIndex(int lightIndex, bool previousFrame);
 bool RAB_AreMaterialsSimilar(RAB_Material a, RAB_Material b);
-RAB_Material lt_make_material(vec4 packedMaterial, vec3 diffuseAlbedoValue) {
-    vec3 diffuseAlbedo = clamp(diffuseAlbedoValue, vec3(0.0f), vec3(1.0f));
-    float roughness = clamp(packedMaterial.x, 0.0f, 1.0f);
-    float metallic = clamp(packedMaterial.y, 0.0f, 1.0f);
-    float emission = clamp(packedMaterial.z, 0.0f, 1.0f);
-    return RAB_Material(
-        diffuseAlbedo,
-        mix(vec3(0.04f), diffuseAlbedo, metallic),
-        roughness,
-        diffuseAlbedo * emission
-    );
-}
-
-RAB_Material lt_extract_material_at_uv(vec2 uv) {
-    vec4 spec = texture(specular, uv);
-    float smoothness = clamp(spec.r, 0.0f, 1.0f);
-    float roughness = clamp(1.0f - smoothness, 0.0f, 1.0f);
-    float metallic = clamp(spec.g, 0.0f, 1.0f);
-    float emission = clamp(spec.a, 0.0f, 1.0f);
-    return lt_make_material(
-        vec4(roughness, metallic, emission, 0.0f),
-        vec3(1.0f)
-    );
-}
-
-vec3 lt_surface_rt_pos(RAB_Surface surface) {
-    return surface.worldPos - world_offset;
-}
-
-RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geoNormalValue, vec3 shadingNormalValue, vec3 albedoValue, RAB_Material materialValue, vec3 cameraWorldPosition, float linearDepthValue) {
-    vec3 resolvedGeoNormal = lt_resolve_reuse_normal(geoNormalValue, geoNormalValue);
-    vec3 resolvedShadingNormal = lt_resolve_reuse_normal(geoNormalValue, shadingNormalValue);
-    vec3 viewDir = cameraWorldPosition - worldPosValue;
-    float viewDirLengthSq = dot(viewDir, viewDir);
-    viewDir = (viewDirLengthSq > 1e-6f) ? (viewDir * inversesqrt(viewDirLengthSq)) : vec3(0.0f, 0.0f, 1.0f);
-    materialValue.diffuseAlbedo = clamp(albedoValue, vec3(0.0f), vec3(1.0f));
-    materialValue.specularF0 = clamp(materialValue.specularF0, vec3(0.0f), vec3(1.0f));
-
-    return RAB_Surface(
-        worldPosValue,
-        viewDir,
-        resolvedShadingNormal,
-        resolvedGeoNormal,
-        linearDepthValue,
-        lt_material_diffuse_probability_with_view(materialValue, resolvedShadingNormal, viewDir),
-        materialValue
-    );
-}
-
-RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geoNormalValue, vec3 shadingNormalValue, vec3 albedoValue, RAB_Material materialValue, float linearDepthValue) {
-    return lt_make_surface(
-        worldPosValue,
-        geoNormalValue,
-        shadingNormalValue,
-        albedoValue,
-        materialValue,
-        world_camera_position,
-        linearDepthValue
-    );
-}
-
-RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geoNormalValue, vec3 shadingNormalValue, vec3 albedoValue, RAB_Material materialValue) {
-    return lt_make_surface(
-        worldPosValue,
-        geoNormalValue,
-        shadingNormalValue,
-        albedoValue,
-        materialValue,
-        ph_linear_view_depth(modelview_projection, worldPosValue)
-    );
-}
-
-RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geoNormalValue, vec3 shadingNormalValue, vec4 materialValue) {
-    return lt_make_surface(
-        worldPosValue,
-        geoNormalValue,
-        shadingNormalValue,
-        vec3(1.0f),
-        lt_make_material(materialValue, vec3(1.0f))
-    );
-}
-
-RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geoNormalValue, vec3 shadingNormalValue, vec3 albedoValue, vec4 materialValue, vec3 cameraWorldPosition, float linearDepthValue) {
-    return lt_make_surface(
-        worldPosValue,
-        geoNormalValue,
-        shadingNormalValue,
-        albedoValue,
-        lt_make_material(materialValue, albedoValue),
-        cameraWorldPosition,
-        linearDepthValue
-    );
-}
-
-RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geoNormalValue, vec3 shadingNormalValue, vec3 albedoValue, vec4 materialValue, float linearDepthValue) {
-    return lt_make_surface(
-        worldPosValue,
-        geoNormalValue,
-        shadingNormalValue,
-        albedoValue,
-        lt_make_material(materialValue, albedoValue),
-        linearDepthValue
-    );
-}
-
-RAB_Surface lt_make_surface(vec3 worldPosValue, vec3 geoNormalValue, vec3 shadingNormalValue) {
-    return lt_make_surface(worldPosValue, geoNormalValue, shadingNormalValue, vec3(1.0f), RAB_EmptyMaterial());
-}
-
-// RTXDI: RAB_EmptySurface() -- returns a zeroed surface with a well-defined up-normal.
-// Used to initialize temporalSurface before a valid temporal neighbor is found,
-// matching RTXDI TemporalResampling.hlsli line 69: RAB_Surface temporalSurface = RAB_EmptySurface();
-RAB_Surface lt_empty_surface() {
-    return RAB_Surface(
-        vec3(0.0f),
-        vec3(0.0f),
-        vec3(0.0f),
-        vec3(0.0f),
-        BACKGROUND_DEPTH,
-        0.0f,
-        RAB_EmptyMaterial()
-    );
-}
-
-RAB_Surface lt_current_surface() {
-    return lt_make_surface(
-        world_pos,
-        block_normal,
-        normal,
-        clamp(albedo, vec3(0.04f), vec3(1.0f)),
-        lt_extract_material_at_uv((vec2(tex_coord) + vec2(0.5f)) / vec2(viewWidth, viewHeight)),
-        ph_linear_view_depth(modelview_projection, world_pos)
-    );
-}
-
-RAB_Surface lt_load_surface(ivec2 uv) {
-    vec4 positionData = texelFetch(radiosity_position, uv, 0);
-    if (positionData.w == BACKGROUND_DEPTH) {
-        return RAB_EmptySurface();
-    }
-    return lt_make_surface(
-        positionData.xyz,
-        texelFetch(radiosity_normal, uv, 0).xyz,
-        texelFetch(radiosity_mapped_normal, uv, 0).xyz,
-        clamp(texelFetch(radiosity_albedo, uv, 0).rgb, vec3(0.04f), vec3(1.0f)),
-        texelFetch(radiosity_material, uv, 0),
-        positionData.w
-    );
-}
-
-RAB_Surface lt_load_previous_surface(ivec2 uv) {
-    vec4 positionData = texelFetch(prev_radiosity_position, uv, 0);
-    if (positionData.w == BACKGROUND_DEPTH) {
-        return RAB_EmptySurface();
-    }
-    return lt_make_surface(
-        positionData.xyz,
-        texelFetch(prev_radiosity_normal, uv, 0).xyz,
-        texelFetch(prev_radiosity_mapped_normal, uv, 0).xyz,
-        clamp(texelFetch(prev_radiosity_albedo, uv, 0).rgb, vec3(0.04f), vec3(1.0f)),
-        texelFetch(prev_radiosity_material, uv, 0),
-        previous_world_camera_position,
-        positionData.w
-    );
-}
-
-float rtxdi_surface_linear_depth(RAB_Surface surface, mat4 modelViewProjection) {
-    return surface.viewDepth;
-}
-
-bool RAB_IsSurfaceValid(RAB_Surface surface);
-vec3 RAB_GetSurfaceNormal(RAB_Surface surface);
-float RAB_GetSurfaceLinearDepth(RAB_Surface surface);
-RAB_Material RAB_GetMaterial(RAB_Surface surface);
-
-// ============================================================================
-// Scatter Temporal Resampling: Reconnection Data
-// ============================================================================
-// =====================================================================
-// Reference-parity ReconnectionData (ReconnectionData.slang:89-166).
-// Field order, names, types and default values MUST match the Slang
-// reference 1:1. DO NOT add photonics-specific fields here -- those belong
-// on the per-pixel reservoir header or the surface identity texture, NOT on
-// the reconnection payload.
-// =====================================================================
-struct HitInfo {
-    vec3  worldPos;    // Object/world-space hit position
-    float viewDepth;   // Linear view depth (for bilateral tests)
-    uint  faceId;      // Dominant signed block face identifier
-    uint  materialId;   // Quantized local material/light identity.
-};
-
-HitInfo HitInfo_empty() {
-    HitInfo h;
-    h.worldPos = vec3(0.0f);
-    h.viewDepth = 0.0f;
-    h.faceId = 0u;
-    h.materialId = 0u;
-    return h;
-}
 
 
-#ifndef PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
-#define PH_LIGHTTREE_SHIFTED_PATH_DATA_DECLARED
-struct ShiftedPathData {
-    HitInfo primaryHit;
-    vec2 fractionalPixel;
-    vec2 lensSample;
-    vec3 firstRayDir;
-    float subPixelJacobian;
-    float lensVertexJacobian;
-    float secondaryPathJacobian;
-    vec3 radiance;
-};
-#endif
-
-// Reference-parity ``ReconnectionData`` (ReconnectionData.slang:89-166).
-struct ReconnectionData {
-    // Some camera / film parameters used generally.
-    vec2  subPixel;                     // ReconnectionData.slang:92
-    vec2  lensSample;                   // ReconnectionData.slang:93
-    float time;                         // ReconnectionData.slang:94
-
-    // The only vertex that contributes actual emission is the final
-    // vertex, i.e. the path length is equivalent to the index of the
-    // light vertex.
-    uint  pathLength;                   // ReconnectionData.slang:98
-
-    // Information about the first vertex.
-    HitInfo firstHit;                   // ReconnectionData.slang:101 (HitInfo)
-    uint  firstBSDFComponentType;       // ReconnectionData.slang:102 (NOTE camelcase)
-    vec3  firstWi;                      // ReconnectionData.slang:103 (toward camera)
-
-    // Information about the second vertex.
-    HitInfo secondHit;                  // ReconnectionData.slang:106 (HitInfo)
-    uint  secondBSDFComponentType;       // ReconnectionData.slang:107 (NOTE camelcase)
-    vec3  secondWo;                      // ReconnectionData.slang:108 (outgoing at x2)
-
-    bool  transmissionEvent;             // ReconnectionData.slang:110
-
-    // Light-side book-keeping for NEE vs BSDF resolution at the shift.
-    bool  lightIsNEE;                    // ReconnectionData.slang:113
-    bool  lightIsDistant;                // ReconnectionData.slang:114
-    float lightPdf;                      // ReconnectionData.slang:115
-
-    // Jacobians carried by every shift map.
-    float subPixelJacobian;              // ReconnectionData.slang:119
-    float lensVertexJacobian;            // ReconnectionData.slang:120
-    float secondaryPathJacobian;         // ReconnectionData.slang:121
-    vec3  irradiance;                    // ReconnectionData.slang:122
-    vec3  earlyThroughput;               // ReconnectionData.slang:123 (prefix thp)
-};
-
-ReconnectionData ReconnectionData_init() {
-    ReconnectionData d;
-    // ReconnectionData.slang:127-129 -- camera / film parameters.
-    d.subPixel = vec2(0.5f, 0.5f);
-    d.lensSample = vec2(0.0f, 0.0f);            // Reference: float2(0, 0) (NOT 0.5).
-    d.time = 0.0f;
-
-    // ReconnectionData.slang:131.
-    d.pathLength = 0u;
-
-    // ReconnectionData.slang:133-135 -- first vertex.
-    d.firstHit = HitInfo_empty();
-    d.firstBSDFComponentType = 0u;
-    d.firstWi = vec3(0.0f, 0.0f, 0.0f);         // Reference: float3(0, 0, 0).
-
-    // ReconnectionData.slang:137-139 -- second vertex.
-    d.secondHit = HitInfo_empty();
-    d.secondBSDFComponentType = 0u;
-    d.secondWo = vec3(0.0f, 0.0f, 0.0f);
-
-    // ReconnectionData.slang:141 -- transmission flag.
-    d.transmissionEvent = false;
-
-    // ReconnectionData.slang:143-145 -- NEE / distant / lightPdf.
-    d.lightIsNEE = false;
-    d.lightIsDistant = false;
-    d.lightPdf = 0.0f;
-
-    // ReconnectionData.slang:147-151 -- Jacobians + radiance carriers.
-    d.subPixelJacobian = 1.0f;
-    d.lensVertexJacobian = 1.0f;
-    d.secondaryPathJacobian = 1.0f;
-    d.irradiance = vec3(0.0f, 0.0f, 0.0f);
-    d.earlyThroughput = vec3(1.0f, 1.0f, 1.0f); // Reference: float3(1, 1, 1), NOT 0.
-    return d;
-}
+#include "/photonics/lighttree/lt_path_state.glsl"
 
 #include "/photonics/lighttree/restir_di_reconnection_surface.glsl"
 
@@ -827,25 +455,7 @@ const uint SCATTER_RECONNECTION_FACE_MASK = 0x7u;
 const uint SCATTER_RECONNECTION_FIRST_FACE_SHIFT = 24u;
 const uint SCATTER_RECONNECTION_SECOND_FACE_SHIFT = 27u;
 
-float scatter_pack_half2(vec2 value) {
-    return uintBitsToFloat(packHalf2x16(value));
-}
-
-vec2 scatter_unpack_half2(float packedValue) {
-    return unpackHalf2x16(floatBitsToUint(packedValue));
-}
-
-uint scatter_pack_reconnection_time_bits(float time)
-{
-    float clampedTime = clamp(time, 0.0f, 1.0f);
-    return min(uint(round(clampedTime * float(SCATTER_RECONNECTION_TIME_MASK))), SCATTER_RECONNECTION_TIME_MASK);
-}
-
-float scatter_unpack_reconnection_time_bits(uint packedMeta)
-{
-    return float((packedMeta >> SCATTER_RECONNECTION_TIME_SHIFT) & SCATTER_RECONNECTION_TIME_MASK)
-        / float(SCATTER_RECONNECTION_TIME_MASK);
-}
+#include "/photonics/lighttree/lt_scatter_packing.glsl"
 
 uint lt_path_sample_proposal_family(uint pathSample);
 

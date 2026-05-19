@@ -1,6 +1,10 @@
 #ifndef PHOTONICS_RESTIR_DI_TEMPORAL_BUFFER_BRIDGE_GLSL
 #define PHOTONICS_RESTIR_DI_TEMPORAL_BUFFER_BRIDGE_GLSL
 
+// Resolve PH_LIGHTTREE_USES_* feature flags from the pass identity flags set
+// by the calling .fsh. Must precede every gated SSBO declaration below.
+#include "/photonics/lighttree/lt_buffer_features.glsl"
+
 #if defined(PH_LIGHTTREE_ENABLE_TEMPORAL_REPROJECT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE) || defined(PH_LIGHTTREE_ENABLE_TEMPORAL_BACKUP_STAGE)
 #define PH_LIGHTTREE_ENABLE_CURRENT_TEMPORAL_COUNTER_BUFFERS 1
 #endif
@@ -27,7 +31,7 @@
 
 #ifndef PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED
 #define PH_LIGHTTREE_FLOATING_COORDS_BUFFER_DECLARED
-#ifndef PH_LIGHTTREE_OMIT_FLOATING_COORDS_BUFFER
+#ifdef PH_LIGHTTREE_USES_FLOATING_COORDS
 layout(std430) restrict buffer floatingCoords {
     vec2 floatingCoordsData[];
 };

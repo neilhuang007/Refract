@@ -1,6 +1,9 @@
 #version 430
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
 #define PH_LIGHTTREE_ENABLE_MULTI_TEMPORAL_SCATTER_STAGE 1
+// SSBO/sampler inclusion is driven by lt_buffer_features.glsl based on the
+// PH_LIGHTTREE_ENABLE_*_STAGE flag above. Lean scatter passes opt out of
+// ReGIR/light-data/floating-coords SSBOs centrally — no per-shader overrides.
 
 in vec4 direction_vert_out;
 

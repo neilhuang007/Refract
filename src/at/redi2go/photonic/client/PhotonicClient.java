@@ -9,6 +9,8 @@ public class PhotonicClient implements ClientModInitializer {
       PhotonicsStorage.applySystemPropertyOverrides();
       PhotonicsConfig.reloadConfig();
       PhotonicsConfigWatchThread.INSTANCE.start();
-      ShaderAutomation.initialize();
+      if (Photonic.automationEnabled()) {
+         ShaderAutomation.initialize();
+      }
    }
 }

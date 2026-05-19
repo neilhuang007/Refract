@@ -18,10 +18,13 @@ import net.minecraft.client.MinecraftClient;
 import org.joml.Vector2f;
 import org.joml.Vector4f;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL44;
+import org.lwjgl.opengl.GL45;
 
 public class ColorFramebuffer extends GlFramebuffer {
    private final Supplier<Vector2f> resolutionSupplier;
@@ -39,6 +42,10 @@ public class ColorFramebuffer extends GlFramebuffer {
    private final List<String> attachmentNames = new ArrayList<>();
    private Map<String, ColorFramebuffer.FramebufferAttachment> readAttachment = new HashMap<>();
    private Map<String, ColorFramebuffer.FramebufferAttachment> writeAttachment = new HashMap<>();
+   /** Ordered list of (names[], internalFormat, interpolate) for each layered group. Used to recreate on resize. */
+   private final List<LayeredGroupSpec> layeredGroupSpecs = new ArrayList<>();
+
+   private record LayeredGroupSpec(String[] names, String internalFormat, boolean interpolate) {}
 
    public ColorFramebuffer(float scale) {
       this(() -> new Vector2f(MinecraftClient.getInstance().getWindow().getFramebufferWidth(), MinecraftClient.getInstance().getWindow().getFramebufferHeight()), scale);
@@ -56,28 +63,70 @@ public class ColorFramebuffer extends GlFramebuffer {
       this.swap();
    }
 
+   /**
+    * Creates a group of {@code names.length} attachments backed by a single RGBA32F texture array on each
+    * side of the double buffer.  All 5 layers share one GL texture id per side.  Binding the attachment for
+    * any name in the group returns the shared array texture id; the layer index is encoded in
+    * {@link FramebufferAttachment#getArrayLayer()}.
+    */
+   public void createLayeredAttachmentGroup(String[] names, String internalFormat, boolean interpolate) {
+      int layerCount = names.length;
+      int readSharedId  = GlStateManager._genTexture();
+      int writeSharedId = GlStateManager._genTexture();
+      initArrayTexture(readSharedId,  internalFormat, interpolate, this.width, this.height, layerCount);
+      initArrayTexture(writeSharedId, internalFormat, interpolate, this.width, this.height, layerCount);
+      for (int i = 0; i < layerCount; i++) {
+         String name = names[i];
+         this.attachmentNames.add(name);
+         this.readAttachment.put(name,  new ColorFramebuffer.FramebufferAttachment(this, this.width, this.height, internalFormat, interpolate, i, readSharedId));
+         this.writeAttachment.put(name, new ColorFramebuffer.FramebufferAttachment(this, this.width, this.height, internalFormat, interpolate, i, writeSharedId));
+      }
+      // Record spec so we can recreate array textures on resize.
+      this.layeredGroupSpecs.add(new LayeredGroupSpec(names.clone(), internalFormat, interpolate));
+      this.swap();
+   }
+
+   private static void initArrayTexture(int texId, String internalFormat, boolean interpolate, int w, int h, int layers) {
+      if (w <= 0 || h <= 0) return;
+      GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, texId);
+      GL45.glTextureStorage3D(texId, 1, GL.pGetInternalFormat(internalFormat), w, h, layers);
+      GL.logGlError("ColorFramebuffer.initArrayTexture(format=" + internalFormat + ", size=" + w + "x" + h + "x" + layers + ")");
+      int filter = interpolate ? GL11.GL_LINEAR : GL11.GL_NEAREST;
+      GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MIN_FILTER, filter);
+      GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MAG_FILTER, filter);
+      GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+      GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+      GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, 0);
+   }
+
    public void bind() {
       this.updatePerFrame();
       this.previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-      GL30.glBindFramebuffer(36160, this.getId());
+      GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.getId());
       int viewportWidth = this.resolveViewportWidth();
       if (this.viewportSide != -1) {
          int x = this.viewportSide * viewportWidth;
-         GL11.glViewport(x, 0, viewportWidth, this.height);
+         GlStateManager._viewport(x, 0, viewportWidth, this.height);
       } else {
-         GL11.glViewport(0, 0, viewportWidth, this.height);
+         GlStateManager._viewport(0, 0, viewportWidth, this.height);
       }
 
       int i = 0;
 
       for (String name : this.attachmentNames) {
-         int texture = name == null ? 0 : this.writeAttachment.get(name).getTextureId();
+         ColorFramebuffer.FramebufferAttachment att = name == null ? null : this.writeAttachment.get(name);
+         int texture = att == null ? 0 : att.getTextureId();
          if (!Objects.equals(name, "depth")) {
-            GL30.glFramebufferTexture2D(36160, 36064 + i, 3553, texture, 0);
-            GL.logGlError("ColorFramebuffer.glFramebufferTexture2D(color name=" + name + ", index=" + i + ")");
+            if (att != null && att.isLayered()) {
+               GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0 + i, texture, 0, att.getArrayLayer());
+               GL.logGlError("ColorFramebuffer.glFramebufferTextureLayer(color name=" + name + ", layer=" + att.getArrayLayer() + ", index=" + i + ")");
+            } else {
+               GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0 + i, GL11.GL_TEXTURE_2D, texture, 0);
+               GL.logGlError("ColorFramebuffer.glFramebufferTexture2D(color name=" + name + ", index=" + i + ")");
+            }
             i++;
          } else {
-            GL30.glFramebufferTexture2D(36160, 36096, 3553, texture, 0);
+            GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_DEPTH_ATTACHMENT, GL11.GL_TEXTURE_2D, texture, 0);
             GL.logGlError("ColorFramebuffer.glFramebufferTexture2D(depth name=" + name + ")");
          }
       }
@@ -93,23 +142,23 @@ public class ColorFramebuffer extends GlFramebuffer {
       buffer.limit(drawBufferCount);
       GL20.glDrawBuffers(buffer);
       GL.logGlError("ColorFramebuffer.glDrawBuffers(count=" + drawBufferCount + ")");
-      int status = GL30.glCheckFramebufferStatus(36160);
-      if (status != 36053) {
+      int status = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER);
+      if (status != GL30.GL_FRAMEBUFFER_COMPLETE) {
          throw new RuntimeException("Framebuffer in invalid state: " + status);
       }
 
       if (this.needsClear) {
          this.needsClear = false;
-         GL11.glClearColor(0, 0, 0, 0);
-         GL11.glClear(16640);
+         GlStateManager._clearColor(0f, 0f, 0f, 0f);
+         GlStateManager._clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, false);
       }
    }
 
    public void unbind() {
-      GL30.glBindFramebuffer(36160, this.previousDrawFramebuffer);
+      GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, this.previousDrawFramebuffer);
       int width = MinecraftClient.getInstance().getWindow().getFramebufferWidth();
       int height = MinecraftClient.getInstance().getWindow().getFramebufferHeight();
-      GL11.glViewport(0, 0, width, height);
+      GlStateManager._viewport(0, 0, width, height);
       this.previousDrawFramebuffer = 0;
    }
 
@@ -126,12 +175,20 @@ public class ColorFramebuffer extends GlFramebuffer {
    public void clear(Vector4f clearColor) {
       this.updatePerFrame();
 
+      for (LayeredGroupSpec spec : this.layeredGroupSpecs) {
+         FramebufferAttachment leader = this.writeAttachment.get(spec.names()[0]);
+         if (leader != null) {
+            leader.clearArray(clearColor);
+         }
+      }
       for (String name : this.attachmentNames) {
          if (Objects.equals(name, "depth")) {
             continue;
          }
-
-         this.writeAttachment.get(name).clear(clearColor);
+         FramebufferAttachment att = this.writeAttachment.get(name);
+         if (att != null && !att.isLayered()) {
+            att.clear(clearColor);
+         }
       }
 
       this.needsClear = false;
@@ -174,9 +231,28 @@ public class ColorFramebuffer extends GlFramebuffer {
             this.realHeight = rawH;
             this.width = (int) Math.max(rawW * this.scale, 1.0F);
             this.height = (int) Math.max(rawH * this.scale, 1.0F);
+            // Recreate layered group array textures before per-attachment init so that
+            // group-leader attachments have a fresh shared texture id ready.
+            for (LayeredGroupSpec spec : this.layeredGroupSpecs) {
+               reinitLayeredGroup(spec, this.readAttachment, this.width, this.height);
+               reinitLayeredGroup(spec, this.writeAttachment, this.width, this.height);
+            }
             this.readAttachment.values().forEach(attachment -> attachment.init(this.width, this.height));
             this.writeAttachment.values().forEach(attachment -> attachment.init(this.width, this.height));
             this.needsClear = true;
+         }
+      }
+   }
+
+   private static void reinitLayeredGroup(LayeredGroupSpec spec, Map<String, FramebufferAttachment> side, int w, int h) {
+      int layerCount = spec.names().length;
+      // Allocate a new shared texture id and propagate it to all layers in this side.
+      int newSharedId = GlStateManager._genTexture();
+      initArrayTexture(newSharedId, spec.internalFormat(), spec.interpolate(), w, h, layerCount);
+      for (String name : spec.names()) {
+         FramebufferAttachment att = side.get(name);
+         if (att != null) {
+            att.setSharedArrayTextureId(newSharedId);
          }
       }
    }
@@ -238,12 +314,25 @@ public class ColorFramebuffer extends GlFramebuffer {
    protected void destroyInternal() {
       super.destroyInternal();
 
-      for (ColorFramebuffer.FramebufferAttachment attachment : this.readAttachment.values()) {
-         attachment.free();
+      for (LayeredGroupSpec spec : this.layeredGroupSpecs) {
+         FramebufferAttachment readLeader = this.readAttachment.get(spec.names()[0]);
+         FramebufferAttachment writeLeader = this.writeAttachment.get(spec.names()[0]);
+         if (readLeader != null) {
+            readLeader.free();
+         }
+         if (writeLeader != null) {
+            writeLeader.free();
+         }
       }
-
-      for (ColorFramebuffer.FramebufferAttachment attachment : this.writeAttachment.values()) {
-         attachment.free();
+      for (FramebufferAttachment att : this.readAttachment.values()) {
+         if (!att.isLayered()) {
+            att.free();
+         }
+      }
+      for (FramebufferAttachment att : this.writeAttachment.values()) {
+         if (!att.isLayered()) {
+            att.free();
+         }
       }
    }
 
@@ -287,35 +376,81 @@ public class ColorFramebuffer extends GlFramebuffer {
       private final ColorFramebuffer framebuffer;
       private final String internalFormat;
       private final boolean interpolate;
+      /** -1 for non-layered; >= 0 for the layer index within the shared array texture. */
+      private final int arrayLayer;
+      /** The shared array texture id for layered attachments (= textureId for layer 0). */
+      private int sharedArrayTextureId;
 
       private FramebufferAttachment(ColorFramebuffer framebuffer, int width, int height, String internalFormat, boolean interpolate) {
-         super(new int[]{width, height}, GL.pGetInternalFormat(internalFormat), 3553, GL11.glGenTextures(), false);
+         super(new int[]{width, height}, GL.pGetInternalFormat(internalFormat), GL11.GL_TEXTURE_2D, GlStateManager._genTexture(), false);
          this.framebuffer = framebuffer;
          this.internalFormat = internalFormat;
          this.interpolate = interpolate;
+         this.arrayLayer = -1;
+         this.sharedArrayTextureId = 0;
          this.init(width, height);
       }
 
+      /** Layered constructor: shares a pre-allocated array texture. Does NOT allocate a new texture. */
+      private FramebufferAttachment(ColorFramebuffer framebuffer, int width, int height, String internalFormat, boolean interpolate, int arrayLayer, int sharedArrayTextureId) {
+         super(new int[]{width, height}, GL.pGetInternalFormat(internalFormat), GL30.GL_TEXTURE_2D_ARRAY, sharedArrayTextureId, false);
+         this.framebuffer = framebuffer;
+         this.internalFormat = internalFormat;
+         this.interpolate = interpolate;
+         this.arrayLayer = arrayLayer;
+         this.sharedArrayTextureId = sharedArrayTextureId;
+         // No init: the caller already called initArrayTexture for the shared texture.
+      }
+
+      public boolean isLayered() {
+         return this.arrayLayer >= 0;
+      }
+
+      public int getArrayLayer() {
+         return this.arrayLayer;
+      }
+
+      /** For layered attachments, update the shared texture id (called on resize). */
+      private void setSharedArrayTextureId(int newId) {
+         // Delete old shared id only from the layer-0 attachment (layer leader).
+         if (this.arrayLayer == 0 && this.sharedArrayTextureId != 0) {
+            GL11.glDeleteTextures(this.sharedArrayTextureId);
+         }
+         this.sharedArrayTextureId = newId;
+         this.textureId = newId;
+      }
+
+      @Override
+      public int getTextureId() {
+         return this.isLayered() ? this.sharedArrayTextureId : this.textureId;
+      }
+
       private void init(int width, int height) {
+         if (this.isLayered()) {
+            // Layered attachments are managed via setSharedArrayTextureId; nothing to do here.
+            this.dimensions[0] = width;
+            this.dimensions[1] = height;
+            return;
+         }
          if (width > 0 && height > 0) {
             this.dimensions[0] = width;
             this.dimensions[1] = height;
-            GL11.glDeleteTextures(this.textureId);
-            this.textureId = GL11.glGenTextures();
-            GL11.glBindTexture(3553, this.getTextureId());
-            GL42.glTexStorage2D(3553, 1, GL.pGetInternalFormat(this.internalFormat), width, height);
+            GlStateManager._deleteTexture(this.textureId);
+            this.textureId = GlStateManager._genTexture();
+            GlStateManager._bindTexture(this.getTextureId());
+            GL42.glTexStorage2D(GL11.GL_TEXTURE_2D, 1, GL.pGetInternalFormat(this.internalFormat), width, height);
             GL.logGlError("ColorFramebuffer.FramebufferAttachment.glTexStorage2D(format=" + this.internalFormat + ", size=" + width + "x" + height + ")");
-            int interpolateFlag = this.interpolate ? 9729 : 9728;
-            GL11.glTexParameteri(3553, 10241, interpolateFlag);
-            GL11.glTexParameteri(3553, 10240, interpolateFlag);
-            GL11.glTexParameteri(3553, 10242, 33071);
-            GL11.glTexParameteri(3553, 10243, 33071);
+            int interpolateFlag = this.interpolate ? GL11.GL_LINEAR : GL11.GL_NEAREST;
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, interpolateFlag);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, interpolateFlag);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
          }
       }
 
       @Override
       public void bind() {
-         GlStateManager._activeTexture(33984 + this.getTextureUnit());
+         GlStateManager._activeTexture(GL13.GL_TEXTURE0 + this.getTextureUnit());
          GlStateManager._bindTexture(this.getTextureId());
       }
 
@@ -329,10 +464,18 @@ public class ColorFramebuffer extends GlFramebuffer {
          throw new UnsupportedOperationException();
       }
 
+      /** Clear a non-layered attachment. */
       private void clear(Vector4f clearColor) {
          FloatBuffer clearValue = this.buildClearValue(clearColor);
          GL44.glClearTexImage(this.getTextureId(), 0, this.getClearFormat(), GL11.GL_FLOAT, clearValue);
          GL.logGlError("ColorFramebuffer.FramebufferAttachment.glClearTexImage(format=" + this.internalFormat + ")");
+      }
+
+      /** Clear the entire array texture backing this layered group (all layers at once). */
+      private void clearArray(Vector4f clearColor) {
+         FloatBuffer clearValue = this.buildClearValue(clearColor);
+         GL44.glClearTexImage(this.sharedArrayTextureId, 0, this.getClearFormat(), GL11.GL_FLOAT, clearValue);
+         GL.logGlError("ColorFramebuffer.FramebufferAttachment.glClearTexImage(array, format=" + this.internalFormat + ")");
       }
 
       private int getClearFormat() {
@@ -363,7 +506,7 @@ public class ColorFramebuffer extends GlFramebuffer {
 
       @Override
       public void free() {
-         GL11.glDeleteTextures(this.textureId);
+         GlStateManager._deleteTexture(this.textureId);
       }
    }
 }

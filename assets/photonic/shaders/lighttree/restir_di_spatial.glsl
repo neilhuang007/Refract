@@ -109,11 +109,11 @@ ReconnectionData SpatialResampling_load_input_reconnection(
     // scatter_reconnection* are half-width when checkerboard is active; halve x.
     ivec2 reservoirPos = RTXDI_PixelPosToReservoirPos(pixel, ph_restir_active_checkerboard_field);
     scatter_unpack_reconnection(
-        texelFetch(scatter_reconnection0, reservoirPos, 0),
-        texelFetch(scatter_reconnection1, reservoirPos, 0),
-        texelFetch(scatter_reconnection2, reservoirPos, 0),
-        texelFetch(scatter_reconnection3, reservoirPos, 0),
-        texelFetch(scatter_reconnection4, reservoirPos, 0),
+        texelFetch(scatter_reconnections, ivec3(reservoirPos, 0), 0),
+        texelFetch(scatter_reconnections, ivec3(reservoirPos, 1), 0),
+        texelFetch(scatter_reconnections, ivec3(reservoirPos, 2), 0),
+        texelFetch(scatter_reconnections, ivec3(reservoirPos, 3), 0),
+        texelFetch(scatter_reconnections, ivec3(reservoirPos, 4), 0),
         0.0f,
         0.0f,
         reconnection

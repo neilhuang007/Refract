@@ -1,16 +1,16 @@
 package at.redi2go.photonic.client;
 
 import at.redi2go.photonic.client.rendering.opengl.objects.TextureObject;
-import at.redi2go.photonic.client.rendering.opengl.rendering.RegirComputeProgram;
 import at.redi2go.photonic.client.rendering.util.BufferUtils;
 import at.redi2go.photonic.client.rendering.opengl.rendering.renderers.MainRenderer;
 import at.redi2go.photonic.client.rendering.world.LightRegistry;
 import at.redi2go.photonic.client.rendering.world.WorldRegistry;
+import at.redi2go.photonic.client.ShaderAutomationImageUtils;
+import at.redi2go.photonic.client.ShaderAutomationValidators;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -41,10 +41,8 @@ public final class ShaderAutomation {
    private static final int RTXDI_PACKED_DI_RESERVOIR_AGE_SHIFT = 16;
    private static final int RTXDI_PACKED_DI_RESERVOIR_MAX_AGE = 0xff;
    private static final int RTXDI_PACKED_DI_RESERVOIR_MAX_DISTANCE = (1 << (RTXDI_PACKED_DI_RESERVOIR_DISTANCE_CHANNEL_BITS - 1)) - 1;
-   private static final int RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED = 1;
    private static final int RTXDI_TILE_SIZE_IN_PIXELS = 16;
    private static final float REGIR_CELL_SIZE = 32.0f;
-   private static final int REGIR_HASH_MAX_PROBES = 128;
    private static final double FIREFLY_LUMA_THRESHOLD = 16.0;
    private static final double SEVERE_FIREFLY_LUMA_THRESHOLD = 64.0;
    private static final double WHOLE_LIGHT_FLASH_DIRECT_DROP_THRESHOLD = 0.35;
@@ -72,11 +70,6 @@ public final class ShaderAutomation {
    private final boolean autoStop;
    private final boolean releaseMouse;
    private final boolean fullscreen;
-   private final String cameraMotionMode;
-   private final int cameraMotionStartActiveTick;
-   private final int cameraMotionPeriodTicks;
-   private final float cameraYawAmplitudeDegrees;
-   private final float cameraPitchAmplitudeDegrees;
    private final int motionRepeatSettleTicks;
    private final double maxMotionRepeatDirectDeltaAvg;
    private final double maxMotionRepeatDirectDeltaMax;
@@ -89,16 +82,12 @@ public final class ShaderAutomation {
    private final double maxIndirectLinearOverbrightFraction;
    private final double maxIndirectLinearSevereFireflyFraction;
    private final double maxIndirectRawLinearOverbrightFraction;
-   private final int worldPrepActiveTick;
    private final int stableSceneSettleTicks;
    private final int stableSceneBlendRegionThreshold;
    private final double stableSceneBlendFactorThreshold;
-   private final long[] timeOfDaySequence;
-   private final int timeOfDayStartActiveTick;
-   private final int timeOfDayStepTicks;
-   private final int blockToggleStartActiveTick;
-   private final int blockTogglePeriodTicks;
-   private final int blockToggleCount;
+   private final ShaderAutomationWorldController worldController;
+   private final ShaderAutomationCameraController cameraController;
+   private final ShaderAutomationFrameMetrics metrics = new ShaderAutomationFrameMetrics();
    private int ticksElapsed = 0;
    private int activeTicks = 0;
    private int renderedFrames = 0;
@@ -112,112 +101,7 @@ public final class ShaderAutomation {
    private int capturesTaken = 0;
    private int litCapturesTaken = 0;
    private int lastCapturedActiveTick = Integer.MIN_VALUE;
-   private int cameraMotionAppliedTicks = 0;
    private int firstLightingSignalActiveTick = -1;
-   private double directMaxLuma = 0.0;
-   private double directSoftMaxLuma = 0.0;
-   private double directDenoisedMaxLuma = 0.0;
-   private double directRawMaxLuma = 0.0;
-   private double lightingBufferMaxLuma = 0.0;
-   private double stageLightingMaxLuma = 0.0;
-   private double stageIndirectMaxLuma = 0.0;
-   private double handheldMaxLuma = 0.0;
-   private double indirectMaxLuma = 0.0;
-   private double indirectRawMaxLuma = 0.0;
-   private double latestDirectMeanLuma = 0.0;
-   private double latestDirectDenoisedMeanLuma = 0.0;
-   private double latestDirectRawMeanLuma = 0.0;
-   private double latestDirectRawLinearMeanLuma = 0.0;
-   private double latestDirectRawLinearMaxLuma = 0.0;
-   private double latestDirectRawLinearOverbrightFraction = 0.0;
-   private double latestDirectRawLinearFireflyFraction = 0.0;
-   private double latestDirectRawLinearSevereFireflyFraction = 0.0;
-   private double latestDirectRawLinearFireflyLumaShare = 0.0;
-   private double latestDirectRawLinearSaturatedPixelFraction = 0.0;
-   private double latestDirectRawLinearNonFiniteFraction = 0.0;
-   private double latestDirectDenoisedLinearMeanLuma = 0.0;
-   private double latestDirectDenoisedLinearMaxLuma = 0.0;
-   private double latestDirectDenoisedLinearOverbrightFraction = 0.0;
-   private double latestDirectDenoisedLinearFireflyFraction = 0.0;
-   private double latestDirectDenoisedLinearSevereFireflyFraction = 0.0;
-   private double latestDirectDenoisedLinearFireflyLumaShare = 0.0;
-   private double latestDirectDenoisedLinearSaturatedPixelFraction = 0.0;
-   private double latestDirectDenoisedLinearNonFiniteFraction = 0.0;
-   private double latestLightingMeanLuma = 0.0;
-   private double latestStageLightingMeanLuma = 0.0;
-   private double latestStageIndirectMeanLuma = 0.0;
-   private double latestIndirectMeanLuma = 0.0;
-   private double latestIndirectRawMeanLuma = 0.0;
-   private double latestIndirectRawLinearMeanLuma = 0.0;
-   private double latestIndirectRawLinearMaxLuma = 0.0;
-   private double latestIndirectRawLinearOverbrightFraction = 0.0;
-   private double latestIndirectRawLinearFireflyFraction = 0.0;
-   private double latestIndirectRawLinearSevereFireflyFraction = 0.0;
-   private double latestIndirectRawLinearFireflyLumaShare = 0.0;
-   private double latestIndirectRawLinearSaturatedPixelFraction = 0.0;
-   private double latestIndirectRawLinearNonFiniteFraction = 0.0;
-   private double latestStageIndirectLinearMeanLuma = 0.0;
-   private double latestStageIndirectLinearMaxLuma = 0.0;
-   private double latestStageIndirectLinearOverbrightFraction = 0.0;
-   private double latestIndirectLinearMeanLuma = 0.0;
-   private double latestIndirectLinearMaxLuma = 0.0;
-   private double latestIndirectLinearOverbrightFraction = 0.0;
-   private double latestIndirectLinearFireflyFraction = 0.0;
-   private double latestIndirectLinearSevereFireflyFraction = 0.0;
-   private double latestIndirectLinearFireflyLumaShare = 0.0;
-   private double latestIndirectLinearSaturatedPixelFraction = 0.0;
-   private double latestIndirectLinearNonFiniteFraction = 0.0;
-   private double latestSpecRawLinearMeanLuma = 0.0;
-   private double latestSpecRawLinearMaxLuma = 0.0;
-   private double latestSpecRawLinearOverbrightFraction = 0.0;
-   private double latestSpecRawLinearFireflyFraction = 0.0;
-   private double latestSpecRawLinearSevereFireflyFraction = 0.0;
-   private double latestSpecRawLinearFireflyLumaShare = 0.0;
-   private double latestSpecRawLinearSaturatedPixelFraction = 0.0;
-   private double latestSpecRawLinearNonFiniteFraction = 0.0;
-   private double latestSpecDenoisedLinearMeanLuma = 0.0;
-   private double latestSpecDenoisedLinearMaxLuma = 0.0;
-   private double latestSpecDenoisedLinearOverbrightFraction = 0.0;
-   private double latestSpecDenoisedLinearFireflyFraction = 0.0;
-   private double latestSpecDenoisedLinearSevereFireflyFraction = 0.0;
-   private double latestSpecDenoisedLinearFireflyLumaShare = 0.0;
-   private double latestSpecDenoisedLinearSaturatedPixelFraction = 0.0;
-   private double latestSpecDenoisedLinearNonFiniteFraction = 0.0;
-   private double latestDirectMeanRed = 0.0;
-   private double latestDirectMeanGreen = 0.0;
-   private double latestDirectMeanBlue = 0.0;
-   private double latestDirectMeanAlpha = 0.0;
-   private double latestDirectZeroAlphaFraction = 0.0;
-   private double latestDirectAlphaDelta = 0.0;
-   private double directAlphaDeltaSum = 0.0;
-   private double directAlphaDeltaMax = 0.0;
-   private int directAlphaDeltaSamples = 0;
-   private double latestDirectBrightnessVariance = 0.0;
-   private double latestDirectBrightnessStdDev = 0.0;
-   private double directBrightnessVarianceSum = 0.0;
-   private double directBrightnessVarianceMax = 0.0;
-   private int directBrightnessVarianceSamples = 0;
-   private double latestHandheldBrightnessVariance = 0.0;
-   private double latestHandheldBrightnessStdDev = 0.0;
-   private double handheldBrightnessVarianceSum = 0.0;
-   private double handheldBrightnessVarianceMax = 0.0;
-   private int handheldBrightnessVarianceSamples = 0;
-   private double latestLightingMeanRed = 0.0;
-   private double latestLightingMeanGreen = 0.0;
-   private double latestLightingMeanBlue = 0.0;
-   private double latestStageLightingMeanRed = 0.0;
-   private double latestStageLightingMeanGreen = 0.0;
-   private double latestStageLightingMeanBlue = 0.0;
-   private double latestStageIndirectMeanRed = 0.0;
-   private double latestStageIndirectMeanGreen = 0.0;
-   private double latestStageIndirectMeanBlue = 0.0;
-   private double latestIndirectMeanRed = 0.0;
-   private double latestIndirectMeanGreen = 0.0;
-   private double latestIndirectMeanBlue = 0.0;
-   private double latestIndirectMeanAlpha = 0.0;
-   private double latestIndirectZeroAlphaFraction = 0.0;
-   private double latestStageIndirectMeanAlpha = 0.0;
-   private double latestStageIndirectZeroAlphaFraction = 0.0;
    private int latestTracedLightCount = 0;
    private int latestTotalLightCount = 0;
    private int maxTracedLightCount = 0;
@@ -225,8 +109,6 @@ public final class ShaderAutomation {
    private int latestLightBlendRegionCount = 0;
    private int lightSelectionCappedCaptures = 0;
    private int globalLightReloadCaptures = 0;
-   private int timeOfDayCommandsIssued = 0;
-   private int blockToggleCommandsIssued = 0;
    private int pendingBurstCaptures = 0;
    private int stableSceneTicks = 0;
    private double latestLightBlendFactor = 0.0;
@@ -259,95 +141,7 @@ public final class ShaderAutomation {
    private boolean observedMotionRepeatHistoryActivity = false;
    private int motionRepeatHistoryEpoch = 0;
    private int lastMotionRepeatHistoryInvalidationActiveTick = Integer.MIN_VALUE;
-   private double directTemporalDeltaSum = 0.0;
-   private double directTemporalDeltaMax = 0.0;
-   private int directTemporalDeltaSamples = 0;
-   private double latestDirectTemporalDelta = 0.0;
-   private double latestDirectTemporalMaxPixelDelta = 0.0;
-   private double latestWholeLightFlashDirectDrop = 0.0;
-   private double latestWholeLightFlashResolvedValidDrop = 0.0;
-   private double latestWholeLightFlashLightCountDrop = 0.0;
-   private double latestWholeLightFlashBlendFactorJump = 0.0;
-   private double maxWholeLightFlashDirectDrop = 0.0;
-   private double maxWholeLightFlashResolvedValidDrop = 0.0;
-   private double maxWholeLightFlashLightCountDrop = 0.0;
-   private double maxWholeLightFlashBlendFactorJump = 0.0;
-   private int wholeLightFlashSuspectCaptures = 0;
-   private int wholeLightFlashLastCapture = -1;
-   private int wholeLightFlashDirectDropCaptures = 0;
-   private int wholeLightFlashResolvedValidDropCaptures = 0;
-   private int wholeLightFlashLightCountDropCaptures = 0;
-   private int wholeLightFlashBlendJumpCaptures = 0;
-   private double previousCaptureDirectMeanLuma = Double.NaN;
-   private double previousCaptureResolvedStrictValidFraction = Double.NaN;
-   private double previousCaptureResolvedMeanWeight = Double.NaN;
-   private double previousCaptureResolvedMeanM = Double.NaN;
-   private double previousCaptureLightBlendFactor = Double.NaN;
-   private int previousCaptureTracedLightCount = -1;
-   private double latestResolvedMeanM = 0.0;
-   private double latestWholeLightFlashResolvedMDrop = 0.0;
-   private double maxWholeLightFlashResolvedMDrop = 0.0;
-   private double directTemporalMaxPixelDeltaSum = 0.0;
-   private double directTemporalMaxPixelDeltaMax = 0.0;
-   private int directTemporalMaxPixelDeltaSamples = 0;
-   private double directSoftTemporalDeltaSum = 0.0;
-   private double directSoftTemporalDeltaMax = 0.0;
-   private int directSoftTemporalDeltaSamples = 0;
-   private double latestDirectSoftTemporalDelta = 0.0;
-   private int directSoftZeroCaptureCount = 0;
-   private int directSoftSignalCaptureCount = 0;
-   private boolean directSoftSignalDetected = false;
-   private boolean directSoftMissingSignalWarningIssued = false;
-   private double indirectTemporalDeltaSum = 0.0;
-   private double indirectTemporalDeltaMax = 0.0;
-   private int indirectTemporalDeltaSamples = 0;
-   private double motionRepeatDirectDeltaSum = 0.0;
-   private double motionRepeatDirectDeltaMax = 0.0;
-   private int motionRepeatDirectDeltaSamples = 0;
-   private double motionRepeatIndirectDeltaSum = 0.0;
-   private double motionRepeatIndirectDeltaMax = 0.0;
-   private int motionRepeatIndirectDeltaSamples = 0;
-   private double directDenoiserGainSum = 0.0;
-   private double directDenoiserGainMax = 0.0;
-   private int directDenoiserGainSamples = 0;
-   private double specDenoiserGainSum = 0.0;
-   private double specDenoiserGainMax = 0.0;
-   private int specDenoiserGainSamples = 0;
-   private double indirectResolveGainSum = 0.0;
-   private double indirectResolveGainMax = 0.0;
-   private int indirectResolveGainSamples = 0;
-   private double latestDirectDenoiserGain = 0.0;
-   private double latestSpecDenoiserGain = 0.0;
-   private double latestIndirectResolveGain = 0.0;
    private int cameraMotionStopActiveTick = -1;
-   private int postMotionDropSamples = 0;
-   private double postMotionDirectMeanAtStop = 0.0;
-   private double postMotionIndirectMeanAtStop = 0.0;
-   private double postMotionRawDirectMeanAtStop = 0.0;
-   private double postMotionStageIndirectMeanAtStop = 0.0;
-   private double latestPostMotionDirectDrop = 0.0;
-   private double latestPostMotionIndirectDrop = 0.0;
-   private double latestPostMotionRawDirectDrop = 0.0;
-   private double latestPostMotionStageIndirectDrop = 0.0;
-   private double postMotionDirectDropMax = 0.0;
-   private double postMotionIndirectDropMax = 0.0;
-   private double postMotionRawDirectDropMax = 0.0;
-   private double postMotionStageIndirectDropMax = 0.0;
-   private double postMotionDirectDropSum = 0.0;
-   private double postMotionIndirectDropSum = 0.0;
-   private double postMotionRawDirectDropSum = 0.0;
-   private double postMotionStageIndirectDropSum = 0.0;
-   private float motionYawOffsetMin = 0.0f;
-   private float motionYawOffsetMax = 0.0f;
-   private float motionPitchOffsetMin = 0.0f;
-   private float motionPitchOffsetMax = 0.0f;
-   private BufferedImage previousDirectImage = null;
-   private BufferedImage previousDirectSoftImage = null;
-   private BufferedImage previousIndirectImage = null;
-   private final Map<MotionRepeatKey, MotionPhaseSample> previousDirectImagesByPhase = new HashMap<>();
-   private final Map<MotionRepeatKey, MotionPhaseSample> previousIndirectImagesByPhase = new HashMap<>();
-   private final List<MotionRepeatDeltaRecord> topDirectRepeatDeltas = new ArrayList<>();
-   private final List<MotionRepeatDeltaRecord> topIndirectRepeatDeltas = new ArrayList<>();
    private boolean raytracerActive = false;
    private boolean directSignalDetected = false;
    private boolean lightingSignalDetected = false;
@@ -355,8 +149,6 @@ public final class ShaderAutomation {
    private boolean fullScreenshotSaved = false;
    private boolean reportInitialized = false;
    private boolean fullscreenApplied = false;
-   private boolean cameraBaselineCaptured = false;
-   private boolean worldAutomationPrepared = false;
    private boolean recoveringFromScreen = false;
    private String failureReason = "";
    private String shaderPackName = "";
@@ -370,12 +162,6 @@ public final class ShaderAutomation {
    private double latestFinalMeanGreen = 0.0;
    private double latestFinalMeanBlue = 0.0;
    private boolean finalSignalDetected = false;
-   private float baselineCameraYaw = 0.0f;
-   private float baselineCameraPitch = 0.0f;
-   private int automationBlockX = Integer.MIN_VALUE;
-   private int automationBlockY = Integer.MIN_VALUE;
-   private int automationBlockZ = Integer.MIN_VALUE;
-   private int lastAutomationCommandActiveTick = Integer.MIN_VALUE;
 
    public static void initialize() {
       if (INSTANCE == null) {
@@ -405,11 +191,11 @@ public final class ShaderAutomation {
       this.autoStop = Boolean.parseBoolean(System.getProperty("photonics.automation.autoStop", "false"));
       this.releaseMouse = Boolean.parseBoolean(System.getProperty("photonics.automation.releaseMouse", "true"));
       this.fullscreen = Boolean.parseBoolean(System.getProperty("photonics.automation.fullscreen", "false"));
-      this.cameraMotionMode = System.getProperty("photonics.automation.cameraMotion", "none").trim().toLowerCase(Locale.ROOT);
-      this.cameraMotionStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.cameraMotionStartActiveTick", this.startDelayTicks + Math.max(this.captureEveryActiveTicks, 30)));
-      this.cameraMotionPeriodTicks = Math.max(0, Integer.getInteger("photonics.automation.cameraMotionPeriodTicks", 120));
-      this.cameraYawAmplitudeDegrees = Math.max(0.0f, Float.parseFloat(System.getProperty("photonics.automation.cameraYawAmplitudeDegrees", "0.0")));
-      this.cameraPitchAmplitudeDegrees = Math.max(0.0f, Float.parseFloat(System.getProperty("photonics.automation.cameraPitchAmplitudeDegrees", "0.0")));
+      String cameraMotionMode = System.getProperty("photonics.automation.cameraMotion", "none").trim().toLowerCase(Locale.ROOT);
+      int cameraMotionStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.cameraMotionStartActiveTick", this.startDelayTicks + Math.max(this.captureEveryActiveTicks, 30)));
+      int cameraMotionPeriodTicks = Math.max(0, Integer.getInteger("photonics.automation.cameraMotionPeriodTicks", 120));
+      float cameraYawAmplitudeDegrees = Math.max(0.0f, Float.parseFloat(System.getProperty("photonics.automation.cameraYawAmplitudeDegrees", "0.0")));
+      float cameraPitchAmplitudeDegrees = Math.max(0.0f, Float.parseFloat(System.getProperty("photonics.automation.cameraPitchAmplitudeDegrees", "0.0")));
       this.motionRepeatSettleTicks = Math.max(this.captureEveryActiveTicks * 2, 60);
       this.maxMotionRepeatDirectDeltaAvg = Double.parseDouble(System.getProperty("photonics.automation.maxMotionRepeatDirectDeltaAvg", "-1"));
       this.maxMotionRepeatDirectDeltaMax = Double.parseDouble(System.getProperty("photonics.automation.maxMotionRepeatDirectDeltaMax", "-1"));
@@ -422,16 +208,34 @@ public final class ShaderAutomation {
       this.maxIndirectLinearOverbrightFraction = Double.parseDouble(System.getProperty("photonics.automation.maxIndirectLinearOverbrightFraction", "-1"));
       this.maxIndirectLinearSevereFireflyFraction = Double.parseDouble(System.getProperty("photonics.automation.maxIndirectLinearSevereFireflyFraction", "-1"));
       this.maxIndirectRawLinearOverbrightFraction = Double.parseDouble(System.getProperty("photonics.automation.maxIndirectRawLinearOverbrightFraction", "-1"));
-      this.worldPrepActiveTick = Math.max(1, Integer.getInteger("photonics.automation.worldPrepActiveTick", 1));
+      int worldPrepActiveTick = Math.max(1, Integer.getInteger("photonics.automation.worldPrepActiveTick", 1));
       this.stableSceneSettleTicks = Math.max(0, Integer.getInteger("photonics.automation.stableSceneSettleTicks", Math.max(this.captureEveryActiveTicks * 2, 120)));
       this.stableSceneBlendRegionThreshold = Math.max(0, Integer.getInteger("photonics.automation.stableSceneBlendRegionThreshold", 0));
       this.stableSceneBlendFactorThreshold = Math.max(0.0, Double.parseDouble(System.getProperty("photonics.automation.stableSceneBlendFactorThreshold", "0.0")));
-      this.timeOfDaySequence = parseLongSequence(System.getProperty("photonics.automation.timeOfDaySequence", ""));
-      this.timeOfDayStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.timeOfDayStartActiveTick", this.cameraMotionStartActiveTick + this.cameraMotionPeriodTicks));
-      this.timeOfDayStepTicks = Math.max(1, Integer.getInteger("photonics.automation.timeOfDayStepTicks", Math.max(this.captureEveryActiveTicks, 30)));
-      this.blockToggleStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.blockToggleStartActiveTick", this.timeOfDayStartActiveTick + this.timeOfDayStepTicks * Math.max(this.timeOfDaySequence.length, 1)));
-      this.blockTogglePeriodTicks = Math.max(1, Integer.getInteger("photonics.automation.blockTogglePeriodTicks", Math.max(this.captureEveryActiveTicks, 30)));
-      this.blockToggleCount = Math.max(0, Integer.getInteger("photonics.automation.blockToggleCount", 0));
+      long[] timeOfDaySequence = ShaderAutomationValidators.parseLongSequence(System.getProperty("photonics.automation.timeOfDaySequence", ""));
+      int timeOfDayStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.timeOfDayStartActiveTick", cameraMotionStartActiveTick + cameraMotionPeriodTicks));
+      int timeOfDayStepTicks = Math.max(1, Integer.getInteger("photonics.automation.timeOfDayStepTicks", Math.max(this.captureEveryActiveTicks, 30)));
+      int blockToggleStartActiveTick = Math.max(0, Integer.getInteger("photonics.automation.blockToggleStartActiveTick", timeOfDayStartActiveTick + timeOfDayStepTicks * Math.max(timeOfDaySequence.length, 1)));
+      int blockTogglePeriodTicks = Math.max(1, Integer.getInteger("photonics.automation.blockTogglePeriodTicks", Math.max(this.captureEveryActiveTicks, 30)));
+      int blockToggleCount = Math.max(0, Integer.getInteger("photonics.automation.blockToggleCount", 0));
+      this.worldController = new ShaderAutomationWorldController(
+         timeOfDaySequence,
+         timeOfDayStartActiveTick,
+         timeOfDayStepTicks,
+         blockToggleStartActiveTick,
+         blockTogglePeriodTicks,
+         blockToggleCount,
+         worldPrepActiveTick,
+         this::queueBurstCaptures
+      );
+      this.cameraController = new ShaderAutomationCameraController(
+         cameraMotionMode,
+         cameraMotionStartActiveTick,
+         cameraMotionPeriodTicks,
+         cameraYawAmplitudeDegrees,
+         cameraPitchAmplitudeDegrees,
+         this::stableSceneSatisfied
+      );
    }
 
    public static void afterPhotonicsRender() {
@@ -450,288 +254,11 @@ public final class ShaderAutomation {
       return INSTANCE != null && INSTANCE.shouldSuppressWorldMutationIngress();
    }
 
-   static boolean matchesExpectedShaderPack(String expected, String actual) {
-      if (expected == null || expected.isBlank()) {
-         return true;
-      }
-      if (actual == null || actual.isBlank()) {
-         return false;
-      }
 
-      for (String normalizedExpected : normalizedShaderPackNames(expected)) {
-         for (String normalizedActual : normalizedShaderPackNames(actual)) {
-            if (normalizedActual.contains(normalizedExpected) || normalizedExpected.contains(normalizedActual)) {
-               return true;
-            }
-         }
-      }
-      return false;
-   }
-
-   static int activeTicksSinceFirstSignal(int activeTicks, int firstLightingSignalActiveTick) {
-      return firstLightingSignalActiveTick < 0 ? -1 : Math.max(0, activeTicks - firstLightingSignalActiveTick);
-   }
-
-   static boolean isCompletionSatisfied(int capturesTaken,
-                                        int captureTarget,
-                                        int litCapturesTaken,
-                                        int minLitCaptures,
-                                        boolean lightingSignalDetected,
-                                        int activeTicks,
-                                        int minActiveTicksBeforeSuccess,
-                                        int activeTicksSinceFirstSignal,
-                                        int minActiveTicksAfterSignal) {
-      return capturesTaken >= captureTarget
-         && litCapturesTaken >= minLitCaptures
-         && lightingSignalDetected
-         && activeTicks >= minActiveTicksBeforeSuccess
-         && activeTicksSinceFirstSignal >= minActiveTicksAfterSignal;
-   }
-
-   static boolean matchesExpectedPatchIdPrefix(String expectedPatchIdPrefix, String patchId) {
-      return expectedPatchIdPrefix == null || expectedPatchIdPrefix.isBlank() || patchId.startsWith(expectedPatchIdPrefix);
-   }
-
-   static boolean shouldCaptureOnActiveTick(int activeTicks, int captureEveryActiveTicks, int lastCapturedActiveTick) {
-      return captureEveryActiveTicks > 0
-         && activeTicks > 0
-         && activeTicks % captureEveryActiveTicks == 0
-         && activeTicks != lastCapturedActiveTick;
-   }
-
-   static float computeSineMotionOffset(int activeTicks, int motionStartActiveTick, int motionPeriodTicks, float amplitudeDegrees) {
-      if (motionPeriodTicks <= 0 || amplitudeDegrees <= 0.0f || activeTicks < motionStartActiveTick) {
-         return 0.0f;
-      }
-
-      double phase = (double) (activeTicks - motionStartActiveTick) / (double) motionPeriodTicks;
-      return (float) (Math.sin(phase * Math.PI * 2.0) * amplitudeDegrees);
-   }
-
-   static int motionPhaseKey(int activeTicks, int motionStartActiveTick, int motionPeriodTicks) {
-      if (motionPeriodTicks <= 0 || activeTicks < motionStartActiveTick) {
-         return -1;
-      }
-
-      return Math.floorMod(activeTicks - motionStartActiveTick, motionPeriodTicks);
-   }
-
-   static long[] parseLongSequence(String value) {
-      if (value == null || value.isBlank()) {
-         return new long[0];
-      }
-
-      String[] parts = value.split(",");
-      List<Long> parsed = new ArrayList<>();
-      for (String part : parts) {
-         String trimmed = part.trim();
-         if (trimmed.isEmpty()) {
-            continue;
-         }
-         parsed.add(Long.parseLong(trimmed));
-      }
-
-      long[] result = new long[parsed.size()];
-      for (int i = 0; i < parsed.size(); i++) {
-         result[i] = parsed.get(i);
-      }
-      return result;
-   }
-
-   static double[] computeImageStats(BufferedImage image) {
-      if (image == null) {
-         return new double[]{0.0, 0.0, 0.0, 0.0, 0.0};
-      }
-
-      double maxLuma = 0.0;
-      double lumaSum = 0.0;
-      double redSum = 0.0;
-      double greenSum = 0.0;
-      double blueSum = 0.0;
-      for (int y = 0; y < image.getHeight(); y++) {
-         for (int x = 0; x < image.getWidth(); x++) {
-            int argb = image.getRGB(x, y);
-            double r = ((argb >> 16) & 255) / 255.0;
-            double g = ((argb >> 8) & 255) / 255.0;
-            double b = (argb & 255) / 255.0;
-            double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            maxLuma = Math.max(maxLuma, luma);
-            lumaSum += luma;
-            redSum += r;
-            greenSum += g;
-            blueSum += b;
-         }
-      }
-      double pixelCount = Math.max(1, image.getWidth() * image.getHeight());
-      return new double[]{
-         maxLuma,
-         lumaSum / pixelCount,
-         redSum / pixelCount,
-         greenSum / pixelCount,
-         blueSum / pixelCount
-      };
-   }
-
-   static double[] computeImageAlphaStats(BufferedImage image) {
-      if (image == null) {
-         return new double[]{0.0, 0.0, 0.0, 0.0};
-      }
-
-      double minAlpha = 1.0;
-      double maxAlpha = 0.0;
-      double alphaSum = 0.0;
-      int zeroAlphaPixels = 0;
-      for (int y = 0; y < image.getHeight(); y++) {
-         for (int x = 0; x < image.getWidth(); x++) {
-            double alpha = ((image.getRGB(x, y) >> 24) & 255) / 255.0;
-            minAlpha = Math.min(minAlpha, alpha);
-            maxAlpha = Math.max(maxAlpha, alpha);
-            alphaSum += alpha;
-            if (alpha <= 1.0e-6) {
-               zeroAlphaPixels++;
-            }
-         }
-      }
-      double pixelCount = Math.max(1, image.getWidth() * image.getHeight());
-      return new double[]{
-         alphaSum / pixelCount,
-         minAlpha,
-         maxAlpha,
-         zeroAlphaPixels / pixelCount
-      };
-   }
-
-   private static ReservoirDebugStats computeReservoirDebugStats(TextureObject texture) {
-      if (texture == null) {
-         return ReservoirDebugStats.EMPTY;
-      }
-
-      texture.updatePerFrame();
-      float[] pixels = texture.downloadFloatData();
-      if (pixels == null || pixels.length < 4) {
-         return ReservoirDebugStats.EMPTY;
-      }
-
-      int pixelCount = pixels.length / 4;
-      int lightValidPixels = 0;
-      int strictValidPixels = 0;
-      double weightSum = 0.0;
-      double mSum = 0.0;
-      for (int i = 0; i < pixelCount; i++) {
-         int base = i * 4;
-         int lightData = Float.floatToRawIntBits(pixels[base]);
-         float weight = pixels[base + 1];
-         int reservoirM = decodePackedReservoirM(pixels[base + 3]);
-         if (lightData != 0) {
-            lightValidPixels++;
-         }
-         if (lightData != 0 && weight > 0.0f && reservoirM > 0) {
-            strictValidPixels++;
-         }
-         weightSum += Math.max(weight, 0.0f);
-         mSum += reservoirM;
-      }
-
-      return new ReservoirDebugStats(
-         lightValidPixels / (double)pixelCount,
-         strictValidPixels / (double)pixelCount,
-         weightSum / pixelCount,
-         mSum / pixelCount
-      );
-   }
 
    static int decodePackedReservoirM(float packedVisibilityAndM) {
       int packed = Float.floatToRawIntBits(packedVisibilityAndM);
       return (packed >>> RTXDI_PACKED_DI_RESERVOIR_M_SHIFT) & RTXDI_PACKED_DI_RESERVOIR_MAX_M_UINT;
-   }
-
-   private static InitialSamplingDebugStats computeInitialSamplingDebugStats(TextureObject texture) {
-      if (texture == null) {
-         return InitialSamplingDebugStats.EMPTY;
-      }
-
-      texture.updatePerFrame();
-      int[] dimensions = texture.getTextureDimensions();
-      if (dimensions.length < 2 || dimensions[0] <= 0 || dimensions[1] <= 1) {
-         return InitialSamplingDebugStats.EMPTY;
-      }
-
-      float[] pixels = texture.downloadFloatData();
-      if (pixels == null || pixels.length < 4) {
-         return InitialSamplingDebugStats.EMPTY;
-      }
-
-      int width = dimensions[0];
-      int height = dimensions[1];
-      int pixelCount = Math.max(1, width * height);
-      int[] reasonCounts = new int[11];
-      double positiveCandidateFractionSum = 0.0;
-      double proposalValidSum = 0.0;
-      double proposalWeightSum = 0.0;
-      double[] successRows = new double[height];
-      double[] zeroTargetRows = new double[height];
-      double[] proposalValidRows = new double[height];
-      double[] proposalWeightRows = new double[height];
-
-      for (int y = 0; y < height; y++) {
-         int successCount = 0;
-         int zeroTargetCount = 0;
-         double proposalValidRowSum = 0.0;
-         double proposalWeightRowSum = 0.0;
-         for (int x = 0; x < width; x++) {
-            int base = (x + y * width) * 4;
-            int reason = Math.max(0, Math.min(10, Math.round(pixels[base])));
-            float positiveCandidateFraction = pixels[base + 1];
-            float proposalValid = pixels[base + 2];
-            float proposalWeight = pixels[base + 3];
-
-            reasonCounts[reason]++;
-            if (Float.isFinite(positiveCandidateFraction)) {
-               positiveCandidateFractionSum += Math.max(0.0f, positiveCandidateFraction);
-            }
-            if (Float.isFinite(proposalValid)) {
-               double clampedProposalValid = Math.max(0.0f, Math.min(1.0f, proposalValid));
-               proposalValidSum += clampedProposalValid;
-               proposalValidRowSum += clampedProposalValid;
-            }
-            if (Float.isFinite(proposalWeight)) {
-               double clampedProposalWeight = Math.max(0.0f, proposalWeight);
-               proposalWeightSum += clampedProposalWeight;
-               proposalWeightRowSum += clampedProposalWeight;
-            }
-            if (reason == 10) {
-               successCount++;
-            }
-            if (reason == 7) {
-               zeroTargetCount++;
-            }
-         }
-         successRows[y] = successCount / (double)Math.max(1, width);
-         zeroTargetRows[y] = zeroTargetCount / (double)Math.max(1, width);
-         proposalValidRows[y] = proposalValidRowSum / (double)Math.max(1, width);
-         proposalWeightRows[y] = proposalWeightRowSum / (double)Math.max(1, width);
-      }
-
-      return new InitialSamplingDebugStats(
-         reasonCounts[0] / (double)pixelCount,
-         reasonCounts[1] / (double)pixelCount,
-         reasonCounts[2] / (double)pixelCount,
-         reasonCounts[3] / (double)pixelCount,
-         reasonCounts[4] / (double)pixelCount,
-         reasonCounts[5] / (double)pixelCount,
-         reasonCounts[6] / (double)pixelCount,
-         reasonCounts[7] / (double)pixelCount,
-         reasonCounts[8] / (double)pixelCount,
-         reasonCounts[9] / (double)pixelCount,
-         reasonCounts[10] / (double)pixelCount,
-         positiveCandidateFractionSum / pixelCount,
-         proposalValidSum / pixelCount,
-         proposalWeightSum / pixelCount,
-         computeRowJumpStats(successRows),
-         computeRowJumpStats(zeroTargetRows),
-         computeRowJumpStats(proposalValidRows),
-         computeRowJumpStats(proposalWeightRows)
-      );
    }
 
    private static FireflyStats computeFireflyStats(TextureObject texture) {
@@ -1182,437 +709,13 @@ public final class ShaderAutomation {
       );
    }
 
-   private static ReGIRPixelCorrelationStats computeReGIRPixelCorrelationStats(
-      TextureObject resolvedReservoirTexture,
-      TextureObject stagePositionTexture,
-      LightRegistry lightRegistry,
-      int frameIndex
-   ) {
-      if (resolvedReservoirTexture == null || stagePositionTexture == null || lightRegistry == null) {
-         return ReGIRPixelCorrelationStats.EMPTY;
-      }
-
-      resolvedReservoirTexture.updatePerFrame();
-      stagePositionTexture.updatePerFrame();
-      int[] resolvedDimensions = resolvedReservoirTexture.getTextureDimensions();
-      int[] stageDimensions = stagePositionTexture.getTextureDimensions();
-      if (resolvedDimensions.length < 2
-         || stageDimensions.length < 2
-         || resolvedDimensions[0] <= 0
-         || resolvedDimensions[1] <= 1
-         || resolvedDimensions[0] != stageDimensions[0]
-         || resolvedDimensions[1] != stageDimensions[1]) {
-         return ReGIRPixelCorrelationStats.EMPTY;
-      }
-
-      float[] resolvedPixels = resolvedReservoirTexture.downloadFloatData();
-      float[] stagePixels = stagePositionTexture.downloadFloatData();
-      if (resolvedPixels == null || stagePixels == null) {
-         return ReGIRPixelCorrelationStats.EMPTY;
-      }
-
-      ReGIRCellBufferStats cellBufferStats = downloadReGIRCellBufferStats(lightRegistry);
-      if (cellBufferStats.validSlotCounts().length == 0 || cellBufferStats.meanWeights().length == 0) {
-         return ReGIRPixelCorrelationStats.EMPTY;
-      }
-
-      int width = resolvedDimensions[0];
-      int height = resolvedDimensions[1];
-      float samplingJitter = lightRegistry.getRegirLookupJitter();
-      float hashCellSize = lightRegistry.getRegirHashCellSizeBlocks();
-      int hashNormalBuckets = lightRegistry.getRegirHashNormalBuckets();
-      double[] cellValidSlotRows = new double[height];
-      double[] cellMeanWeightRows = new double[height];
-      double[] outsideGridRows = new double[height];
-      double[] jitteredCellChangedRows = new double[height];
-      double[] jitteredCellMeanWeightDeltaRows = new double[height];
-      double[] jitteredOutsideGridDeltaRows = new double[height];
-      int visiblePixels = 0;
-      int resolvedStrictValidVisiblePixels = 0;
-      int exactOutsideGridVisiblePixels = 0;
-      int exactOutsideGridStrictInvalidPixels = 0;
-      int exactOutsideGridStrictValidPixels = 0;
-      int zeroSlotStrictInvalidPixels = 0;
-      int zeroSlotStrictValidPixels = 0;
-      double strictInvalidCellSlotSum = 0.0;
-      double strictValidCellSlotSum = 0.0;
-      double strictInvalidCellWeightSum = 0.0;
-      double strictValidCellWeightSum = 0.0;
-      int strictInvalidInsideGridPixels = 0;
-      int strictValidInsideGridPixels = 0;
-      int jitteredCellChangedVisiblePixels = 0;
-      int jitteredOutsideGridDeltaVisiblePixels = 0;
-      double jitteredCellMeanWeightDeltaSum = 0.0;
-
-      for (int y = 0; y < height; y++) {
-         int rowVisiblePixels = 0;
-         int rowOutsideGridPixels = 0;
-         int rowJitteredCellChangedPixels = 0;
-         int rowJitteredOutsideGridDeltaPixels = 0;
-         double rowCellSlotSum = 0.0;
-         double rowCellWeightSum = 0.0;
-         double rowJitteredCellMeanWeightDeltaSum = 0.0;
-
-         for (int x = 0; x < width; x++) {
-            int base = (x + y * width) * 4;
-            float px = stagePixels[base];
-            float py = stagePixels[base + 1];
-            float pz = stagePixels[base + 2];
-            if (!Float.isFinite(px) || !Float.isFinite(py) || !Float.isFinite(pz)) {
-               continue;
-            }
-            if (Math.abs(px) < 1.0e-6f && Math.abs(py) < 1.0e-6f && Math.abs(pz) < 1.0e-6f) {
-               continue;
-            }
-
-            rowVisiblePixels++;
-            visiblePixels++;
-
-            int resolvedLightData = Float.floatToRawIntBits(resolvedPixels[base]);
-            float resolvedWeight = resolvedPixels[base + 1];
-            int resolvedM = decodePackedReservoirM(resolvedPixels[base + 3]);
-            boolean strictValid = resolvedLightData != 0 && resolvedWeight > 0.0f && resolvedM > 0;
-            if (strictValid) {
-               resolvedStrictValidVisiblePixels++;
-            }
-
-            ReGIRHashCellCoord shaderCellCoord = calculateExactReGIRHashCellCoord(hashCellSize, px, py, pz);
-            ReGIRHashCellCoord jitteredReferenceCellCoord = calculateJitteredReGIRHashCellCoord(
-               x,
-               y,
-               frameIndex,
-               hashCellSize,
-               samplingJitter,
-               px,
-               py,
-               pz
-            );
-            if (!shaderCellCoord.equals(jitteredReferenceCellCoord)) {
-               rowJitteredCellChangedPixels++;
-               jitteredCellChangedVisiblePixels++;
-            }
-
-            ReGIRCellSampleStats shaderCellStats = lookupReGIRHashCellStats(cellBufferStats, shaderCellCoord, hashNormalBuckets);
-            ReGIRCellSampleStats jitteredCellStats = lookupReGIRHashCellStats(cellBufferStats, jitteredReferenceCellCoord, hashNormalBuckets);
-            if (shaderCellStats.found() != jitteredCellStats.found()) {
-               rowJitteredOutsideGridDeltaPixels++;
-               jitteredOutsideGridDeltaVisiblePixels++;
-            }
-            if (shaderCellStats.found() && jitteredCellStats.found()) {
-               double shaderCellMeanWeight = shaderCellStats.meanWeight();
-               double jitteredCellMeanWeight = jitteredCellStats.meanWeight();
-               double jitteredCellMeanWeightDelta = Math.abs(jitteredCellMeanWeight - shaderCellMeanWeight);
-               rowJitteredCellMeanWeightDeltaSum += jitteredCellMeanWeightDelta;
-               jitteredCellMeanWeightDeltaSum += jitteredCellMeanWeightDelta;
-            }
-            if (!shaderCellStats.found()) {
-               rowOutsideGridPixels++;
-               exactOutsideGridVisiblePixels++;
-               if (strictValid) {
-                  exactOutsideGridStrictValidPixels++;
-               } else {
-                  exactOutsideGridStrictInvalidPixels++;
-               }
-               continue;
-            }
-
-            int cellValidSlots = shaderCellStats.validSlots();
-            double cellMeanWeight = shaderCellStats.meanWeight();
-            rowCellSlotSum += cellValidSlots;
-            rowCellWeightSum += cellMeanWeight;
-
-            if (strictValid) {
-               strictValidInsideGridPixels++;
-               strictValidCellSlotSum += cellValidSlots;
-               strictValidCellWeightSum += cellMeanWeight;
-               if (cellValidSlots == 0) {
-                  zeroSlotStrictValidPixels++;
-               }
-            } else {
-               strictInvalidInsideGridPixels++;
-               strictInvalidCellSlotSum += cellValidSlots;
-               strictInvalidCellWeightSum += cellMeanWeight;
-               if (cellValidSlots == 0) {
-                  zeroSlotStrictInvalidPixels++;
-               }
-            }
-         }
-
-         cellValidSlotRows[y] = rowVisiblePixels == 0 ? 0.0 : rowCellSlotSum / rowVisiblePixels;
-         cellMeanWeightRows[y] = rowVisiblePixels == 0 ? 0.0 : rowCellWeightSum / rowVisiblePixels;
-         outsideGridRows[y] = rowVisiblePixels == 0 ? 0.0 : rowOutsideGridPixels / (double) rowVisiblePixels;
-         jitteredCellChangedRows[y] = rowVisiblePixels == 0 ? 0.0 : rowJitteredCellChangedPixels / (double) rowVisiblePixels;
-         jitteredCellMeanWeightDeltaRows[y] = rowVisiblePixels == 0 ? 0.0 : rowJitteredCellMeanWeightDeltaSum / rowVisiblePixels;
-         jitteredOutsideGridDeltaRows[y] = rowVisiblePixels == 0 ? 0.0 : rowJitteredOutsideGridDeltaPixels / (double) rowVisiblePixels;
-      }
-
-      double visiblePixelCount = Math.max(1, visiblePixels);
-      return new ReGIRPixelCorrelationStats(
-         visiblePixels / (double) Math.max(1, width * height),
-         resolvedStrictValidVisiblePixels / visiblePixelCount,
-         exactOutsideGridVisiblePixels / visiblePixelCount,
-         exactOutsideGridStrictInvalidPixels / visiblePixelCount,
-         exactOutsideGridStrictValidPixels / visiblePixelCount,
-         strictInvalidInsideGridPixels == 0 ? 0.0 : zeroSlotStrictInvalidPixels / (double) strictInvalidInsideGridPixels,
-         strictValidInsideGridPixels == 0 ? 0.0 : zeroSlotStrictValidPixels / (double) strictValidInsideGridPixels,
-         strictInvalidInsideGridPixels == 0 ? 0.0 : strictInvalidCellSlotSum / strictInvalidInsideGridPixels,
-         strictValidInsideGridPixels == 0 ? 0.0 : strictValidCellSlotSum / strictValidInsideGridPixels,
-         strictInvalidInsideGridPixels == 0 ? 0.0 : strictInvalidCellWeightSum / strictInvalidInsideGridPixels,
-         strictValidInsideGridPixels == 0 ? 0.0 : strictValidCellWeightSum / strictValidInsideGridPixels,
-         jitteredCellChangedVisiblePixels / visiblePixelCount,
-         jitteredCellMeanWeightDeltaSum / visiblePixelCount,
-         jitteredOutsideGridDeltaVisiblePixels / visiblePixelCount,
-         computeRowJumpStats(cellValidSlotRows),
-         computeRowJumpStats(cellMeanWeightRows),
-         computeRowJumpStats(outsideGridRows),
-         computeRowJumpStats(jitteredCellChangedRows),
-         computeRowJumpStats(jitteredCellMeanWeightDeltaRows),
-         computeRowJumpStats(jitteredOutsideGridDeltaRows)
-      );
-   }
-
-   private static ReGIRCellBufferStats downloadReGIRCellBufferStats(LightRegistry lightRegistry) {
-      int hashTableSize = lightRegistry.getRegirHashTableSize();
-      int lightsPerCell = lightRegistry.getRegirLightsPerCell();
-      if (hashTableSize <= 0 || lightsPerCell <= 0) {
-         return ReGIRCellBufferStats.EMPTY;
-      }
-
-      int[] validSlotCounts = new int[hashTableSize];
-      double[] meanWeights = new double[hashTableSize];
-      int[] checksums = new int[hashTableSize];
-      int[] keyX = new int[hashTableSize];
-      int[] keyY = new int[hashTableSize];
-      int[] keyZ = new int[hashTableSize];
-      int[] keyBucket = new int[hashTableSize];
-      int regirEntryOffset = RegirComputeProgram.tileCount * RegirComputeProgram.tileSize;
-      lightRegistry.getRegirLightIndexMemoryManager().download(downloadedBuffer -> {
-         ByteBuffer data = downloadedBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-         for (int hashSlot = 0; hashSlot < hashTableSize; hashSlot++) {
-            int validSlots = 0;
-            double weightSum = 0.0;
-            int cellEntryBase = regirEntryOffset + hashSlot * lightsPerCell;
-            for (int slot = 0; slot < lightsPerCell; slot++) {
-               int byteIndex = (cellEntryBase + slot) * 8;
-               if (byteIndex + 8 > data.capacity()) {
-                  break;
-               }
-
-               float storedWeight = Float.intBitsToFloat(data.getInt(byteIndex + 4));
-               if (Float.isFinite(storedWeight) && storedWeight > 0.0f) {
-                  validSlots++;
-                  weightSum += storedWeight;
-               }
-            }
-
-            validSlotCounts[hashSlot] = validSlots;
-            meanWeights[hashSlot] = validSlots == 0 ? 0.0 : weightSum / validSlots;
-         }
-      });
-      lightRegistry.getRegirHashChecksumMemoryManager().download(downloadedBuffer -> {
-         ByteBuffer data = downloadedBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-         for (int hashSlot = 0; hashSlot < hashTableSize && hashSlot * Integer.BYTES + Integer.BYTES <= data.capacity(); hashSlot++) {
-            checksums[hashSlot] = data.getInt(hashSlot * Integer.BYTES);
-         }
-      });
-      lightRegistry.getRegirHashKeyMemoryManager().download(downloadedBuffer -> {
-         ByteBuffer data = downloadedBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-         for (int hashSlot = 0; hashSlot < hashTableSize; hashSlot++) {
-            int byteIndex = hashSlot * 4 * Integer.BYTES;
-            if (byteIndex + 4 * Integer.BYTES > data.capacity()) {
-               break;
-            }
-            keyX[hashSlot] = data.getInt(byteIndex);
-            keyY[hashSlot] = data.getInt(byteIndex + Integer.BYTES);
-            keyZ[hashSlot] = data.getInt(byteIndex + 2 * Integer.BYTES);
-            keyBucket[hashSlot] = data.getInt(byteIndex + 3 * Integer.BYTES);
-         }
-      });
-
-      return new ReGIRCellBufferStats(validSlotCounts, meanWeights, checksums, keyX, keyY, keyZ, keyBucket);
-   }
-
-   private static ReGIRHashCellCoord calculateJitteredReGIRHashCellCoord(
-      int pixelX,
-      int pixelY,
-      int frameIndex,
-      float hashCellSize,
-      float samplingJitter,
-      float worldX,
-      float worldY,
-      float worldZ
-   ) {
-      ReGIRHashCellCoord baseCell = calculateExactReGIRHashCellCoord(hashCellSize, worldX, worldY, worldZ);
-      int geometrySeed = regirHashPcgKey(baseCell.x(), baseCell.y(), baseCell.z(), 0)
-         ^ regirHashXxhashChecksum(baseCell.x(), baseCell.y(), baseCell.z(), 0);
-      RandomSamplerState coherentRng = initRTXDIRandomSampler(
-         geometrySeed,
-         geometrySeed >>> 16,
-         0,
-         RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED
-      );
-      float jitterScale = samplingJitter * hashCellSize * 0.5f;
-      float jitteredX = worldX + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
-      float jitteredY = worldY + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
-      float jitteredZ = worldZ + (nextRTXDIRandom(coherentRng) - 0.5f) * jitterScale;
-      return calculateExactReGIRHashCellCoord(hashCellSize, jitteredX, jitteredY, jitteredZ);
-   }
-
-   private static ReGIRHashCellCoord calculateExactReGIRHashCellCoord(
-      float hashCellSize,
-      float worldX,
-      float worldY,
-      float worldZ
-   ) {
-      return new ReGIRHashCellCoord(
-         (int) Math.floor(worldX / hashCellSize),
-         (int) Math.floor(worldY / hashCellSize),
-         (int) Math.floor(worldZ / hashCellSize)
-      );
-   }
-
-   private static ReGIRCellSampleStats lookupReGIRHashCellStats(
-      ReGIRCellBufferStats stats,
-      ReGIRHashCellCoord cellCoord,
-      int normalBuckets
-   ) {
-      int validSlots = 0;
-      double weightSum = 0.0;
-      int representativeSlot = -1;
-      for (int bucket = 0; bucket < Math.max(1, normalBuckets); bucket++) {
-         int hashSlot = lookupReGIRHashSlot(stats, cellCoord, bucket);
-         if (hashSlot < 0) {
-            continue;
-         }
-         if (representativeSlot < 0) {
-            representativeSlot = hashSlot;
-         }
-         int bucketValidSlots = stats.validSlotCounts()[hashSlot];
-         validSlots += bucketValidSlots;
-         weightSum += stats.meanWeights()[hashSlot] * bucketValidSlots;
-      }
-
-      return new ReGIRCellSampleStats(
-         representativeSlot,
-         validSlots,
-         validSlots == 0 ? 0.0 : weightSum / validSlots
-      );
-   }
-
-   private static int lookupReGIRHashSlot(ReGIRCellBufferStats stats, ReGIRHashCellCoord cellCoord, int bucket) {
-      int hashTableSize = stats.checksums().length;
-      if (hashTableSize <= 0) {
-         return -1;
-      }
-
-      int checksum = regirHashXxhashChecksum(cellCoord.x(), cellCoord.y(), cellCoord.z(), bucket);
-      int slot = Integer.remainderUnsigned(regirHashPcgKey(cellCoord.x(), cellCoord.y(), cellCoord.z(), bucket), hashTableSize);
-      for (int probe = 0; probe < REGIR_HASH_MAX_PROBES; probe++) {
-         int stored = stats.checksums()[slot];
-         if (stored == 0 || stored == -1) {
-            return -1;
-         }
-         if (stored == checksum
-            && stats.keyX()[slot] == cellCoord.x()
-            && stats.keyY()[slot] == cellCoord.y()
-            && stats.keyZ()[slot] == cellCoord.z()
-            && stats.keyBucket()[slot] == bucket) {
-            return slot;
-         }
-         slot = (slot + 1) % hashTableSize;
-      }
-      return -1;
-   }
-
-   private static int regirHashPcgKey(int cellX, int cellY, int cellZ, int bucket) {
-      return regirPcgStep(bucket + regirPcgStep(cellZ + regirPcgStep(cellY + regirPcgStep(cellX))));
-   }
-
-   private static int regirHashXxhashChecksum(int cellX, int cellY, int cellZ, int bucket) {
-      int hash = regirXxhashStep(bucket + regirXxhashStep(cellZ + regirXxhashStep(cellY + regirXxhashStep(cellX))));
-      if (hash == 0) {
-         return 1;
-      }
-      if (hash == -1) {
-         return -2;
-      }
-      return hash;
-   }
-
-   private static int regirPcgStep(int h) {
-      h = h * 747796405 + (int) 2891336453L;
-      h = ((h >>> ((h >>> 28) + 4)) ^ h) * 277803737;
-      return (h >>> 22) ^ h;
-   }
-
-   private static int regirXxhashStep(int h) {
-      h += 374761393;
-      h = 668265263 * Integer.rotateLeft(h, 17);
-      h = -2048144777 * (h ^ (h >>> 15));
-      h = -1028477379 * (h ^ (h >>> 13));
-      return h ^ (h >>> 16);
-   }
-
-   private static RandomSamplerState initRTXDIRandomSampler(int pixelX, int pixelY, int frameIndex, int pass) {
-      int linearPixelIndex = rtxdiZCurveToLinearIndex(pixelX, pixelY);
-      int seed = rtxdiJenkinsHash(linearPixelIndex) + frameIndex + pass * 31;
-      return new RandomSamplerState(seed, 1);
-   }
-
-   private static float nextRTXDIRandom(RandomSamplerState rng) {
-      int value = murmur3(rng);
-      int bits = (value & ((1 << 23) - 1)) | 0x3f800000;
-      return Float.intBitsToFloat(bits) - 1.0f;
-   }
-
-   private static int murmur3(RandomSamplerState rng) {
-      int hash = rng.seed;
-      int k = rng.index++;
-      k *= 0xcc9e2d51;
-      k = Integer.rotateLeft(k, 15);
-      k *= 0x1b873593;
-      hash ^= k;
-      hash = Integer.rotateLeft(hash, 13);
-      hash = hash * 5 + 0xe6546b64;
-      hash ^= 4;
-      hash ^= hash >>> 16;
-      hash *= 0x85ebca6b;
-      hash ^= hash >>> 13;
-      hash *= 0xc2b2ae35;
-      hash ^= hash >>> 16;
-      return hash;
-   }
-
-   private static int rtxdiZCurveToLinearIndex(int x, int y) {
-      return rtxdiIntegerExplode(x) | (rtxdiIntegerExplode(y) << 1);
-   }
-
-   private static int rtxdiIntegerExplode(int x) {
-      x = (x | (x << 8)) & 0x00FF00FF;
-      x = (x | (x << 4)) & 0x0F0F0F0F;
-      x = (x | (x << 2)) & 0x33333333;
-      x = (x | (x << 1)) & 0x55555555;
-      return x;
-   }
-
-   private static int rtxdiJenkinsHash(int value) {
-      int hash = value;
-      hash = (hash + 0x7ed55d16) + (hash << 12);
-      hash = (hash ^ 0xc761c23c) ^ (hash >>> 19);
-      hash = (hash + 0x165667b1) + (hash << 5);
-      hash = (hash + 0xd3a2646c) ^ (hash << 9);
-      hash = (hash + 0xfd7046c5) + (hash << 3);
-      hash = (hash ^ 0xb55a4f09) ^ (hash >>> 16);
-      return hash;
-   }
-
    private static boolean isInsideAxisAlignedCube(float x, float y, float z, Vector3f center, float halfExtent) {
       return x >= center.x - halfExtent && x < center.x + halfExtent
          && y >= center.y - halfExtent && y < center.y + halfExtent
          && z >= center.z - halfExtent && z < center.z + halfExtent;
    }
 
-   private static RowJumpStats computeRowJumpStats(double[] rowMeans) {
+   static RowJumpStats computeRowJumpStats(double[] rowMeans) {
       if (rowMeans == null || rowMeans.length <= 1) {
          return RowJumpStats.EMPTY;
       }
@@ -1636,133 +739,6 @@ public final class ShaderAutomation {
       return new RowJumpStats(bestRow, rowMeans.length - 1 - bestRow, bestDelta, bestPrevious, bestNext);
    }
 
-   static double computeImageBrightnessVariance(BufferedImage image) {
-      if (image == null) {
-         return 0.0;
-      }
-
-      int width = image.getWidth();
-      int height = image.getHeight();
-      if (width <= 0 || height <= 0) {
-         return 0.0;
-      }
-
-      double pixelCount = Math.max(1, width * height);
-      double meanLuma = computeImageStats(image)[1];
-      double varianceSum = 0.0;
-      for (int y = 0; y < height; y++) {
-         for (int x = 0; x < width; x++) {
-            double luma = computeLuma(image.getRGB(x, y));
-            double delta = luma - meanLuma;
-            varianceSum += delta * delta;
-         }
-      }
-      return varianceSum / pixelCount;
-   }
-
-   static double computeImageBrightnessStdDev(BufferedImage image) {
-      return Math.sqrt(computeImageBrightnessVariance(image));
-   }
-
-   static double computeMaxLumaPixelDelta(BufferedImage previousImage, BufferedImage currentImage) {
-      if (previousImage == null || currentImage == null) {
-         return 0.0;
-      }
-
-      int width = Math.min(previousImage.getWidth(), currentImage.getWidth());
-      int height = Math.min(previousImage.getHeight(), currentImage.getHeight());
-      if (width <= 0 || height <= 0) {
-         return 0.0;
-      }
-
-      double maxDelta = 0.0;
-      for (int y = 0; y < height; y++) {
-         for (int x = 0; x < width; x++) {
-            double delta = Math.abs(computeLuma(currentImage.getRGB(x, y)) - computeLuma(previousImage.getRGB(x, y)));
-            maxDelta = Math.max(maxDelta, delta);
-         }
-      }
-      return maxDelta;
-   }
-
-   private static double computeLuma(int argb) {
-      double red = ((argb >> 16) & 255) / 255.0;
-      double green = ((argb >> 8) & 255) / 255.0;
-      double blue = (argb & 255) / 255.0;
-      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-   }
-
-   static double computeAlphaDelta(BufferedImage previousImage, BufferedImage currentImage) {
-      if (previousImage == null || currentImage == null) {
-         return 0.0;
-      }
-
-      int width = Math.min(previousImage.getWidth(), currentImage.getWidth());
-      int height = Math.min(previousImage.getHeight(), currentImage.getHeight());
-      if (width <= 0 || height <= 0) {
-         return 0.0;
-      }
-
-      double pixelCount = Math.max(1, width * height);
-      double deltaSum = 0.0;
-      for (int y = 0; y < height; y++) {
-         for (int x = 0; x < width; x++) {
-            double previousAlpha = ((previousImage.getRGB(x, y) >> 24) & 255) / 255.0;
-            double currentAlpha = ((currentImage.getRGB(x, y) >> 24) & 255) / 255.0;
-            deltaSum += Math.abs(currentAlpha - previousAlpha);
-         }
-      }
-      return deltaSum / pixelCount;
-   }
-
-   static double computeMaxLuma(BufferedImage image) {
-      return computeImageStats(image)[0];
-   }
-
-   static double computeMeanLumaDelta(BufferedImage previousImage, BufferedImage currentImage) {
-      if (previousImage == null || currentImage == null) {
-         return 0.0;
-      }
-      int width = Math.min(previousImage.getWidth(), currentImage.getWidth());
-      int height = Math.min(previousImage.getHeight(), currentImage.getHeight());
-      if (width <= 0 || height <= 0) {
-         return 0.0;
-      }
-
-      double deltaSum = 0.0;
-      int pixelCount = width * height;
-      for (int y = 0; y < height; y++) {
-         for (int x = 0; x < width; x++) {
-            deltaSum += Math.abs(computeLuma(currentImage.getRGB(x, y)) - computeLuma(previousImage.getRGB(x, y)));
-         }
-      }
-
-      return deltaSum / pixelCount;
-   }
-
-   static double computeRelativeImprovement(double baseline, double improved) {
-      if (baseline <= 1.0e-6) {
-         return 0.0;
-      }
-      return Math.max(0.0, (baseline - improved) / baseline);
-   }
-
-   private static List<String> normalizedShaderPackNames(String value) {
-      String normalized = normalizeShaderPackName(value);
-      List<String> normalizedNames = new ArrayList<>();
-      normalizedNames.add(normalized);
-      if (normalized.contains("euphoriapatches")) {
-         normalizedNames.add("complementaryreimagined");
-      }
-      if (normalized.contains("complementaryreimagined")) {
-         normalizedNames.add("euphoriapatches");
-      }
-      return normalizedNames;
-   }
-
-   private static String normalizeShaderPackName(String value) {
-      return value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
-   }
 
    private void onEndTick(MinecraftClient client) {
       if (this.finished) {
@@ -1784,8 +760,10 @@ public final class ShaderAutomation {
 
       if (client.world != null && this.raytracerActive) {
          this.activeTicks++;
-         this.applyCameraMotion(client);
-         this.applyWorldAutomation(client);
+         if (this.cameraController.isEnabled()) {
+            this.cameraController.applyCameraMotion(this.activeTicks, client);
+         }
+         this.worldController.applyWorldAutomation(this.activeTicks, client);
          this.updatePostMotionWindow();
       }
       if (this.ticksElapsed >= this.timeoutTicks) {
@@ -1936,9 +914,9 @@ public final class ShaderAutomation {
          FireflyStats indirectFireflyStats = computeFireflyStats(indirectTexture);
          WorldRegistry worldRegistry = Raytracer.INSTANCE.getWorldRegistry();
          LightRegistry lightRegistry = worldRegistry.getLightRegistry();
-         ReservoirDebugStats proposalReservoirStats = computeReservoirDebugStats(directReservoirTexture);
-         InitialSamplingDebugStats initialSamplingDebugStats = computeInitialSamplingDebugStats(directInitialDebugTexture);
-         ReservoirDebugStats resolvedReservoirStats = computeReservoirDebugStats(directResolvedReservoirTexture);
+         ShaderAutomationGpuDebugExtractor.ReservoirDebugStats proposalReservoirStats = ShaderAutomationGpuDebugExtractor.computeReservoirDebugStats(directReservoirTexture);
+         ShaderAutomationGpuDebugExtractor.InitialSamplingDebugStats initialSamplingDebugStats = ShaderAutomationGpuDebugExtractor.computeInitialSamplingDebugStats(directInitialDebugTexture);
+         ShaderAutomationGpuDebugExtractor.ReservoirDebugStats resolvedReservoirStats = ShaderAutomationGpuDebugExtractor.computeReservoirDebugStats(directResolvedReservoirTexture);
          PositionDebugStats stagePositionStats = computePositionDebugStats(stagePositionTexture);
          RowJumpStats directRawRowJump = computeHdrLumaRowJumpStats(directRawTexture);
          ReservoirRowJumpStats proposalReservoirRowJumps = computeReservoirRowJumpStats(directReservoirTexture);
@@ -1958,25 +936,25 @@ public final class ShaderAutomation {
             lightRegistry.getRegirLookupJitter()
          );
          int frameIndex = SystemTimeUniforms.COUNTER.getAsInt();
-         ReGIRPixelCorrelationStats regirPixelCorrelationStats = computeReGIRPixelCorrelationStats(
+         ShaderAutomationGpuDebugExtractor.ReGIRPixelCorrelationStats regirPixelCorrelationStats = ShaderAutomationGpuDebugExtractor.computeReGIRPixelCorrelationStats(
             directResolvedReservoirTexture,
             stagePositionTexture,
             lightRegistry,
             frameIndex
          );
-         double[] directStats = computeImageStats(directImage);
-         double[] directSoftStats = computeImageStats(directSoftImage);
-         double[] directDenoisedStats = computeImageStats(directDenoisedImage);
-         double[] directRawStats = computeImageStats(directRawImage);
-         double[] lightingStats = computeImageStats(lightingImage);
-         double[] stageLightingStats = computeImageStats(stageLightingImage);
-         double[] stageIndirectStats = computeImageStats(stageIndirectImage);
-         double[] handheldStats = computeImageStats(handheldImage);
-         double[] indirectRawStats = computeImageStats(indirectRawImage);
-         double[] indirectStats = computeImageStats(indirectImage);
-         double[] directAlphaStats = computeImageAlphaStats(directImage);
-         double[] stageIndirectAlphaStats = computeImageAlphaStats(stageIndirectImage);
-         double[] indirectAlphaStats = computeImageAlphaStats(indirectImage);
+         double[] directStats = ShaderAutomationImageUtils.computeImageStats(directImage);
+         double[] directSoftStats = ShaderAutomationImageUtils.computeImageStats(directSoftImage);
+         double[] directDenoisedStats = ShaderAutomationImageUtils.computeImageStats(directDenoisedImage);
+         double[] directRawStats = ShaderAutomationImageUtils.computeImageStats(directRawImage);
+         double[] lightingStats = ShaderAutomationImageUtils.computeImageStats(lightingImage);
+         double[] stageLightingStats = ShaderAutomationImageUtils.computeImageStats(stageLightingImage);
+         double[] stageIndirectStats = ShaderAutomationImageUtils.computeImageStats(stageIndirectImage);
+         double[] handheldStats = ShaderAutomationImageUtils.computeImageStats(handheldImage);
+         double[] indirectRawStats = ShaderAutomationImageUtils.computeImageStats(indirectRawImage);
+         double[] indirectStats = ShaderAutomationImageUtils.computeImageStats(indirectImage);
+         double[] directAlphaStats = ShaderAutomationImageUtils.computeImageAlphaStats(directImage);
+         double[] stageIndirectAlphaStats = ShaderAutomationImageUtils.computeImageAlphaStats(stageIndirectImage);
+         double[] indirectAlphaStats = ShaderAutomationImageUtils.computeImageAlphaStats(indirectImage);
          double directLuma = directStats[0];
          double directSoftLuma = directSoftStats[0];
          double directDenoisedLuma = directDenoisedStats[0];
@@ -1987,116 +965,116 @@ public final class ShaderAutomation {
          double handheldLuma = handheldStats[0];
          double indirectRawLuma = indirectRawStats[0];
          double indirectLuma = indirectStats[0];
-         this.directMaxLuma = Math.max(this.directMaxLuma, directLuma);
-         this.directSoftMaxLuma = Math.max(this.directSoftMaxLuma, directSoftLuma);
-         this.directDenoisedMaxLuma = Math.max(this.directDenoisedMaxLuma, directDenoisedLuma);
-         this.directRawMaxLuma = Math.max(this.directRawMaxLuma, directRawLuma);
-         this.lightingBufferMaxLuma = Math.max(this.lightingBufferMaxLuma, lightingLuma);
-         this.stageLightingMaxLuma = Math.max(this.stageLightingMaxLuma, stageLightingLuma);
-         this.stageIndirectMaxLuma = Math.max(this.stageIndirectMaxLuma, stageIndirectLuma);
-         this.handheldMaxLuma = Math.max(this.handheldMaxLuma, handheldLuma);
-         this.indirectRawMaxLuma = Math.max(this.indirectRawMaxLuma, indirectRawLuma);
-         this.indirectMaxLuma = Math.max(this.indirectMaxLuma, indirectLuma);
-         this.latestDirectMeanLuma = directStats[1];
-         this.latestDirectDenoisedMeanLuma = directDenoisedStats[1];
-         this.latestDirectRawMeanLuma = directRawStats[1];
-         this.latestDirectRawLinearMeanLuma = directRawLinearStats.meanLuma();
-         this.latestDirectRawLinearMaxLuma = directRawLinearStats.maxLuma();
-         this.latestDirectRawLinearOverbrightFraction = directRawLinearStats.overbrightFraction();
-         this.latestDirectRawLinearFireflyFraction = directRawFireflyStats.fireflyFraction();
-         this.latestDirectRawLinearSevereFireflyFraction = directRawFireflyStats.severeFireflyFraction();
-         this.latestDirectRawLinearFireflyLumaShare = directRawFireflyStats.fireflyLumaShare();
-         this.latestDirectRawLinearSaturatedPixelFraction = directRawFireflyStats.saturatedPixelFraction();
-         this.latestDirectRawLinearNonFiniteFraction = directRawFireflyStats.nonFiniteFraction();
-         this.latestDirectDenoisedLinearMeanLuma = directDenoisedLinearStats.meanLuma();
-         this.latestDirectDenoisedLinearMaxLuma = directDenoisedLinearStats.maxLuma();
-         this.latestDirectDenoisedLinearOverbrightFraction = directDenoisedLinearStats.overbrightFraction();
-         this.latestDirectDenoisedLinearFireflyFraction = directDenoisedFireflyStats.fireflyFraction();
-         this.latestDirectDenoisedLinearSevereFireflyFraction = directDenoisedFireflyStats.severeFireflyFraction();
-         this.latestDirectDenoisedLinearFireflyLumaShare = directDenoisedFireflyStats.fireflyLumaShare();
-         this.latestDirectDenoisedLinearSaturatedPixelFraction = directDenoisedFireflyStats.saturatedPixelFraction();
-         this.latestDirectDenoisedLinearNonFiniteFraction = directDenoisedFireflyStats.nonFiniteFraction();
-         this.latestLightingMeanLuma = lightingStats[1];
-         this.latestStageLightingMeanLuma = stageLightingStats[1];
-         this.latestStageIndirectMeanLuma = stageIndirectStats[1];
-         this.latestIndirectRawMeanLuma = indirectRawStats[1];
-         this.latestIndirectMeanLuma = indirectStats[1];
-         this.latestSpecRawLinearMeanLuma = specRawLinearStats.meanLuma();
-         this.latestSpecRawLinearMaxLuma = specRawLinearStats.maxLuma();
-         this.latestSpecRawLinearOverbrightFraction = specRawLinearStats.overbrightFraction();
-         this.latestSpecRawLinearFireflyFraction = specRawFireflyStats.fireflyFraction();
-         this.latestSpecRawLinearSevereFireflyFraction = specRawFireflyStats.severeFireflyFraction();
-         this.latestSpecRawLinearFireflyLumaShare = specRawFireflyStats.fireflyLumaShare();
-         this.latestSpecRawLinearSaturatedPixelFraction = specRawFireflyStats.saturatedPixelFraction();
-         this.latestSpecRawLinearNonFiniteFraction = specRawFireflyStats.nonFiniteFraction();
-         this.latestSpecDenoisedLinearMeanLuma = specDenoisedLinearStats.meanLuma();
-         this.latestSpecDenoisedLinearMaxLuma = specDenoisedLinearStats.maxLuma();
-         this.latestSpecDenoisedLinearOverbrightFraction = specDenoisedLinearStats.overbrightFraction();
-         this.latestSpecDenoisedLinearFireflyFraction = specDenoisedFireflyStats.fireflyFraction();
-         this.latestSpecDenoisedLinearSevereFireflyFraction = specDenoisedFireflyStats.severeFireflyFraction();
-         this.latestSpecDenoisedLinearFireflyLumaShare = specDenoisedFireflyStats.fireflyLumaShare();
-         this.latestSpecDenoisedLinearSaturatedPixelFraction = specDenoisedFireflyStats.saturatedPixelFraction();
-         this.latestSpecDenoisedLinearNonFiniteFraction = specDenoisedFireflyStats.nonFiniteFraction();
-         this.latestIndirectRawLinearMeanLuma = indirectRawLinearStats.meanLuma();
-         this.latestIndirectRawLinearMaxLuma = indirectRawLinearStats.maxLuma();
-         this.latestIndirectRawLinearOverbrightFraction = indirectRawLinearStats.overbrightFraction();
-         this.latestIndirectRawLinearFireflyFraction = indirectRawFireflyStats.fireflyFraction();
-         this.latestIndirectRawLinearSevereFireflyFraction = indirectRawFireflyStats.severeFireflyFraction();
-         this.latestIndirectRawLinearFireflyLumaShare = indirectRawFireflyStats.fireflyLumaShare();
-         this.latestIndirectRawLinearSaturatedPixelFraction = indirectRawFireflyStats.saturatedPixelFraction();
-         this.latestIndirectRawLinearNonFiniteFraction = indirectRawFireflyStats.nonFiniteFraction();
-         this.latestIndirectLinearMeanLuma = indirectLinearStats.meanLuma();
-         this.latestIndirectLinearMaxLuma = indirectLinearStats.maxLuma();
-         this.latestIndirectLinearOverbrightFraction = indirectLinearStats.overbrightFraction();
-         this.latestIndirectLinearFireflyFraction = indirectFireflyStats.fireflyFraction();
-         this.latestIndirectLinearSevereFireflyFraction = indirectFireflyStats.severeFireflyFraction();
-         this.latestIndirectLinearFireflyLumaShare = indirectFireflyStats.fireflyLumaShare();
-         this.latestIndirectLinearSaturatedPixelFraction = indirectFireflyStats.saturatedPixelFraction();
-         this.latestIndirectLinearNonFiniteFraction = indirectFireflyStats.nonFiniteFraction();
-         this.latestStageIndirectLinearMeanLuma = stageIndirectLinearStats.meanLuma();
-         this.latestStageIndirectLinearMaxLuma = stageIndirectLinearStats.maxLuma();
-         this.latestStageIndirectLinearOverbrightFraction = stageIndirectLinearStats.overbrightFraction();
-         this.latestDirectMeanRed = directStats[2];
-         this.latestDirectMeanGreen = directStats[3];
-         this.latestDirectMeanBlue = directStats[4];
-         this.latestDirectMeanAlpha = directAlphaStats[0];
-         this.latestDirectZeroAlphaFraction = directAlphaStats[3];
-         this.latestDirectAlphaDelta = computeAlphaDelta(this.previousDirectImage, directImage);
-         if (this.previousDirectImage != null) {
-            this.directAlphaDeltaSum += this.latestDirectAlphaDelta;
-            this.directAlphaDeltaMax = Math.max(this.directAlphaDeltaMax, this.latestDirectAlphaDelta);
-            this.directAlphaDeltaSamples++;
+         this.metrics.directMaxLuma = Math.max(this.metrics.directMaxLuma, directLuma);
+         this.metrics.directSoftMaxLuma = Math.max(this.metrics.directSoftMaxLuma, directSoftLuma);
+         this.metrics.directDenoisedMaxLuma = Math.max(this.metrics.directDenoisedMaxLuma, directDenoisedLuma);
+         this.metrics.directRawMaxLuma = Math.max(this.metrics.directRawMaxLuma, directRawLuma);
+         this.metrics.lightingBufferMaxLuma = Math.max(this.metrics.lightingBufferMaxLuma, lightingLuma);
+         this.metrics.stageLightingMaxLuma = Math.max(this.metrics.stageLightingMaxLuma, stageLightingLuma);
+         this.metrics.stageIndirectMaxLuma = Math.max(this.metrics.stageIndirectMaxLuma, stageIndirectLuma);
+         this.metrics.handheldMaxLuma = Math.max(this.metrics.handheldMaxLuma, handheldLuma);
+         this.metrics.indirectRawMaxLuma = Math.max(this.metrics.indirectRawMaxLuma, indirectRawLuma);
+         this.metrics.indirectMaxLuma = Math.max(this.metrics.indirectMaxLuma, indirectLuma);
+         this.metrics.latestDirectMeanLuma = directStats[1];
+         this.metrics.latestDirectDenoisedMeanLuma = directDenoisedStats[1];
+         this.metrics.latestDirectRawMeanLuma = directRawStats[1];
+         this.metrics.latestDirectRawLinearMeanLuma = directRawLinearStats.meanLuma();
+         this.metrics.latestDirectRawLinearMaxLuma = directRawLinearStats.maxLuma();
+         this.metrics.latestDirectRawLinearOverbrightFraction = directRawLinearStats.overbrightFraction();
+         this.metrics.latestDirectRawLinearFireflyFraction = directRawFireflyStats.fireflyFraction();
+         this.metrics.latestDirectRawLinearSevereFireflyFraction = directRawFireflyStats.severeFireflyFraction();
+         this.metrics.latestDirectRawLinearFireflyLumaShare = directRawFireflyStats.fireflyLumaShare();
+         this.metrics.latestDirectRawLinearSaturatedPixelFraction = directRawFireflyStats.saturatedPixelFraction();
+         this.metrics.latestDirectRawLinearNonFiniteFraction = directRawFireflyStats.nonFiniteFraction();
+         this.metrics.latestDirectDenoisedLinearMeanLuma = directDenoisedLinearStats.meanLuma();
+         this.metrics.latestDirectDenoisedLinearMaxLuma = directDenoisedLinearStats.maxLuma();
+         this.metrics.latestDirectDenoisedLinearOverbrightFraction = directDenoisedLinearStats.overbrightFraction();
+         this.metrics.latestDirectDenoisedLinearFireflyFraction = directDenoisedFireflyStats.fireflyFraction();
+         this.metrics.latestDirectDenoisedLinearSevereFireflyFraction = directDenoisedFireflyStats.severeFireflyFraction();
+         this.metrics.latestDirectDenoisedLinearFireflyLumaShare = directDenoisedFireflyStats.fireflyLumaShare();
+         this.metrics.latestDirectDenoisedLinearSaturatedPixelFraction = directDenoisedFireflyStats.saturatedPixelFraction();
+         this.metrics.latestDirectDenoisedLinearNonFiniteFraction = directDenoisedFireflyStats.nonFiniteFraction();
+         this.metrics.latestLightingMeanLuma = lightingStats[1];
+         this.metrics.latestStageLightingMeanLuma = stageLightingStats[1];
+         this.metrics.latestStageIndirectMeanLuma = stageIndirectStats[1];
+         this.metrics.latestIndirectRawMeanLuma = indirectRawStats[1];
+         this.metrics.latestIndirectMeanLuma = indirectStats[1];
+         this.metrics.latestSpecRawLinearMeanLuma = specRawLinearStats.meanLuma();
+         this.metrics.latestSpecRawLinearMaxLuma = specRawLinearStats.maxLuma();
+         this.metrics.latestSpecRawLinearOverbrightFraction = specRawLinearStats.overbrightFraction();
+         this.metrics.latestSpecRawLinearFireflyFraction = specRawFireflyStats.fireflyFraction();
+         this.metrics.latestSpecRawLinearSevereFireflyFraction = specRawFireflyStats.severeFireflyFraction();
+         this.metrics.latestSpecRawLinearFireflyLumaShare = specRawFireflyStats.fireflyLumaShare();
+         this.metrics.latestSpecRawLinearSaturatedPixelFraction = specRawFireflyStats.saturatedPixelFraction();
+         this.metrics.latestSpecRawLinearNonFiniteFraction = specRawFireflyStats.nonFiniteFraction();
+         this.metrics.latestSpecDenoisedLinearMeanLuma = specDenoisedLinearStats.meanLuma();
+         this.metrics.latestSpecDenoisedLinearMaxLuma = specDenoisedLinearStats.maxLuma();
+         this.metrics.latestSpecDenoisedLinearOverbrightFraction = specDenoisedLinearStats.overbrightFraction();
+         this.metrics.latestSpecDenoisedLinearFireflyFraction = specDenoisedFireflyStats.fireflyFraction();
+         this.metrics.latestSpecDenoisedLinearSevereFireflyFraction = specDenoisedFireflyStats.severeFireflyFraction();
+         this.metrics.latestSpecDenoisedLinearFireflyLumaShare = specDenoisedFireflyStats.fireflyLumaShare();
+         this.metrics.latestSpecDenoisedLinearSaturatedPixelFraction = specDenoisedFireflyStats.saturatedPixelFraction();
+         this.metrics.latestSpecDenoisedLinearNonFiniteFraction = specDenoisedFireflyStats.nonFiniteFraction();
+         this.metrics.latestIndirectRawLinearMeanLuma = indirectRawLinearStats.meanLuma();
+         this.metrics.latestIndirectRawLinearMaxLuma = indirectRawLinearStats.maxLuma();
+         this.metrics.latestIndirectRawLinearOverbrightFraction = indirectRawLinearStats.overbrightFraction();
+         this.metrics.latestIndirectRawLinearFireflyFraction = indirectRawFireflyStats.fireflyFraction();
+         this.metrics.latestIndirectRawLinearSevereFireflyFraction = indirectRawFireflyStats.severeFireflyFraction();
+         this.metrics.latestIndirectRawLinearFireflyLumaShare = indirectRawFireflyStats.fireflyLumaShare();
+         this.metrics.latestIndirectRawLinearSaturatedPixelFraction = indirectRawFireflyStats.saturatedPixelFraction();
+         this.metrics.latestIndirectRawLinearNonFiniteFraction = indirectRawFireflyStats.nonFiniteFraction();
+         this.metrics.latestIndirectLinearMeanLuma = indirectLinearStats.meanLuma();
+         this.metrics.latestIndirectLinearMaxLuma = indirectLinearStats.maxLuma();
+         this.metrics.latestIndirectLinearOverbrightFraction = indirectLinearStats.overbrightFraction();
+         this.metrics.latestIndirectLinearFireflyFraction = indirectFireflyStats.fireflyFraction();
+         this.metrics.latestIndirectLinearSevereFireflyFraction = indirectFireflyStats.severeFireflyFraction();
+         this.metrics.latestIndirectLinearFireflyLumaShare = indirectFireflyStats.fireflyLumaShare();
+         this.metrics.latestIndirectLinearSaturatedPixelFraction = indirectFireflyStats.saturatedPixelFraction();
+         this.metrics.latestIndirectLinearNonFiniteFraction = indirectFireflyStats.nonFiniteFraction();
+         this.metrics.latestStageIndirectLinearMeanLuma = stageIndirectLinearStats.meanLuma();
+         this.metrics.latestStageIndirectLinearMaxLuma = stageIndirectLinearStats.maxLuma();
+         this.metrics.latestStageIndirectLinearOverbrightFraction = stageIndirectLinearStats.overbrightFraction();
+         this.metrics.latestDirectMeanRed = directStats[2];
+         this.metrics.latestDirectMeanGreen = directStats[3];
+         this.metrics.latestDirectMeanBlue = directStats[4];
+         this.metrics.latestDirectMeanAlpha = directAlphaStats[0];
+         this.metrics.latestDirectZeroAlphaFraction = directAlphaStats[3];
+         this.metrics.latestDirectAlphaDelta = ShaderAutomationImageUtils.computeAlphaDelta(this.metrics.previousDirectImage, directImage);
+         if (this.metrics.previousDirectImage != null) {
+            this.metrics.directAlphaDeltaSum += this.metrics.latestDirectAlphaDelta;
+            this.metrics.directAlphaDeltaMax = Math.max(this.metrics.directAlphaDeltaMax, this.metrics.latestDirectAlphaDelta);
+            this.metrics.directAlphaDeltaSamples++;
          }
-         this.latestDirectBrightnessVariance = computeImageBrightnessVariance(directImage);
-         this.latestDirectBrightnessStdDev = Math.sqrt(this.latestDirectBrightnessVariance);
-         this.directBrightnessVarianceSum += this.latestDirectBrightnessVariance;
-         this.directBrightnessVarianceMax = Math.max(this.directBrightnessVarianceMax, this.latestDirectBrightnessVariance);
-         this.directBrightnessVarianceSamples++;
-         this.latestHandheldBrightnessVariance = computeImageBrightnessVariance(handheldImage);
-         this.latestHandheldBrightnessStdDev = Math.sqrt(this.latestHandheldBrightnessVariance);
-         this.handheldBrightnessVarianceSum += this.latestHandheldBrightnessVariance;
-         this.handheldBrightnessVarianceMax = Math.max(this.handheldBrightnessVarianceMax, this.latestHandheldBrightnessVariance);
-         this.handheldBrightnessVarianceSamples++;
-         this.latestLightingMeanRed = lightingStats[2];
-         this.latestLightingMeanGreen = lightingStats[3];
-         this.latestLightingMeanBlue = lightingStats[4];
-         this.latestStageLightingMeanRed = stageLightingStats[2];
-         this.latestStageLightingMeanGreen = stageLightingStats[3];
-         this.latestStageLightingMeanBlue = stageLightingStats[4];
-         this.latestStageIndirectMeanRed = stageIndirectStats[2];
-         this.latestStageIndirectMeanGreen = stageIndirectStats[3];
-         this.latestStageIndirectMeanBlue = stageIndirectStats[4];
-         this.latestIndirectMeanRed = indirectStats[2];
-         this.latestIndirectMeanGreen = indirectStats[3];
-         this.latestIndirectMeanBlue = indirectStats[4];
-         this.latestStageIndirectMeanAlpha = stageIndirectAlphaStats[0];
-         this.latestStageIndirectZeroAlphaFraction = stageIndirectAlphaStats[3];
-         this.latestIndirectMeanAlpha = indirectAlphaStats[0];
-         this.latestIndirectZeroAlphaFraction = indirectAlphaStats[3];
-         this.updateDirectSoftSignalState(directSoftLuma, captureIndex);
-         this.recordTemporalDelta(directTemporalAndRepeatImage, false, false);
-         this.recordTemporalDelta(directSoftImage, true, false);
-         this.recordTemporalDelta(indirectImage, false, true);
+         this.metrics.latestDirectBrightnessVariance = ShaderAutomationImageUtils.computeImageBrightnessVariance(directImage);
+         this.metrics.latestDirectBrightnessStdDev = Math.sqrt(this.metrics.latestDirectBrightnessVariance);
+         this.metrics.directBrightnessVarianceSum += this.metrics.latestDirectBrightnessVariance;
+         this.metrics.directBrightnessVarianceMax = Math.max(this.metrics.directBrightnessVarianceMax, this.metrics.latestDirectBrightnessVariance);
+         this.metrics.directBrightnessVarianceSamples++;
+         this.metrics.latestHandheldBrightnessVariance = ShaderAutomationImageUtils.computeImageBrightnessVariance(handheldImage);
+         this.metrics.latestHandheldBrightnessStdDev = Math.sqrt(this.metrics.latestHandheldBrightnessVariance);
+         this.metrics.handheldBrightnessVarianceSum += this.metrics.latestHandheldBrightnessVariance;
+         this.metrics.handheldBrightnessVarianceMax = Math.max(this.metrics.handheldBrightnessVarianceMax, this.metrics.latestHandheldBrightnessVariance);
+         this.metrics.handheldBrightnessVarianceSamples++;
+         this.metrics.latestLightingMeanRed = lightingStats[2];
+         this.metrics.latestLightingMeanGreen = lightingStats[3];
+         this.metrics.latestLightingMeanBlue = lightingStats[4];
+         this.metrics.latestStageLightingMeanRed = stageLightingStats[2];
+         this.metrics.latestStageLightingMeanGreen = stageLightingStats[3];
+         this.metrics.latestStageLightingMeanBlue = stageLightingStats[4];
+         this.metrics.latestStageIndirectMeanRed = stageIndirectStats[2];
+         this.metrics.latestStageIndirectMeanGreen = stageIndirectStats[3];
+         this.metrics.latestStageIndirectMeanBlue = stageIndirectStats[4];
+         this.metrics.latestIndirectMeanRed = indirectStats[2];
+         this.metrics.latestIndirectMeanGreen = indirectStats[3];
+         this.metrics.latestIndirectMeanBlue = indirectStats[4];
+         this.metrics.latestStageIndirectMeanAlpha = stageIndirectAlphaStats[0];
+         this.metrics.latestStageIndirectZeroAlphaFraction = stageIndirectAlphaStats[3];
+         this.metrics.latestIndirectMeanAlpha = indirectAlphaStats[0];
+         this.metrics.latestIndirectZeroAlphaFraction = indirectAlphaStats[3];
+         this.metrics.updateDirectSoftSignalState(directSoftLuma, captureIndex, this.activeTicks, this.metrics.directMaxLuma, this.metrics.directRawMaxLuma, this.metrics.handheldMaxLuma);
+         this.metrics.recordTemporalDelta(directTemporalAndRepeatImage, false, false);
+         this.metrics.recordTemporalDelta(directSoftImage, true, false);
+         this.metrics.recordTemporalDelta(indirectImage, false, true);
          this.latestTracedLightCount = lightRegistry.lightCount();
          this.latestTotalLightCount = lightRegistry.totalLights();
          this.maxTracedLightCount = Math.max(this.maxTracedLightCount, this.latestTracedLightCount);
@@ -2111,22 +1089,22 @@ public final class ShaderAutomation {
          if (this.latestGlobalLightReload) {
             this.globalLightReloadCaptures++;
          }
-         this.updatePostMotionDropMetrics();
-         this.latestDirectDenoiserGain = computeRelativeImprovement(directRawStats[1], directDenoisedStats[1]);
-         this.latestSpecDenoiserGain = computeRelativeImprovement(this.latestSpecRawLinearMeanLuma, this.latestSpecDenoisedLinearMeanLuma);
-         this.latestIndirectResolveGain = computeRelativeImprovement(stageIndirectStats[1], indirectStats[1]);
-         this.directDenoiserGainSum += this.latestDirectDenoiserGain;
-         this.directDenoiserGainMax = Math.max(this.directDenoiserGainMax, this.latestDirectDenoiserGain);
-         this.directDenoiserGainSamples++;
-         this.specDenoiserGainSum += this.latestSpecDenoiserGain;
-         this.specDenoiserGainMax = Math.max(this.specDenoiserGainMax, this.latestSpecDenoiserGain);
-         this.specDenoiserGainSamples++;
-         this.indirectResolveGainSum += this.latestIndirectResolveGain;
-         this.indirectResolveGainMax = Math.max(this.indirectResolveGainMax, this.latestIndirectResolveGain);
-         this.indirectResolveGainSamples++;
-         this.recordMotionRepeatDelta(directTemporalAndRepeatImage, true, captureIndex);
-         this.recordMotionRepeatDelta(indirectImage, false, captureIndex);
-         this.updateWholeLightFlashDiagnostics(captureIndex, resolvedReservoirStats);
+         this.metrics.updatePostMotionDropMetrics(this.cameraMotionStopActiveTick, this.activeTicks);
+         this.metrics.latestDirectDenoiserGain = ShaderAutomationImageUtils.computeRelativeImprovement(directRawStats[1], directDenoisedStats[1]);
+         this.metrics.latestSpecDenoiserGain = ShaderAutomationImageUtils.computeRelativeImprovement(this.metrics.latestSpecRawLinearMeanLuma, this.metrics.latestSpecDenoisedLinearMeanLuma);
+         this.metrics.latestIndirectResolveGain = ShaderAutomationImageUtils.computeRelativeImprovement(stageIndirectStats[1], indirectStats[1]);
+         this.metrics.directDenoiserGainSum += this.metrics.latestDirectDenoiserGain;
+         this.metrics.directDenoiserGainMax = Math.max(this.metrics.directDenoiserGainMax, this.metrics.latestDirectDenoiserGain);
+         this.metrics.directDenoiserGainSamples++;
+         this.metrics.specDenoiserGainSum += this.metrics.latestSpecDenoiserGain;
+         this.metrics.specDenoiserGainMax = Math.max(this.metrics.specDenoiserGainMax, this.metrics.latestSpecDenoiserGain);
+         this.metrics.specDenoiserGainSamples++;
+         this.metrics.indirectResolveGainSum += this.metrics.latestIndirectResolveGain;
+         this.metrics.indirectResolveGainMax = Math.max(this.metrics.indirectResolveGainMax, this.metrics.latestIndirectResolveGain);
+         this.metrics.indirectResolveGainSamples++;
+         this.metrics.recordMotionRepeatDelta(directTemporalAndRepeatImage, true, captureIndex, this.activeTicks, this.motionRepeatSettleTicks, this.ticksSinceLastAutomationCommand(), this.isMotionRepeatHistorySettled(), this.cameraController.getCameraMotionStartActiveTick(), this.cameraController.getCameraMotionPeriodTicks(), this.worldController.getTimeOfDayCommandsIssued(), this.worldController.getBlockToggleCommandsIssued(), this.motionRepeatHistoryEpoch());
+         this.metrics.recordMotionRepeatDelta(indirectImage, false, captureIndex, this.activeTicks, this.motionRepeatSettleTicks, this.ticksSinceLastAutomationCommand(), this.isMotionRepeatHistorySettled(), this.cameraController.getCameraMotionStartActiveTick(), this.cameraController.getCameraMotionPeriodTicks(), this.worldController.getTimeOfDayCommandsIssued(), this.worldController.getBlockToggleCommandsIssued(), this.motionRepeatHistoryEpoch());
+         this.metrics.updateWholeLightFlashDiagnostics(captureIndex, resolvedReservoirStats, this.latestTracedLightCount, this.latestTotalLightCount, this.latestLightBlendFactor, WHOLE_LIGHT_FLASH_DIRECT_DROP_THRESHOLD, WHOLE_LIGHT_FLASH_VALID_FRACTION_DROP_THRESHOLD, WHOLE_LIGHT_FLASH_LIGHT_COUNT_DROP_THRESHOLD, WHOLE_LIGHT_FLASH_BLEND_FACTOR_JUMP_THRESHOLD);
          this.capturesTaken = captureIndex;
          this.pendingFinalCaptureIndex = captureIndex;
          boolean directThisCapture = directLuma > 0.0 || directSoftLuma > 0.0 || directRawLuma > 0.0 || handheldLuma > 0.0;
@@ -2139,13 +1117,13 @@ public final class ShaderAutomation {
                Photonic.info("[Automation] first lighting signal at activeTicks={} renderedFrames={} capture={}", this.activeTicks, this.renderedFrames, this.capturesTaken);
             }
          }
-         this.directSignalDetected = this.directMaxLuma > 0.0 || this.directSoftMaxLuma > 0.0 || this.directRawMaxLuma > 0.0 || this.handheldMaxLuma > 0.0;
-         this.lightingSignalDetected = this.directMaxLuma > 0.0 || this.directSoftMaxLuma > 0.0 || this.handheldMaxLuma > 0.0 || this.indirectMaxLuma > 0.0;
+         this.directSignalDetected = this.metrics.directMaxLuma > 0.0 || this.metrics.directSoftMaxLuma > 0.0 || this.metrics.directRawMaxLuma > 0.0 || this.metrics.handheldMaxLuma > 0.0;
+         this.lightingSignalDetected = this.metrics.directMaxLuma > 0.0 || this.metrics.directSoftMaxLuma > 0.0 || this.metrics.handheldMaxLuma > 0.0 || this.metrics.indirectMaxLuma > 0.0;
          Photonic.info("[Automation] capture={} signal={} directSignal={} directSoftSignal={} litCaptures={}/{} activeTicks={} renderedFrames={} lights={}/{} capped={} blendFactor={} blendRegions={} globalReload={} luma(direct={}, soft={}, denoised={}, rawDirect={}, lighting={}, stageLighting={}, stageIndirect={}, handheld={}, rawIndirect={}, indirect={}) mean(direct={}, denoised={}, rawDirect={}, lighting={}, stageLighting={}, stageIndirect={}, rawIndirect={}, indirect={}) variance(direct={}, handheld={}) stddev(direct={}, handheld={}) directAlpha(mean={}, zeroFrac={}) linearIndirect(rawMean={}, rawMax={}, rawOverbright={}, stageMean={}, stageMax={}, stageOverbright={}) meanRgb(direct=({}, {}, {}), lighting=({}, {}, {}), stageLighting=({}, {}, {}), stageIndirect=({}, {}, {}), indirect=({}, {}, {})) indirectAlpha(mainMean={}, mainZeroFrac={}, stageMean={}, stageZeroFrac={}) temporalDelta(directAvg={}, directMax={}, directPixelMaxLatest={}, directPixelMaxAvg={}, softAvg={}, softMax={}, indirectAvg={}, indirectMax={})",
             this.capturesTaken,
             successSignalThisCapture,
             directThisCapture,
-            this.directSoftSignalDetected,
+            this.metrics.directSoftSignalDetected,
             this.litCapturesTaken,
             this.minLitCaptures,
             this.activeTicks,
@@ -2174,18 +1152,18 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", stageIndirectStats[1]),
             String.format(Locale.ROOT, "%.5f", indirectRawStats[1]),
             String.format(Locale.ROOT, "%.5f", indirectStats[1]),
-            String.format(Locale.ROOT, "%.6f", this.latestDirectBrightnessVariance),
-            String.format(Locale.ROOT, "%.6f", this.latestHandheldBrightnessVariance),
-            String.format(Locale.ROOT, "%.6f", this.latestDirectBrightnessStdDev),
-            String.format(Locale.ROOT, "%.6f", this.latestHandheldBrightnessStdDev),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectMeanAlpha),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectZeroAlphaFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearMaxLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearOverbrightFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestStageIndirectLinearMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestStageIndirectLinearMaxLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestStageIndirectLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.6f", this.metrics.latestDirectBrightnessVariance),
+            String.format(Locale.ROOT, "%.6f", this.metrics.latestHandheldBrightnessVariance),
+            String.format(Locale.ROOT, "%.6f", this.metrics.latestDirectBrightnessStdDev),
+            String.format(Locale.ROOT, "%.6f", this.metrics.latestHandheldBrightnessStdDev),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectMeanAlpha),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectZeroAlphaFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestStageIndirectLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestStageIndirectLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestStageIndirectLinearOverbrightFraction),
             String.format(Locale.ROOT, "%.5f", directStats[2]),
             String.format(Locale.ROOT, "%.5f", directStats[3]),
             String.format(Locale.ROOT, "%.5f", directStats[4]),
@@ -2201,18 +1179,18 @@ public final class ShaderAutomation {
             String.format(Locale.ROOT, "%.5f", indirectStats[2]),
             String.format(Locale.ROOT, "%.5f", indirectStats[3]),
             String.format(Locale.ROOT, "%.5f", indirectStats[4]),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectMeanAlpha),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectZeroAlphaFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestStageIndirectMeanAlpha),
-            String.format(Locale.ROOT, "%.5f", this.latestStageIndirectZeroAlphaFraction),
-            String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(false, false)),
-            String.format(Locale.ROOT, "%.5f", this.directTemporalDeltaMax),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectTemporalMaxPixelDelta),
-            String.format(Locale.ROOT, "%.5f", this.averageDirectTemporalMaxPixelDelta()),
-            String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(true, false)),
-            String.format(Locale.ROOT, "%.5f", this.directSoftTemporalDeltaMax),
-            String.format(Locale.ROOT, "%.5f", this.averageTemporalDelta(false, true)),
-            String.format(Locale.ROOT, "%.5f", this.indirectTemporalDeltaMax));
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectMeanAlpha),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectZeroAlphaFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestStageIndirectMeanAlpha),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestStageIndirectZeroAlphaFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.averageTemporalDelta(false, false)),
+            String.format(Locale.ROOT, "%.5f", this.metrics.directTemporalDeltaMax),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectTemporalMaxPixelDelta),
+            String.format(Locale.ROOT, "%.5f", this.metrics.averageDirectTemporalMaxPixelDelta()),
+            String.format(Locale.ROOT, "%.5f", this.metrics.averageTemporalDelta(true, false)),
+            String.format(Locale.ROOT, "%.5f", this.metrics.directSoftTemporalDeltaMax),
+            String.format(Locale.ROOT, "%.5f", this.metrics.averageTemporalDelta(false, true)),
+            String.format(Locale.ROOT, "%.5f", this.metrics.indirectTemporalDeltaMax));
          Photonic.info(
             "[Automation] reservoir capture={} proposal(lightValid={}, strict={}, meanWeight={}, meanM={}) resolved(lightValid={}, strict={}, meanWeight={}, meanM={}) stagePosition(mean=({}, {}, {}), min=({}, {}, {}), max=({}, {}, {}))",
             this.capturesTaken,
@@ -2405,99 +1383,99 @@ public final class ShaderAutomation {
          );
          Photonic.info("[Automation] fireflies capture={} directRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) directDenoised(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) specRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) specDenoised(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) indirectRaw(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={}) indirect(mean={}, max={}, overbright={}, hot16={}, hot64={}, hotShare={}, saturated={}, nonFinite={})",
             this.capturesTaken,
-            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearMaxLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearOverbrightFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearSevereFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearFireflyLumaShare),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearSaturatedPixelFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectRawLinearNonFiniteFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearMaxLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearOverbrightFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearSevereFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearFireflyLumaShare),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearSaturatedPixelFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoisedLinearNonFiniteFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearMaxLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearOverbrightFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearSevereFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearFireflyLumaShare),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearSaturatedPixelFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecRawLinearNonFiniteFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearMaxLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearOverbrightFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearSevereFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearFireflyLumaShare),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearSaturatedPixelFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoisedLinearNonFiniteFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearMaxLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearOverbrightFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearSevereFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearFireflyLumaShare),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearSaturatedPixelFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectRawLinearNonFiniteFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearMaxLuma),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearOverbrightFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearSevereFireflyFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearFireflyLumaShare),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearSaturatedPixelFraction),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectLinearNonFiniteFraction)
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectRawLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectRawLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectRawLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectRawLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectRawLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectRawLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectRawLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectRawLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoisedLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoisedLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoisedLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoisedLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoisedLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoisedLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoisedLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoisedLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecRawLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecRawLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecRawLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecRawLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecRawLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecRawLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecRawLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecRawLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoisedLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoisedLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoisedLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoisedLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoisedLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoisedLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoisedLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoisedLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectRawLinearNonFiniteFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectLinearMeanLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectLinearMaxLuma),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectLinearOverbrightFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectLinearFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectLinearSevereFireflyFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectLinearFireflyLumaShare),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectLinearSaturatedPixelFraction),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectLinearNonFiniteFraction)
          );
          Photonic.info("[Automation] denoise gain capture={} direct(latest={}, avg={}, max={}) spec(latest={}, avg={}, max={}) indirect(latest={}, avg={}, max={})",
             this.capturesTaken,
-            String.format(Locale.ROOT, "%.5f", this.latestDirectDenoiserGain),
-            String.format(Locale.ROOT, "%.5f", this.directDenoiserGainSamples == 0 ? 0.0 : this.directDenoiserGainSum / this.directDenoiserGainSamples),
-            String.format(Locale.ROOT, "%.5f", this.directDenoiserGainMax),
-            String.format(Locale.ROOT, "%.5f", this.latestSpecDenoiserGain),
-            String.format(Locale.ROOT, "%.5f", this.specDenoiserGainSamples == 0 ? 0.0 : this.specDenoiserGainSum / this.specDenoiserGainSamples),
-            String.format(Locale.ROOT, "%.5f", this.specDenoiserGainMax),
-            String.format(Locale.ROOT, "%.5f", this.latestIndirectResolveGain),
-            String.format(Locale.ROOT, "%.5f", this.indirectResolveGainSamples == 0 ? 0.0 : this.indirectResolveGainSum / this.indirectResolveGainSamples),
-            String.format(Locale.ROOT, "%.5f", this.indirectResolveGainMax));
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestDirectDenoiserGain),
+            String.format(Locale.ROOT, "%.5f", this.metrics.directDenoiserGainSamples == 0 ? 0.0 : this.metrics.directDenoiserGainSum / this.metrics.directDenoiserGainSamples),
+            String.format(Locale.ROOT, "%.5f", this.metrics.directDenoiserGainMax),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestSpecDenoiserGain),
+            String.format(Locale.ROOT, "%.5f", this.metrics.specDenoiserGainSamples == 0 ? 0.0 : this.metrics.specDenoiserGainSum / this.metrics.specDenoiserGainSamples),
+            String.format(Locale.ROOT, "%.5f", this.metrics.specDenoiserGainMax),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestIndirectResolveGain),
+            String.format(Locale.ROOT, "%.5f", this.metrics.indirectResolveGainSamples == 0 ? 0.0 : this.metrics.indirectResolveGainSum / this.metrics.indirectResolveGainSamples),
+            String.format(Locale.ROOT, "%.5f", this.metrics.indirectResolveGainMax));
          Photonic.info("[Automation] post-motion drop capture={} samples={} direct(stop={}, latestDrop={}, avg={}, max={}) rawDirect(stop={}, latestDrop={}, avg={}, max={}) indirect(stop={}, latestDrop={}, avg={}, max={}) stageIndirect(stop={}, latestDrop={}, avg={}, max={})",
             this.capturesTaken,
-            this.postMotionDropSamples,
-            String.format(Locale.ROOT, "%.5f", this.postMotionDirectMeanAtStop),
-            String.format(Locale.ROOT, "%.5f", this.latestPostMotionDirectDrop),
-            String.format(Locale.ROOT, "%.5f", this.postMotionDropSamples == 0 ? 0.0 : this.postMotionDirectDropSum / this.postMotionDropSamples),
-            String.format(Locale.ROOT, "%.5f", this.postMotionDirectDropMax),
-            String.format(Locale.ROOT, "%.5f", this.postMotionRawDirectMeanAtStop),
-            String.format(Locale.ROOT, "%.5f", this.latestPostMotionRawDirectDrop),
-            String.format(Locale.ROOT, "%.5f", this.postMotionDropSamples == 0 ? 0.0 : this.postMotionRawDirectDropSum / this.postMotionDropSamples),
-            String.format(Locale.ROOT, "%.5f", this.postMotionRawDirectDropMax),
-            String.format(Locale.ROOT, "%.5f", this.postMotionIndirectMeanAtStop),
-            String.format(Locale.ROOT, "%.5f", this.latestPostMotionIndirectDrop),
-            String.format(Locale.ROOT, "%.5f", this.postMotionDropSamples == 0 ? 0.0 : this.postMotionIndirectDropSum / this.postMotionDropSamples),
-            String.format(Locale.ROOT, "%.5f", this.postMotionIndirectDropMax),
-            String.format(Locale.ROOT, "%.5f", this.postMotionStageIndirectMeanAtStop),
-            String.format(Locale.ROOT, "%.5f", this.latestPostMotionStageIndirectDrop),
-            String.format(Locale.ROOT, "%.5f", this.postMotionDropSamples == 0 ? 0.0 : this.postMotionStageIndirectDropSum / this.postMotionDropSamples),
-            String.format(Locale.ROOT, "%.5f", this.postMotionStageIndirectDropMax));
+            this.metrics.postMotionDropSamples,
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionDirectMeanAtStop),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestPostMotionDirectDrop),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionDropSamples == 0 ? 0.0 : this.metrics.postMotionDirectDropSum / this.metrics.postMotionDropSamples),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionDirectDropMax),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionRawDirectMeanAtStop),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestPostMotionRawDirectDrop),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionDropSamples == 0 ? 0.0 : this.metrics.postMotionRawDirectDropSum / this.metrics.postMotionDropSamples),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionRawDirectDropMax),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionIndirectMeanAtStop),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestPostMotionIndirectDrop),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionDropSamples == 0 ? 0.0 : this.metrics.postMotionIndirectDropSum / this.metrics.postMotionDropSamples),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionIndirectDropMax),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionStageIndirectMeanAtStop),
+            String.format(Locale.ROOT, "%.5f", this.metrics.latestPostMotionStageIndirectDrop),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionDropSamples == 0 ? 0.0 : this.metrics.postMotionStageIndirectDropSum / this.metrics.postMotionDropSamples),
+            String.format(Locale.ROOT, "%.5f", this.metrics.postMotionStageIndirectDropMax));
          if (this.isCameraMotionEnabled()) {
             Photonic.info("[Automation] motion mode={} ticks={} yawOffsetRange=[{}, {}] pitchOffsetRange=[{}, {}] repeatDelta(directAvg={}, directMax={}, indirectAvg={}, indirectMax={}, phaseSamples={}/{})",
-               this.cameraMotionMode,
-               this.cameraMotionAppliedTicks,
-               String.format(Locale.ROOT, "%.2f", this.motionYawOffsetMin),
-               String.format(Locale.ROOT, "%.2f", this.motionYawOffsetMax),
-               String.format(Locale.ROOT, "%.2f", this.motionPitchOffsetMin),
-               String.format(Locale.ROOT, "%.2f", this.motionPitchOffsetMax),
-               String.format(Locale.ROOT, "%.5f", this.averageMotionRepeatDelta(true)),
-               String.format(Locale.ROOT, "%.5f", this.motionRepeatDirectDeltaMax),
-               String.format(Locale.ROOT, "%.5f", this.averageMotionRepeatDelta(false)),
-               String.format(Locale.ROOT, "%.5f", this.motionRepeatIndirectDeltaMax),
-               this.motionRepeatDirectDeltaSamples,
-               this.motionRepeatIndirectDeltaSamples);
+               this.cameraController.getCameraMotionMode(),
+               this.cameraController.getCameraMotionAppliedTicks(),
+               String.format(Locale.ROOT, "%.2f", this.cameraController.getMotionYawOffsetMin()),
+               String.format(Locale.ROOT, "%.2f", this.cameraController.getMotionYawOffsetMax()),
+               String.format(Locale.ROOT, "%.2f", this.cameraController.getMotionPitchOffsetMin()),
+               String.format(Locale.ROOT, "%.2f", this.cameraController.getMotionPitchOffsetMax()),
+               String.format(Locale.ROOT, "%.5f", this.metrics.averageMotionRepeatDelta(true)),
+               String.format(Locale.ROOT, "%.5f", this.metrics.motionRepeatDirectDeltaMax),
+               String.format(Locale.ROOT, "%.5f", this.metrics.averageMotionRepeatDelta(false)),
+               String.format(Locale.ROOT, "%.5f", this.metrics.motionRepeatIndirectDeltaMax),
+               this.metrics.motionRepeatDirectDeltaSamples,
+               this.metrics.motionRepeatIndirectDeltaSamples);
          }
          this.writeReport(false);
          if (this.buildSuccess()) {
@@ -2529,7 +1507,7 @@ public final class ShaderAutomation {
          String filename = "final-" + String.format(Locale.ROOT, "%03d", captureIndex) + ".png";
          ImageIO.write(image, "PNG", this.captureDir.resolve(filename).toFile());
 
-         double[] finalStats = computeImageStats(image);
+         double[] finalStats = ShaderAutomationImageUtils.computeImageStats(image);
          this.finalFrameMaxLuma = Math.max(this.finalFrameMaxLuma, finalStats[0]);
          this.latestFinalMeanLuma = finalStats[1];
          this.latestFinalMeanRed = finalStats[2];
@@ -2670,7 +1648,7 @@ public final class ShaderAutomation {
    }
 
    private void updatePostMotionWindow() {
-      if (!this.isCameraMotionEnabled() || this.cameraMotionAppliedTicks <= 0) {
+      if (!this.isCameraMotionEnabled() || this.cameraController.getCameraMotionAppliedTicks() <= 0) {
          return;
       }
 
@@ -2678,311 +1656,22 @@ public final class ShaderAutomation {
          return;
       }
 
-      if (this.timeOfDaySequence.length == 0 && this.blockToggleCount == 0) {
+      long[] timeOfDaySequence = this.worldController.getTimeOfDaySequence();
+      int blockToggleCount = this.worldController.getBlockToggleCount();
+      if (timeOfDaySequence.length == 0 && blockToggleCount == 0) {
          return;
       }
 
-      int motionEndTick = this.timeOfDaySequence.length > 0
-         ? this.timeOfDayStartActiveTick
-         : this.blockToggleStartActiveTick;
+      int motionEndTick = timeOfDaySequence.length > 0
+         ? this.worldController.getTimeOfDayStartActiveTick()
+         : this.worldController.getBlockToggleStartActiveTick();
       if (motionEndTick > 0 && this.activeTicks >= motionEndTick) {
          this.cameraMotionStopActiveTick = motionEndTick;
       }
    }
 
-   private void updatePostMotionDropMetrics() {
-      if (this.cameraMotionStopActiveTick < 0 || this.activeTicks < this.cameraMotionStopActiveTick) {
-         return;
-      }
-
-      if (this.postMotionDropSamples == 0) {
-         this.postMotionDirectMeanAtStop = this.latestDirectMeanLuma;
-         this.postMotionIndirectMeanAtStop = this.latestIndirectMeanLuma;
-         this.postMotionRawDirectMeanAtStop = this.latestDirectRawMeanLuma;
-         this.postMotionStageIndirectMeanAtStop = this.latestStageIndirectMeanLuma;
-      }
-
-      this.latestPostMotionDirectDrop = Math.max(0.0, this.postMotionDirectMeanAtStop - this.latestDirectMeanLuma);
-      this.latestPostMotionIndirectDrop = Math.max(0.0, this.postMotionIndirectMeanAtStop - this.latestIndirectMeanLuma);
-      this.latestPostMotionRawDirectDrop = Math.max(0.0, this.postMotionRawDirectMeanAtStop - this.latestDirectRawMeanLuma);
-      this.latestPostMotionStageIndirectDrop = Math.max(0.0, this.postMotionStageIndirectMeanAtStop - this.latestStageIndirectMeanLuma);
-      this.postMotionDirectDropMax = Math.max(this.postMotionDirectDropMax, this.latestPostMotionDirectDrop);
-      this.postMotionIndirectDropMax = Math.max(this.postMotionIndirectDropMax, this.latestPostMotionIndirectDrop);
-      this.postMotionRawDirectDropMax = Math.max(this.postMotionRawDirectDropMax, this.latestPostMotionRawDirectDrop);
-      this.postMotionStageIndirectDropMax = Math.max(this.postMotionStageIndirectDropMax, this.latestPostMotionStageIndirectDrop);
-      this.postMotionDirectDropSum += this.latestPostMotionDirectDrop;
-      this.postMotionIndirectDropSum += this.latestPostMotionIndirectDrop;
-      this.postMotionRawDirectDropSum += this.latestPostMotionRawDirectDrop;
-      this.postMotionStageIndirectDropSum += this.latestPostMotionStageIndirectDrop;
-      this.postMotionDropSamples++;
-   }
-
-   private void updateDirectSoftSignalState(double directSoftLuma, int captureIndex) {
-      if (directSoftLuma > 0.0) {
-         this.directSoftSignalDetected = true;
-         this.directSoftSignalCaptureCount++;
-         return;
-      }
-
-      this.directSoftZeroCaptureCount++;
-      if (this.directSoftMissingSignalWarningIssued || this.directSoftZeroCaptureCount < 50) {
-         return;
-      }
-
-      this.directSoftMissingSignalWarningIssued = true;
-      Photonic.warn(
-         "[Automation] direct_soft remained black for {} captures; capture={} activeTicks={} directMaxLuma={} directRawMaxLuma={} handheldMaxLuma={}",
-         this.directSoftZeroCaptureCount,
-         captureIndex,
-         this.activeTicks,
-         String.format(Locale.ROOT, "%.4f", this.directMaxLuma),
-         String.format(Locale.ROOT, "%.4f", this.directRawMaxLuma),
-         String.format(Locale.ROOT, "%.4f", this.handheldMaxLuma));
-   }
-
-   private void recordTemporalDelta(BufferedImage currentImage, boolean directSoft, boolean indirect) {
-      if (currentImage == null) {
-         return;
-      }
-
-      if (indirect) {
-         double delta = computeMeanLumaDelta(this.previousIndirectImage, currentImage);
-         if (this.previousIndirectImage != null) {
-            this.indirectTemporalDeltaSum += delta;
-            this.indirectTemporalDeltaMax = Math.max(this.indirectTemporalDeltaMax, delta);
-            this.indirectTemporalDeltaSamples++;
-         }
-         this.previousIndirectImage = currentImage;
-         return;
-      }
-
-      if (directSoft) {
-         double delta = computeMeanLumaDelta(this.previousDirectSoftImage, currentImage);
-         if (this.previousDirectSoftImage != null) {
-            this.latestDirectSoftTemporalDelta = delta;
-            this.directSoftTemporalDeltaSum += delta;
-            this.directSoftTemporalDeltaMax = Math.max(this.directSoftTemporalDeltaMax, delta);
-            this.directSoftTemporalDeltaSamples++;
-         }
-         this.previousDirectSoftImage = currentImage;
-         return;
-      }
-
-      double delta = computeMeanLumaDelta(this.previousDirectImage, currentImage);
-      double maxPixelDelta = computeMaxLumaPixelDelta(this.previousDirectImage, currentImage);
-      if (this.previousDirectImage != null) {
-         this.latestDirectTemporalDelta = delta;
-         this.latestDirectTemporalMaxPixelDelta = maxPixelDelta;
-         this.directTemporalDeltaSum += delta;
-         this.directTemporalDeltaMax = Math.max(this.directTemporalDeltaMax, delta);
-         this.directTemporalDeltaSamples++;
-         this.directTemporalMaxPixelDeltaSum += maxPixelDelta;
-         this.directTemporalMaxPixelDeltaMax = Math.max(this.directTemporalMaxPixelDeltaMax, maxPixelDelta);
-         this.directTemporalMaxPixelDeltaSamples++;
-      }
-      this.previousDirectImage = currentImage;
-   }
-
-   private void recordMotionRepeatDelta(BufferedImage currentImage, boolean direct, int captureIndex) {
-      if (!this.isMotionRepeatValidationEnabled() || currentImage == null) {
-         return;
-      }
-
-      int phaseKey = motionPhaseKey(this.activeTicks, this.cameraMotionStartActiveTick, this.cameraMotionPeriodTicks);
-      if (phaseKey < 0) {
-         return;
-      }
-
-      int ticksSinceCommand = this.ticksSinceLastAutomationCommand();
-      if (ticksSinceCommand < this.motionRepeatSettleTicks) {
-         return;
-      }
-      if (!this.isMotionRepeatHistorySettled()) {
-         return;
-      }
-
-      MotionRepeatKey repeatKey = new MotionRepeatKey(phaseKey, this.timeOfDayCommandsIssued, this.blockToggleCommandsIssued, this.motionRepeatHistoryEpoch());
-      Map<MotionRepeatKey, MotionPhaseSample> historyByPhase = direct ? this.previousDirectImagesByPhase : this.previousIndirectImagesByPhase;
-      MotionPhaseSample previousSample = historyByPhase.get(repeatKey);
-      if (previousSample != null) {
-         double delta = computeMeanLumaDelta(previousSample.image(), currentImage);
-         if (direct) {
-            this.motionRepeatDirectDeltaSum += delta;
-            this.motionRepeatDirectDeltaMax = Math.max(this.motionRepeatDirectDeltaMax, delta);
-            this.motionRepeatDirectDeltaSamples++;
-         } else {
-            this.motionRepeatIndirectDeltaSum += delta;
-            this.motionRepeatIndirectDeltaMax = Math.max(this.motionRepeatIndirectDeltaMax, delta);
-            this.motionRepeatIndirectDeltaSamples++;
-         }
-         this.recordTopRepeatDelta(
-            direct,
-            new MotionRepeatDeltaRecord(
-               delta,
-               phaseKey,
-               previousSample.captureIndex(),
-               captureIndex,
-               previousSample.activeTick(),
-               this.activeTicks,
-               previousSample.ticksSinceAutomationCommand(),
-               ticksSinceCommand,
-               previousSample.timeOfDayCommandCount(),
-               previousSample.blockToggleCommandCount(),
-               this.timeOfDayCommandsIssued,
-               this.blockToggleCommandsIssued,
-               repeatKey.historyEpoch()
-            )
-         );
-      }
-      historyByPhase.put(
-         repeatKey,
-         new MotionPhaseSample(
-            currentImage,
-            captureIndex,
-            this.activeTicks,
-            ticksSinceCommand,
-            this.timeOfDayCommandsIssued,
-            this.blockToggleCommandsIssued,
-            repeatKey.historyEpoch()
-         )
-      );
-   }
-
-   private void updateWholeLightFlashDiagnostics(int captureIndex, ReservoirDebugStats resolvedReservoirStats) {
-      double directDrop = 0.0;
-      if (Double.isFinite(this.previousCaptureDirectMeanLuma) && this.previousCaptureDirectMeanLuma > 1.0e-6) {
-         directDrop = Math.max(0.0, (this.previousCaptureDirectMeanLuma - this.latestDirectMeanLuma) / this.previousCaptureDirectMeanLuma);
-      }
-
-      double resolvedValidDrop = 0.0;
-      if (Double.isFinite(this.previousCaptureResolvedStrictValidFraction)) {
-         resolvedValidDrop = Math.max(0.0, this.previousCaptureResolvedStrictValidFraction - resolvedReservoirStats.strictValidFraction());
-      }
-
-      double lightCountDrop = 0.0;
-      if (this.previousCaptureTracedLightCount > 0) {
-         lightCountDrop = Math.max(0.0, (this.previousCaptureTracedLightCount - this.latestTracedLightCount) / (double)this.previousCaptureTracedLightCount);
-      }
-
-      double resolvedMDrop = 0.0;
-      if (Double.isFinite(this.previousCaptureResolvedMeanM) && this.previousCaptureResolvedMeanM > 1.0e-6) {
-         resolvedMDrop = Math.max(0.0, (this.previousCaptureResolvedMeanM - resolvedReservoirStats.meanM()) / this.previousCaptureResolvedMeanM);
-      }
-
-      double blendFactorJump = 0.0;
-      if (Double.isFinite(this.previousCaptureLightBlendFactor)) {
-         blendFactorJump = Math.abs(this.latestLightBlendFactor - this.previousCaptureLightBlendFactor);
-      }
-
-      this.latestResolvedMeanM = resolvedReservoirStats.meanM();
-      this.latestWholeLightFlashDirectDrop = directDrop;
-      this.latestWholeLightFlashResolvedValidDrop = resolvedValidDrop;
-      this.latestWholeLightFlashLightCountDrop = lightCountDrop;
-      this.latestWholeLightFlashResolvedMDrop = resolvedMDrop;
-      this.latestWholeLightFlashBlendFactorJump = blendFactorJump;
-      this.maxWholeLightFlashDirectDrop = Math.max(this.maxWholeLightFlashDirectDrop, directDrop);
-      this.maxWholeLightFlashResolvedValidDrop = Math.max(this.maxWholeLightFlashResolvedValidDrop, resolvedValidDrop);
-      this.maxWholeLightFlashLightCountDrop = Math.max(this.maxWholeLightFlashLightCountDrop, lightCountDrop);
-      this.maxWholeLightFlashResolvedMDrop = Math.max(this.maxWholeLightFlashResolvedMDrop, resolvedMDrop);
-      this.maxWholeLightFlashBlendFactorJump = Math.max(this.maxWholeLightFlashBlendFactorJump, blendFactorJump);
-
-      boolean directDropTriggered = directDrop >= WHOLE_LIGHT_FLASH_DIRECT_DROP_THRESHOLD;
-      boolean resolvedValidDropTriggered = resolvedValidDrop >= WHOLE_LIGHT_FLASH_VALID_FRACTION_DROP_THRESHOLD;
-      boolean lightCountDropTriggered = lightCountDrop >= WHOLE_LIGHT_FLASH_LIGHT_COUNT_DROP_THRESHOLD;
-      boolean blendJumpTriggered = blendFactorJump >= WHOLE_LIGHT_FLASH_BLEND_FACTOR_JUMP_THRESHOLD;
-
-      if (directDropTriggered) {
-         this.wholeLightFlashDirectDropCaptures++;
-      }
-      if (resolvedValidDropTriggered) {
-         this.wholeLightFlashResolvedValidDropCaptures++;
-      }
-      if (lightCountDropTriggered) {
-         this.wholeLightFlashLightCountDropCaptures++;
-      }
-      if (blendJumpTriggered) {
-         this.wholeLightFlashBlendJumpCaptures++;
-      }
-
-      if (directDropTriggered || resolvedValidDropTriggered || lightCountDropTriggered || blendJumpTriggered) {
-         this.wholeLightFlashSuspectCaptures++;
-         this.wholeLightFlashLastCapture = captureIndex;
-         Photonic.warn(
-            "[Automation] whole-light-flash capture={} directDrop={} resolvedValidDrop={} resolvedMDrop={} resolvedWeightDelta={} lightCountDrop={} blendFactorJump={} directMean={} prevDirectMean={} resolvedStrict={} prevResolvedStrict={} resolvedMeanWeight={} prevResolvedMeanWeight={} resolvedMeanM={} prevResolvedMeanM={} tracedLights={}/{} prevTracedLights={} blendFactor={} prevBlendFactor={} triggers(direct={}, resolved={}, lights={}, blend={})",
-            captureIndex,
-            String.format(Locale.ROOT, "%.5f", directDrop),
-            String.format(Locale.ROOT, "%.5f", resolvedValidDrop),
-            String.format(Locale.ROOT, "%.5f", resolvedMDrop),
-            String.format(Locale.ROOT, "%.5f", Double.isFinite(this.previousCaptureResolvedMeanWeight) ? resolvedReservoirStats.meanWeight() - this.previousCaptureResolvedMeanWeight : 0.0),
-            String.format(Locale.ROOT, "%.5f", lightCountDrop),
-            String.format(Locale.ROOT, "%.5f", blendFactorJump),
-            String.format(Locale.ROOT, "%.5f", this.latestDirectMeanLuma),
-            String.format(Locale.ROOT, "%.5f", this.previousCaptureDirectMeanLuma),
-            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.strictValidFraction()),
-            String.format(Locale.ROOT, "%.5f", this.previousCaptureResolvedStrictValidFraction),
-            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.meanWeight()),
-            String.format(Locale.ROOT, "%.5f", this.previousCaptureResolvedMeanWeight),
-            String.format(Locale.ROOT, "%.5f", resolvedReservoirStats.meanM()),
-            String.format(Locale.ROOT, "%.5f", this.previousCaptureResolvedMeanM),
-            this.latestTracedLightCount,
-            this.latestTotalLightCount,
-            this.previousCaptureTracedLightCount,
-            String.format(Locale.ROOT, "%.5f", this.latestLightBlendFactor),
-            String.format(Locale.ROOT, "%.5f", this.previousCaptureLightBlendFactor),
-            directDropTriggered,
-            resolvedValidDropTriggered,
-            lightCountDropTriggered,
-            blendJumpTriggered
-         );
-      }
-
-      this.previousCaptureDirectMeanLuma = this.latestDirectMeanLuma;
-      this.previousCaptureResolvedStrictValidFraction = resolvedReservoirStats.strictValidFraction();
-      this.previousCaptureResolvedMeanWeight = resolvedReservoirStats.meanWeight();
-      this.previousCaptureResolvedMeanM = resolvedReservoirStats.meanM();
-      this.previousCaptureLightBlendFactor = this.latestLightBlendFactor;
-      this.previousCaptureTracedLightCount = this.latestTracedLightCount;
-   }
-
-   private double averageTemporalDelta(boolean directSoft, boolean indirect) {
-      if (indirect) {
-         return this.indirectTemporalDeltaSamples == 0 ? 0.0 : this.indirectTemporalDeltaSum / this.indirectTemporalDeltaSamples;
-      }
-      if (directSoft) {
-         return this.directSoftTemporalDeltaSamples == 0 ? 0.0 : this.directSoftTemporalDeltaSum / this.directSoftTemporalDeltaSamples;
-      }
-      return this.directTemporalDeltaSamples == 0 ? 0.0 : this.directTemporalDeltaSum / this.directTemporalDeltaSamples;
-   }
-
-   private double averageDirectTemporalMaxPixelDelta() {
-      return this.directTemporalMaxPixelDeltaSamples == 0
-         ? 0.0
-         : this.directTemporalMaxPixelDeltaSum / this.directTemporalMaxPixelDeltaSamples;
-   }
-
-   private double averageDirectAlphaDelta() {
-      return this.directAlphaDeltaSamples == 0 ? 0.0 : this.directAlphaDeltaSum / this.directAlphaDeltaSamples;
-   }
-
-   private double averageDirectBrightnessVariance() {
-      return this.directBrightnessVarianceSamples == 0 ? 0.0 : this.directBrightnessVarianceSum / this.directBrightnessVarianceSamples;
-   }
-
-   private double averageHandheldBrightnessVariance() {
-      return this.handheldBrightnessVarianceSamples == 0 ? 0.0 : this.handheldBrightnessVarianceSum / this.handheldBrightnessVarianceSamples;
-   }
-
-   private double averageMotionRepeatDelta(boolean direct) {
-      if (direct) {
-         return this.motionRepeatDirectDeltaSamples == 0 ? 0.0 : this.motionRepeatDirectDeltaSum / this.motionRepeatDirectDeltaSamples;
-      }
-      return this.motionRepeatIndirectDeltaSamples == 0 ? 0.0 : this.motionRepeatIndirectDeltaSum / this.motionRepeatIndirectDeltaSamples;
-   }
-
    private int ticksSinceLastAutomationCommand() {
-      return this.lastAutomationCommandActiveTick == Integer.MIN_VALUE
-         ? Integer.MAX_VALUE
-         : Math.max(0, this.activeTicks - this.lastAutomationCommandActiveTick);
+      return this.worldController.ticksSinceLastCommand(this.activeTicks);
    }
 
    private int ticksSinceLastMotionRepeatHistoryInvalidation() {
@@ -3024,42 +1713,9 @@ public final class ShaderAutomation {
       return this.observedMotionRepeatHistoryActivity ? this.motionRepeatHistoryEpoch : 0;
    }
 
-   private void recordTopRepeatDelta(boolean direct, MotionRepeatDeltaRecord record) {
-      List<MotionRepeatDeltaRecord> topDeltas = direct ? this.topDirectRepeatDeltas : this.topIndirectRepeatDeltas;
-      topDeltas.add(record);
-      topDeltas.sort((left, right) -> Double.compare(right.delta(), left.delta()));
-      if (topDeltas.size() > MAX_REPEAT_DIAGNOSTICS) {
-         topDeltas.remove(topDeltas.size() - 1);
-      }
-   }
-
-   private static String formatRepeatDeltaDiagnostics(List<MotionRepeatDeltaRecord> records) {
-      if (records.isEmpty()) {
-         return "";
-      }
-
-      List<String> parts = new ArrayList<>(records.size());
-      for (MotionRepeatDeltaRecord record : records) {
-         parts.add(String.format(
-            Locale.ROOT,
-            "delta=%.5f phase=%d epoch=%d captures=%d→%d activeTicks=%d→%d cmdTicks=%d→%d",
-            record.delta(),
-            record.phaseKey(),
-            record.historyEpoch(),
-            record.previousCaptureIndex(),
-            record.currentCaptureIndex(),
-            record.previousActiveTick(),
-            record.currentActiveTick(),
-            record.previousTicksSinceAutomationCommand(),
-            record.currentTicksSinceAutomationCommand()
-         ));
-      }
-      return String.join(" | ", parts);
-   }
-
    private void refreshRuntimeState() {
       this.patchId = this.currentPatchId();
-      this.expectedShaderPackMatched = matchesExpectedShaderPack(this.expectedShaderPack, Iris.getCurrentPackName());
+      this.expectedShaderPackMatched = ShaderAutomationValidators.matchesExpectedShaderPack(this.expectedShaderPack, Iris.getCurrentPackName());
       this.raytracerActive = Raytracer.INSTANCE != null && !Raytracer.isDisabled();
       if (!this.raytracerActive) {
          this.stableSceneTicks = 0;
@@ -3279,137 +1935,6 @@ public final class ShaderAutomation {
       return String.format(Locale.ROOT, "%.2f", fps);
    }
 
-   private void applyCameraMotion(MinecraftClient client) {
-      if (!this.isCameraMotionEnabled() || client.player == null || !this.stableSceneSatisfied()) {
-         return;
-      }
-
-      if (!this.cameraBaselineCaptured) {
-         this.cameraBaselineCaptured = true;
-         this.baselineCameraYaw = client.player.getYaw();
-         this.baselineCameraPitch = client.player.getPitch();
-      }
-
-      float yawOffset = computeSineMotionOffset(this.activeTicks, this.cameraMotionStartActiveTick, this.cameraMotionPeriodTicks, this.cameraYawAmplitudeDegrees);
-      float pitchOffset = computeSineMotionOffset(
-         this.activeTicks + Math.max(this.cameraMotionPeriodTicks / 4, 1),
-         this.cameraMotionStartActiveTick,
-         this.cameraMotionPeriodTicks,
-         this.cameraPitchAmplitudeDegrees
-      );
-      float targetYaw = this.baselineCameraYaw + yawOffset;
-      float targetPitch = clampPitch(this.baselineCameraPitch + pitchOffset);
-
-      client.player.setYaw(targetYaw);
-      client.player.setPitch(targetPitch);
-      client.player.setHeadYaw(targetYaw);
-      client.player.setBodyYaw(targetYaw);
-
-      if (this.activeTicks >= this.cameraMotionStartActiveTick) {
-         this.cameraMotionAppliedTicks++;
-         this.motionYawOffsetMin = Math.min(this.motionYawOffsetMin, yawOffset);
-         this.motionYawOffsetMax = Math.max(this.motionYawOffsetMax, yawOffset);
-         this.motionPitchOffsetMin = Math.min(this.motionPitchOffsetMin, pitchOffset);
-         this.motionPitchOffsetMax = Math.max(this.motionPitchOffsetMax, pitchOffset);
-      }
-   }
-
-   private void applyWorldAutomation(MinecraftClient client) {
-      if (client.world == null || client.player == null || client.getServer() == null) {
-         return;
-      }
-
-      this.prepareWorldAutomation(client);
-      this.applyTimeOfDayAutomation(client);
-      this.applyBlockToggleAutomation(client);
-   }
-
-   private void prepareWorldAutomation(MinecraftClient client) {
-      if (this.worldAutomationPrepared || this.activeTicks < this.worldPrepActiveTick) {
-         return;
-      }
-
-      boolean prepared = true;
-      prepared &= this.executeServerCommand(client, "gamerule doDaylightCycle false");
-      prepared &= this.executeServerCommand(client, "gamerule doWeatherCycle false");
-      prepared &= this.executeServerCommand(client, "gamerule randomTickSpeed 0");
-      prepared &= this.executeServerCommand(client, "gamerule doMobSpawning false");
-      prepared &= this.executeServerCommand(client, "gamerule doFireTick false");
-      prepared &= this.executeServerCommand(client, "weather clear");
-      if (prepared) {
-         this.worldAutomationPrepared = true;
-         this.queueBurstCaptures(2);
-      }
-   }
-
-   private void applyTimeOfDayAutomation(MinecraftClient client) {
-      if (this.timeOfDaySequence.length == 0 || this.activeTicks < this.timeOfDayStartActiveTick) {
-         return;
-      }
-
-      int sequenceIndex = (this.activeTicks - this.timeOfDayStartActiveTick) / this.timeOfDayStepTicks;
-      if (sequenceIndex < 0 || sequenceIndex >= this.timeOfDaySequence.length || sequenceIndex < this.timeOfDayCommandsIssued) {
-         return;
-      }
-
-      long timeOfDay = this.timeOfDaySequence[sequenceIndex];
-      if (this.executeServerCommand(client, "time set " + timeOfDay)) {
-         this.timeOfDayCommandsIssued = sequenceIndex + 1;
-         this.queueBurstCaptures(3);
-      }
-   }
-
-   private void applyBlockToggleAutomation(MinecraftClient client) {
-      if (this.blockToggleCount <= 0 || this.activeTicks < this.blockToggleStartActiveTick) {
-         return;
-      }
-
-      int toggleIndex = (this.activeTicks - this.blockToggleStartActiveTick) / this.blockTogglePeriodTicks;
-      if (toggleIndex < 0 || toggleIndex >= this.blockToggleCount || toggleIndex < this.blockToggleCommandsIssued) {
-         return;
-      }
-
-      this.ensureAutomationBlockTarget(client);
-      if (this.automationBlockX == Integer.MIN_VALUE) {
-         return;
-      }
-
-      String command = (toggleIndex & 1) == 0
-         ? "setblock " + this.automationBlockX + " " + this.automationBlockY + " " + this.automationBlockZ + " minecraft:glowstone replace"
-         : "setblock " + this.automationBlockX + " " + this.automationBlockY + " " + this.automationBlockZ + " minecraft:air destroy";
-      if (this.executeServerCommand(client, command)) {
-         this.blockToggleCommandsIssued = toggleIndex + 1;
-         this.queueBurstCaptures(3);
-      }
-   }
-
-   private void ensureAutomationBlockTarget(MinecraftClient client) {
-      if (this.automationBlockX != Integer.MIN_VALUE || client.player == null) {
-         return;
-      }
-
-      double yawRadians = Math.toRadians(client.player.getYaw());
-      this.automationBlockX = (int)Math.floor(client.player.getX() - Math.sin(yawRadians) * 3.0);
-      this.automationBlockY = (int)Math.floor(client.player.getY());
-      this.automationBlockZ = (int)Math.floor(client.player.getZ() + Math.cos(yawRadians) * 3.0);
-   }
-
-   private boolean executeServerCommand(MinecraftClient client, String command) {
-      if (client.getServer() == null) {
-         return false;
-      }
-
-      try {
-         client.getServer().execute(() -> client.getServer().getCommandManager().executeWithPrefix(client.getServer().getCommandSource(), command));
-         this.lastAutomationCommandActiveTick = this.activeTicks;
-         Photonic.info("[Automation] command activeTicks={} command={}", this.activeTicks, command);
-         return true;
-      } catch (RuntimeException e) {
-         Photonic.warn("[Automation] command failed activeTicks={} command={} error={}", this.activeTicks, command, e.toString());
-         return false;
-      }
-   }
-
    private void queueBurstCaptures(int burstCaptureCount) {
       this.pendingBurstCaptures = Math.max(this.pendingBurstCaptures, burstCaptureCount);
    }
@@ -3439,7 +1964,7 @@ public final class ShaderAutomation {
          this.litCapturesTaken,
          this.minLitCaptures,
          this.directSignalDetected,
-         activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick),
+         ShaderAutomationValidators.activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick),
          this.minActiveTicksBeforeSuccess,
          this.minActiveTicksAfterSignal,
          formatFps(this.currentFps),
@@ -3489,34 +2014,34 @@ public final class ShaderAutomation {
          props.setProperty("releaseMouse", Boolean.toString(this.releaseMouse));
          props.setProperty("requireDirectSignal", Boolean.toString(this.requireDirectSignal));
          props.setProperty("firstLightingSignalActiveTick", Integer.toString(this.firstLightingSignalActiveTick));
-         props.setProperty("activeTicksSinceFirstSignal", Integer.toString(activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick)));
-         props.setProperty("cameraMotionMode", this.cameraMotionMode);
-         props.setProperty("cameraMotionStartActiveTick", Integer.toString(this.cameraMotionStartActiveTick));
-         props.setProperty("cameraMotionPeriodTicks", Integer.toString(this.cameraMotionPeriodTicks));
-         props.setProperty("cameraYawAmplitudeDegrees", Float.toString(this.cameraYawAmplitudeDegrees));
-         props.setProperty("cameraPitchAmplitudeDegrees", Float.toString(this.cameraPitchAmplitudeDegrees));
-         props.setProperty("cameraMotionAppliedTicks", Integer.toString(this.cameraMotionAppliedTicks));
+         props.setProperty("activeTicksSinceFirstSignal", Integer.toString(ShaderAutomationValidators.activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick)));
+         props.setProperty("cameraMotionMode", this.cameraController.getCameraMotionMode());
+         props.setProperty("cameraMotionStartActiveTick", Integer.toString(this.cameraController.getCameraMotionStartActiveTick()));
+         props.setProperty("cameraMotionPeriodTicks", Integer.toString(this.cameraController.getCameraMotionPeriodTicks()));
+         props.setProperty("cameraYawAmplitudeDegrees", Float.toString(this.cameraController.getCameraYawAmplitudeDegrees()));
+         props.setProperty("cameraPitchAmplitudeDegrees", Float.toString(this.cameraController.getCameraPitchAmplitudeDegrees()));
+         props.setProperty("cameraMotionAppliedTicks", Integer.toString(this.cameraController.getCameraMotionAppliedTicks()));
          props.setProperty("cameraMotionStopActiveTick", Integer.toString(this.cameraMotionStopActiveTick));
          props.setProperty("motionRepeatSettleTicks", Integer.toString(this.motionRepeatSettleTicks));
-         props.setProperty("worldPrepActiveTick", Integer.toString(this.worldPrepActiveTick));
-         props.setProperty("worldAutomationPrepared", Boolean.toString(this.worldAutomationPrepared));
+         props.setProperty("worldPrepActiveTick", Integer.toString(this.worldController.getWorldPrepActiveTick()));
+         props.setProperty("worldAutomationPrepared", Boolean.toString(this.worldController.isWorldAutomationPrepared()));
          props.setProperty("stableSceneSettleTicks", Integer.toString(this.stableSceneSettleTicks));
          props.setProperty("stableSceneTicks", Integer.toString(this.stableSceneTicks));
          props.setProperty("stableSceneSatisfied", Boolean.toString(this.stableSceneSatisfied()));
          props.setProperty("stableSceneBlendRegionThreshold", Integer.toString(this.stableSceneBlendRegionThreshold));
          props.setProperty("stableSceneBlendFactorThreshold", Double.toString(this.stableSceneBlendFactorThreshold));
-         props.setProperty("timeOfDaySequenceLength", Integer.toString(this.timeOfDaySequence.length));
-         props.setProperty("timeOfDayStartActiveTick", Integer.toString(this.timeOfDayStartActiveTick));
-         props.setProperty("timeOfDayStepTicks", Integer.toString(this.timeOfDayStepTicks));
-         props.setProperty("timeOfDayCommandsIssued", Integer.toString(this.timeOfDayCommandsIssued));
-         props.setProperty("blockToggleStartActiveTick", Integer.toString(this.blockToggleStartActiveTick));
-         props.setProperty("blockTogglePeriodTicks", Integer.toString(this.blockTogglePeriodTicks));
-         props.setProperty("blockToggleCount", Integer.toString(this.blockToggleCount));
-         props.setProperty("blockToggleCommandsIssued", Integer.toString(this.blockToggleCommandsIssued));
-         props.setProperty("motionYawOffsetMin", Float.toString(this.motionYawOffsetMin));
-         props.setProperty("motionYawOffsetMax", Float.toString(this.motionYawOffsetMax));
-         props.setProperty("motionPitchOffsetMin", Float.toString(this.motionPitchOffsetMin));
-         props.setProperty("motionPitchOffsetMax", Float.toString(this.motionPitchOffsetMax));
+         props.setProperty("timeOfDaySequenceLength", Integer.toString(this.worldController.getTimeOfDaySequence().length));
+         props.setProperty("timeOfDayStartActiveTick", Integer.toString(this.worldController.getTimeOfDayStartActiveTick()));
+         props.setProperty("timeOfDayStepTicks", Integer.toString(this.worldController.getTimeOfDayStepTicks()));
+         props.setProperty("timeOfDayCommandsIssued", Integer.toString(this.worldController.getTimeOfDayCommandsIssued()));
+         props.setProperty("blockToggleStartActiveTick", Integer.toString(this.worldController.getBlockToggleStartActiveTick()));
+         props.setProperty("blockTogglePeriodTicks", Integer.toString(this.worldController.getBlockTogglePeriodTicks()));
+         props.setProperty("blockToggleCount", Integer.toString(this.worldController.getBlockToggleCount()));
+         props.setProperty("blockToggleCommandsIssued", Integer.toString(this.worldController.getBlockToggleCommandsIssued()));
+         props.setProperty("motionYawOffsetMin", Float.toString(this.cameraController.getMotionYawOffsetMin()));
+         props.setProperty("motionYawOffsetMax", Float.toString(this.cameraController.getMotionYawOffsetMax()));
+         props.setProperty("motionPitchOffsetMin", Float.toString(this.cameraController.getMotionPitchOffsetMin()));
+         props.setProperty("motionPitchOffsetMax", Float.toString(this.cameraController.getMotionPitchOffsetMax()));
          props.setProperty("success", Boolean.toString(success));
          props.setProperty("failureReason", finalFailureReason);
          props.setProperty("shaderPackName", this.shaderPackName);
@@ -3527,16 +2052,16 @@ public final class ShaderAutomation {
          props.setProperty("raytracerActive", Boolean.toString(this.raytracerActive));
          props.setProperty("directSignalDetected", Boolean.toString(this.directSignalDetected));
          props.setProperty("lightingSignalDetected", Boolean.toString(this.lightingSignalDetected));
-         props.setProperty("directMaxLuma", Double.toString(this.directMaxLuma));
-         props.setProperty("directSoftMaxLuma", Double.toString(this.directSoftMaxLuma));
-         props.setProperty("directDenoisedMaxLuma", Double.toString(this.directDenoisedMaxLuma));
-         props.setProperty("directRawMaxLuma", Double.toString(this.directRawMaxLuma));
-         props.setProperty("lightingBufferMaxLuma", Double.toString(this.lightingBufferMaxLuma));
-         props.setProperty("stageLightingMaxLuma", Double.toString(this.stageLightingMaxLuma));
-         props.setProperty("stageIndirectMaxLuma", Double.toString(this.stageIndirectMaxLuma));
-         props.setProperty("handheldMaxLuma", Double.toString(this.handheldMaxLuma));
-         props.setProperty("indirectRawMaxLuma", Double.toString(this.indirectRawMaxLuma));
-         props.setProperty("indirectMaxLuma", Double.toString(this.indirectMaxLuma));
+         props.setProperty("directMaxLuma", Double.toString(this.metrics.directMaxLuma));
+         props.setProperty("directSoftMaxLuma", Double.toString(this.metrics.directSoftMaxLuma));
+         props.setProperty("directDenoisedMaxLuma", Double.toString(this.metrics.directDenoisedMaxLuma));
+         props.setProperty("directRawMaxLuma", Double.toString(this.metrics.directRawMaxLuma));
+         props.setProperty("lightingBufferMaxLuma", Double.toString(this.metrics.lightingBufferMaxLuma));
+         props.setProperty("stageLightingMaxLuma", Double.toString(this.metrics.stageLightingMaxLuma));
+         props.setProperty("stageIndirectMaxLuma", Double.toString(this.metrics.stageIndirectMaxLuma));
+         props.setProperty("handheldMaxLuma", Double.toString(this.metrics.handheldMaxLuma));
+         props.setProperty("indirectRawMaxLuma", Double.toString(this.metrics.indirectRawMaxLuma));
+         props.setProperty("indirectMaxLuma", Double.toString(this.metrics.indirectMaxLuma));
          props.setProperty("finalCaptureIndex", Integer.toString(this.latestFinalCaptureIndex));
          props.setProperty("finalFrameMaxLuma", Double.toString(this.finalFrameMaxLuma));
          props.setProperty("latestFinalMeanLuma", Double.toString(this.latestFinalMeanLuma));
@@ -3544,97 +2069,97 @@ public final class ShaderAutomation {
          props.setProperty("latestFinalMeanGreen", Double.toString(this.latestFinalMeanGreen));
          props.setProperty("latestFinalMeanBlue", Double.toString(this.latestFinalMeanBlue));
          props.setProperty("finalSignalDetected", Boolean.toString(this.finalSignalDetected));
-         props.setProperty("latestDirectMeanLuma", Double.toString(this.latestDirectMeanLuma));
-         props.setProperty("latestDirectDenoisedMeanLuma", Double.toString(this.latestDirectDenoisedMeanLuma));
-         props.setProperty("latestDirectRawMeanLuma", Double.toString(this.latestDirectRawMeanLuma));
-         props.setProperty("latestDirectRawLinearMeanLuma", Double.toString(this.latestDirectRawLinearMeanLuma));
-         props.setProperty("latestDirectRawLinearMaxLuma", Double.toString(this.latestDirectRawLinearMaxLuma));
-         props.setProperty("latestDirectRawLinearOverbrightFraction", Double.toString(this.latestDirectRawLinearOverbrightFraction));
-         props.setProperty("latestDirectRawLinearFireflyFraction", Double.toString(this.latestDirectRawLinearFireflyFraction));
-         props.setProperty("latestDirectRawLinearSevereFireflyFraction", Double.toString(this.latestDirectRawLinearSevereFireflyFraction));
-         props.setProperty("latestDirectRawLinearFireflyLumaShare", Double.toString(this.latestDirectRawLinearFireflyLumaShare));
-         props.setProperty("latestDirectRawLinearSaturatedPixelFraction", Double.toString(this.latestDirectRawLinearSaturatedPixelFraction));
-         props.setProperty("latestDirectRawLinearNonFiniteFraction", Double.toString(this.latestDirectRawLinearNonFiniteFraction));
-         props.setProperty("latestDirectDenoisedLinearMeanLuma", Double.toString(this.latestDirectDenoisedLinearMeanLuma));
-         props.setProperty("latestDirectDenoisedLinearMaxLuma", Double.toString(this.latestDirectDenoisedLinearMaxLuma));
-         props.setProperty("latestDirectDenoisedLinearOverbrightFraction", Double.toString(this.latestDirectDenoisedLinearOverbrightFraction));
-         props.setProperty("latestDirectDenoisedLinearFireflyFraction", Double.toString(this.latestDirectDenoisedLinearFireflyFraction));
-         props.setProperty("latestDirectDenoisedLinearSevereFireflyFraction", Double.toString(this.latestDirectDenoisedLinearSevereFireflyFraction));
-         props.setProperty("latestDirectDenoisedLinearFireflyLumaShare", Double.toString(this.latestDirectDenoisedLinearFireflyLumaShare));
-         props.setProperty("latestDirectDenoisedLinearSaturatedPixelFraction", Double.toString(this.latestDirectDenoisedLinearSaturatedPixelFraction));
-         props.setProperty("latestDirectDenoisedLinearNonFiniteFraction", Double.toString(this.latestDirectDenoisedLinearNonFiniteFraction));
-         props.setProperty("latestLightingMeanLuma", Double.toString(this.latestLightingMeanLuma));
-         props.setProperty("latestStageLightingMeanLuma", Double.toString(this.latestStageLightingMeanLuma));
-         props.setProperty("latestStageIndirectMeanLuma", Double.toString(this.latestStageIndirectMeanLuma));
-         props.setProperty("latestIndirectRawMeanLuma", Double.toString(this.latestIndirectRawMeanLuma));
-         props.setProperty("latestIndirectMeanLuma", Double.toString(this.latestIndirectMeanLuma));
-         props.setProperty("latestSpecRawLinearMeanLuma", Double.toString(this.latestSpecRawLinearMeanLuma));
-         props.setProperty("latestSpecRawLinearMaxLuma", Double.toString(this.latestSpecRawLinearMaxLuma));
-         props.setProperty("latestSpecRawLinearOverbrightFraction", Double.toString(this.latestSpecRawLinearOverbrightFraction));
-         props.setProperty("latestSpecRawLinearFireflyFraction", Double.toString(this.latestSpecRawLinearFireflyFraction));
-         props.setProperty("latestSpecRawLinearSevereFireflyFraction", Double.toString(this.latestSpecRawLinearSevereFireflyFraction));
-         props.setProperty("latestSpecRawLinearFireflyLumaShare", Double.toString(this.latestSpecRawLinearFireflyLumaShare));
-         props.setProperty("latestSpecRawLinearSaturatedPixelFraction", Double.toString(this.latestSpecRawLinearSaturatedPixelFraction));
-         props.setProperty("latestSpecRawLinearNonFiniteFraction", Double.toString(this.latestSpecRawLinearNonFiniteFraction));
-         props.setProperty("latestSpecDenoisedLinearMeanLuma", Double.toString(this.latestSpecDenoisedLinearMeanLuma));
-         props.setProperty("latestSpecDenoisedLinearMaxLuma", Double.toString(this.latestSpecDenoisedLinearMaxLuma));
-         props.setProperty("latestSpecDenoisedLinearOverbrightFraction", Double.toString(this.latestSpecDenoisedLinearOverbrightFraction));
-         props.setProperty("latestSpecDenoisedLinearFireflyFraction", Double.toString(this.latestSpecDenoisedLinearFireflyFraction));
-         props.setProperty("latestSpecDenoisedLinearSevereFireflyFraction", Double.toString(this.latestSpecDenoisedLinearSevereFireflyFraction));
-         props.setProperty("latestSpecDenoisedLinearFireflyLumaShare", Double.toString(this.latestSpecDenoisedLinearFireflyLumaShare));
-         props.setProperty("latestSpecDenoisedLinearSaturatedPixelFraction", Double.toString(this.latestSpecDenoisedLinearSaturatedPixelFraction));
-         props.setProperty("latestSpecDenoisedLinearNonFiniteFraction", Double.toString(this.latestSpecDenoisedLinearNonFiniteFraction));
-         props.setProperty("latestIndirectRawLinearMeanLuma", Double.toString(this.latestIndirectRawLinearMeanLuma));
-         props.setProperty("latestIndirectRawLinearMaxLuma", Double.toString(this.latestIndirectRawLinearMaxLuma));
-         props.setProperty("latestIndirectRawLinearOverbrightFraction", Double.toString(this.latestIndirectRawLinearOverbrightFraction));
-         props.setProperty("latestIndirectRawLinearFireflyFraction", Double.toString(this.latestIndirectRawLinearFireflyFraction));
-         props.setProperty("latestIndirectRawLinearSevereFireflyFraction", Double.toString(this.latestIndirectRawLinearSevereFireflyFraction));
-         props.setProperty("latestIndirectRawLinearFireflyLumaShare", Double.toString(this.latestIndirectRawLinearFireflyLumaShare));
-         props.setProperty("latestIndirectRawLinearSaturatedPixelFraction", Double.toString(this.latestIndirectRawLinearSaturatedPixelFraction));
-         props.setProperty("latestIndirectRawLinearNonFiniteFraction", Double.toString(this.latestIndirectRawLinearNonFiniteFraction));
-         props.setProperty("latestIndirectLinearMeanLuma", Double.toString(this.latestIndirectLinearMeanLuma));
-         props.setProperty("latestIndirectLinearMaxLuma", Double.toString(this.latestIndirectLinearMaxLuma));
-         props.setProperty("latestIndirectLinearOverbrightFraction", Double.toString(this.latestIndirectLinearOverbrightFraction));
-         props.setProperty("latestIndirectLinearFireflyFraction", Double.toString(this.latestIndirectLinearFireflyFraction));
-         props.setProperty("latestIndirectLinearSevereFireflyFraction", Double.toString(this.latestIndirectLinearSevereFireflyFraction));
-         props.setProperty("latestIndirectLinearFireflyLumaShare", Double.toString(this.latestIndirectLinearFireflyLumaShare));
-         props.setProperty("latestIndirectLinearSaturatedPixelFraction", Double.toString(this.latestIndirectLinearSaturatedPixelFraction));
-         props.setProperty("latestIndirectLinearNonFiniteFraction", Double.toString(this.latestIndirectLinearNonFiniteFraction));
-         props.setProperty("latestStageIndirectLinearMeanLuma", Double.toString(this.latestStageIndirectLinearMeanLuma));
-         props.setProperty("latestStageIndirectLinearMaxLuma", Double.toString(this.latestStageIndirectLinearMaxLuma));
-         props.setProperty("latestStageIndirectLinearOverbrightFraction", Double.toString(this.latestStageIndirectLinearOverbrightFraction));
-         props.setProperty("latestDirectMeanRed", Double.toString(this.latestDirectMeanRed));
-         props.setProperty("latestDirectMeanGreen", Double.toString(this.latestDirectMeanGreen));
-         props.setProperty("latestDirectMeanBlue", Double.toString(this.latestDirectMeanBlue));
-         props.setProperty("latestDirectMeanAlpha", Double.toString(this.latestDirectMeanAlpha));
-         props.setProperty("latestDirectZeroAlphaFraction", Double.toString(this.latestDirectZeroAlphaFraction));
-         props.setProperty("latestDirectAlphaDelta", Double.toString(this.latestDirectAlphaDelta));
-         props.setProperty("directAlphaDeltaAvg", Double.toString(this.averageDirectAlphaDelta()));
-         props.setProperty("directAlphaDeltaMax", Double.toString(this.directAlphaDeltaMax));
-         props.setProperty("latestDirectBrightnessVariance", Double.toString(this.latestDirectBrightnessVariance));
-         props.setProperty("latestDirectBrightnessStdDev", Double.toString(this.latestDirectBrightnessStdDev));
-         props.setProperty("directBrightnessVarianceAvg", Double.toString(this.averageDirectBrightnessVariance()));
-         props.setProperty("directBrightnessVarianceMax", Double.toString(this.directBrightnessVarianceMax));
-         props.setProperty("latestHandheldBrightnessVariance", Double.toString(this.latestHandheldBrightnessVariance));
-         props.setProperty("latestHandheldBrightnessStdDev", Double.toString(this.latestHandheldBrightnessStdDev));
-         props.setProperty("handheldBrightnessVarianceAvg", Double.toString(this.averageHandheldBrightnessVariance()));
-         props.setProperty("handheldBrightnessVarianceMax", Double.toString(this.handheldBrightnessVarianceMax));
-         props.setProperty("latestLightingMeanRed", Double.toString(this.latestLightingMeanRed));
-         props.setProperty("latestLightingMeanGreen", Double.toString(this.latestLightingMeanGreen));
-         props.setProperty("latestLightingMeanBlue", Double.toString(this.latestLightingMeanBlue));
-         props.setProperty("latestStageLightingMeanRed", Double.toString(this.latestStageLightingMeanRed));
-         props.setProperty("latestStageLightingMeanGreen", Double.toString(this.latestStageLightingMeanGreen));
-         props.setProperty("latestStageLightingMeanBlue", Double.toString(this.latestStageLightingMeanBlue));
-         props.setProperty("latestStageIndirectMeanRed", Double.toString(this.latestStageIndirectMeanRed));
-         props.setProperty("latestStageIndirectMeanGreen", Double.toString(this.latestStageIndirectMeanGreen));
-         props.setProperty("latestStageIndirectMeanBlue", Double.toString(this.latestStageIndirectMeanBlue));
-         props.setProperty("latestIndirectMeanRed", Double.toString(this.latestIndirectMeanRed));
-         props.setProperty("latestIndirectMeanGreen", Double.toString(this.latestIndirectMeanGreen));
-         props.setProperty("latestIndirectMeanBlue", Double.toString(this.latestIndirectMeanBlue));
-         props.setProperty("latestIndirectMeanAlpha", Double.toString(this.latestIndirectMeanAlpha));
-         props.setProperty("latestIndirectZeroAlphaFraction", Double.toString(this.latestIndirectZeroAlphaFraction));
-         props.setProperty("latestStageIndirectMeanAlpha", Double.toString(this.latestStageIndirectMeanAlpha));
-         props.setProperty("latestStageIndirectZeroAlphaFraction", Double.toString(this.latestStageIndirectZeroAlphaFraction));
+         props.setProperty("latestDirectMeanLuma", Double.toString(this.metrics.latestDirectMeanLuma));
+         props.setProperty("latestDirectDenoisedMeanLuma", Double.toString(this.metrics.latestDirectDenoisedMeanLuma));
+         props.setProperty("latestDirectRawMeanLuma", Double.toString(this.metrics.latestDirectRawMeanLuma));
+         props.setProperty("latestDirectRawLinearMeanLuma", Double.toString(this.metrics.latestDirectRawLinearMeanLuma));
+         props.setProperty("latestDirectRawLinearMaxLuma", Double.toString(this.metrics.latestDirectRawLinearMaxLuma));
+         props.setProperty("latestDirectRawLinearOverbrightFraction", Double.toString(this.metrics.latestDirectRawLinearOverbrightFraction));
+         props.setProperty("latestDirectRawLinearFireflyFraction", Double.toString(this.metrics.latestDirectRawLinearFireflyFraction));
+         props.setProperty("latestDirectRawLinearSevereFireflyFraction", Double.toString(this.metrics.latestDirectRawLinearSevereFireflyFraction));
+         props.setProperty("latestDirectRawLinearFireflyLumaShare", Double.toString(this.metrics.latestDirectRawLinearFireflyLumaShare));
+         props.setProperty("latestDirectRawLinearSaturatedPixelFraction", Double.toString(this.metrics.latestDirectRawLinearSaturatedPixelFraction));
+         props.setProperty("latestDirectRawLinearNonFiniteFraction", Double.toString(this.metrics.latestDirectRawLinearNonFiniteFraction));
+         props.setProperty("latestDirectDenoisedLinearMeanLuma", Double.toString(this.metrics.latestDirectDenoisedLinearMeanLuma));
+         props.setProperty("latestDirectDenoisedLinearMaxLuma", Double.toString(this.metrics.latestDirectDenoisedLinearMaxLuma));
+         props.setProperty("latestDirectDenoisedLinearOverbrightFraction", Double.toString(this.metrics.latestDirectDenoisedLinearOverbrightFraction));
+         props.setProperty("latestDirectDenoisedLinearFireflyFraction", Double.toString(this.metrics.latestDirectDenoisedLinearFireflyFraction));
+         props.setProperty("latestDirectDenoisedLinearSevereFireflyFraction", Double.toString(this.metrics.latestDirectDenoisedLinearSevereFireflyFraction));
+         props.setProperty("latestDirectDenoisedLinearFireflyLumaShare", Double.toString(this.metrics.latestDirectDenoisedLinearFireflyLumaShare));
+         props.setProperty("latestDirectDenoisedLinearSaturatedPixelFraction", Double.toString(this.metrics.latestDirectDenoisedLinearSaturatedPixelFraction));
+         props.setProperty("latestDirectDenoisedLinearNonFiniteFraction", Double.toString(this.metrics.latestDirectDenoisedLinearNonFiniteFraction));
+         props.setProperty("latestLightingMeanLuma", Double.toString(this.metrics.latestLightingMeanLuma));
+         props.setProperty("latestStageLightingMeanLuma", Double.toString(this.metrics.latestStageLightingMeanLuma));
+         props.setProperty("latestStageIndirectMeanLuma", Double.toString(this.metrics.latestStageIndirectMeanLuma));
+         props.setProperty("latestIndirectRawMeanLuma", Double.toString(this.metrics.latestIndirectRawMeanLuma));
+         props.setProperty("latestIndirectMeanLuma", Double.toString(this.metrics.latestIndirectMeanLuma));
+         props.setProperty("latestSpecRawLinearMeanLuma", Double.toString(this.metrics.latestSpecRawLinearMeanLuma));
+         props.setProperty("latestSpecRawLinearMaxLuma", Double.toString(this.metrics.latestSpecRawLinearMaxLuma));
+         props.setProperty("latestSpecRawLinearOverbrightFraction", Double.toString(this.metrics.latestSpecRawLinearOverbrightFraction));
+         props.setProperty("latestSpecRawLinearFireflyFraction", Double.toString(this.metrics.latestSpecRawLinearFireflyFraction));
+         props.setProperty("latestSpecRawLinearSevereFireflyFraction", Double.toString(this.metrics.latestSpecRawLinearSevereFireflyFraction));
+         props.setProperty("latestSpecRawLinearFireflyLumaShare", Double.toString(this.metrics.latestSpecRawLinearFireflyLumaShare));
+         props.setProperty("latestSpecRawLinearSaturatedPixelFraction", Double.toString(this.metrics.latestSpecRawLinearSaturatedPixelFraction));
+         props.setProperty("latestSpecRawLinearNonFiniteFraction", Double.toString(this.metrics.latestSpecRawLinearNonFiniteFraction));
+         props.setProperty("latestSpecDenoisedLinearMeanLuma", Double.toString(this.metrics.latestSpecDenoisedLinearMeanLuma));
+         props.setProperty("latestSpecDenoisedLinearMaxLuma", Double.toString(this.metrics.latestSpecDenoisedLinearMaxLuma));
+         props.setProperty("latestSpecDenoisedLinearOverbrightFraction", Double.toString(this.metrics.latestSpecDenoisedLinearOverbrightFraction));
+         props.setProperty("latestSpecDenoisedLinearFireflyFraction", Double.toString(this.metrics.latestSpecDenoisedLinearFireflyFraction));
+         props.setProperty("latestSpecDenoisedLinearSevereFireflyFraction", Double.toString(this.metrics.latestSpecDenoisedLinearSevereFireflyFraction));
+         props.setProperty("latestSpecDenoisedLinearFireflyLumaShare", Double.toString(this.metrics.latestSpecDenoisedLinearFireflyLumaShare));
+         props.setProperty("latestSpecDenoisedLinearSaturatedPixelFraction", Double.toString(this.metrics.latestSpecDenoisedLinearSaturatedPixelFraction));
+         props.setProperty("latestSpecDenoisedLinearNonFiniteFraction", Double.toString(this.metrics.latestSpecDenoisedLinearNonFiniteFraction));
+         props.setProperty("latestIndirectRawLinearMeanLuma", Double.toString(this.metrics.latestIndirectRawLinearMeanLuma));
+         props.setProperty("latestIndirectRawLinearMaxLuma", Double.toString(this.metrics.latestIndirectRawLinearMaxLuma));
+         props.setProperty("latestIndirectRawLinearOverbrightFraction", Double.toString(this.metrics.latestIndirectRawLinearOverbrightFraction));
+         props.setProperty("latestIndirectRawLinearFireflyFraction", Double.toString(this.metrics.latestIndirectRawLinearFireflyFraction));
+         props.setProperty("latestIndirectRawLinearSevereFireflyFraction", Double.toString(this.metrics.latestIndirectRawLinearSevereFireflyFraction));
+         props.setProperty("latestIndirectRawLinearFireflyLumaShare", Double.toString(this.metrics.latestIndirectRawLinearFireflyLumaShare));
+         props.setProperty("latestIndirectRawLinearSaturatedPixelFraction", Double.toString(this.metrics.latestIndirectRawLinearSaturatedPixelFraction));
+         props.setProperty("latestIndirectRawLinearNonFiniteFraction", Double.toString(this.metrics.latestIndirectRawLinearNonFiniteFraction));
+         props.setProperty("latestIndirectLinearMeanLuma", Double.toString(this.metrics.latestIndirectLinearMeanLuma));
+         props.setProperty("latestIndirectLinearMaxLuma", Double.toString(this.metrics.latestIndirectLinearMaxLuma));
+         props.setProperty("latestIndirectLinearOverbrightFraction", Double.toString(this.metrics.latestIndirectLinearOverbrightFraction));
+         props.setProperty("latestIndirectLinearFireflyFraction", Double.toString(this.metrics.latestIndirectLinearFireflyFraction));
+         props.setProperty("latestIndirectLinearSevereFireflyFraction", Double.toString(this.metrics.latestIndirectLinearSevereFireflyFraction));
+         props.setProperty("latestIndirectLinearFireflyLumaShare", Double.toString(this.metrics.latestIndirectLinearFireflyLumaShare));
+         props.setProperty("latestIndirectLinearSaturatedPixelFraction", Double.toString(this.metrics.latestIndirectLinearSaturatedPixelFraction));
+         props.setProperty("latestIndirectLinearNonFiniteFraction", Double.toString(this.metrics.latestIndirectLinearNonFiniteFraction));
+         props.setProperty("latestStageIndirectLinearMeanLuma", Double.toString(this.metrics.latestStageIndirectLinearMeanLuma));
+         props.setProperty("latestStageIndirectLinearMaxLuma", Double.toString(this.metrics.latestStageIndirectLinearMaxLuma));
+         props.setProperty("latestStageIndirectLinearOverbrightFraction", Double.toString(this.metrics.latestStageIndirectLinearOverbrightFraction));
+         props.setProperty("latestDirectMeanRed", Double.toString(this.metrics.latestDirectMeanRed));
+         props.setProperty("latestDirectMeanGreen", Double.toString(this.metrics.latestDirectMeanGreen));
+         props.setProperty("latestDirectMeanBlue", Double.toString(this.metrics.latestDirectMeanBlue));
+         props.setProperty("latestDirectMeanAlpha", Double.toString(this.metrics.latestDirectMeanAlpha));
+         props.setProperty("latestDirectZeroAlphaFraction", Double.toString(this.metrics.latestDirectZeroAlphaFraction));
+         props.setProperty("latestDirectAlphaDelta", Double.toString(this.metrics.latestDirectAlphaDelta));
+         props.setProperty("directAlphaDeltaAvg", Double.toString(this.metrics.averageDirectAlphaDelta()));
+         props.setProperty("directAlphaDeltaMax", Double.toString(this.metrics.directAlphaDeltaMax));
+         props.setProperty("latestDirectBrightnessVariance", Double.toString(this.metrics.latestDirectBrightnessVariance));
+         props.setProperty("latestDirectBrightnessStdDev", Double.toString(this.metrics.latestDirectBrightnessStdDev));
+         props.setProperty("directBrightnessVarianceAvg", Double.toString(this.metrics.averageDirectBrightnessVariance()));
+         props.setProperty("directBrightnessVarianceMax", Double.toString(this.metrics.directBrightnessVarianceMax));
+         props.setProperty("latestHandheldBrightnessVariance", Double.toString(this.metrics.latestHandheldBrightnessVariance));
+         props.setProperty("latestHandheldBrightnessStdDev", Double.toString(this.metrics.latestHandheldBrightnessStdDev));
+         props.setProperty("handheldBrightnessVarianceAvg", Double.toString(this.metrics.averageHandheldBrightnessVariance()));
+         props.setProperty("handheldBrightnessVarianceMax", Double.toString(this.metrics.handheldBrightnessVarianceMax));
+         props.setProperty("latestLightingMeanRed", Double.toString(this.metrics.latestLightingMeanRed));
+         props.setProperty("latestLightingMeanGreen", Double.toString(this.metrics.latestLightingMeanGreen));
+         props.setProperty("latestLightingMeanBlue", Double.toString(this.metrics.latestLightingMeanBlue));
+         props.setProperty("latestStageLightingMeanRed", Double.toString(this.metrics.latestStageLightingMeanRed));
+         props.setProperty("latestStageLightingMeanGreen", Double.toString(this.metrics.latestStageLightingMeanGreen));
+         props.setProperty("latestStageLightingMeanBlue", Double.toString(this.metrics.latestStageLightingMeanBlue));
+         props.setProperty("latestStageIndirectMeanRed", Double.toString(this.metrics.latestStageIndirectMeanRed));
+         props.setProperty("latestStageIndirectMeanGreen", Double.toString(this.metrics.latestStageIndirectMeanGreen));
+         props.setProperty("latestStageIndirectMeanBlue", Double.toString(this.metrics.latestStageIndirectMeanBlue));
+         props.setProperty("latestIndirectMeanRed", Double.toString(this.metrics.latestIndirectMeanRed));
+         props.setProperty("latestIndirectMeanGreen", Double.toString(this.metrics.latestIndirectMeanGreen));
+         props.setProperty("latestIndirectMeanBlue", Double.toString(this.metrics.latestIndirectMeanBlue));
+         props.setProperty("latestIndirectMeanAlpha", Double.toString(this.metrics.latestIndirectMeanAlpha));
+         props.setProperty("latestIndirectZeroAlphaFraction", Double.toString(this.metrics.latestIndirectZeroAlphaFraction));
+         props.setProperty("latestStageIndirectMeanAlpha", Double.toString(this.metrics.latestStageIndirectMeanAlpha));
+         props.setProperty("latestStageIndirectZeroAlphaFraction", Double.toString(this.metrics.latestStageIndirectZeroAlphaFraction));
          props.setProperty("latestTracedLightCount", Integer.toString(this.latestTracedLightCount));
          props.setProperty("latestTotalLightCount", Integer.toString(this.latestTotalLightCount));
          props.setProperty("maxTracedLightCount", Integer.toString(this.maxTracedLightCount));
@@ -3665,78 +2190,78 @@ public final class ShaderAutomation {
          props.setProperty("latestMaxPendingBlendRegions", Integer.toString(this.latestMaxPendingBlendRegions));
          props.setProperty("latestMaxPendingBlendVolume", Long.toString(this.latestMaxPendingBlendVolume));
          props.setProperty("globalLightReloadCaptures", Integer.toString(this.globalLightReloadCaptures));
-         props.setProperty("directSoftSignalDetected", Boolean.toString(this.directSoftSignalDetected));
-         props.setProperty("directSoftSignalCaptureCount", Integer.toString(this.directSoftSignalCaptureCount));
-         props.setProperty("directSoftZeroCaptureCount", Integer.toString(this.directSoftZeroCaptureCount));
-         props.setProperty("directSoftMissingSignalWarningIssued", Boolean.toString(this.directSoftMissingSignalWarningIssued));
-         props.setProperty("latestDirectTemporalDelta", Double.toString(this.latestDirectTemporalDelta));
-         props.setProperty("directTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(false, false)));
-         props.setProperty("directTemporalDeltaMax", Double.toString(this.directTemporalDeltaMax));
-         props.setProperty("latestDirectTemporalMaxPixelDelta", Double.toString(this.latestDirectTemporalMaxPixelDelta));
-         props.setProperty("directTemporalMaxPixelDeltaAvg", Double.toString(this.averageDirectTemporalMaxPixelDelta()));
-         props.setProperty("directTemporalMaxPixelDeltaMax", Double.toString(this.directTemporalMaxPixelDeltaMax));
-         props.setProperty("latestWholeLightFlashDirectDrop", Double.toString(this.latestWholeLightFlashDirectDrop));
-         props.setProperty("latestWholeLightFlashResolvedValidDrop", Double.toString(this.latestWholeLightFlashResolvedValidDrop));
-         props.setProperty("latestWholeLightFlashLightCountDrop", Double.toString(this.latestWholeLightFlashLightCountDrop));
-         props.setProperty("latestWholeLightFlashResolvedMDrop", Double.toString(this.latestWholeLightFlashResolvedMDrop));
-         props.setProperty("latestWholeLightFlashBlendFactorJump", Double.toString(this.latestWholeLightFlashBlendFactorJump));
-         props.setProperty("maxWholeLightFlashDirectDrop", Double.toString(this.maxWholeLightFlashDirectDrop));
-         props.setProperty("maxWholeLightFlashResolvedValidDrop", Double.toString(this.maxWholeLightFlashResolvedValidDrop));
-         props.setProperty("maxWholeLightFlashLightCountDrop", Double.toString(this.maxWholeLightFlashLightCountDrop));
-         props.setProperty("maxWholeLightFlashResolvedMDrop", Double.toString(this.maxWholeLightFlashResolvedMDrop));
-         props.setProperty("maxWholeLightFlashBlendFactorJump", Double.toString(this.maxWholeLightFlashBlendFactorJump));
-         props.setProperty("wholeLightFlashSuspectCaptures", Integer.toString(this.wholeLightFlashSuspectCaptures));
-         props.setProperty("wholeLightFlashLastCapture", Integer.toString(this.wholeLightFlashLastCapture));
-         props.setProperty("wholeLightFlashDirectDropCaptures", Integer.toString(this.wholeLightFlashDirectDropCaptures));
-         props.setProperty("wholeLightFlashResolvedValidDropCaptures", Integer.toString(this.wholeLightFlashResolvedValidDropCaptures));
-         props.setProperty("wholeLightFlashLightCountDropCaptures", Integer.toString(this.wholeLightFlashLightCountDropCaptures));
-         props.setProperty("wholeLightFlashBlendJumpCaptures", Integer.toString(this.wholeLightFlashBlendJumpCaptures));
-         props.setProperty("previousCaptureResolvedMeanWeight", Double.toString(this.previousCaptureResolvedMeanWeight));
-         props.setProperty("previousCaptureResolvedMeanM", Double.toString(this.previousCaptureResolvedMeanM));
-         props.setProperty("previousCaptureResolvedStrictValidFraction", Double.toString(this.previousCaptureResolvedStrictValidFraction));
-         props.setProperty("latestResolvedMeanM", Double.toString(this.latestResolvedMeanM));
-         props.setProperty("previousCaptureDirectMeanLuma", Double.toString(this.previousCaptureDirectMeanLuma));
-         props.setProperty("previousCaptureLightBlendFactor", Double.toString(this.previousCaptureLightBlendFactor));
-         props.setProperty("previousCaptureTracedLightCount", Integer.toString(this.previousCaptureTracedLightCount));
-         props.setProperty("latestDirectSoftTemporalDelta", Double.toString(this.latestDirectSoftTemporalDelta));
-         props.setProperty("directSoftTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(true, false)));
-         props.setProperty("directSoftTemporalDeltaMax", Double.toString(this.directSoftTemporalDeltaMax));
-         props.setProperty("indirectTemporalDeltaAvg", Double.toString(this.averageTemporalDelta(false, true)));
-         props.setProperty("indirectTemporalDeltaMax", Double.toString(this.indirectTemporalDeltaMax));
-         props.setProperty("latestDirectDenoiserGain", Double.toString(this.latestDirectDenoiserGain));
-         props.setProperty("latestSpecDenoiserGain", Double.toString(this.latestSpecDenoiserGain));
-         props.setProperty("latestIndirectResolveGain", Double.toString(this.latestIndirectResolveGain));
-         props.setProperty("directDenoiserGainAvg", Double.toString(this.directDenoiserGainSamples == 0 ? 0.0 : this.directDenoiserGainSum / this.directDenoiserGainSamples));
-         props.setProperty("directDenoiserGainMax", Double.toString(this.directDenoiserGainMax));
-         props.setProperty("specDenoiserGainAvg", Double.toString(this.specDenoiserGainSamples == 0 ? 0.0 : this.specDenoiserGainSum / this.specDenoiserGainSamples));
-         props.setProperty("specDenoiserGainMax", Double.toString(this.specDenoiserGainMax));
-         props.setProperty("indirectResolveGainAvg", Double.toString(this.indirectResolveGainSamples == 0 ? 0.0 : this.indirectResolveGainSum / this.indirectResolveGainSamples));
-         props.setProperty("indirectResolveGainMax", Double.toString(this.indirectResolveGainMax));
-         props.setProperty("postMotionDropSamples", Integer.toString(this.postMotionDropSamples));
-         props.setProperty("postMotionDirectMeanAtStop", Double.toString(this.postMotionDirectMeanAtStop));
-         props.setProperty("postMotionRawDirectMeanAtStop", Double.toString(this.postMotionRawDirectMeanAtStop));
-         props.setProperty("postMotionIndirectMeanAtStop", Double.toString(this.postMotionIndirectMeanAtStop));
-         props.setProperty("postMotionStageIndirectMeanAtStop", Double.toString(this.postMotionStageIndirectMeanAtStop));
-         props.setProperty("latestPostMotionDirectDrop", Double.toString(this.latestPostMotionDirectDrop));
-         props.setProperty("latestPostMotionRawDirectDrop", Double.toString(this.latestPostMotionRawDirectDrop));
-         props.setProperty("latestPostMotionIndirectDrop", Double.toString(this.latestPostMotionIndirectDrop));
-         props.setProperty("latestPostMotionStageIndirectDrop", Double.toString(this.latestPostMotionStageIndirectDrop));
-         props.setProperty("postMotionDirectDropAvg", Double.toString(this.postMotionDropSamples == 0 ? 0.0 : this.postMotionDirectDropSum / this.postMotionDropSamples));
-         props.setProperty("postMotionRawDirectDropAvg", Double.toString(this.postMotionDropSamples == 0 ? 0.0 : this.postMotionRawDirectDropSum / this.postMotionDropSamples));
-         props.setProperty("postMotionIndirectDropAvg", Double.toString(this.postMotionDropSamples == 0 ? 0.0 : this.postMotionIndirectDropSum / this.postMotionDropSamples));
-         props.setProperty("postMotionStageIndirectDropAvg", Double.toString(this.postMotionDropSamples == 0 ? 0.0 : this.postMotionStageIndirectDropSum / this.postMotionDropSamples));
-         props.setProperty("postMotionDirectDropMax", Double.toString(this.postMotionDirectDropMax));
-         props.setProperty("postMotionRawDirectDropMax", Double.toString(this.postMotionRawDirectDropMax));
-         props.setProperty("postMotionIndirectDropMax", Double.toString(this.postMotionIndirectDropMax));
-         props.setProperty("postMotionStageIndirectDropMax", Double.toString(this.postMotionStageIndirectDropMax));
-         props.setProperty("motionRepeatDirectDeltaAvg", Double.toString(this.averageMotionRepeatDelta(true)));
-         props.setProperty("motionRepeatDirectDeltaMax", Double.toString(this.motionRepeatDirectDeltaMax));
-         props.setProperty("motionRepeatDirectDeltaSamples", Integer.toString(this.motionRepeatDirectDeltaSamples));
-         props.setProperty("motionRepeatIndirectDeltaAvg", Double.toString(this.averageMotionRepeatDelta(false)));
-         props.setProperty("motionRepeatIndirectDeltaMax", Double.toString(this.motionRepeatIndirectDeltaMax));
-         props.setProperty("motionRepeatIndirectDeltaSamples", Integer.toString(this.motionRepeatIndirectDeltaSamples));
-         props.setProperty("motionRepeatDirectTopDeltas", formatRepeatDeltaDiagnostics(this.topDirectRepeatDeltas));
-         props.setProperty("motionRepeatIndirectTopDeltas", formatRepeatDeltaDiagnostics(this.topIndirectRepeatDeltas));
+         props.setProperty("directSoftSignalDetected", Boolean.toString(this.metrics.directSoftSignalDetected));
+         props.setProperty("directSoftSignalCaptureCount", Integer.toString(this.metrics.directSoftSignalCaptureCount));
+         props.setProperty("directSoftZeroCaptureCount", Integer.toString(this.metrics.directSoftZeroCaptureCount));
+         props.setProperty("directSoftMissingSignalWarningIssued", Boolean.toString(this.metrics.directSoftMissingSignalWarningIssued));
+         props.setProperty("latestDirectTemporalDelta", Double.toString(this.metrics.latestDirectTemporalDelta));
+         props.setProperty("directTemporalDeltaAvg", Double.toString(this.metrics.averageTemporalDelta(false, false)));
+         props.setProperty("directTemporalDeltaMax", Double.toString(this.metrics.directTemporalDeltaMax));
+         props.setProperty("latestDirectTemporalMaxPixelDelta", Double.toString(this.metrics.latestDirectTemporalMaxPixelDelta));
+         props.setProperty("directTemporalMaxPixelDeltaAvg", Double.toString(this.metrics.averageDirectTemporalMaxPixelDelta()));
+         props.setProperty("directTemporalMaxPixelDeltaMax", Double.toString(this.metrics.directTemporalMaxPixelDeltaMax));
+         props.setProperty("latestWholeLightFlashDirectDrop", Double.toString(this.metrics.latestWholeLightFlashDirectDrop));
+         props.setProperty("latestWholeLightFlashResolvedValidDrop", Double.toString(this.metrics.latestWholeLightFlashResolvedValidDrop));
+         props.setProperty("latestWholeLightFlashLightCountDrop", Double.toString(this.metrics.latestWholeLightFlashLightCountDrop));
+         props.setProperty("latestWholeLightFlashResolvedMDrop", Double.toString(this.metrics.latestWholeLightFlashResolvedMDrop));
+         props.setProperty("latestWholeLightFlashBlendFactorJump", Double.toString(this.metrics.latestWholeLightFlashBlendFactorJump));
+         props.setProperty("maxWholeLightFlashDirectDrop", Double.toString(this.metrics.maxWholeLightFlashDirectDrop));
+         props.setProperty("maxWholeLightFlashResolvedValidDrop", Double.toString(this.metrics.maxWholeLightFlashResolvedValidDrop));
+         props.setProperty("maxWholeLightFlashLightCountDrop", Double.toString(this.metrics.maxWholeLightFlashLightCountDrop));
+         props.setProperty("maxWholeLightFlashResolvedMDrop", Double.toString(this.metrics.maxWholeLightFlashResolvedMDrop));
+         props.setProperty("maxWholeLightFlashBlendFactorJump", Double.toString(this.metrics.maxWholeLightFlashBlendFactorJump));
+         props.setProperty("wholeLightFlashSuspectCaptures", Integer.toString(this.metrics.wholeLightFlashSuspectCaptures));
+         props.setProperty("wholeLightFlashLastCapture", Integer.toString(this.metrics.wholeLightFlashLastCapture));
+         props.setProperty("wholeLightFlashDirectDropCaptures", Integer.toString(this.metrics.wholeLightFlashDirectDropCaptures));
+         props.setProperty("wholeLightFlashResolvedValidDropCaptures", Integer.toString(this.metrics.wholeLightFlashResolvedValidDropCaptures));
+         props.setProperty("wholeLightFlashLightCountDropCaptures", Integer.toString(this.metrics.wholeLightFlashLightCountDropCaptures));
+         props.setProperty("wholeLightFlashBlendJumpCaptures", Integer.toString(this.metrics.wholeLightFlashBlendJumpCaptures));
+         props.setProperty("previousCaptureResolvedMeanWeight", Double.toString(this.metrics.previousCaptureResolvedMeanWeight));
+         props.setProperty("previousCaptureResolvedMeanM", Double.toString(this.metrics.previousCaptureResolvedMeanM));
+         props.setProperty("previousCaptureResolvedStrictValidFraction", Double.toString(this.metrics.previousCaptureResolvedStrictValidFraction));
+         props.setProperty("latestResolvedMeanM", Double.toString(this.metrics.latestResolvedMeanM));
+         props.setProperty("previousCaptureDirectMeanLuma", Double.toString(this.metrics.previousCaptureDirectMeanLuma));
+         props.setProperty("previousCaptureLightBlendFactor", Double.toString(this.metrics.previousCaptureLightBlendFactor));
+         props.setProperty("previousCaptureTracedLightCount", Integer.toString(this.metrics.previousCaptureTracedLightCount));
+         props.setProperty("latestDirectSoftTemporalDelta", Double.toString(this.metrics.latestDirectSoftTemporalDelta));
+         props.setProperty("directSoftTemporalDeltaAvg", Double.toString(this.metrics.averageTemporalDelta(true, false)));
+         props.setProperty("directSoftTemporalDeltaMax", Double.toString(this.metrics.directSoftTemporalDeltaMax));
+         props.setProperty("indirectTemporalDeltaAvg", Double.toString(this.metrics.averageTemporalDelta(false, true)));
+         props.setProperty("indirectTemporalDeltaMax", Double.toString(this.metrics.indirectTemporalDeltaMax));
+         props.setProperty("latestDirectDenoiserGain", Double.toString(this.metrics.latestDirectDenoiserGain));
+         props.setProperty("latestSpecDenoiserGain", Double.toString(this.metrics.latestSpecDenoiserGain));
+         props.setProperty("latestIndirectResolveGain", Double.toString(this.metrics.latestIndirectResolveGain));
+         props.setProperty("directDenoiserGainAvg", Double.toString(this.metrics.directDenoiserGainSamples == 0 ? 0.0 : this.metrics.directDenoiserGainSum / this.metrics.directDenoiserGainSamples));
+         props.setProperty("directDenoiserGainMax", Double.toString(this.metrics.directDenoiserGainMax));
+         props.setProperty("specDenoiserGainAvg", Double.toString(this.metrics.specDenoiserGainSamples == 0 ? 0.0 : this.metrics.specDenoiserGainSum / this.metrics.specDenoiserGainSamples));
+         props.setProperty("specDenoiserGainMax", Double.toString(this.metrics.specDenoiserGainMax));
+         props.setProperty("indirectResolveGainAvg", Double.toString(this.metrics.indirectResolveGainSamples == 0 ? 0.0 : this.metrics.indirectResolveGainSum / this.metrics.indirectResolveGainSamples));
+         props.setProperty("indirectResolveGainMax", Double.toString(this.metrics.indirectResolveGainMax));
+         props.setProperty("postMotionDropSamples", Integer.toString(this.metrics.postMotionDropSamples));
+         props.setProperty("postMotionDirectMeanAtStop", Double.toString(this.metrics.postMotionDirectMeanAtStop));
+         props.setProperty("postMotionRawDirectMeanAtStop", Double.toString(this.metrics.postMotionRawDirectMeanAtStop));
+         props.setProperty("postMotionIndirectMeanAtStop", Double.toString(this.metrics.postMotionIndirectMeanAtStop));
+         props.setProperty("postMotionStageIndirectMeanAtStop", Double.toString(this.metrics.postMotionStageIndirectMeanAtStop));
+         props.setProperty("latestPostMotionDirectDrop", Double.toString(this.metrics.latestPostMotionDirectDrop));
+         props.setProperty("latestPostMotionRawDirectDrop", Double.toString(this.metrics.latestPostMotionRawDirectDrop));
+         props.setProperty("latestPostMotionIndirectDrop", Double.toString(this.metrics.latestPostMotionIndirectDrop));
+         props.setProperty("latestPostMotionStageIndirectDrop", Double.toString(this.metrics.latestPostMotionStageIndirectDrop));
+         props.setProperty("postMotionDirectDropAvg", Double.toString(this.metrics.postMotionDropSamples == 0 ? 0.0 : this.metrics.postMotionDirectDropSum / this.metrics.postMotionDropSamples));
+         props.setProperty("postMotionRawDirectDropAvg", Double.toString(this.metrics.postMotionDropSamples == 0 ? 0.0 : this.metrics.postMotionRawDirectDropSum / this.metrics.postMotionDropSamples));
+         props.setProperty("postMotionIndirectDropAvg", Double.toString(this.metrics.postMotionDropSamples == 0 ? 0.0 : this.metrics.postMotionIndirectDropSum / this.metrics.postMotionDropSamples));
+         props.setProperty("postMotionStageIndirectDropAvg", Double.toString(this.metrics.postMotionDropSamples == 0 ? 0.0 : this.metrics.postMotionStageIndirectDropSum / this.metrics.postMotionDropSamples));
+         props.setProperty("postMotionDirectDropMax", Double.toString(this.metrics.postMotionDirectDropMax));
+         props.setProperty("postMotionRawDirectDropMax", Double.toString(this.metrics.postMotionRawDirectDropMax));
+         props.setProperty("postMotionIndirectDropMax", Double.toString(this.metrics.postMotionIndirectDropMax));
+         props.setProperty("postMotionStageIndirectDropMax", Double.toString(this.metrics.postMotionStageIndirectDropMax));
+         props.setProperty("motionRepeatDirectDeltaAvg", Double.toString(this.metrics.averageMotionRepeatDelta(true)));
+         props.setProperty("motionRepeatDirectDeltaMax", Double.toString(this.metrics.motionRepeatDirectDeltaMax));
+         props.setProperty("motionRepeatDirectDeltaSamples", Integer.toString(this.metrics.motionRepeatDirectDeltaSamples));
+         props.setProperty("motionRepeatIndirectDeltaAvg", Double.toString(this.metrics.averageMotionRepeatDelta(false)));
+         props.setProperty("motionRepeatIndirectDeltaMax", Double.toString(this.metrics.motionRepeatIndirectDeltaMax));
+         props.setProperty("motionRepeatIndirectDeltaSamples", Integer.toString(this.metrics.motionRepeatIndirectDeltaSamples));
+         props.setProperty("motionRepeatDirectTopDeltas", ShaderAutomationFrameMetrics.formatRepeatDeltaDiagnostics(this.metrics.topDirectRepeatDeltas));
+         props.setProperty("motionRepeatIndirectTopDeltas", ShaderAutomationFrameMetrics.formatRepeatDeltaDiagnostics(this.metrics.topIndirectRepeatDeltas));
          props.setProperty("maxMotionRepeatDirectDeltaAvg", Double.toString(this.maxMotionRepeatDirectDeltaAvg));
          props.setProperty("maxMotionRepeatDirectDeltaMax", Double.toString(this.maxMotionRepeatDirectDeltaMax));
          props.setProperty("maxMotionRepeatIndirectDeltaAvg", Double.toString(this.maxMotionRepeatIndirectDeltaAvg));
@@ -3764,7 +2289,7 @@ public final class ShaderAutomation {
 
    private boolean shouldSuppressWorldMutationIngress() {
       return Boolean.getBoolean("photonics.automation.suppressWorldMutationIngress")
-         && this.worldAutomationPrepared
+         && this.worldController.isWorldAutomationPrepared()
          && this.activeTicks >= this.startDelayTicks
          && !this.finished;
    }
@@ -3786,7 +2311,7 @@ public final class ShaderAutomation {
          && this.worldAutomationSatisfied()
          && this.motionRepeatValidationSatisfied()
          && this.qualityThresholdsSatisfied()
-         && isCompletionSatisfied(
+         && ShaderAutomationValidators.isCompletionSatisfied(
             this.capturesTaken,
             this.captureTarget,
             this.litCapturesTaken,
@@ -3794,12 +2319,12 @@ public final class ShaderAutomation {
             this.lightingSignalDetected,
             this.activeTicks,
             this.minActiveTicksBeforeSuccess,
-            activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick),
+            ShaderAutomationValidators.activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick),
             this.minActiveTicksAfterSignal);
    }
 
    private boolean patchIdMatches() {
-      return matchesExpectedPatchIdPrefix(this.expectedPatchIdPrefix, this.patchId);
+      return ShaderAutomationValidators.matchesExpectedPatchIdPrefix(this.expectedPatchIdPrefix, this.patchId);
    }
 
    private boolean shouldCaptureThisFrame() {
@@ -3811,7 +2336,7 @@ public final class ShaderAutomation {
          this.pendingBurstCaptures--;
          return true;
       }
-      if (shouldCaptureOnActiveTick(this.activeTicks, this.captureEveryActiveTicks, this.lastCapturedActiveTick)) {
+      if (ShaderAutomationValidators.shouldCaptureOnActiveTick(this.activeTicks, this.captureEveryActiveTicks, this.lastCapturedActiveTick)) {
          this.lastCapturedActiveTick = this.activeTicks;
          return true;
       }
@@ -3822,9 +2347,7 @@ public final class ShaderAutomation {
    }
 
    private boolean isCameraMotionEnabled() {
-      return !"none".equals(this.cameraMotionMode)
-         && this.cameraMotionPeriodTicks > 0
-         && (this.cameraYawAmplitudeDegrees > 0.0f || this.cameraPitchAmplitudeDegrees > 0.0f);
+      return this.cameraController.isEnabled();
    }
 
    private boolean isMotionRepeatValidationEnabled() {
@@ -3832,53 +2355,52 @@ public final class ShaderAutomation {
    }
 
    private boolean worldAutomationSatisfied() {
-      if (this.timeOfDaySequence.length > 0 && this.timeOfDayCommandsIssued < this.timeOfDaySequence.length) {
+      long[] timeOfDaySequence = this.worldController.getTimeOfDaySequence();
+      if (timeOfDaySequence.length > 0 && this.worldController.getTimeOfDayCommandsIssued() < timeOfDaySequence.length) {
          return false;
       }
-      return this.blockToggleCount <= 0 || this.blockToggleCommandsIssued >= this.blockToggleCount;
+      int blockToggleCount = this.worldController.getBlockToggleCount();
+      return blockToggleCount <= 0 || this.worldController.getBlockToggleCommandsIssued() >= blockToggleCount;
    }
 
    private boolean directSoftSignalSatisfied() {
-      return this.directSoftSignalDetected || this.directSoftZeroCaptureCount < 50;
+      return this.metrics.directSoftSignalDetected || this.metrics.directSoftZeroCaptureCount < 50;
    }
 
    private boolean motionRepeatValidationSatisfied() {
       if (!this.isMotionRepeatValidationEnabled()) {
          return true;
       }
-      if (this.motionRepeatDirectDeltaSamples == 0 || this.motionRepeatIndirectDeltaSamples == 0) {
+      if (this.metrics.motionRepeatDirectDeltaSamples == 0 || this.metrics.motionRepeatIndirectDeltaSamples == 0) {
          return false;
       }
-      return thresholdSatisfied(this.averageMotionRepeatDelta(true), this.maxMotionRepeatDirectDeltaAvg)
-         && thresholdSatisfied(this.motionRepeatDirectDeltaMax, this.maxMotionRepeatDirectDeltaMax)
-         && thresholdSatisfied(this.averageMotionRepeatDelta(false), this.maxMotionRepeatIndirectDeltaAvg)
-         && thresholdSatisfied(this.motionRepeatIndirectDeltaMax, this.maxMotionRepeatIndirectDeltaMax);
+      return thresholdSatisfied(this.metrics.averageMotionRepeatDelta(true), this.maxMotionRepeatDirectDeltaAvg)
+         && thresholdSatisfied(this.metrics.motionRepeatDirectDeltaMax, this.maxMotionRepeatDirectDeltaMax)
+         && thresholdSatisfied(this.metrics.averageMotionRepeatDelta(false), this.maxMotionRepeatIndirectDeltaAvg)
+         && thresholdSatisfied(this.metrics.motionRepeatIndirectDeltaMax, this.maxMotionRepeatIndirectDeltaMax);
    }
 
    private boolean qualityThresholdsSatisfied() {
       return directTemporalValidationSatisfied()
-         && thresholdSatisfied(this.averageTemporalDelta(false, true), this.maxIndirectTemporalDeltaAvg)
-         && thresholdSatisfied(this.indirectTemporalDeltaMax, this.maxIndirectTemporalDeltaMax)
-         && thresholdSatisfied(this.latestIndirectLinearOverbrightFraction, this.maxIndirectLinearOverbrightFraction)
-         && thresholdSatisfied(this.latestIndirectLinearSevereFireflyFraction, this.maxIndirectLinearSevereFireflyFraction)
-         && thresholdSatisfied(this.latestIndirectRawLinearOverbrightFraction, this.maxIndirectRawLinearOverbrightFraction);
+         && thresholdSatisfied(this.metrics.averageTemporalDelta(false, true), this.maxIndirectTemporalDeltaAvg)
+         && thresholdSatisfied(this.metrics.indirectTemporalDeltaMax, this.maxIndirectTemporalDeltaMax)
+         && thresholdSatisfied(this.metrics.latestIndirectLinearOverbrightFraction, this.maxIndirectLinearOverbrightFraction)
+         && thresholdSatisfied(this.metrics.latestIndirectLinearSevereFireflyFraction, this.maxIndirectLinearSevereFireflyFraction)
+         && thresholdSatisfied(this.metrics.latestIndirectRawLinearOverbrightFraction, this.maxIndirectRawLinearOverbrightFraction);
    }
 
    private boolean directTemporalValidationSatisfied() {
       if (this.isMotionRepeatValidationEnabled()) {
          return true;
       }
-      return thresholdSatisfied(this.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)
-         && thresholdSatisfied(this.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax);
+      return thresholdSatisfied(this.metrics.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)
+         && thresholdSatisfied(this.metrics.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax);
    }
 
    private static boolean thresholdSatisfied(double value, double maxAllowed) {
       return maxAllowed < 0.0 || value <= maxAllowed;
    }
 
-   private static float clampPitch(float pitch) {
-      return Math.max(-89.0f, Math.min(89.0f, pitch));
-   }
 
    private String defaultFailureReason() {
       if (!this.expectedShaderPackMatched) {
@@ -3898,123 +2420,127 @@ public final class ShaderAutomation {
       }
       if (this.requireDirectSignal && !this.directSignalDetected) {
          return "No direct lighting signal detected"
-            + " (directMaxLuma=" + this.directMaxLuma
-            + ", directSoftMaxLuma=" + this.directSoftMaxLuma
-            + ", directDenoisedMaxLuma=" + this.directDenoisedMaxLuma
-            + ", directRawMaxLuma=" + this.directRawMaxLuma
-            + ", lightingBufferMaxLuma=" + this.lightingBufferMaxLuma
-            + ", stageLightingMaxLuma=" + this.stageLightingMaxLuma
+            + " (directMaxLuma=" + this.metrics.directMaxLuma
+            + ", directSoftMaxLuma=" + this.metrics.directSoftMaxLuma
+            + ", directDenoisedMaxLuma=" + this.metrics.directDenoisedMaxLuma
+            + ", directRawMaxLuma=" + this.metrics.directRawMaxLuma
+            + ", lightingBufferMaxLuma=" + this.metrics.lightingBufferMaxLuma
+            + ", stageLightingMaxLuma=" + this.metrics.stageLightingMaxLuma
             + ")";
       }
       if (!this.directSoftSignalSatisfied()) {
-         return "direct_soft remained black for " + this.directSoftZeroCaptureCount + " captures";
+         return "direct_soft remained black for " + this.metrics.directSoftZeroCaptureCount + " captures";
       }
       if (this.litCapturesTaken < this.minLitCaptures) {
          return "Insufficient lit captures: " + this.litCapturesTaken + "/" + this.minLitCaptures;
       }
       if (this.isMotionRepeatValidationEnabled()) {
-         if (this.motionRepeatDirectDeltaSamples == 0 || this.motionRepeatIndirectDeltaSamples == 0) {
+         if (this.metrics.motionRepeatDirectDeltaSamples == 0 || this.metrics.motionRepeatIndirectDeltaSamples == 0) {
             return "Camera-motion validation captured no repeated phases (directSamples="
-               + this.motionRepeatDirectDeltaSamples
+               + this.metrics.motionRepeatDirectDeltaSamples
                + ", indirectSamples="
-               + this.motionRepeatIndirectDeltaSamples
+               + this.metrics.motionRepeatIndirectDeltaSamples
                + ")";
          }
-         if (!thresholdSatisfied(this.averageMotionRepeatDelta(true), this.maxMotionRepeatDirectDeltaAvg)) {
+         if (!thresholdSatisfied(this.metrics.averageMotionRepeatDelta(true), this.maxMotionRepeatDirectDeltaAvg)) {
             return "Direct repeat delta average exceeded threshold: "
-               + this.averageMotionRepeatDelta(true)
+               + this.metrics.averageMotionRepeatDelta(true)
                + " > "
                + this.maxMotionRepeatDirectDeltaAvg;
          }
-         if (!thresholdSatisfied(this.motionRepeatDirectDeltaMax, this.maxMotionRepeatDirectDeltaMax)) {
+         if (!thresholdSatisfied(this.metrics.motionRepeatDirectDeltaMax, this.maxMotionRepeatDirectDeltaMax)) {
             return "Direct repeat delta max exceeded threshold: "
-               + this.motionRepeatDirectDeltaMax
+               + this.metrics.motionRepeatDirectDeltaMax
                + " > "
                + this.maxMotionRepeatDirectDeltaMax
                + " topDeltas=["
-               + formatRepeatDeltaDiagnostics(this.topDirectRepeatDeltas)
+               + ShaderAutomationFrameMetrics.formatRepeatDeltaDiagnostics(this.metrics.topDirectRepeatDeltas)
                + "]";
          }
-         if (!thresholdSatisfied(this.averageMotionRepeatDelta(false), this.maxMotionRepeatIndirectDeltaAvg)) {
+         if (!thresholdSatisfied(this.metrics.averageMotionRepeatDelta(false), this.maxMotionRepeatIndirectDeltaAvg)) {
             return "Indirect repeat delta average exceeded threshold: "
-               + this.averageMotionRepeatDelta(false)
+               + this.metrics.averageMotionRepeatDelta(false)
                + " > "
                + this.maxMotionRepeatIndirectDeltaAvg
                + " topDeltas=["
-               + formatRepeatDeltaDiagnostics(this.topIndirectRepeatDeltas)
+               + ShaderAutomationFrameMetrics.formatRepeatDeltaDiagnostics(this.metrics.topIndirectRepeatDeltas)
                + "]";
          }
-         if (!thresholdSatisfied(this.motionRepeatIndirectDeltaMax, this.maxMotionRepeatIndirectDeltaMax)) {
+         if (!thresholdSatisfied(this.metrics.motionRepeatIndirectDeltaMax, this.maxMotionRepeatIndirectDeltaMax)) {
             return "Indirect repeat delta max exceeded threshold: "
-               + this.motionRepeatIndirectDeltaMax
+               + this.metrics.motionRepeatIndirectDeltaMax
                + " > "
                + this.maxMotionRepeatIndirectDeltaMax
                + " topDeltas=["
-               + formatRepeatDeltaDiagnostics(this.topIndirectRepeatDeltas)
+               + ShaderAutomationFrameMetrics.formatRepeatDeltaDiagnostics(this.metrics.topIndirectRepeatDeltas)
                + "]";
          }
       }
       if (!directTemporalValidationSatisfied()) {
-         if (!thresholdSatisfied(this.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)) {
+         if (!thresholdSatisfied(this.metrics.averageTemporalDelta(false, false), this.maxDirectTemporalDeltaAvg)) {
             return "Direct temporal delta average exceeded threshold: "
-               + this.averageTemporalDelta(false, false)
+               + this.metrics.averageTemporalDelta(false, false)
                + " > "
                + this.maxDirectTemporalDeltaAvg;
          }
-         if (!thresholdSatisfied(this.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax)) {
+         if (!thresholdSatisfied(this.metrics.directTemporalDeltaMax, this.maxDirectTemporalDeltaMax)) {
             return "Direct temporal delta max exceeded threshold: "
-               + this.directTemporalDeltaMax
+               + this.metrics.directTemporalDeltaMax
                + " > "
                + this.maxDirectTemporalDeltaMax;
          }
       }
-      if (!thresholdSatisfied(this.averageTemporalDelta(false, true), this.maxIndirectTemporalDeltaAvg)) {
+      if (!thresholdSatisfied(this.metrics.averageTemporalDelta(false, true), this.maxIndirectTemporalDeltaAvg)) {
          return "Indirect temporal delta average exceeded threshold: "
-            + this.averageTemporalDelta(false, true)
+            + this.metrics.averageTemporalDelta(false, true)
             + " > "
             + this.maxIndirectTemporalDeltaAvg;
       }
-      if (!thresholdSatisfied(this.indirectTemporalDeltaMax, this.maxIndirectTemporalDeltaMax)) {
+      if (!thresholdSatisfied(this.metrics.indirectTemporalDeltaMax, this.maxIndirectTemporalDeltaMax)) {
          return "Indirect temporal delta max exceeded threshold: "
-            + this.indirectTemporalDeltaMax
+            + this.metrics.indirectTemporalDeltaMax
             + " > "
             + this.maxIndirectTemporalDeltaMax;
       }
-      if (!thresholdSatisfied(this.latestIndirectLinearOverbrightFraction, this.maxIndirectLinearOverbrightFraction)) {
+      if (!thresholdSatisfied(this.metrics.latestIndirectLinearOverbrightFraction, this.maxIndirectLinearOverbrightFraction)) {
          return "Indirect resolve overbright fraction exceeded threshold: "
-            + this.latestIndirectLinearOverbrightFraction
+            + this.metrics.latestIndirectLinearOverbrightFraction
             + " > "
             + this.maxIndirectLinearOverbrightFraction;
       }
-      if (!thresholdSatisfied(this.latestIndirectLinearSevereFireflyFraction, this.maxIndirectLinearSevereFireflyFraction)) {
+      if (!thresholdSatisfied(this.metrics.latestIndirectLinearSevereFireflyFraction, this.maxIndirectLinearSevereFireflyFraction)) {
          return "Indirect resolve severe firefly fraction exceeded threshold: "
-            + this.latestIndirectLinearSevereFireflyFraction
+            + this.metrics.latestIndirectLinearSevereFireflyFraction
             + " > "
             + this.maxIndirectLinearSevereFireflyFraction;
       }
-      if (!thresholdSatisfied(this.latestIndirectRawLinearOverbrightFraction, this.maxIndirectRawLinearOverbrightFraction)) {
+      if (!thresholdSatisfied(this.metrics.latestIndirectRawLinearOverbrightFraction, this.maxIndirectRawLinearOverbrightFraction)) {
          return "Indirect raw overbright fraction exceeded threshold: "
-            + this.latestIndirectRawLinearOverbrightFraction
+            + this.metrics.latestIndirectRawLinearOverbrightFraction
             + " > "
             + this.maxIndirectRawLinearOverbrightFraction;
       }
-      if (this.timeOfDaySequence.length > 0 && this.timeOfDayCommandsIssued < this.timeOfDaySequence.length) {
-         return "Time-of-day automation incomplete: " + this.timeOfDayCommandsIssued + "/" + this.timeOfDaySequence.length;
+      long[] timeOfDaySequence = this.worldController.getTimeOfDaySequence();
+      int timeOfDayCommandsIssued = this.worldController.getTimeOfDayCommandsIssued();
+      if (timeOfDaySequence.length > 0 && timeOfDayCommandsIssued < timeOfDaySequence.length) {
+         return "Time-of-day automation incomplete: " + timeOfDayCommandsIssued + "/" + timeOfDaySequence.length;
       }
-      if (this.blockToggleCount > 0 && this.blockToggleCommandsIssued < this.blockToggleCount) {
-         return "Block-toggle automation incomplete: " + this.blockToggleCommandsIssued + "/" + this.blockToggleCount;
+      int blockToggleCount = this.worldController.getBlockToggleCount();
+      int blockToggleCommandsIssued = this.worldController.getBlockToggleCommandsIssued();
+      if (blockToggleCount > 0 && blockToggleCommandsIssued < blockToggleCount) {
+         return "Block-toggle automation incomplete: " + blockToggleCommandsIssued + "/" + blockToggleCount;
       }
       if (this.activeTicks < this.minActiveTicksBeforeSuccess) {
          return "Automation ended before minimum active ticks: " + this.activeTicks + "/" + this.minActiveTicksBeforeSuccess;
       }
-      int activeTicksSinceFirstSignal = activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick);
+      int activeTicksSinceFirstSignal = ShaderAutomationValidators.activeTicksSinceFirstSignal(this.activeTicks, this.firstLightingSignalActiveTick);
       if (activeTicksSinceFirstSignal < this.minActiveTicksAfterSignal) {
          return "Automation ended before post-signal settle window: " + activeTicksSinceFirstSignal + "/" + this.minActiveTicksAfterSignal;
       }
       return "Automation failed";
    }
 
-   private record MotionRepeatKey(
+   record MotionRepeatKey(
       int phaseKey,
       int timeOfDayCommandCount,
       int blockToggleCommandCount,
@@ -4022,7 +2548,7 @@ public final class ShaderAutomation {
    ) {
    }
 
-   private record MotionPhaseSample(
+   record MotionPhaseSample(
       BufferedImage image,
       int captureIndex,
       int activeTick,
@@ -4033,7 +2559,7 @@ public final class ShaderAutomation {
    ) {
    }
 
-   private record MotionRepeatDeltaRecord(
+   record MotionRepeatDeltaRecord(
       double delta,
       int phaseKey,
       int previousCaptureIndex,
@@ -4050,14 +2576,14 @@ public final class ShaderAutomation {
    ) {
    }
 
-   private record RowJumpStats(
+   record RowJumpStats(
       int rowFromBottom,
       int rowFromTop,
       double delta,
       double previousMean,
       double nextMean
    ) {
-      private static final RowJumpStats EMPTY = new RowJumpStats(0, 0, 0.0, 0.0, 0.0);
+      static final RowJumpStats EMPTY = new RowJumpStats(0, 0, 0.0, 0.0, 0.0);
    }
 
    private record ReservoirRowJumpStats(
@@ -4083,90 +2609,6 @@ public final class ShaderAutomation {
       private static final ReGIRCoverageRowJumpStats EMPTY = new ReGIRCoverageRowJumpStats(RowJumpStats.EMPTY, RowJumpStats.EMPTY);
    }
 
-   private record ReGIRCellBufferStats(
-      int[] validSlotCounts,
-      double[] meanWeights,
-      int[] checksums,
-      int[] keyX,
-      int[] keyY,
-      int[] keyZ,
-      int[] keyBucket
-   ) {
-      private static final ReGIRCellBufferStats EMPTY = new ReGIRCellBufferStats(
-         new int[0],
-         new double[0],
-         new int[0],
-         new int[0],
-         new int[0],
-         new int[0],
-         new int[0]
-      );
-   }
-
-   private record ReGIRHashCellCoord(int x, int y, int z) {
-   }
-
-   private record ReGIRCellSampleStats(int representativeSlot, int validSlots, double meanWeight) {
-      boolean found() {
-         return this.representativeSlot >= 0;
-      }
-   }
-
-   private record ReGIRPixelCorrelationStats(
-      double visiblePixelFraction,
-      double strictValidVisibleFraction,
-      double exactOutsideGridFraction,
-      double strictInvalidOutsideGridFraction,
-      double strictValidOutsideGridFraction,
-      double strictInvalidZeroSlotFraction,
-      double strictValidZeroSlotFraction,
-      double strictInvalidMeanCellValidSlots,
-      double strictValidMeanCellValidSlots,
-      double strictInvalidMeanCellWeight,
-      double strictValidMeanCellWeight,
-      double jitteredCellChangedFraction,
-      double jitteredMeanCellWeightDelta,
-      double jitteredOutsideGridDeltaFraction,
-      RowJumpStats cellValidSlotsJump,
-      RowJumpStats cellMeanWeightJump,
-      RowJumpStats outsideGridJump,
-      RowJumpStats jitteredCellChangedJump,
-      RowJumpStats jitteredCellMeanWeightDeltaJump,
-      RowJumpStats jitteredOutsideGridDeltaJump
-   ) {
-      private static final ReGIRPixelCorrelationStats EMPTY = new ReGIRPixelCorrelationStats(
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         RowJumpStats.EMPTY,
-         RowJumpStats.EMPTY,
-         RowJumpStats.EMPTY,
-         RowJumpStats.EMPTY,
-         RowJumpStats.EMPTY,
-         RowJumpStats.EMPTY
-      );
-   }
-
-   private record ReservoirDebugStats(
-      double lightValidFraction,
-      double strictValidFraction,
-      double meanWeight,
-      double meanM
-   ) {
-      private static final ReservoirDebugStats EMPTY = new ReservoirDebugStats(0.0, 0.0, 0.0, 0.0);
-   }
-
    private record ReservoirSampleDebugStats(
       double nonZeroFraction,
       double meanU,
@@ -4182,48 +2624,6 @@ public final class ShaderAutomation {
       double meanAbsDistanceY
    ) {
       private static final ReservoirMetaDebugStats EMPTY = new ReservoirMetaDebugStats(0.0, 0.0, 0.0, 0.0);
-   }
-
-   private record InitialSamplingDebugStats(
-      double invalidSurfaceFraction,
-      double noLightsFraction,
-      double noLocalSamplesFraction,
-      double invalidLightSelectionFraction,
-      double invalidLightSampleFraction,
-      double zeroRadianceFraction,
-      double zeroSourcePdfFraction,
-      double zeroTargetPdfFraction,
-      double nonFiniteSourcePdfFraction,
-      double nonFiniteTargetPdfFraction,
-      double successFraction,
-      double meanPositiveCandidateFraction,
-      double proposalValidFraction,
-      double meanProposalWeight,
-      RowJumpStats successRowJump,
-      RowJumpStats zeroTargetRowJump,
-      RowJumpStats proposalValidRowJump,
-      RowJumpStats proposalWeightRowJump
-   ) {
-      private static final InitialSamplingDebugStats EMPTY = new InitialSamplingDebugStats(
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         0.0,
-         RowJumpStats.EMPTY,
-         RowJumpStats.EMPTY,
-         RowJumpStats.EMPTY,
-         RowJumpStats.EMPTY
-      );
    }
 
    private record PositionDebugStats(
@@ -4250,15 +2650,6 @@ public final class ShaderAutomation {
       private static final FireflyStats EMPTY = new FireflyStats(0.0, 0.0, 0.0, 0.0, 0.0);
    }
 
-   private static final class RandomSamplerState {
-      private final int seed;
-      private int index;
-
-      private RandomSamplerState(int seed, int index) {
-         this.seed = seed;
-         this.index = index;
-      }
-   }
 }
 
 

@@ -5,6 +5,8 @@ import java.awt.image.BufferedImage;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL44;
 
 public class Texture2D extends TextureObject {
@@ -29,7 +31,7 @@ public class Texture2D extends TextureObject {
    }
 
    public Texture2D(int width, int height, boolean pixelated, boolean highBitDepth, boolean alpha, int textureId) {
-      super(new int[]{width, height, alpha ? 4 : 3, highBitDepth ? 4 : 1}, getFormat(highBitDepth, alpha), 3553, textureId, false);
+      super(new int[]{width, height, alpha ? 4 : 3, highBitDepth ? 4 : 1}, getFormat(highBitDepth, alpha), GL11.GL_TEXTURE_2D, textureId, false);
       this.width = width;
       this.height = height;
       this.pixelated = pixelated;
@@ -38,9 +40,9 @@ public class Texture2D extends TextureObject {
 
    private static int getFormat(boolean highBitDepth, boolean alpha) {
       if (highBitDepth) {
-         return alpha ? 34836 : 34837;
+         return alpha ? GL30.GL_RGBA32F : GL30.GL_RGB32F;
       } else {
-         return alpha ? 32856 : 32849;
+         return alpha ? GL11.GL_RGBA8 : GL11.GL_RGB8;
       }
    }
 
@@ -59,28 +61,28 @@ public class Texture2D extends TextureObject {
       }
 
       int textureId = GL11.glGenTextures();
-      GL11.glBindTexture(3553, textureId);
-      GL11.glTexImage2D(3553, 0, format, width, height, 0, 6408, 5125, textureBuffer);
-      GL11.glTexParameteri(3553, 10241, pixelated ? 9728 : 9729);
-      GL11.glTexParameteri(3553, 10240, pixelated ? 9728 : 9729);
-      GL11.glBindTexture(3553, 0);
+      GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+      GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, format, width, height, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_INT, textureBuffer);
+      GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, pixelated ? GL11.GL_NEAREST : GL11.GL_LINEAR);
+      GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, pixelated ? GL11.GL_NEAREST : GL11.GL_LINEAR);
+      GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
       return textureId;
    }
 
    @Override
    public void bind() {
-      GlStateManager._activeTexture(33984 + this.getTextureUnit());
+      GlStateManager._activeTexture(GL13.GL_TEXTURE0 + this.getTextureUnit());
       GlStateManager._bindTexture(this.getTextureId());
    }
 
    @Override
    public void unbind() {
-      GL11.glBindTexture(3553, 0);
+      GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
    }
 
    @Override
    public void clear(int i) {
-      GL44.glClearTexImage(this.getTextureId(), 0, 6408, 5125, (ByteBuffer)null);
+      GL44.glClearTexImage(this.getTextureId(), 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_INT, (ByteBuffer)null);
    }
 
    @Override

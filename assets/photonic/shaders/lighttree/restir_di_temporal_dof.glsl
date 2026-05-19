@@ -83,6 +83,17 @@ vec3 lt_di_temporal_previous_camera_w()
     return lt_di_temporal_previous_camera_relative_world_from_ndc(vec2(0.0f, 0.0f));
 }
 
+float lt_di_temporal_camera_aspect_ratio()
+{
+    return float(viewWidth) / max(float(viewHeight), 1.0f);
+}
+
+float lt_di_temporal_camera_tan_fov_y()
+{
+    // Standard symmetric perspective projection: P[1][1] = 1 / tan(fov_y / 2).
+    return 1.0f / max(abs(gbufferProjection[1][1]), 1e-6f);
+}
+
 float lt_di_temporal_camera_interval_duration()
 {
     return max(lt_di_temporal_artificial_frame_time(), 1e-6f);
