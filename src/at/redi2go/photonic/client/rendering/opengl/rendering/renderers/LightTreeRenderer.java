@@ -546,6 +546,11 @@ public class LightTreeRenderer extends MainRenderer {
    }
 
    private String loadShaderSource(String shaderRelativePath) {
+      String raw = readShaderFile(shaderRelativePath);
+      return raw == null ? null : resolveIncludes(raw, 0);
+   }
+
+   private String readShaderFile(String shaderRelativePath) {
       String resourcePath = "assets/photonic/shaders/" + shaderRelativePath;
       Path devEnvPath = Path.of("../src/main/resources/" + resourcePath);
       if (Files.exists(devEnvPath)) {
@@ -565,6 +570,46 @@ public class LightTreeRenderer extends MainRenderer {
       }
       Photonic.warn("[LightTree] Shader source not found: {}", resourcePath);
       return null;
+   }
+
+   // GLSL drivers reject #include directives; Iris preprocesses them for fragment shaders
+   // but compute programs receive source via this path. Inline includes here so the same
+   // shared headers (e.g. regir_hash_constants.glsl) work for both compute and fragment.
+   private String resolveIncludes(String source, int depth) {
+      if (depth > 16) {
+         Photonic.warn("[LightTree] #include depth exceeded; stopping expansion");
+         return source;
+      }
+      StringBuilder out = new StringBuilder(source.length());
+      for (String line : source.split("\n", -1)) {
+         String trimmed = line.trim();
+         if (trimmed.startsWith("#include")) {
+            int q1 = trimmed.indexOf('"');
+            int q2 = q1 < 0 ? -1 : trimmed.indexOf('"', q1 + 1);
+            if (q1 < 0 || q2 < 0) {
+               out.append(line).append('\n');
+               continue;
+            }
+            String includePath = trimmed.substring(q1 + 1, q2);
+            if (includePath.startsWith("/photonics/")) {
+               includePath = includePath.substring("/photonics/".length());
+            } else if (includePath.startsWith("/")) {
+               includePath = includePath.substring(1);
+            }
+            String included = readShaderFile(includePath);
+            if (included != null) {
+               out.append(resolveIncludes(included, depth + 1));
+               if (!included.endsWith("\n")) {
+                  out.append('\n');
+               }
+            } else {
+               out.append(line).append('\n');
+            }
+         } else {
+            out.append(line).append('\n');
+         }
+      }
+      return out.toString();
    }
 
    @Override

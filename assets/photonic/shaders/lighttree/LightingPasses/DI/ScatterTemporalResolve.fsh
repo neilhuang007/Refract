@@ -1,5 +1,5 @@
 #version 430
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+#include "/photonics/lighttree/lt_feature_flags.glsl"
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_STAGE 1
 // SSBO/sampler inclusion is driven by lt_buffer_features.glsl based on the
 // PH_LIGHTTREE_ENABLE_*_STAGE flag above. Lean scatter passes opt out of

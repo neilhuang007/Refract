@@ -1,5 +1,5 @@
 #version 430
-#define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_BUFFERS 1
+#include "/photonics/lighttree/lt_feature_flags.glsl"
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SORT_STAGE 1
 #define PH_LIGHTTREE_ENABLE_TEMPORAL_SCATTER_SORTING 1
 

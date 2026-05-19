@@ -284,8 +284,7 @@ uint regir_hash_pcg_key(ivec3 cellCoord, int bucket) {
         + regir_pcg_step(uint(cellCoord.y) + regir_pcg_step(uint(cellCoord.x)))));
 }
 
-const uint REGIR_HASH_CLAIMED = 0xffffffffu;
-const int REGIR_HASH_MAX_PROBES = 128;
+#include "/photonics/lighttree/regir_hash_constants.glsl"
 
 uint regir_hash_xxhash_checksum(ivec3 cellCoord, int bucket) {
     uint h = regir_xxhash_step(uint(bucket) + regir_xxhash_step(uint(cellCoord.z)
